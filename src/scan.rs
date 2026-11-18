@@ -268,17 +268,23 @@ fn nested_flag(shell: &str, v: &str) -> Option<Flag> {
     if matches!(v.as_str(), "/c" | "/k" | "//c" | "//k") {
         return Some(Flag::Command);
     }
-    let rest = v.strip_prefix('-').filter(|r| !r.is_empty())?;
     if matches!(shell, "pwsh" | "powershell") {
-        // PowerShell accepts any unambiguous prefix of a parameter name.
+        // PowerShell accepts `-x`, `--x`, `/x` and dash-like characters before any unambiguous
+        // prefix of a parameter name.
+        let rest = ["--", "-", "/", "\u{2013}", "\u{2014}", "\u{2015}"]
+            .iter()
+            .find_map(|p| v.strip_prefix(p))
+            .filter(|r| !r.is_empty())?;
         if rest == "ec" || (rest.starts_with('e') && "encodedcommand".starts_with(rest)) {
             return Some(Flag::Encoded);
         }
         if "command".starts_with(rest) || "commandwithargs".starts_with(rest) || rest == "cwa" {
             return Some(Flag::Command);
         }
+        return None;
     }
     // bash -c, -lc, -ec: a cluster of short options ending in c.
+    let rest = v.strip_prefix('-').filter(|r| !r.is_empty())?;
     (rest.bytes().all(|b| b.is_ascii_lowercase()) && rest.ends_with('c')).then_some(Flag::Command)
 }
 
@@ -419,8 +425,11 @@ fn segments(text: &str, mode: Mode) -> Segments {
         }
     };
 
+    // $ written as a plain character just before this one (\$'…' is not an ANSI-C quote).
+    let mut plain_dollar = false;
     while i < n {
         let c = b[i];
+        let after_dollar = std::mem::take(&mut plain_dollar);
         let escape = match mode {
             Mode::Bash => b'\\',
             Mode::Pwsh => b'`',
@@ -442,7 +451,7 @@ fn segments(text: &str, mode: Mode) -> Segments {
             i = text[i..].find('\n').map_or(n, |k| i + k);
         } else if c == b'\'' || c == b'"' {
             // bash `$'…'` takes backslash escapes; `"…"` takes the shell's escape character.
-            let ansi_c = c == b'\'' && mode == Mode::Bash && i > 0 && b[i - 1] == b'$';
+            let ansi_c = c == b'\'' && mode == Mode::Bash && after_dollar;
             let esc = if c == b'"' || ansi_c {
                 Some(escape)
             } else {
@@ -454,8 +463,9 @@ fn segments(text: &str, mode: Mode) -> Segments {
                 start: i,
                 end: (j + 1).min(n),
             };
-            if j >= n {
-                // Unclosed: the shell may read the rest as code, so scan it as code too.
+            if j >= n || (ansi_c && body.contains("\\'")) {
+                // Unclosed, or an ANSI-C body whose `\'` another reading closes on: the shell
+                // may read the rest as code, so scan it as code too.
                 embedded.push((span, body.to_string()));
             } else if c == b'"'
                 && (body.contains("$(") || (mode == Mode::Bash && body.contains('`')))
@@ -480,6 +490,7 @@ fn segments(text: &str, mode: Mode) -> Segments {
         } else {
             let l = char_len_at(text, i);
             push(&mut cur, i, i + l, &text[i..i + l], false);
+            plain_dollar = c == b'$';
             i += l;
         }
     }
@@ -547,6 +558,15 @@ mod tests {
         "git checkout -f main",
         "git checkout --force main",
         "git restore x",
+        "git restore --staged --worktree x",
+        "git restore -SW x",
+        "git switch -f main",
+        "git switch --force main",
+        "git switch --discard-changes main",
+        "find . -name '*.tmp' -delete",
+        // a heredoc body that a shell runs
+        "bash <<'EOF'\nrm -rf x\nEOF",
+        "sh <<EOF\ngit reset --hard\nEOF",
         "git worktree remove x",
         "git stash drop",
         "git stash clear",
@@ -592,6 +612,12 @@ mod tests {
         "powershell -e AAAA",
         "pwsh.exe -enc AAAA",
         "pwsh -ec AAAA",
+        "pwsh /enc AAAA",
+        "pwsh --EncodedCommand AAAA",
+        "pwsh /Command 'Remove-Item x'",
+        "pwsh \u{2013}c 'ri x'",
+        // `\$'` is a literal dollar before a plain quote, not an ANSI-C string
+        "echo \\$'a\\' <# ; rm -rf x ; echo '",
     ];
 
     const HARMLESS: &[&str] = &[
@@ -603,6 +629,12 @@ mod tests {
         "git status",
         "git reset --soft HEAD~1",
         "git clean -n",
+        "git clean -fn",
+        "git clean -f --dry-run",
+        "git restore --staged x",
+        "git restore -S x",
+        "git switch main",
+        "find . -name '*.tmp'",
         "git checkout main",
         "git stash list",
         "robocopy a b /E",
