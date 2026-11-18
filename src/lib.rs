@@ -156,6 +156,7 @@ mod tests {
             let cfg = Config {
                 walk_budget_ms: walk,
                 hook_timeout_ms: hook,
+                ..Config::default()
             };
             let d = Deadline::for_config(start, &cfg);
             assert_eq!(d.ms, want, "walk {walk} hook {hook}");

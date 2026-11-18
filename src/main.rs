@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use shellwise::adapter::check_json;
 use shellwise::config::Config;
 use shellwise::ir::EnvView;
-use shellwise::level::{Verdict, exit_code};
+use shellwise::level::{Finding, Verdict, exit_code};
 use shellwise::{
     BashProfile, CheckInput, Deadline, MAX_INPUT_BYTES, Os, Shell, check, fail_closed,
 };
@@ -52,6 +52,9 @@ struct CheckArgs {
     /// Print the verdict as JSON.
     #[arg(long)]
     json: bool,
+    /// An integration config file; the user file overrides it, the repo file only raises.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
     /// The command (after `--`); read from stdin when absent.
     #[arg(last = true)]
     command: Vec<OsString>,
@@ -95,9 +98,6 @@ fn run(start: Instant) -> i32 {
 }
 
 fn run_check(start: Instant, args: CheckArgs) -> i32 {
-    let cfg = Config::default();
-    let deadline = test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &cfg));
-
     let bytes = if args.command.is_empty() {
         let mut buf = Vec::new();
         if let Err(e) = io::stdin().read_to_end(&mut buf) {
@@ -112,7 +112,8 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
             Err(os) => {
                 // Not valid Unicode: the lossy text is still scanned, then fails closed below.
                 let lossy = os.to_string_lossy().into_owned();
-                return finish(fail_closed(&lossy, "invalid UTF-8"), &args, "invalid UTF-8");
+                let reason = "invalid UTF-8";
+                return finish(fail_closed(&lossy, reason), Vec::new(), &args, reason);
             }
         }
     };
@@ -121,13 +122,20 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
         Ok(s) => s,
         Err(e) => {
             let lossy = String::from_utf8_lossy(e.as_bytes()).into_owned();
-            return finish(fail_closed(&lossy, "invalid UTF-8"), &args, "invalid UTF-8");
+            let reason = "invalid UTF-8";
+            return finish(fail_closed(&lossy, reason), Vec::new(), &args, reason);
         }
     };
     if command.len() > MAX_INPUT_BYTES {
         let reason = "input over the size cap";
-        return finish(fail_closed(&command, reason), &args, reason);
+        return finish(fail_closed(&command, reason), Vec::new(), &args, reason);
     }
+
+    let (cfg, cfg_findings) = match load_config(start, args.config.clone(), args.cwd.clone()) {
+        Ok(loaded) => loaded,
+        Err(reason) => return finish(fail_closed(&command, reason), Vec::new(), &args, reason),
+    };
+    let deadline = test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &cfg));
 
     let verdict = match analyse(
         &command,
@@ -138,10 +146,44 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
     ) {
         Ok(v) => v,
         Err(reason) => {
-            return finish(fail_closed(&command, reason), &args, reason);
+            return finish(fail_closed(&command, reason), cfg_findings, &args, reason);
         }
     };
-    finish(verdict, &args, "")
+    finish(verdict, cfg_findings, &args, "")
+}
+
+/// Load the config layers (`Config::discover`) on a worker thread, waiting at most until the
+/// default deadline. `check` passes `--config` and `--cwd`; the `hook claude-code` adapter passes
+/// its `--config` and the event's `cwd`. `Err` is a fail-closed reason.
+fn load_config(
+    start: Instant,
+    integration: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+) -> Result<(Config, Vec<Finding>), &'static str> {
+    let budget =
+        test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &Config::default()));
+    let (tx, rx) = mpsc::channel();
+    let job = move || {
+        if testhook_is("config-sleep") {
+            thread::sleep(std::time::Duration::from_secs(60));
+        }
+        let cwd = cwd.or_else(|| std::env::current_dir().ok());
+        let result =
+            panic::catch_unwind(|| Config::discover(integration.as_deref(), cwd.as_deref()));
+        let _ = tx.send(result);
+    };
+    if thread::Builder::new()
+        .name("config".into())
+        .spawn(job)
+        .is_err()
+    {
+        return Err("the config thread did not start");
+    }
+    match rx.recv_timeout(budget.remaining()) {
+        Ok(Ok(loaded)) => Ok(loaded),
+        Ok(Err(_)) => Err("internal error while loading the config"),
+        Err(_) => Err("the config did not load before the deadline"),
+    }
 }
 
 /// Run `check` on a big-stack worker inside `catch_unwind`; wait only until the deadline.
@@ -189,10 +231,13 @@ fn analyse(
 }
 
 /// Print the verdict and return the exit code. A fail-closed `ok` names its reason on stderr.
-fn finish(verdict: Verdict, args: &CheckArgs, failed: &str) -> i32 {
+fn finish(verdict: Verdict, cfg_findings: Vec<Finding>, args: &CheckArgs, failed: &str) -> i32 {
     if !failed.is_empty() && verdict.findings.is_empty() {
         eprintln!("shellwise: analysis failed ({failed}); no destructive command in the raw text");
     }
+    let mut findings = verdict.findings;
+    findings.extend(cfg_findings);
+    let verdict = Verdict::new(findings);
     let mut out = String::new();
     if args.json {
         out.push_str(&check_json::render(&verdict));
