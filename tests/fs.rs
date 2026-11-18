@@ -1499,6 +1499,8 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             "Set-Location literal &&",
             stmt(lits("Set-Location", &[r"C:\x"]), Some(ChainOp::And)),
         ),
+        ("chdir literal", stmt(lits("chdir", &[r"C:\x"]), seq)),
+        ("sl literal", stmt(lits("sl", &[r"C:\x"]), seq)),
         ("Get-ChildItem", stmt(lits("Get-ChildItem", &["Env:"]), seq)),
         ("Write-Host", stmt(lits("Write-Host", &["x"]), seq)),
         ("echo", stmt(cmd("echo", vec![var("x")]), seq)),
@@ -1560,6 +1562,11 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         (
             "Remove-Item $p",
             stmt(cmd("Remove-Item", vec![var("p")]), seq),
+        ),
+        ("Remove-Item Function:f", stmt(ri("Function:f"), seq)),
+        (
+            "path-qualified Get-",
+            stmt(lits(r"C:\x\Get-Thing.exe", &[]), seq),
         ),
         (
             "wrapped Get-",
