@@ -17,6 +17,10 @@ Without `-- COMMAND` the command is read from stdin. Exit codes: 0 ok/warn, 1 br
 3 critical, 64 usage error. `--json` prints
 `{"version":1,"level":…,"findings":[{"rule","level","message","fix","span":{"start","end"}}]}`.
 
+## Limits
+
+- `CDPATH` set by a shell profile the hook cannot see is not modelled.
+
 ## Develop
 
 ```

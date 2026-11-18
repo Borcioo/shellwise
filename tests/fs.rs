@@ -1019,6 +1019,8 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
         // A splat or a variable may carry `-ItemType Junction`.
         cmd("New-Item", vec![var("p")]),
         cmd("New-Item", vec![lit(r"t\j"), var("opts")]),
+        // A non-literal `ln` argument may carry `-s` and `-t`.
+        cmd("ln", vec![var("opts"), lit(r"C:\x"), lit("t/j")]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(vague.clone(), seq), &env);

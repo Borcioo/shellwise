@@ -366,6 +366,14 @@ fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
         "ln" => {
             let long = |t: &str, full: &str| t.len() > 2 && full.starts_with(t);
             let short = |t: &str| t.starts_with('-') && !t.starts_with("--") && t.len() > 1;
+            // A variable, substitution or glob may carry `-s` and `-t`; `~` cannot.
+            if c.args.iter().any(|w| {
+                w.parts
+                    .iter()
+                    .any(|p| !matches!(p, WordPart::Literal(_) | WordPart::Tilde))
+            }) {
+                return Some(None);
+            }
             let symbolic = lit_args
                 .iter()
                 .flatten()
