@@ -238,9 +238,24 @@ impl Cx {
 /// is opaque.
 const MAX_TAINT_STEPS: usize = 64;
 
-/// Shell variables that always hold an integer.
+/// Shell variables that hold an integer while the script does not assign them.
 const INTEGER_VARIABLES: &[&str] = &[
     "#", "?", "$", "RANDOM", "LINENO", "SECONDS", "BASHPID", "PPID", "UID", "EUID",
+];
+
+/// Names bash itself declares integer and lets the script assign (`declare -p` in a bare bash
+/// 5.1 and 5.2; `BASHPID` ignores an assignment, `EUID`, `PPID` and `UID` are read-only): a value
+/// assigned to one is arithmetic.
+const SHELL_INTEGERS: &[&str] = &["HISTCMD", "OPTIND", "RANDOM", "SRANDOM"];
+
+/// Variables the shell sets to text from the script itself: the last argument, a regex match,
+/// the command being run, the arguments, the `-c` text.
+const SHELL_TEXT_VARIABLES: &[&str] = &[
+    "_",
+    "BASH_COMMAND",
+    "BASH_REMATCH",
+    "BASH_ARGV",
+    "BASH_EXECUTION_STRING",
 ];
 
 /// A value assigned to a name, as the taint rule reads it.
@@ -279,6 +294,8 @@ struct Call {
 /// passes a value that is not clean.
 struct Taint {
     clean: BTreeSet<String>,
+    /// Every name the script assigns.
+    assigned: BTreeSet<String>,
     positional: bool,
     /// Propagation went past `MAX_TAINT_STEPS`: every arithmetic context reads a tainted name.
     all: bool,
@@ -288,7 +305,8 @@ struct Taint {
 
 impl Taint {
     fn is_clean(&self, name: &str) -> bool {
-        INTEGER_VARIABLES.contains(&name) || self.clean.contains(name)
+        self.clean.contains(name)
+            || (INTEGER_VARIABLES.contains(&name) && !self.assigned.contains(name))
     }
 
     /// Whether arithmetic over `text` reads a tainted name.
@@ -297,12 +315,11 @@ impl Taint {
         self.all || names.iter().any(|n| !self.is_clean(n)) || (positional && self.positional)
     }
 
-    /// `assigned`: the names the script assigns.
-    fn value_clean(&self, v: &Value, assigned: &BTreeSet<&str>) -> bool {
+    fn value_clean(&self, v: &Value) -> bool {
         match v {
             Value::Clean => true,
             Value::Tainted => false,
-            Value::Copy(n) => self.is_clean(n) || !assigned.contains(n.as_str()),
+            Value::Copy(n) => self.is_clean(n) || !self.assigned.contains(n),
             Value::Arith { names, positional } => {
                 names.iter().all(|n| self.is_clean(n)) && !(*positional && self.positional)
             }
@@ -315,15 +332,17 @@ impl Taint {
         assigned: &[(String, Value)],
         calls: &[Call],
         functions: &BTreeSet<String>,
-        integers: BTreeSet<String>,
+        mut integers: BTreeSet<String>,
     ) -> Taint {
-        let names: BTreeSet<&str> = assigned.iter().map(|(n, _)| n.as_str()).collect();
+        let names: BTreeSet<String> = assigned.iter().map(|(n, _)| n.clone()).collect();
         let callers: Vec<&Call> = calls
             .iter()
             .filter(|c| c.function.as_ref().is_none_or(|f| functions.contains(f)))
             .collect();
+        integers.extend(SHELL_INTEGERS.iter().map(|n| n.to_string()));
         let mut t = Taint {
-            clean: names.iter().map(|n| n.to_string()).collect(),
+            clean: names.clone(),
+            assigned: names,
             positional: false,
             all: false,
             integers,
@@ -332,13 +351,13 @@ impl Taint {
         for round in 0.. {
             let dirty: BTreeSet<&str> = assigned
                 .iter()
-                .filter(|(n, v)| t.clean.contains(n) && !t.value_clean(v, &names))
+                .filter(|(n, v)| t.clean.contains(n) && !t.value_clean(v))
                 .map(|(n, _)| n.as_str())
                 .collect();
             let positional = !t.positional
                 && callers
                     .iter()
-                    .any(|c| c.args.iter().any(|v| !t.value_clean(v, &names)));
+                    .any(|c| c.args.iter().any(|v| !t.value_clean(v)));
             if dirty.is_empty() && !positional {
                 break;
             }
@@ -373,7 +392,12 @@ fn classify(parts: &[WordPart]) -> Value {
             Value::Clean
         }
         [WordPart::Var(v)] => {
-            if v == "@" || v == "*" || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())) {
+            if SHELL_TEXT_VARIABLES.contains(&v.as_str()) {
+                Value::Tainted
+            } else if v == "@"
+                || v == "*"
+                || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+            {
                 Value::Arith {
                     names: Vec::new(),
                     positional: true,
@@ -504,18 +528,34 @@ impl Lower {
         } else {
             classify(parts)
         };
+        self.record(name, value);
+    }
+
+    /// Every assignment goes through here: a value that is not clean, assigned to an integer
+    /// name, is evaluated as arithmetic.
+    fn record(&self, name: &str, value: Value) {
+        if let Some(t) = &self.taint
+            && t.integers.contains(name)
+            && !t.value_clean(&value)
+        {
+            self.tainted_read.set(true);
+        }
         self.assigned.borrow_mut().push((name.to_string(), value));
     }
 
     /// Record a name that gets a value at run time (`read n`); a name that is not static
-    /// may be any name.
+    /// may be any name, an integer one too.
     fn runtime_target(&self, w: Option<&Word>) {
         match w.and_then(|w| w.static_value(&EnvView::new())) {
             Some(v) => {
-                let name = v.split('[').next().unwrap_or_default().to_string();
-                self.assigned.borrow_mut().push((name, Value::Tainted));
+                self.record(v.split('[').next().unwrap_or_default(), Value::Tainted);
             }
-            None => self.unknown_target.set(true),
+            None => {
+                self.unknown_target.set(true);
+                if self.taint.is_some() {
+                    self.tainted_read.set(true);
+                }
+            }
         }
     }
 
@@ -1015,10 +1055,7 @@ impl Lower {
             if integer {
                 self.integers.borrow_mut().insert(name.to_string());
             }
-            if let Some(value) = value {
-                if integer {
-                    self.read_arith(value);
-                }
+            if value.is_some() {
                 // The value: the parts after the `=` in the first, literal part.
                 match w.parts.split_first() {
                     Some((WordPart::Literal(first), rest)) if first.contains('=') => {
@@ -1104,6 +1141,11 @@ impl Lower {
             i += 1;
         }
         match target {
+            // Without a name they set `REPLY` and `MAPFILE`.
+            Some("read") if operands.is_empty() => self.record("REPLY", Value::Tainted),
+            Some("mapfile" | "readarray") if operands.is_empty() => {
+                self.record("MAPFILE", Value::Tainted)
+            }
             Some("read") | Some("mapfile" | "readarray") => {
                 for i in operands {
                     self.runtime_target(args.get(i));
@@ -1230,9 +1272,9 @@ impl Lower {
                 };
                 let mut value = self.word_text(&w.value, origin, span, cx)?;
                 self.assigned(&name, &value.parts, a.append);
-                // A value assigned to an integer name is arithmetic.
+                // A value assigned to an integer name is arithmetic (`assigned` judges it): its
+                // quoted subscripts run their `$(…)`.
                 if self.integers().is_some_and(|i| i.contains(&name)) {
-                    self.read_arith(&value_text(&value));
                     self.subscript_substs(&mut value, cx)?;
                 }
                 out.push((name, value));

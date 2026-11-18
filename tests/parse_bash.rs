@@ -611,6 +611,49 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             "((",
         ),
         (format!("{x}declare -i 'n=x'"), "declare"),
+        // Every way a value reaches an integer name evaluates it: a loop variable, an array,
+        // `printf -v`, `read`, a quoted operand, a copy; the shell's own integer names too.
+        (
+            "declare -i n; for n in 'a[$(rm -rf y)]'; do :; done".to_string(),
+            "((",
+        ),
+        ("declare -i n; n=('a[$(rm -rf y)]')".to_string(), "<none>"),
+        (
+            "declare -i n; printf -v n %s 'a[$(rm -rf y)]'".to_string(),
+            "printf",
+        ),
+        (
+            "declare -i n; read n <<< 'a[$(rm -rf y)]'".to_string(),
+            "read",
+        ),
+        (
+            "declare -i n; export 'n=a[$(rm -rf y)]'".to_string(),
+            "export",
+        ),
+        (format!("{x}declare -i n; for n in x; do :; done"), "(("),
+        ("OPTIND='a[$(rm -rf y)]'".to_string(), "<none>"),
+        ("RANDOM='a[$(rm -rf y)]'".to_string(), "<none>"),
+        ("SRANDOM='a[$(rm -rf y)]'".to_string(), "<none>"),
+        ("HISTCMD='a[$(rm -rf y)]'".to_string(), "<none>"),
+        // An integer shell variable the script assigns is as clean as its values.
+        (
+            "unset RANDOM; RANDOM='a[$(rm -rf y)]'; (( RANDOM ))".to_string(),
+            "((",
+        ),
+        // Text the shell keeps from the script itself, and the default targets of `read` and
+        // `mapfile`; the obsolete `$[…]`.
+        (": 'a[$(rm -rf y)]'; n=$_; (( n ))".to_string(), "(("),
+        (
+            "[[ 'a[$(rm -rf y)]' =~ .* ]]; n=$BASH_REMATCH; (( n ))".to_string(),
+            "((",
+        ),
+        // By rule (script text or arguments): bash runs nothing in these shapes.
+        ("n=$BASH_COMMAND; (( n ))".to_string(), "(("),
+        ("n=$BASH_ARGV; (( n ))".to_string(), "(("),
+        ("n=$BASH_EXECUTION_STRING; (( n ))".to_string(), "(("),
+        ("REPLY=0; read < f; (( REPLY ))".to_string(), "(("),
+        ("MAPFILE=0; mapfile < f; (( MAPFILE ))".to_string(), "(("),
+        (format!("{x}echo $[x]"), "echo"),
         // `+=` joins two clean names into the name of a tainted one.
         (
             "a=1; b=1; ab='a[$(rm -rf y)]'; n=a; n+=b; (( n ))".to_string(),
@@ -632,6 +675,8 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ("(( n == 1 )); (( n ))".to_string(), "(("),
         ("z=1; v=n; declare \"$v=1\"; (( z ))".to_string(), "(("),
         ("z=1; read \"$v\" < f; (( z ))".to_string(), "(("),
+        // The target may be an integer name: the read evaluates what it reads.
+        ("read \"$v\" <<< 1".to_string(), "read"),
         // A function call or `set` carries a tainted argument into `$1`, `$@`.
         (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
@@ -662,13 +707,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
     for (src, name) in runs {
         let s = ok(src);
         let c = commands(&s);
-        let c = c
-            .iter()
-            .rev()
-            .find(|c| bash_util::name_of(c) == *name)
-            .unwrap_or_else(|| panic!("{src}: no {name}"));
-        if !c.opaque {
-            bad.push(format!("not opaque: {src}"));
+        match c.iter().rev().find(|c| bash_util::name_of(c) == *name) {
+            None => bad.push(format!("no {name}: {src}")),
+            Some(c) if !c.opaque => bad.push(format!("not opaque: {src}")),
+            Some(_) => {}
         }
     }
     // Contexts outside any command: the script gets an opaque `((` command, also when a command
@@ -714,6 +756,8 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "export 'n=5'; (( n ))".to_string(),
         "readonly 'n=5'; (( n ))".to_string(),
         "a=(1 2); (( a ))".to_string(),
+        "RANDOM=5; (( RANDOM ))".to_string(),
+        "declare -i n; n=5; for n in 1 2; do :; done".to_string(),
         // Arithmetic assigns integers.
         "(( n = 1 )); (( n ))".to_string(),
         "(( n += 1 )); (( n ))".to_string(),
