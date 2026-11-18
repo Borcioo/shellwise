@@ -442,11 +442,10 @@ fn segment_hits(
                     .iter()
                     .position(|w| matches!(w.value.as_str(), ";" | "+" | "\\;"))
                     .unwrap_or(rest.len());
+                // A later word after a wrapper in the clause is already a reading of the
+                // whole segment (`hits_at`), so the clause needs only its own walk.
                 let clause = &rest[..end];
-                each_reading(clause, depth, b, |start, w| {
-                    scan_walk(table, &clause[start..], w, true, b, out);
-                    false
-                });
+                scan_walk(table, clause, &walk(clause, depth, b), true, b, out);
             }
         }
     }
@@ -1686,7 +1685,7 @@ mod tests {
         "bash <(cat script.sh)",
         // printed text the writer still expands
         "echo \"$X\" | bash",
-        "echo \"`x`\" | bash",
+        "echo \"a`x`b\" | bash",
         "printf 'r\\155 -rf x' | bash",
         "printf 'rm%s-rf x' ' ' | bash",
         // a heredoc delimiter the reader cannot resolve: the rest of the input is unread
@@ -1756,6 +1755,9 @@ mod tests {
         "eval echo hi",
         "Start-Process -FilePath notepad -ArgumentList 'a.txt'",
         "git branch --delete topic",
+        // static text an interpreter reads is scanned, not taken as unreadable
+        "'Get-Date' | iex",
+        "echo hi | bash",
     ];
 
     #[test]
