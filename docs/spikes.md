@@ -124,14 +124,16 @@ PowerShell, 22,334 Bash, 1,605 destructive) over 31 calendar days, 28 of them wi
 |---|---|---|
 | Toolchain | Rust 1.97.1, MSVC (VS Build Tools 2022 17.14) through `cc` | Rust 1.100.0 (rustup installed for the spike), gcc 11.4 |
 | `cargo build --release` | passes, no flags or env needed | passes |
-| Release binary (unstripped) | 1,883,648 bytes | 2,365,392 bytes |
+| Release binary (unstripped, final build) | 1,888,768 bytes | 2,370,064 bytes |
 
 Versions: `tree-sitter` 0.27.2, `tree-sitter-powershell` 0.26.6, `brush-parser` 0.4.0 (all MIT), plus
-`serde_json` 1.0.154 for the event; 107 packages in the lockfile. `brush-parser` brings a
+`serde_json` 1.0.154 for the event; 107 dependencies in the lockfile. `brush-parser` brings a
 snapshot-test crate and its helpers into the normal dependency tree. `cargo deny check` (0.21.0)
 passes advisories, bans, licences and sources with an allow list of MIT, Apache-2.0 (also with the
 LLVM exception), Unlicense, Zlib, BSD-2-Clause and Unicode-3.0; bans warn about five duplicated
-crates. The Linux build gave the same dump as the Windows build on every corpus row of both shells.
+crates. Built from the same final source on both systems, the Linux binary's dump equals the
+Windows binary's on every snapshot row: 28,453 PowerShell rows (tree-sitter, variant (a) below) and
+22,334 Bash rows (brush-parser on the original text), 0 rows differing.
 
 ### PowerShell: tree-sitter-powershell against `Parser::ParseInput`
 
@@ -150,19 +152,22 @@ its target) as a redirection, which the grammar does not.
 | Mismatches on destructive rows | 77 of 1,058 | 65 | 0 unlisted |
 | Gap rows correct | 22 of 29 | 22 of 29 | all |
 
-Errors only tree-sitter reports (886 rows; 25 rows the other way), by the text at the first error
-node: a variable glued to a path (`$name\dir`, `$env:NAME/x`) 332; a numeric multiplier suffix
+Errors only tree-sitter reports (886 rows; 25 rows the other way), bucketed by the text around the
+first ERROR or MISSING node only, so each count is a floor: a variable glued to a path (`$name\dir`, `$env:NAME/x`) 332; a numeric multiplier suffix
 (`1MB`) 156; a bare word starting with `@` (a package scope) 27; a parameter glued to a quoted
 value 25; `??` and `?.` 15; the ternary operator 10; an error at the first character 19; a
 `switch` clause 1; other shapes (escaped quotes inside double-quoted strings, recovery that swallows
-the following statements) 301.
+the following statements) 301. A rescan of the whole command of those 301 rows finds one of the
+named shapes in 165 of them (a variable glued to a path in 124, a multiplier suffix in 37, an `@`
+word in 19, `??`/`?.` in 6, a glued quoted value in 4); the reviewer's broader patterns found 218.
 
 Silent mismatches in (a): a glued redirection or a numbered stream redirect read as an extra
 argument (711 rows, the difference between (a) and (b)); a range inside parentheses (`(1..5)`) read
 as an extra command (357); other argument splits (44): a method call on a variable or a
 here-string (`$x.Trim()`) split from its argument list, a `$(…)` glued to the end of a word split
 off so the first part reads as a static literal, backslash-escaped double quotes inside a
-double-quoted argument, `${name}:` losing its colon; comments (8). Even with every argument split
+double-quoted argument, `${name}:` losing its colon, `-split '\s+'` joined into one element,
+`(Get-Date).AddDays(-5)` split from its argument list; comments (8). Even with every argument split
 repaired in lowering, the phantom range commands alone are 1.25 % of the rows.
 
 Destructive mismatches in (a), by mechanism: 52 rows where only tree-sitter reports an error (fail
@@ -200,10 +205,13 @@ count as commands.
 | Mismatches on destructive rows | 0 of 547 | 0 unlisted |
 | Gap rows correct | 17 of 19 | all |
 
+0.148 % is a floor: brush-parser reads both the row and bash's canonical text, so a misreading it
+makes the same way on both sides does not show.
+
 The one error mismatch: `case` with unparenthesised patterns inside `$(…)`, which brush rejects.
 Of the 33 silent rows, 32 are rows the reference cannot judge: bash prints a heredoc followed by
-`||`/`&&` with the operator at the start of the next line, which no parser reads back (brush's
-reading of the original was right on the rows checked by hand); 1 is the host setup's own CRLF
+`||`/`&&` with the operator at the start of the next line, which no parser reads back (on the 6 of
+them checked by hand, brush's command names for the original were right); 1 is the host setup's own CRLF
 normalisation dropping a CR from a `$'…'` word. Heredoc rows: 3,834, 0 error mismatches, 32 silent,
 all of them the printer case. `$'…'` rows: 246, 0 error mismatches, 2 silent (one of each cause).
 The 10 rows bash rejects (unclosed backticks, a heredoc closed by the end of input, which the
@@ -265,4 +273,10 @@ silent mismatches are at most 0.5 % and equal error status is at least 99 %.
 a dedicated Rust lexer scoped to what the rules need, with `ParseInput` as the test oracle. brush-parser
 meets the corpus thresholds and misses two heredoc-delimiter gap rows, which it rejects as parse
 errors rather than misreading. Separately, destructive `ok` rows with a dynamic target run at 14.8
-per day against the 2 per day of FP meter 2: the owner decides before Task 4. Waiting for the owner.
+per day against the 2 per day of FP meter 2: the owner decides before Task 4.
+
+Owner decisions:
+
+- PowerShell: fork the tree-sitter-powershell grammar and re-measure it with the same thresholds.
+- Dynamic targets: the shim moves into v1.
+- Bash: brush-parser is kept; the two heredoc-delimiter gap rows fail closed.
