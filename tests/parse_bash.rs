@@ -200,6 +200,13 @@ fn loops_mark_their_commands() {
         assert!(inner.iter().all(|c| c.in_loop), "{src}");
     }
     assert!(commands(&ok("rm x")).iter().all(|c| !c.in_loop));
+    // The `for (( … ))` header runs before its loop: `;` joins them.
+    match &ok("true || for ((i=0; i<3; i++)); do rm x; done").stmts[..] {
+        [_, Stmt::Pipeline(header), Stmt::Loop { .. }] => {
+            assert_eq!(header.chain, Some(ChainOp::Seq))
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -348,6 +355,7 @@ fn hidden_commands_inside_words_are_found() {
         ("echo $((1 + $(rm x)))", &["echo", "rm"]),
         ("[[ -n $(rm x) ]]", &["[[", "rm"]),
         ("(( $(rm x) ))", &["((", "rm"]),
+        ("(( x )) > $(rm x)", &["((", "rm"]),
         ("case $(git branch) in main) rm x;; esac", &["git", "rm"]),
         (
             "echo $(echo $(echo $(git status)))",
@@ -397,6 +405,9 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
         ("let 'a[\"]\"+$(rm -rf x)]'", &["let", "rm"]),
         ("let 'a[$(echo \"]\")+$(rm -rf x)]'", &["let", "echo", "rm"]),
         ("let 'a[b[1]+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[$(echo ])+$(rm -rf x)]'", &["let", "echo", "rm"]),
+        ("let 'a[${y:-]}+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[\\]+$(rm -rf x)]'", &["let", "rm"]),
         // The value assigned to an integer name is arithmetic.
         (
             "declare -i n; n='a[$(rm -rf x)]'",
@@ -532,6 +543,35 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}for (( i = x; i < 0; i++ )); do :; done"), "(("),
         (format!("{x}while (( x )); do break; done"), "(("),
         (format!("{x}(( x )) || true"), "(("),
+        (format!("{x}a=([x]=1)"), "<none>"),
+        (format!("{x}declare 'n+=x'; (( n ))"), "(("),
+        ("export 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("readonly 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        (
+            "f() { declare -i n; n=\"$*\"; }; f 'a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "f() { declare -i n; n=\"$@\"; }; f 'a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        // A substitution after the read does not hide it.
+        (format!("{x}echo ${{a[x]}} $(true)"), "echo"),
+        // Every parameter operator keeps the subscript arithmetic.
+        (format!("{x}echo \"${{a[x]:=d}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]=}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]:?e}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]:+d}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]##1}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]%1}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]%%1}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]@Q}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]^}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]^^}}\""), "echo"),
+        (format!("{x}echo \"${{a[x],}}\""), "echo"),
+        (format!("{x}echo \"${{a[x],,}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]/1/2}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]:0}}\""), "echo"),
     ];
     // Every failing row is listed, not only the first.
     let mut bad = Vec::new();
@@ -547,11 +587,13 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             bad.push(format!("not opaque: {src}"));
         }
     }
-    // Contexts outside any command: the script gets an opaque `((` command.
+    // Contexts outside any command: the script gets an opaque `((` command, also when a command
+    // (simple, `((`, `[[`) is lowered after the read.
     for src in [
         format!("{x}case ${{a[x]}} in *) ;; esac"),
-        format!("{x}for f in ${{a[x]}}; do :; done"),
-        format!("{x}{{ :; }} > \"${{a[x]}}\""),
+        format!("{x}case ${{a[x]}} in *) echo ;; esac"),
+        format!("{x}for f in ${{a[x]}}; do (( 1 )); done"),
+        format!("{x}{{ [[ 1 ]]; }} > \"${{a[x]}}\""),
     ] {
         let s = ok(&src);
         if !commands(&s)

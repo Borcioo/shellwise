@@ -256,8 +256,9 @@ struct Taint {
 }
 
 impl Taint {
+    /// `all` is only set once names were tainted, so it needs no check here.
     fn is_empty(&self) -> bool {
-        self.names.is_empty() && !self.positional && !self.all
+        self.names.is_empty() && !self.positional
     }
 
     /// Whether arithmetic over `text` reads a tainted name.
@@ -1484,7 +1485,6 @@ fn holds_code_subscript(text: &str) -> bool {
 /// The names in arithmetic text (`a[x+$y]` → `a`, `x`, `y`).
 fn identifiers(text: &str) -> impl Iterator<Item = &str> {
     text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-        .filter(|id| id.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_'))
 }
 
 /// Whether text expands a positional parameter (`$1`, `${10}`, `$@`, `$*`).
