@@ -1214,8 +1214,11 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
                     if h.strip_tabs {
                         line = line.trim_start_matches('\t');
                     }
-                    // Byte for byte, as bash compares: a `\r` belongs to the line or the word.
-                    if line == h.delim {
+                    // bash compares byte for byte, but a reader that drops CR ends the body at a
+                    // line that matches once `\r` is trimmed: the earliest end of the two leaves
+                    // the most text to scan as code. (The trimmed compare also holds every
+                    // byte-for-byte match.)
+                    if line.trim_end_matches('\r') == h.delim.trim_end_matches('\r') {
                         found = true;
                         body_end = j;
                         next = (line_end + 1).min(n);
@@ -1666,6 +1669,10 @@ mod tests {
         // automated note 2: a delimiter with `\r` that no line matches byte for byte
         "cat <<EOF\r\nEOF\nrm -rf x",
         "cat <<EOF\nEOF\r\nrm -rf x",
+        // a line that matches the delimiter only once `\r` is trimmed ends the body (a reader
+        // that drops CR stops there): the earliest end is the safe side
+        "echo \u{2018}a; cat <<EOF\nhello\nEOF\r\nrm -rf x\nEOF\necho \u{2019}",
+        "echo \u{2018}a; cat <<EOF\r\nhello\r\nEOF\nrm -rf x\r\nEOF\r\necho \u{2019}",
     ];
 
     /// Commands the scan cannot read to the end (too deep, too much work, text it cannot see):
@@ -1749,9 +1756,6 @@ mod tests {
         "eval echo hi",
         "Start-Process -FilePath notepad -ArgumentList 'a.txt'",
         "git branch --delete topic",
-        // bash compares delimiter lines byte for byte: a `\r` belongs to the word or the line
-        "echo \u{2018}a; cat <<EOF\r\nhello\nEOF\nrm -rf x\nEOF\r\necho \u{2019}",
-        "echo \u{2018}a; cat <<EOF\nhello\nEOF\r\nrm -rf x\nEOF\necho \u{2019}",
     ];
 
     #[test]
