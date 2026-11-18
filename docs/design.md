@@ -21,8 +21,8 @@ gaps; values only the shell knows stay unknown, so destructive commands with the
 
 ## Goals (v1)
 
-1. **Replace the host setup's Python baseline-guard** for both tools (PowerShell, Bash): all 23 rules it
-   holds today (13 installed + 10 in the uninstalled full guard), with the same or better catch rate
+1. **Replace the host setup's Python baseline-guard** for both tools (PowerShell, Bash): all 24 rule ids it
+   holds today (14 installed, counting `git-unreadable`, + 10 in the uninstalled full guard), with the same or better catch rate
    within the false-positive budget below on the real corpus.
 2. **Encode the mechanical traps** of `windows-dev-env` and the "Windows shell" rules, so those prose
    bullets can be deleted from the host setup (table below). A new rule enters v1 only with at least
@@ -68,7 +68,7 @@ gaps; values only the shell knows stay unknown, so destructive commands with the
 - Public repo: no absolute paths, personal or client names in code, docs or fixtures; synthetic
   fixtures only, the real corpus stays outside the repo. Creating the GitHub repo, publishing to
   crates.io and every release need the owner's explicit OK each time.
-- Local repo `F:\Projekty\tools\shellwise`, branches `main`/`develop` per the owner's git workflow.
+- Branches `main`/`develop` per the owner's git workflow.
 - Talk to the owner in Polish; code, docs and commits in English.
 
 ## Approaches considered
@@ -175,7 +175,9 @@ only when the word exists on disk and is not a commit, etc.). Junctions are read
 
 ### Configuration
 
-TOML. User file (`<config dir>/shellwise/config.toml`) may raise or lower any rule's level, set
+TOML, in three layers: an integration file passed with `--config <file>` (how a plugin such as the
+host setup ships its settings to every machine), then the user file, which overrides it, then the repo
+file. The user file (`<config dir>/shellwise/config.toml`) may raise or lower any rule's level, set
 `dynamic_target`, the walk budget, protected paths, and lists the generic rules need: "gate"
 commands whose output must not be truncated (the host setup puts `my-tool.ps1` and its gate
 commands here), `.bat` launcher names, optional tool paths named in fixes. A repo file
@@ -184,7 +186,7 @@ guard off.
 
 ### Rules v1
 
-Ported from baseline-guard (23): `ps-git-commit-stdin`, `git-restore-discards`,
+Ported from baseline-guard (24): `ps-git-commit-stdin`, `git-restore-discards`, `git-unreadable`,
 `gate-truncated-pipeline` (gate list from config), `bash-backslash-collapse`, `cli-inline-prose`,
 `stale-write-var`, `ps-bare-bash`, `ps-dotnet-relative-path`, `ps-native-nonewline`, `bat-metachar`,
 `ps-bad-parameter`, `git-no-verify` (policy, off unless enabled in config), `git-worktree-junction`
@@ -220,9 +222,8 @@ it before writing the command (e.g. which shell to choose).
 Claude Code transcripts (main and subagent) into JSONL with a label: `failed` (error output),
 `denied-hook`, `denied-permission`, `ok`, plus a `destructive` flag set by an independent matcher
 (command names of the delete/discard family, not shellwise's own resolution). The corpus is the
-owner's transcripts under `~/.claude/projects` (at least the last 30 days; the earlier audit
-scripts in `F:\Temp\stop-audit\` show how to walk them); the file stays outside the repo, under
-`F:\Temp\shellwise-corpus\`. **Baseline:** the current `baseline_guard.py` (`check()` and the installed
+owner's Claude Code transcripts (at least the last 30 days); the file stays outside the repo, in
+the folder `$SHELLWISE_CORPUS` names. **Baseline:** the current `baseline_guard.py` (`check()` and the installed
 `check_installed()`) replayed over the same rows, recorded before the first rule is ported. `shellwise bench
 --corpus` reports per rule: catches on `failed`/`denied-*`, denies on `ok` (false positives, each
 listed), parse failures per shell, latency p50/p99, and a differential against baseline-guard on the
@@ -256,7 +257,9 @@ fixture format, CLI parsing library, how rule docs are generated.
 
 ## Estimate
 
-v1: ~38 agent working hours; ~6,000 lines of Rust, ~4,500 lines of tests and fixtures; spikes ~4 h; the host setup stage ~3 h, ~100 code and ~80 test lines added, baseline_guard.py rules and ~40 prose lines removed.
+v1: ~55 agent working hours; ~7,000 lines of Rust, ~6,500 lines of tests and fixtures (porting
+`test_rules.py` alone is ~2,150 lines of cases); spikes ~6 h; the host setup stage ~6 h: the commit shadow
+keeps the Python lexer parts it needs (~900 lines stay), ~2,000 rule lines and ~40 prose lines go.
 Simpler version (~15 h, ~3,000 + ~2,000 lines): PowerShell only, the 13 installed rules and the
 delete guard, no new lint rules. It drops Bash coverage (the Bash handlers would stay in Python, so
 baseline-guard could not be deleted) and the "will it break" additions.
