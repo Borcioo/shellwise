@@ -27,7 +27,8 @@ pub struct Entry {
 /// A table row that matched, and the span of the simple command it matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
-    pub row: usize,
+    /// The table row, or `None` for a nested body the scan cannot read (an encoded command).
+    pub row: Option<usize>,
     pub span: Span,
 }
 
@@ -137,8 +138,14 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
         return out;
     }
     for mode in [Mode::Bash, Mode::Pwsh] {
-        for seg in segments(cmd, mode) {
+        let (segs, embedded) = segments(cmd, mode);
+        for seg in segs {
             segment_hits(table, strip_prefix(&seg), depth, &mut out);
+        }
+        for (span, body) in embedded {
+            for h in hits_at(table, &body, depth + 1) {
+                out.push(Hit { row: h.row, span });
+            }
         }
     }
     // Both readings usually find the same command.
@@ -154,11 +161,18 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, out: &mut Vec<Hit>
         end: words[words.len() - 1].span.end,
     };
     let name = base_name(&first.value);
-    if let Some(body) = nested_body(&name, words) {
-        for h in hits_at(table, &body, depth + 1) {
-            out.push(Hit { row: h.row, span });
+    match nested_body(&name, words) {
+        Some(Nested::Body(body)) => {
+            for h in hits_at(table, &body, depth + 1) {
+                out.push(Hit { row: h.row, span });
+            }
+            return;
         }
-        return;
+        Some(Nested::Opaque) => {
+            out.push(Hit { row: None, span });
+            return;
+        }
+        None => {}
     }
     if name == "find" {
         for (k, w) in words.iter().enumerate() {
@@ -186,7 +200,10 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, out: &mut Vec<Hit>
             if (entry.requires_any.is_empty() || any(&entry.requires_any))
                 && !any(&entry.unless_any)
             {
-                out.push(Hit { row, span });
+                out.push(Hit {
+                    row: Some(row),
+                    span,
+                });
             }
         }
     }
@@ -207,8 +224,21 @@ const GIT_VALUE_OPTS: [&str; 7] = [
     "--config-env",
 ];
 
+enum Nested {
+    /// The text of the nested command.
+    Body(String),
+    /// A nested command the scan cannot read (`pwsh -EncodedCommand`).
+    Opaque,
+}
+
+#[derive(PartialEq, Eq)]
+enum Flag {
+    Command,
+    Encoded,
+}
+
 /// The body of `bash -c …`, `pwsh -Command …`, `cmd /c …` or `Invoke-Expression …`, if any.
-fn nested_body(name: &str, words: &[Tok]) -> Option<String> {
+fn nested_body(name: &str, words: &[Tok]) -> Option<Nested> {
     let join = |rest: &[Tok]| {
         rest.iter()
             .map(|w| w.value.as_str())
@@ -216,24 +246,40 @@ fn nested_body(name: &str, words: &[Tok]) -> Option<String> {
             .join(" ")
     };
     match name {
-        "invoke-expression" | "iex" => Some(join(&words[1..])),
+        "invoke-expression" | "iex" => Some(Nested::Body(join(&words[1..]))),
         "bash" | "sh" | "pwsh" | "powershell" | "cmd" => {
-            let k = words[1..]
-                .iter()
-                .position(|w| !w.quoted && is_nested_flag(&w.value))?;
-            Some(join(&words[k + 2..]))
+            let (k, flag) = words[1..].iter().enumerate().find_map(|(k, w)| {
+                if w.quoted {
+                    return None;
+                }
+                nested_flag(name, &w.value).map(|f| (k, f))
+            })?;
+            Some(match flag {
+                Flag::Encoded => Nested::Opaque,
+                Flag::Command => Nested::Body(join(&words[k + 2..])),
+            })
         }
         _ => None,
     }
 }
 
-fn is_nested_flag(v: &str) -> bool {
+fn nested_flag(shell: &str, v: &str) -> Option<Flag> {
     let v = v.to_ascii_lowercase();
-    if matches!(v.as_str(), "-command" | "/c" | "/k" | "//c" | "//k") {
-        return true;
+    if matches!(v.as_str(), "/c" | "/k" | "//c" | "//k") {
+        return Some(Flag::Command);
     }
-    let rest = v.strip_prefix('-').unwrap_or("");
-    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_lowercase()) && rest.ends_with('c')
+    let rest = v.strip_prefix('-').filter(|r| !r.is_empty())?;
+    if matches!(shell, "pwsh" | "powershell") {
+        // PowerShell accepts any unambiguous prefix of a parameter name.
+        if rest == "ec" || (rest.starts_with('e') && "encodedcommand".starts_with(rest)) {
+            return Some(Flag::Encoded);
+        }
+        if "command".starts_with(rest) || "commandwithargs".starts_with(rest) || rest == "cwa" {
+            return Some(Flag::Command);
+        }
+    }
+    // bash -c, -lc, -ec: a cluster of short options ending in c.
+    (rest.bytes().all(|b| b.is_ascii_lowercase()) && rest.ends_with('c')).then_some(Flag::Command)
 }
 
 /// The command name without a directory or `.exe`, lowercased.
@@ -338,16 +384,21 @@ struct Tok {
     span: Span,
 }
 
+type Segments = (Vec<Vec<Tok>>, Vec<(Span, String)>);
+
 fn char_len_at(text: &str, i: usize) -> usize {
     text[i..].chars().next().map_or(1, char::len_utf8)
 }
 
 /// Simple commands of `text` as words: split at `; | & ( ) { }` and newlines, quotes joined into
 /// their word, comments dropped. Lenient: an unclosed quote or comment runs to the end.
-fn segments(text: &str, mode: Mode) -> Vec<Vec<Tok>> {
+/// Also returns quoted text that may run as code (a substitution in `"…"`, an unclosed quote),
+/// with its span, for the caller to scan as a nested command.
+fn segments(text: &str, mode: Mode) -> Segments {
     let b = text.as_bytes();
     let n = text.len();
     let mut out = Vec::new();
+    let mut embedded = Vec::new();
     let mut words: Vec<Tok> = Vec::new();
     let mut cur: Option<Tok> = None;
     let mut i = 0;
@@ -389,23 +440,30 @@ fn segments(text: &str, mode: Mode) -> Vec<Vec<Tok>> {
             i = text[i + 2..].find("#>").map_or(n, |k| i + 2 + k + 2);
         } else if c == b'#' && cur.is_none() {
             i = text[i..].find('\n').map_or(n, |k| i + k);
-        } else if c == b'\'' {
-            let j = text[i + 1..].find('\'').map_or(n, |k| i + 1 + k);
-            push(&mut cur, i, (j + 1).min(n), &text[i + 1..j], true);
-            i = j + 1;
-        } else if c == b'"' {
-            let mut j = i + 1;
-            while j < n && b[j] != b'"' {
-                if b[j] == escape {
-                    j += 1;
-                    if j >= n {
-                        break;
-                    }
-                }
-                j += char_len_at(text, j);
+        } else if c == b'\'' || c == b'"' {
+            // bash `$'…'` takes backslash escapes; `"…"` takes the shell's escape character.
+            let ansi_c = c == b'\'' && mode == Mode::Bash && i > 0 && b[i - 1] == b'$';
+            let esc = if c == b'"' || ansi_c {
+                Some(escape)
+            } else {
+                None
+            };
+            let j = close_quote(text, i + 1, c, esc);
+            let body = &text[i + 1..j];
+            let span = Span {
+                start: i,
+                end: (j + 1).min(n),
+            };
+            if j >= n {
+                // Unclosed: the shell may read the rest as code, so scan it as code too.
+                embedded.push((span, body.to_string()));
+            } else if c == b'"'
+                && (body.contains("$(") || (mode == Mode::Bash && body.contains('`')))
+            {
+                // A substitution inside a double-quoted word runs: scan the whole body as code.
+                embedded.push((span, body.to_string()));
             }
-            let j = j.min(n);
-            push(&mut cur, i, (j + 1).min(n), &text[i + 1..j], true);
+            push(&mut cur, i, span.end, body, true);
             i = j + 1;
         } else if c == escape {
             if text[i + 1..].starts_with('\n') {
@@ -429,7 +487,24 @@ fn segments(text: &str, mode: Mode) -> Vec<Vec<Tok>> {
     if !words.is_empty() {
         out.push(words);
     }
-    out
+    (out, embedded)
+}
+
+/// The index of the quote closing a string that starts at `from`, or `text.len()` when unclosed.
+fn close_quote(text: &str, from: usize, quote: u8, escape: Option<u8>) -> usize {
+    let b = text.as_bytes();
+    let n = text.len();
+    let mut j = from;
+    while j < n && b[j] != quote {
+        if Some(b[j]) == escape {
+            j += 1;
+            if j >= n {
+                break;
+            }
+        }
+        j += char_len_at(text, j);
+    }
+    j.min(n)
 }
 
 #[cfg(test)]
@@ -500,6 +575,23 @@ mod tests {
         "'rm' -rf x",
         "r\\m -rf x",
         "Remove-`Item x",
+        "[void] Remove-Item x",
+        "Get-ChildItem x | Remove-Item",
+        // command substitution inside a double-quoted word
+        "echo \"$(rm -rf x)\"",
+        "echo \"a `rm -rf x` b\"",
+        "Write-Output \"now $(Remove-Item x)\"",
+        // quotes the lenient reader may close in the wrong place
+        "echo $'it\\'s'; rm -rf x",
+        "echo $'a\\'b' ; rm -rf x ; echo 'c'",
+        "echo 'never closed; rm -rf x",
+        // every prefix of -Command, and bodies the scan cannot read
+        "pwsh -co \"Remove-Item x\"",
+        "pwsh -Comm 'ri x'",
+        "pwsh -EncodedCommand AAAA",
+        "powershell -e AAAA",
+        "pwsh.exe -enc AAAA",
+        "pwsh -ec AAAA",
     ];
 
     const HARMLESS: &[&str] = &[
@@ -516,6 +608,9 @@ mod tests {
         "robocopy a b /E",
         "Get-ChildItem x | Measure-Object",
         "format x",
+        "echo hi # ; rm -rf x",
+        "bash -e script.sh",
+        "echo \"$(Get-Date)\"",
     ];
 
     #[test]
@@ -535,7 +630,9 @@ mod tests {
         let mut seen = vec![false; table().len()];
         for cmd in DESTRUCTIVE {
             for hit in hits(table(), cmd) {
-                seen[hit.row] = true;
+                if let Some(row) = hit.row {
+                    seen[row] = true;
+                }
             }
         }
         let missing: Vec<usize> = (0..seen.len()).filter(|&k| !seen[k]).collect();
@@ -576,6 +673,7 @@ mod tests {
     fn load_rejects_malformed_tables() {
         let bad = [
             "",
+            "command = []\n",
             "[[command]]\nnames = []\nshells = [\"bash\"]\nrequires_any = []\n",
             "[[command]]\nnames = [\"rm\"]\nshells = []\nrequires_any = []\n",
             "[[command]]\nnames = [\"rm\"]\nshells = [\"zsh\"]\nrequires_any = []\n",
