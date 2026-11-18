@@ -1,0 +1,2 @@
+Positive control for scripts/leak_check.py: the line below is a profile path the leak leg must catch.
+C:\Users\fixture-user\Documents\notes.txt

@@ -1,0 +1,24 @@
+[package]
+name = "shellwise"
+version = "0.1.0"
+edition = "2024"
+description = "Command guard and lint for shell commands written by AI coding agents"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+publish = false
+
+[features]
+# Tests that compare the parsers against the real shells (need pwsh and Git Bash).
+oracle = []
+# Test-only rules that panic or sleep, driven by SHELLWISE_TESTHOOK. Never in a release build.
+testhooks = []
+
+[dependencies]
+clap = { version = "4.6.8", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+
+# A panic must unwind so the worker's catch_unwind can turn it into the fail-closed verdict.
+[profile.release]
+panic = "unwind"
