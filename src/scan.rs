@@ -206,10 +206,11 @@ pub fn harmless(text: &str) -> bool {
     }
     let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
     let same = |w: &str, e: &str| w.eq_ignore_ascii_case(e);
-    if let [tool, flag] = words.as_slice() {
-        if same(flag, "--version") && VERSION_TOOLS.iter().any(|t| same(tool, t)) {
-            return true;
-        }
+    if let [tool, flag] = words.as_slice()
+        && same(flag, "--version")
+        && VERSION_TOOLS.iter().any(|t| same(tool, t))
+    {
+        return true;
     }
     READ_ONLY.iter().any(|entry| {
         let want: Vec<&str> = entry.split(' ').collect();
