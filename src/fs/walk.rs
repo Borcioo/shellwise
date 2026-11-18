@@ -86,6 +86,15 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
         Err(_) => return WalkResult::Unreadable(root.to_path_buf()),
     };
     let inside = path_key(&root.to_string_lossy(), os);
+    // The mount table: a folder in the tree that is a mount point leads out of it even when a
+    // bind mount keeps the device. Without a table the device check alone decides.
+    let mounts: Vec<String> = match fs.mount_points() {
+        Ok(Some(list)) => list
+            .iter()
+            .map(|m| path_key(&m.to_string_lossy(), os))
+            .collect(),
+        _ => Vec::new(),
+    };
     let mut found = Vec::new();
     let done = |found: Vec<Link>, otherwise: WalkResult| {
         if found.is_empty() {
@@ -122,12 +131,14 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
                     }
                 }
             } else if m.is_dir {
-                let same_device = match (root_dev, fs.device(&e)) {
-                    (None, _) => true,
-                    (Some(r), Ok(d)) => d == Some(r),
-                    (Some(_), Err(err)) if not_found(&err) => continue,
-                    (Some(_), Err(_)) => return done(found, WalkResult::Unreadable(e)),
-                };
+                let listed = mounts.contains(&path_key(&e.to_string_lossy(), os));
+                let same_device = !listed
+                    && match (root_dev, fs.device(&e)) {
+                        (None, _) => true,
+                        (Some(r), Ok(d)) => d == Some(r),
+                        (Some(_), Err(err)) if not_found(&err) => continue,
+                        (Some(_), Err(_)) => return done(found, WalkResult::Unreadable(e)),
+                    };
                 if same_device {
                     todo.push_back(e);
                 } else {

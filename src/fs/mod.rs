@@ -48,6 +48,44 @@ pub trait Fs: Send + Sync {
     fn device(&self, _p: &Path) -> io::Result<Option<u64>> {
         Ok(None)
     }
+    /// Every mount point on this system (`/proc/self/mountinfo` on Linux), so the walk sees a
+    /// bind mount that keeps the device; `None` where the system cannot list them.
+    fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
+        Ok(None)
+    }
+}
+
+/// The mount points in the text of a `/proc/self/mountinfo` file (field 5, octal escapes such
+/// as `\040` decoded).
+pub fn parse_mountinfo(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .filter_map(|l| l.split(' ').nth(4))
+        .map(|field| PathBuf::from(unescape_mount(field)))
+        .collect()
+}
+
+/// `\NNN` (three octal digits) as the byte it names: the kernel writes space, tab, newline and
+/// backslash this way.
+fn unescape_mount(field: &str) -> String {
+    let b = field.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let octal = b
+            .get(i + 1..i + 4)
+            .filter(|d| d.iter().all(|c| (b'0'..=b'7').contains(c)));
+        match (b[i], octal) {
+            (b'\\', Some(d)) => {
+                out.push((d[0] - b'0') * 64 + (d[1] - b'0') * 8 + (d[2] - b'0'));
+                i += 4;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// One file's identity: two paths with equal ids name the same file or folder.
@@ -158,6 +196,12 @@ impl Fs for RealFs {
             volume: m.dev(),
             index: m.ino(),
         }))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
+        let text = std::fs::read_to_string("/proc/self/mountinfo")?;
+        Ok(Some(parse_mountinfo(&text)))
     }
 
     #[cfg(not(windows))]

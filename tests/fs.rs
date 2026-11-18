@@ -151,6 +151,8 @@ struct FakeFs {
     /// Devices; when any is set, a node without one is on device 1, and `DEVICE_ERROR` cannot
     /// be read.
     devs: BTreeMap<PathBuf, Option<u64>>,
+    /// What `mount_points` answers; `Err` when `None`.
+    mounts: Option<Vec<PathBuf>>,
 }
 
 impl FakeFs {
@@ -227,6 +229,13 @@ impl Fs for FakeFs {
         match self.nodes.get(p) {
             Some(Node::Link(_, k)) => Ok(*k),
             _ => Err(io::Error::other("no readable link")),
+        }
+    }
+
+    fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
+        match &self.mounts {
+            Some(m) => Ok(Some(m.clone())),
+            None => Err(io::Error::from(io::ErrorKind::PermissionDenied)),
         }
     }
 
@@ -623,6 +632,61 @@ fn walk_counts_a_folder_on_another_device_as_a_mount_point() {
             "{refused}"
         );
     }
+}
+
+/// `mount --bind` on the same file system keeps the device: the mount table names it.
+#[cfg(unix)]
+#[test]
+fn walk_counts_a_listed_mount_point_inside_the_tree_on_the_same_device() {
+    let tree = || {
+        FakeFs::default()
+            .dir(&at("data/sub/deep"))
+            .dir(&at("data/bind/x"))
+    };
+    let mut fake = tree();
+    fake.mounts = Some(vec![
+        PathBuf::from("/"),
+        // The root itself, and a mount outside it, are not links out of the tree.
+        PathBuf::from(at("data")),
+        PathBuf::from(at("elsewhere")),
+        PathBuf::from(at("data/bind")),
+    ]);
+    let fs = fake.shared();
+    assert_eq!(
+        outside_links(Path::new(&at("data")), &fs, &far()),
+        WalkResult::Outside(vec![lk(at("data/bind"), LinkKind::MountPoint)])
+    );
+    // A mount table that cannot be read leaves the device check.
+    let unread = tree().shared();
+    assert_eq!(
+        outside_links(Path::new(&at("data")), &unread, &far()),
+        WalkResult::Clean
+    );
+}
+
+#[test]
+fn mountinfo_lists_every_mount_point_with_its_escapes_decoded() {
+    let text = "22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n\
+                61 22 0:5 / /dev rw,nosuid - devtmpfs udev rw\n\
+                90 22 8:1 /home/u/src /w/my\\040data/bind rw - ext4 /dev/sda1 rw\n\
+                91 22 0:44 / /w/tab\\011and\\134back rw - tmpfs none rw\n";
+    assert_eq!(
+        shellwise::fs::parse_mountinfo(text),
+        vec![
+            PathBuf::from("/"),
+            PathBuf::from("/dev"),
+            PathBuf::from("/w/my data/bind"),
+            PathBuf::from("/w/tab\tand\\back"),
+        ]
+    );
+}
+
+/// The real mount table is read.
+#[cfg(target_os = "linux")]
+#[test]
+fn real_fs_reads_the_mount_table() {
+    let mounts = real().mount_points().unwrap().unwrap();
+    assert!(mounts.iter().any(|m| m == Path::new("/proc")), "{mounts:?}");
 }
 
 /// The real file system reports the device: `/dev/shm` and `/dev/pts` are mounts under `/dev`.
