@@ -492,7 +492,8 @@ impl Lower {
             self.integers.into_inner(),
         );
         taint.all |= self.unknown_target.get();
-        let needed = self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
+        let needed = taint.all
+            || self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
             || assigned.iter().any(|(n, _)| taint.integers.contains(n));
         needed.then_some(taint)
     }
