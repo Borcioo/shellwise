@@ -578,6 +578,8 @@ pub struct Location {
     new_links: Vec<String>,
     /// An earlier statement creates a link at a place the hook cannot tell.
     new_link_unknown: bool,
+    /// `read_script` found nothing that may define or redefine a drive or a command.
+    names_fixed: bool,
 }
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
@@ -811,11 +813,19 @@ impl Location {
             remapped: false,
             new_links: Vec::new(),
             new_link_unknown: false,
+            names_fixed: false,
         }
     }
 
     pub fn shell(&self) -> Shell {
         self.shell
+    }
+
+    /// Read the whole command once, before the first target: a path on a built-in drive that is
+    /// no file system is no file only when nothing anywhere in the command may define or
+    /// redefine a drive or a command. Until then it may be a folder.
+    pub fn read_script(&mut self, script: &Script) {
+        self.names_fixed = !may_redefine(script);
     }
 
     pub fn os(&self) -> Os {
@@ -834,7 +844,7 @@ impl Location {
     fn kind_of(&self, fail: Fail) -> UnknownKind {
         match fail {
             Fail::Dynamic => UnknownKind::Dynamic,
-            Fail::Unknown | Fail::NotAFile => UnknownKind::MayBeCritical,
+            Fail::Unknown => UnknownKind::MayBeCritical,
             // A known candidate is dropped with the unknown one (`cd $x; rm -rf ..` from the
             // repo root), and it may be critical.
             Fail::NoLocation if !self.dirs.known.is_empty() => UnknownKind::MayBeCritical,
@@ -866,7 +876,7 @@ impl Location {
                     links.push(None);
                 }
             }
-            Node::Loop(_) => {}
+            Node::Loop(_) | Node::Func | Node::Expr => {}
         });
         self.remapped |= remap;
         for l in links {
@@ -1423,6 +1433,10 @@ enum Node<'a> {
     Cmd(&'a SimpleCommand),
     Method(&'a crate::ir::MethodCall),
     Loop(Span),
+    /// A function definition (its body is visited after it).
+    Func,
+    /// An expression the IR does not split into commands.
+    Expr,
 }
 
 fn cmd_words(c: &SimpleCommand) -> Vec<&Word> {
@@ -1459,7 +1473,10 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
                         f(Node::Method(m));
                         m.args.iter().collect()
                     }
-                    Elem::Expr(w) => vec![w],
+                    Elem::Expr(w) => {
+                        f(Node::Expr);
+                        vec![w]
+                    }
                 };
                 for w in words {
                     for s in word_scripts(w) {
@@ -1477,8 +1494,87 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
                 visit_script(b, f);
             }
         }
-        Stmt::Func { body, .. } | Stmt::Block(body) => visit_script(body, f),
+        Stmt::Func { body, .. } => {
+            f(Node::Func);
+            visit_script(body, f);
+        }
+        Stmt::Block(body) => visit_script(body, f),
     }
+}
+
+/// Anything in `s` (nested bodies and substitutions included) may define or redefine a drive or
+/// a command: a drive, alias or module command, a function, a dot-source or `iex`, a script or
+/// a module-qualified name, an alias or function path, an opaque, unread or expression
+/// statement, a call on a drive or the session state.
+fn may_redefine(s: &Script) -> bool {
+    let mut hit = false;
+    visit_script(s, &mut |n| {
+        hit |= match n {
+            Node::Cmd(c) => command_may_redefine(c),
+            Node::Method(m) => {
+                let call = format!("{}.{}", m.type_name, m.method).to_ascii_lowercase();
+                call.contains("drive") || call.contains("sessionstate")
+            }
+            Node::Loop(_) => false,
+            Node::Func | Node::Expr => true,
+        }
+    });
+    hit
+}
+
+/// The commands that define or redefine a drive, an alias, a module's commands or run text.
+const REDEFINERS: [&str; 22] = [
+    "new-psdrive",
+    "ndr",
+    "mount",
+    "remove-psdrive",
+    "rdr",
+    "set-alias",
+    "sal",
+    "new-alias",
+    "nal",
+    "import-alias",
+    "ipal",
+    "remove-alias",
+    "import-module",
+    "ipmo",
+    "new-module",
+    "nmo",
+    "import-pssession",
+    "ipsn",
+    ".",
+    "invoke-expression",
+    "iex",
+    "source",
+];
+
+fn command_may_redefine(c: &SimpleCommand) -> bool {
+    if c.opaque {
+        return true;
+    }
+    let name = match unwrap(c) {
+        Run::Cmd { name, raw, .. } => {
+            // `Microsoft.PowerShell.Management\New-PSDrive`, `.\setup.ps1`, `setup.ps1`.
+            if raw.contains(['\\', '/']) || raw.ends_with(".ps1") || raw.ends_with(".psm1") {
+                return true;
+            }
+            name
+        }
+        Run::Nothing => return false,
+        Run::Unread { .. } => return true,
+    };
+    if REDEFINERS.contains(&name.as_str()) {
+        return true;
+    }
+    // `Set-Item Function:Remove-Item {…}`, `Remove-Item Alias:rm`, `Set-Item $p …`.
+    let writer = PS_ITEM_WRITERS.contains(&name.as_str());
+    c.args.iter().any(|w| match literal(w) {
+        Some(t) => {
+            let lower = t.to_ascii_lowercase();
+            lower.contains("alias:") || lower.contains("function:")
+        }
+        None => writer,
+    })
 }
 
 // ------------------------------------------------------------------ environment
@@ -1622,6 +1718,7 @@ pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
             }
             _ => env.mark_all_dynamic(),
         },
+        Node::Func | Node::Expr => {}
     });
 }
 
@@ -1755,12 +1852,45 @@ pub enum Target {
     Dynamic(Span),
     /// A relative path where the location is unknown, or a path form the hook cannot place.
     UnknownLocation(UnknownKind),
-    /// A path on a built-in PowerShell drive that is no file system (`Env:FOO`, `HKCU:\x`):
-    /// no file target, so the delete rule leaves it to other rules.
+    /// A path on a built-in PowerShell drive that is no file system (`Env:FOO`, `HKCU:\x`),
+    /// deleted by `DeleteBy::Provider` in a command `Location::read_script` found nothing in that
+    /// may redefine a drive or a command: no file target, so the delete rule leaves it to other
+    /// rules.
     NotAFile,
     /// The deadline passed while expanding the word.
     Timeout,
 }
+
+/// How a delete reads its path: a PowerShell provider cmdlet (`Remove-Item` and its aliases)
+/// reads `Env:` and the other drives through their providers; a native program or a .NET call
+/// reads it as a file-system path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteBy {
+    Provider,
+    Native,
+}
+
+/// How `c`, run in `shell` on `os`, reads its paths: `Provider` only for `Remove-Item` and the
+/// aliases that OS gives it, named plainly (not `rm.exe`, a folder or a module).
+pub fn delete_by(c: &SimpleCommand, shell: Shell, os: Os) -> DeleteBy {
+    let raw = raw_name(c);
+    let names: &[&str] = match os {
+        Os::Windows => &REMOVE_ITEM,
+        // pwsh on Linux and macOS has no `rm`, `rmdir`, `rd`, `del` or `erase` alias.
+        Os::Posix => &REMOVE_ITEM[..2],
+    };
+    if !c.opaque
+        && matches!(shell, Shell::Pwsh | Shell::Powershell5)
+        && names.contains(&raw.as_str())
+    {
+        DeleteBy::Provider
+    } else {
+        DeleteBy::Native
+    }
+}
+
+/// `Remove-Item` and its Windows aliases; the first two exist on every OS.
+const REMOVE_ITEM: [&str; 7] = ["remove-item", "ri", "rm", "rmdir", "rd", "del", "erase"];
 
 /// Why a target is unknown, which decides its level. Ordered: where both apply,
 /// `MayBeCritical` wins.
@@ -1798,19 +1928,21 @@ enum Fail {
     Unknown,
     /// A relative path, and the folder it is relative to is unknown: as unknown as that folder.
     NoLocation,
-    /// A path on a built-in PowerShell drive that is no file system.
-    NotAFile,
 }
 
-/// The built-in PowerShell drives whose provider is no file system.
-const NON_FS_DRIVES: [&str; 8] = [
-    "env", "variable", "function", "alias", "cert", "hkcu", "hklm", "wsman",
-];
+/// The built-in PowerShell drives whose provider is no file system. `Function:` and `Alias:`
+/// are left out: deleting there may make a later delete another command (`read_script`).
+const NON_FS_DRIVES: [&str; 6] = ["env", "variable", "cert", "hkcu", "hklm", "wsman"];
 
-/// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`).
+/// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`) with no `.` or `..` step
+/// and no stream suffix.
 fn on_non_fs_drive(text: &str) -> bool {
-    text.split_once(':')
-        .is_some_and(|(drive, _)| NON_FS_DRIVES.iter().any(|d| drive.eq_ignore_ascii_case(d)))
+    let Some((drive, rest)) = text.split_once(':') else {
+        return false;
+    };
+    NON_FS_DRIVES.iter().any(|d| drive.eq_ignore_ascii_case(d))
+        && !rest.contains(':')
+        && !rest.split(['\\', '/']).any(|c| c == "." || c == "..")
 }
 
 fn is_pwd(name: &str, shell: Shell) -> bool {
@@ -2029,9 +2161,6 @@ fn split_comps(segs: &[Seg], os: Os) -> Vec<Vec<Seg>> {
 
 fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Result<Plan, Fail> {
     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
-    if matches!(loc.shell, Shell::Pwsh | Shell::Powershell5) && on_non_fs_drive(&text) {
-        return Err(Fail::NotAFile);
-    }
     let link_free = dotdot_prefixes(&text, base, loc, env)?;
     if !segs.iter().any(|s| s.glob) {
         let whole = absolutize(&text, base, loc.shell, loc.os, env)?;
@@ -2187,6 +2316,7 @@ pub fn target(
     word: &Word,
     loc: &Location,
     env: &EnvView,
+    by: DeleteBy,
     fs: &SharedFs,
     deadline: &Deadline,
 ) -> Target {
@@ -2200,11 +2330,21 @@ pub fn target(
         if segs.iter().all(|s| s.text.is_empty()) {
             return Target::Paths(Vec::new());
         }
+        let text: String = segs.iter().map(|s| s.text.as_str()).collect();
+        if by == DeleteBy::Provider
+            && matches!(loc.shell, Shell::Pwsh | Shell::Powershell5)
+            && on_non_fs_drive(&text)
+        {
+            // `New-PSDrive Env -PSProvider FileSystem` anywhere may map the name to a folder.
+            return if loc.names_fixed {
+                Target::NotAFile
+            } else {
+                Target::UnknownLocation(UnknownKind::MayBeCritical)
+            };
+        }
         match plan(&segs, base, loc, env) {
             Ok(p) => plans.push(p),
             Err(Fail::Dynamic) => return Target::Dynamic(word.span),
-            // `New-PSDrive Env -PSProvider FileSystem` may have mapped the name to a folder.
-            Err(Fail::NotAFile) if !loc.remapped => return Target::NotAFile,
             Err(f) => return Target::UnknownLocation(loc.kind_of(f)),
         }
     }

@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use shellwise::fs::resolve::{
-    Location, ParamMatch, Target, UnknownKind, critical_by_identity, critical_reason, env_view,
-    mark_assigned, pwsh_param, repo_root, target,
+    DeleteBy, Location, ParamMatch, Target, UnknownKind, critical_by_identity, critical_reason,
+    delete_by, env_view, mark_assigned, pwsh_param, repo_root, target,
 };
 use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
 use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
@@ -738,8 +738,11 @@ fn win(shell: Shell) -> (Location, EnvView) {
     (loc, env)
 }
 
+/// A delete that reads its path as a file-system path (a native program, a .NET call).
+const NATIVE: DeleteBy = DeleteBy::Native;
+
 fn resolve(w: &Word, loc: &Location, env: &EnvView) -> Target {
-    sorted(target(w, loc, env, &real(), &far()))
+    sorted(target(w, loc, env, NATIVE, &real(), &far()))
 }
 
 #[test]
@@ -769,7 +772,7 @@ fn windows_path_forms_resolve_as_the_shell_would() {
             paths(&[r"C:\x"]),
         ),
         (r"Temp:\x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
-        (r"HKCU:\Software\x", Target::NotAFile),
+        (r"HKCU:\Software\x", MAY_BE_CRITICAL),
         // NTFS stream forms name the folder itself (`rd /s` deletes it).
         (r"C:\w\repo::$INDEX_ALLOCATION", MAY_BE_CRITICAL),
         (r"C:\w\repo:$I30:$INDEX_ALLOCATION", MAY_BE_CRITICAL),
@@ -901,7 +904,14 @@ fn short_names_are_expanded_before_comparison() {
         PathBuf::from(r"C:\Profiles\u.name"),
     );
     let fs = fake.shared();
-    let t = target(&lit(r"C:\PROFILES\U~1"), &loc, &EnvView::new(), &fs, &far());
+    let t = target(
+        &lit(r"C:\PROFILES\U~1"),
+        &loc,
+        &EnvView::new(),
+        NATIVE,
+        &fs,
+        &far(),
+    );
     assert_eq!(t, paths(&[r"C:\Profiles\u.name"]));
     let hang: SharedFs = Arc::new(Hang("long_path"));
     let start = Instant::now();
@@ -909,6 +919,7 @@ fn short_names_are_expanded_before_comparison() {
         &lit(r"C:\PROFILES\U~1"),
         &loc,
         &EnvView::new(),
+        NATIVE,
         &hang,
         &Deadline::new(start, 100),
     );
@@ -968,7 +979,14 @@ fn globs_expand_against_the_folder_and_time_out_with_it() {
     );
     let hang: SharedFs = Arc::new(Hang("read_dir"));
     let start = Instant::now();
-    let r = target(&glob("*"), &loc, &env, &hang, &Deadline::new(start, 100));
+    let r = target(
+        &glob("*"),
+        &loc,
+        &env,
+        NATIVE,
+        &hang,
+        &Deadline::new(start, 100),
+    );
     assert_eq!(r, Target::Timeout);
     assert!(start.elapsed() < Duration::from_millis(150));
 }
@@ -996,7 +1014,7 @@ fn a_glob_over_a_folder_the_hook_cannot_list_is_unknown() {
         0,
     );
     assert_eq!(
-        target(&w, &loc, &EnvView::new(), &fs, &far()),
+        target(&w, &loc, &EnvView::new(), NATIVE, &fs, &far()),
         MAY_BE_CRITICAL
     );
 }
@@ -1010,7 +1028,7 @@ fn a_bash_dotdot_out_of_a_link_is_unknown() {
     let sep = std::path::MAIN_SEPARATOR;
     let r = |shell: Shell, text: &str| {
         let loc = Location::new(shell, Os::host(), Some(Path::new(&at("repo"))));
-        target(&lit(text), &loc, &EnvView::new(), &fs, &far())
+        target(&lit(text), &loc, &EnvView::new(), NATIVE, &fs, &far())
     };
     let out_of_link = format!("l{sep}..{sep}x");
     let out_of_dir = format!("sub{sep}..{sep}x");
@@ -1427,8 +1445,23 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             bad.push(format!("{label}: got {got:?}, want {want:?}"));
         }
     };
+    // `<before>; Remove-Item <text>; <later>`, the whole command read first, the delete's own
+    // reader taken from the command.
+    let judge = |before: Vec<Stmt>, delete: SimpleCommand, later: Vec<Stmt>| {
+        let shell = Shell::Pwsh;
+        let by = delete_by(&delete, shell, Os::Windows);
+        let text = delete.args[0].clone();
+        let mut all = before.clone();
+        all.push(stmt(delete, seq));
+        all.extend(later);
+        let mut loc = base.clone();
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &env);
+        sorted(target(&text, &loc, &env, by, &real(), &far()))
+    };
+    let ri = |text: &str| lits("Remove-Item", &[text]);
     // Every built-in drive whose provider is no file system, in any case and path form.
-    let not_files = [
+    for text in [
         "Env:FOO",
         "env:foo",
         r"Env:\FOO",
@@ -1437,18 +1470,23 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         "Env:",
         "Variable:x",
         r"variable:\x*",
-        "Function:f",
-        "Alias:a",
         r"Cert:\CurrentUser\My\x",
         r"HKCU:\Software\x",
         r"hklm:\SOFTWARE\x",
         r"WSMan:\localhost\x",
-    ];
-    for text in not_files {
+    ] {
         expect(
-            resolve(&lit(text), &base, &env),
+            judge(Vec::new(), ri(text), Vec::new()),
             &Target::NotAFile,
             text.to_string(),
+        );
+    }
+    // Each alias of Remove-Item.
+    for alias in ["remove-item", "ri", "rm", "rmdir", "rd", "del", "erase"] {
+        expect(
+            judge(Vec::new(), lits(alias, &["Env:FOO"]), Vec::new()),
+            &Target::NotAFile,
+            format!("{alias} Env:FOO"),
         );
     }
     // The location does not matter: `Pop-Location; Remove-Item Env:X`, `cd $x; …`, `cd $x && …`.
@@ -1460,39 +1498,159 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             stmt(cmd("cd", vec![var("x")]), Some(ChainOp::And)),
         ),
     ] {
-        let mut loc = base.clone();
-        loc.after(&before, &env);
         expect(
-            resolve(&lit("Env:FOO"), &loc, &env),
+            judge(vec![before], ri("Env:FOO"), Vec::new()),
             &Target::NotAFile,
             format!("{label} Env:FOO"),
         );
     }
-    // A drive name PowerShell does not build in may be a profile's file-system drive.
-    for text in [r"Proj:\x", r"Environment:\x", r"HKCC:\x"] {
+    // A drive name PowerShell does not build in may be a profile's file-system drive. Removing
+    // an alias or a function may make the delete another command.
+    for text in [
+        r"Proj:\x",
+        r"Environment:\x",
+        r"HKCC:\x",
+        "Function:f",
+        "Alias:a",
+    ] {
         expect(
-            resolve(&lit(text), &base, &env),
+            judge(Vec::new(), ri(text), Vec::new()),
             &MAY_BE_CRITICAL,
             text.to_string(),
         );
     }
-    // `Remove-PSDrive Env; New-PSDrive Env -PSProvider FileSystem -Root C:\` maps the name to
-    // the file system (pwsh 7.7 accepts it).
-    let mut loc = base.clone();
-    loc.after(
-        &stmt(
-            lits(
-                "New-PSDrive",
-                &["Env", "-PSProvider", "FileSystem", "-Root", r"C:\"],
-            ),
-            seq,
+    // Note 1: only a provider cmdlet reads the drive; a native program or a .NET call reads a
+    // file-system path, and a `.`/`..` step or a stream suffix leaves the drive's path form.
+    for (label, delete) in [
+        ("rm.exe", lits("rm.exe", &["Env:FOO"])),
+        ("cmd", lits("cmd", &["Env:FOO"])),
+        (
+            "module-qualified",
+            lits(r"Microsoft.PowerShell.Management\Remove-Item", &["Env:FOO"]),
         ),
-        &env,
-    );
+        ("dotdot", ri(r"Env:..\x")),
+        ("dot", ri(r"Env:.\x")),
+        ("deeper dotdot", ri(r"HKCU:\a\..\..\x")),
+        ("stream", ri("Env:FOO:bar")),
+    ] {
+        expect(
+            judge(Vec::new(), delete, Vec::new()),
+            &MAY_BE_CRITICAL,
+            format!("note 1 {label}"),
+        );
+    }
+    let mut opaque = ri("Env:FOO");
+    opaque.opaque = true;
     expect(
-        resolve(&lit("Env:FOO"), &loc, &env),
+        judge(Vec::new(), opaque, Vec::new()),
         &MAY_BE_CRITICAL,
-        "New-PSDrive; Env:FOO".to_string(),
+        "note 1 opaque delete".to_string(),
+    );
+    // Note 2: anything anywhere in the command that may define or redefine a drive or a command,
+    // before the delete or after it.
+    let nested = word_at(
+        vec![WordPart::Block(Box::new(script(vec![stmt(
+            lits("New-PSDrive", &["Env", "-PSProvider", "FileSystem"]),
+            None,
+        )])))],
+        0,
+    );
+    let mut opaque = lits("x", &[]);
+    opaque.opaque = true;
+    let redefiners: Vec<(&str, Stmt)> = vec![
+        (
+            "New-PSDrive",
+            stmt(
+                lits(
+                    "New-PSDrive",
+                    &["Env", "-PSProvider", "FileSystem", "-Root", r"C:\"],
+                ),
+                seq,
+            ),
+        ),
+        ("ndr", stmt(lits("ndr", &["Env"]), seq)),
+        (
+            "Remove-PSDrive",
+            stmt(lits("Remove-PSDrive", &["Env"]), seq),
+        ),
+        ("Set-Alias", stmt(lits("Set-Alias", &["rm", "x"]), seq)),
+        ("sal", stmt(lits("sal", &["rm", "x"]), seq)),
+        ("New-Alias", stmt(lits("New-Alias", &["rm", "x"]), seq)),
+        ("Remove-Alias", stmt(lits("Remove-Alias", &["rm"]), seq)),
+        ("Remove-Item Alias:rm", stmt(ri("Alias:rm"), seq)),
+        (
+            "Set-Item Function:",
+            stmt(lits("Set-Item", &["Function:Remove-Item", "x"]), seq),
+        ),
+        (
+            "Set-Item $p",
+            stmt(cmd("Set-Item", vec![var("p"), lit("x")]), seq),
+        ),
+        (
+            "function",
+            Stmt::Func {
+                name: "Remove-Item".to_string(),
+                body: script(Vec::new()),
+            },
+        ),
+        ("Import-Module", stmt(lits("Import-Module", &["m"]), seq)),
+        ("ipmo", stmt(lits("ipmo", &["m"]), seq)),
+        ("dot-source", stmt(lits(".", &[r".\x.ps1"]), seq)),
+        ("script call", stmt(lits(r".\x.ps1", &[]), seq)),
+        ("iex", stmt(lits("iex", &["x"]), seq)),
+        (
+            "module-qualified",
+            stmt(
+                lits(r"Microsoft.PowerShell.Management\New-PSDrive", &["Env"]),
+                seq,
+            ),
+        ),
+        ("opaque", stmt(opaque, seq)),
+        ("Start-Process", stmt(lits("Start-Process", &["pwsh"]), seq)),
+        (
+            "SessionState method",
+            method("ExecutionContext.SessionState.Drive", "New", Vec::new()),
+        ),
+        (
+            "expression",
+            Stmt::Pipeline(Pipeline {
+                elems: vec![Elem::Expr(lit("$ExecutionContext.SessionState"))],
+                chain: seq,
+            }),
+        ),
+        (
+            "nested New-PSDrive",
+            stmt(cmd("ForEach-Object", vec![nested]), seq),
+        ),
+    ];
+    for (label, s) in redefiners {
+        expect(
+            judge(vec![s.clone()], ri("Env:FOO"), Vec::new()),
+            &MAY_BE_CRITICAL,
+            format!("note 2 before: {label}"),
+        );
+        expect(
+            judge(Vec::new(), ri("Env:FOO"), vec![s]),
+            &MAY_BE_CRITICAL,
+            format!("note 2 after: {label}"),
+        );
+    }
+    // A command with none of them.
+    expect(
+        judge(
+            vec![stmt(lits("echo", &["x"]), seq)],
+            ri("Env:FOO"),
+            vec![stmt(ri("Env:BAR"), seq)],
+        ),
+        &Target::NotAFile,
+        "note 2 control".to_string(),
+    );
+    // Fail closed: without the whole command read, nothing proves the drive.
+    let by = delete_by(&ri("Env:FOO"), Shell::Pwsh, Os::Windows);
+    expect(
+        sorted(target(&lit("Env:FOO"), &base, &env, by, &real(), &far())),
+        &MAY_BE_CRITICAL,
+        "unread command".to_string(),
     );
     // In bash `Env:FOO` is a file `Env` with a stream.
     let (bash_loc, bash_env) = win(Shell::Bash(BashProfile::GitBash));
@@ -1501,6 +1659,44 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         &MAY_BE_CRITICAL,
         "bash Env:FOO".to_string(),
     );
+    // Who reads the drive (note 1): Remove-Item and its aliases in PowerShell, as the OS defines
+    // them (pwsh on Linux has no `rm`/`rmdir` alias).
+    let mut opaque_rm = lits("rm", &[]);
+    opaque_rm.opaque = true;
+    for (c, shell, os, want) in [
+        (
+            lits("Remove-Item", &[]),
+            Shell::Pwsh,
+            Os::Windows,
+            DeleteBy::Provider,
+        ),
+        (
+            lits("rm", &[]),
+            Shell::Powershell5,
+            Os::Windows,
+            DeleteBy::Provider,
+        ),
+        (lits("ri", &[]), Shell::Pwsh, Os::Posix, DeleteBy::Provider),
+        (lits("rm", &[]), Shell::Pwsh, Os::Posix, NATIVE),
+        (lits("rmdir", &[]), Shell::Pwsh, Os::Posix, NATIVE),
+        (lits("rm.exe", &[]), Shell::Pwsh, Os::Windows, NATIVE),
+        (lits("cmd", &[]), Shell::Pwsh, Os::Windows, NATIVE),
+        (
+            lits("rm", &[]),
+            Shell::Bash(BashProfile::GitBash),
+            Os::Windows,
+            NATIVE,
+        ),
+        (opaque_rm, Shell::Pwsh, Os::Windows, NATIVE),
+    ] {
+        let got = delete_by(&c, shell, os);
+        if got != want {
+            bad.push(format!(
+                "delete_by {} {shell:?} {os:?}: got {got:?}, want {want:?}",
+                show(&c)
+            ));
+        }
+    }
     assert!(
         bad.is_empty(),
         "{} rows failed:\n{}",
