@@ -1164,16 +1164,30 @@ fn arith_command(words: Vec<Word>, span: Span, cx: Cx) -> Stmt {
     })
 }
 
-/// A command that evaluates arithmetic naming a variable the script sets to text that runs a
-/// command (`x='a[$(…)]'; (( x ))`): whether bash runs it is not known here, so it is opaque.
+/// A command that evaluates a variable the script sets to text that runs a command — arithmetic
+/// (`x='a[$(…)]'; (( x ))`), `${!x}`, an assignment to a `declare -i` name: whether bash runs it
+/// is not known here, so it is opaque.
 fn mark_tainted_arithmetic(script: &mut Script) {
+    let env = EnvView::new();
     let mut tainted = BTreeSet::new();
+    // Names declared integer (`declare -i n`): assigning to one evaluates the value.
+    let mut integers = BTreeSet::new();
     visit_commands(script, &mut |c| {
         for (name, w) in &c.assigns {
-            if w.static_value(&EnvView::new())
-                .is_some_and(|v| runs_code(&v))
-            {
+            if w.static_value(&env).is_some_and(|v| runs_code(&v)) {
                 tainted.insert(name.clone());
+            }
+        }
+        if matches!(
+            c.canonical.as_deref(),
+            Some("declare" | "typeset" | "local")
+        ) {
+            let values: Vec<String> = c.args.iter().filter_map(|w| w.static_value(&env)).collect();
+            let integer = values.iter().any(|v| v.starts_with('-') && v.contains('i'));
+            if integer {
+                for v in values.iter().filter(|v| !v.starts_with('-')) {
+                    integers.insert(v.split('=').next().unwrap_or_default().to_string());
+                }
             }
         }
     });
@@ -1181,6 +1195,12 @@ fn mark_tainted_arithmetic(script: &mut Script) {
         return;
     }
     visit_commands(script, &mut |c| {
+        let integer_assigned = c.assigns.iter().any(|(name, w)| {
+            integers.contains(name) && w.static_value(&env).is_some_and(|v| runs_code(&v))
+        });
+        if integer_assigned {
+            c.opaque = true;
+        }
         // `(( … ))` itself holds its expression as a `((…))` part, matched below.
         let arithmetic_command = matches!(c.canonical.as_deref(), Some("let" | "[["));
         let words = std::iter::once(&c.name)
@@ -1191,6 +1211,8 @@ fn mark_tainted_arithmetic(script: &mut Script) {
             for p in &w.parts {
                 let text = match p {
                     WordPart::Var(v) if v.starts_with("((") => v.as_str(),
+                    // `${!y}`: the value of `y` names the variable, subscript included.
+                    WordPart::Var(v) if v.starts_with('!') => v.as_str(),
                     WordPart::Var(v) | WordPart::Literal(v) | WordPart::Glob(v)
                         if arithmetic_command =>
                     {

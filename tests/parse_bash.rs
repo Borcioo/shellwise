@@ -330,6 +330,7 @@ fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
         ("echo $(( x + 1 ))", "echo"),
         ("let x", "let"),
         ("[[ x -eq 1 ]]", "[["),
+        ("echo \"${!x}\"", "echo"),
     ] {
         let src = format!("{set}{cmd}");
         let s = ok(&src);
@@ -337,7 +338,21 @@ fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
         let c = c.iter().find(|c| bash_util::name_of(c) == name).unwrap();
         assert!(c.opaque, "{src}");
     }
-    for src in ["x='a[$(rm -rf y)]'; echo x", "y=1; (( y ))", "(( x ))"] {
+    // `declare -i n`: the later assignment evaluates its value.
+    let s = ok("declare -i n; n='a[$(rm -rf y)]'");
+    assert!(commands(&s)[1].opaque, "assignment to a declare -i name");
+    // `declare -n r='a[$(…)]'`: the operand's subscript is lowered like `declare 'a[…]=1'`.
+    assert_eq!(
+        names(&ok("declare -n r='a[$(rm -rf y)]'; echo $r")),
+        ["declare", "rm", "echo"]
+    );
+    for src in [
+        "x='a[$(rm -rf y)]'; echo x",
+        "y=1; (( y ))",
+        "(( x ))",
+        "declare n; n='a[$(rm -rf y)]'",
+        "y=1; echo \"${!y}\"",
+    ] {
         let s = ok(src);
         assert!(commands(&s).iter().all(|c| !c.opaque), "{src}");
     }
@@ -511,6 +526,7 @@ fn nested(kind: &str, n: usize) -> String {
         "masked_param" => ("${x:-]", "y", "}"),
         // `!` and `&&`/`||` recurse in the parser without opening a bracket or a keyword.
         "bang" => ("! ", "true", ""),
+        "coproc" => ("coproc ", "true", ""),
         "test_not" => ("! ", "-n x", ""),
         "test_and" => ("x && ", "x", ""),
         "test_or" => ("x || ", "x", ""),
@@ -530,7 +546,7 @@ const BUDGET: &str = "nested text too large to parse in time";
 /// sizes 64 KiB per level; a release build (16 KiB per level) parses it and lowering decides.
 const STACK_CAP: &str = "nesting too deep to parse safely";
 const PARSES: &str = "parses";
-const NESTED_KINDS: [(&str, &str); 22] = [
+const NESTED_KINDS: [(&str, &str); 23] = [
     ("subst", BRACKETS),
     ("paren", BRACKETS),
     ("brace", BRACKETS),
@@ -564,6 +580,7 @@ const NESTED_KINDS: [(&str, &str); 22] = [
             LOWERING
         },
     ),
+    ("coproc", LOWERING),
     ("test_and", LOWERING),
     ("test_or", LOWERING),
     ("test_paren", BRACKETS),
