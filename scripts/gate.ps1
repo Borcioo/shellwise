@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Legs, in order: fmt, clippy, test-windows (cargo test --features oracle,testhooks),
-  test-wsl (cargo test --features testhooks in WSL Ubuntu through the login shell, target dir under
+  test-wsl (cargo test --features testhooks in WSL Ubuntu through the login shell from getent passwd, run as `<shell> -lic`, target dir under
   the WSL home; installs rustup with its official installer when cargo is missing there), deny,
   leak (python -I scripts/leak_check.py; needs SHELLWISE_CORPUS and SHELLWISE_DENYLIST).
   A test leg passes only with a count above 0. Logs go to target/gate/<leg>.log.
@@ -84,6 +84,8 @@ $drive = $root.Substring(0, 1).ToLower()
 $wslRoot = "/mnt/$drive/" + ($root.Substring(3) -replace '\\', '/')
 $wslScript = @'
 set -e
+# zsh does not load ~/.cargo/env; source it whatever the login shell is.
+if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 if ! command -v cargo >/dev/null 2>&1; then
   echo "gate: cargo missing in WSL; installing rustup with its official installer"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -95,7 +97,11 @@ export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/target"
 cargo --version
 cargo test --features testhooks
 '@ -replace "`r`n", "`n"
-$total += Assert-TestLeg (Invoke-Leg 'test-wsl' { wsl.exe -d $Distro -- bash -lc $wslScript gate $wslRoot })
+# The user's login shell, as `getent passwd` names it (bash, zsh, ...), interactive so its rc runs.
+$wslShell = (wsl.exe -d $Distro -- sh -c 'getent passwd "$(id -un)" | cut -d: -f7' | Out-String).Trim()
+if (-not $wslShell) { Stop-Gate 'test-wsl (no login shell from getent)' $null }
+Write-Host "LEG test-wsl shell $wslShell"
+$total += Assert-TestLeg (Invoke-Leg 'test-wsl' { wsl.exe -d $Distro -- $wslShell -lic $wslScript gate $wslRoot })
 
 Assert-Leg (Invoke-Leg 'deny' { cargo deny check })
 

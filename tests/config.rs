@@ -548,7 +548,7 @@ fn check_fails_closed_when_the_config_does_not_load_in_time() {
     // 1000 ms bound plus process start under a parallel test run; under the 3000 ms minimum
     // hook timeout.
     assert!(r.elapsed.as_millis() < 2500, "took {:?}", r.elapsed);
-    let r = check(&d, &[], "Get-Date", &env);
+    let r = check(&d, &[], "echo hi", &env);
     assert_eq!(r.code, 0, "{}", r.stdout);
     assert_eq!(r.json()["level"], "ok");
 }
@@ -562,7 +562,7 @@ fn check_fails_closed_when_the_config_load_breaks() {
     for mode in ["config-panic", "config-spawn-fail"] {
         let r = check(&d, &[], cmd, &[("SHELLWISE_TESTHOOK", mode)]);
         common::assert_failclosed_danger(&r, cmd, "rm -rf x");
-        let r = check(&d, &[], "Get-Date", &[("SHELLWISE_TESTHOOK", mode)]);
+        let r = check(&d, &[], "echo hi", &[("SHELLWISE_TESTHOOK", mode)]);
         assert_eq!(r.code, 0, "{mode}: {}", r.stdout);
         assert!(r.stderr.contains("config"), "{mode}: {}", r.stderr);
     }

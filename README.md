@@ -2,8 +2,10 @@
 
 A command guard and lint for shell commands written by AI coding agents. It reads one command
 (PowerShell or bash), judges it and answers with a level: `ok`, `warn`, `break`, `danger` or
-`critical`. When it cannot finish the analysis it fails closed: `danger` if the raw text holds a
-destructive command (from `data/destructive.toml`), `ok` otherwise.
+`critical`. When it cannot finish the analysis it fails closed: `danger`, unless the raw text is a
+simple read-only command without options (`git status`, `ls src`, `cargo --version`, …); the allow
+marker has no effect there. A destructive command (from `data/destructive.toml`) found in the raw
+text is named in the reason.
 
 Status: early development, not released.
 

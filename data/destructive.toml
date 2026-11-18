@@ -31,7 +31,7 @@ shells = ["bash"]
 requires_any = []
 
 [[command]]
-names = ["Remove-Item", "ri", "rm", "rmdir", "rd", "del", "erase", "Clear-Content"]
+names = ["Remove-Item", "ri", "rm", "rmdir", "rd", "del", "erase", "Clear-Content", "clc"]
 shells = ["pwsh"]
 requires_any = []
 
