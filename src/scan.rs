@@ -442,10 +442,13 @@ fn segment_hits(
                     .iter()
                     .position(|w| matches!(w.value.as_str(), ";" | "+" | "\\;"))
                     .unwrap_or(rest.len());
-                // A later word after a wrapper in the clause is already a reading of the
-                // whole segment (`hits_at`), so the clause needs only its own walk.
+                // Every reading of the clause, bounded by its terminator: the segment's own
+                // readings run past it, where `-name` reads as git's `-n`.
                 let clause = &rest[..end];
-                scan_walk(table, clause, &walk(clause, depth, b), true, b, out);
+                each_reading(clause, depth, b, |start, w| {
+                    scan_walk(table, &clause[start..], w, true, b, out);
+                    false
+                });
             }
         }
     }
@@ -1657,6 +1660,10 @@ mod tests {
         ". <(echo 'rm -rf x')",
         // every consumer reads every command start, and an env -S consumer counts
         "find . -exec sudo -u root rm -rf {} +",
+        // a clause ends at its terminator: words after it (`-name`) are not the command's
+        "find . -exec sudo -u root git clean -fdx \\; -name x",
+        "find . -exec sudo -u root git clean -fdx ';' -name x",
+        "find . -exec env -S 'rm -rf x' \\;",
         "sudo -X foo iex('Remove-Item x')",
         "echo \u{2018}a; wsl <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
         "echo 'rm -rf x' | env -S'bash -x'",
