@@ -533,9 +533,9 @@ fn windows_path_forms_resolve_as_the_shell_would() {
         ("C:", Target::UnknownLocation),
         (r"\\?\C:\x", paths(&[r"C:\x"])),
         (r"\\.\C:\x", paths(&[r"C:\x"])),
-        (r"\\?\UNC\srv\share\x", paths(&[r"\\srv\share\x"])),
-        (r"\\srv\share\x", paths(&[r"\\srv\share\x"])),
-        ("//srv/share/x", paths(&[r"\\srv\share\x"])),
+        (r"\\?\UNC\srv\share\x", Target::UnknownLocation),
+        (r"\\srv\share\x", Target::UnknownLocation),
+        ("//srv/share/x", Target::UnknownLocation),
         (r"sub\x", paths(&[r"C:\w\repo\sub\x"])),
         (r"..\..\..\..", paths(&[r"C:\"])),
         (r"\x", paths(&[r"C:\x"])),
@@ -583,7 +583,7 @@ fn git_bash_path_forms_map_msys_paths_to_windows_ones() {
         ("/tmp/x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
         ("/usr/bin", Target::UnknownLocation),
         ("C:/x", paths(&[r"C:\x"])),
-        ("//srv/share/x", paths(&[r"\\srv\share\x"])),
+        ("//srv/share/x", Target::UnknownLocation),
         ("sub/x", paths(&[r"C:\w\repo\sub\x"])),
     ];
     for (text, want) in cases {
@@ -807,6 +807,16 @@ fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
         lits("subst", &["X:", r"C:\Profiles\u"]),
         lits("New-PSDrive", &["-Name", "X", "-Root", r"C:\Profiles\u"]),
         lits("net", &["use", "X:", r"\\srv\share"]),
+        lits(r"C:\Windows\System32\SUBST.EXE", &["X:", r"C:\Profiles\u"]),
+        lits(
+            "mountvol",
+            &["X:", r"\\?\Volume{0b1c2d3e-0000-4000-8000-000000000001}\"],
+        ),
+        lits(
+            "New-SmbMapping",
+            &["-LocalPath", "X:", "-RemotePath", r"\\srv\share"],
+        ),
+        lits("net1", &["use", "X:", r"\\srv\share"]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(mapping.clone(), Some(ChainOp::Seq)), &env);
@@ -1005,6 +1015,12 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
     };
     assert_eq!(after_cd(&env, "sub"), Target::UnknownLocation);
     assert_eq!(after_cd(&env, "./sub"), paths(&[r"C:\w\repo\sub\y"]));
+    // `.hidden` is searched in CDPATH like any other relative name.
+    assert_eq!(after_cd(&env, ".hidden"), Target::UnknownLocation);
+    // `$CDPATH` never resolves to the hook's own value.
+    let w = var("CDPATH");
+    let loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));
+    assert_eq!(resolve(&w, &loc, &env), Target::Dynamic(w.span));
     let (_, mut plain) = win(shell);
     assert_eq!(after_cd(&plain, "sub"), paths(&[r"C:\w\repo\sub\y"]));
     mark_assigned(
@@ -1425,6 +1441,7 @@ fn critical_reason_names_each_protected_folder_on_windows() {
         ("d:/", Some("drive root")),
         (r"\\?\C:\", Some("drive root")),
         (r"\\srv\share", Some("drive root")),
+        (r"\\?\UNC\srv\share", Some("drive root")),
         (r"\\srv\share\", Some("drive root")),
         (
             r"\\?\Volume{0b1c2d3e-0000-4000-8000-000000000001}\",

@@ -291,8 +291,10 @@ pub struct Location {
 /// `subst`, `New-PSDrive`, `net use`: after them a drive letter may name another folder.
 fn remaps_drives(c: &SimpleCommand) -> bool {
     match command_name(c).as_str() {
-        "subst" | "new-psdrive" | "ndr" | "mount" => true,
-        "net" | "net.exe" => c
+        "subst" | "new-psdrive" | "ndr" | "mount" | "mountvol" | "new-smbmapping" | "diskpart" => {
+            true
+        }
+        "net" | "net1" => c
             .args
             .first()
             .and_then(literal)
@@ -495,11 +497,17 @@ impl Location {
                 // Bash looks a relative name up in CDPATH first.
                 let searched = !pwsh
                     && match w.parts.first() {
-                        Some(WordPart::Literal(s)) => !s.starts_with(['/', '.']),
+                        Some(WordPart::Literal(s)) => {
+                            !(s.starts_with('/')
+                                || s == "."
+                                || s == ".."
+                                || s.starts_with("./")
+                                || s.starts_with("../"))
+                        }
                         Some(WordPart::Tilde) => false,
                         _ => true,
                     };
-                let cdpath = env.get("CDPATH").is_some() || env.is_assigned("CDPATH");
+                let cdpath = env.get(CDPATH_SEEN).is_some() || env.is_assigned("CDPATH");
                 if wild || (searched && cdpath) {
                     Dirs::unknown()
                 } else {
@@ -657,12 +665,24 @@ fn pwsh_location_arg(args: &[Word]) -> LocArg<'_> {
     found.unwrap_or(LocArg::Unknown)
 }
 
-/// The command name as the dialect resolves it, lowercased.
+/// The command name as the dialect resolves it, lowercased, without its folder and without
+/// `.exe` / `.com` (`C:\Windows\System32\SUBST.EXE` → `subst`).
 fn command_name(c: &SimpleCommand) -> String {
-    c.canonical
+    let name = c
+        .canonical
         .as_deref()
         .unwrap_or(&c.typed)
-        .to_ascii_lowercase()
+        .to_ascii_lowercase();
+    let base = name.rsplit(['\\', '/']).next().unwrap_or(&name);
+    let base = base
+        .strip_suffix(".exe")
+        .or_else(|| base.strip_suffix(".com"))
+        .unwrap_or(base);
+    if base.is_empty() {
+        name
+    } else {
+        base.to_string()
+    }
 }
 
 /// The word's text when it is one literal.
@@ -785,6 +805,9 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
 
 // ------------------------------------------------------------------ environment
 
+/// A key no shell variable can have: set when the hook's environment holds `CDPATH`.
+const CDPATH_SEEN: &str = "\0cdpath";
+
 /// Names the hook may resolve when the tool sees the same value (`XDG_*` besides).
 const PLAIN_NAMES: [&str; 5] = ["USERPROFILE", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA"];
 
@@ -840,9 +863,9 @@ pub fn env_view(shell: Shell, os: Os, vars: impl IntoIterator<Item = (String, St
             env.set(&env_name(&n), v);
         }
     }
-    // Only so a relative `cd` knows bash may search it.
-    if !pwsh && let Some(v) = lookup("CDPATH") {
-        env.set("CDPATH", v);
+    // Only so a relative `cd` knows bash may search it; `$CDPATH` itself never resolves.
+    if !pwsh && lookup("CDPATH").is_some() {
+        env.set(CDPATH_SEEN, "1");
     }
     env
 }
@@ -1224,29 +1247,13 @@ enum PlanErr {
     Unknown,
 }
 
-/// A path the hook cannot compare with the folders it protects: a mapped drive letter, a
-/// volume or device path, a loopback or administrative share (`\\localhost\C$\…`).
+/// A path the hook cannot compare with the folders it protects: a mapped drive letter, or any
+/// UNC, volume or device path (a share may be this machine under any of its names).
 fn is_alias(p: &str, loc: &Location) -> bool {
     if loc.os != Os::Windows || p == "/" {
         return false;
     }
-    if loc.remapped {
-        return true;
-    }
-    let c = Canon::parse(p, Os::Windows);
-    if c.prefix.starts_with("\\\\?\\") {
-        return true;
-    }
-    if let Some(unc) = c.prefix.strip_prefix("\\\\") {
-        let (server, share) = unc.split_once('\\').unwrap_or((unc, ""));
-        let server = server.to_ascii_lowercase();
-        return share.is_empty()
-            || share.ends_with('$')
-            || matches!(server.as_str(), "localhost" | "." | "[::1]")
-            || server.starts_with("127.")
-            || server.contains(':');
-    }
-    false
+    loc.remapped || Canon::parse(p, Os::Windows).prefix.starts_with("\\\\")
 }
 
 /// The resolved folders each bash `..` in `text` steps out of.
