@@ -262,8 +262,8 @@ enum Value {
 
 /// A command whose arguments become the positional parameters.
 struct Call {
-    /// The name as typed when it may be a function of the script; `None` for `set`, `source`,
-    /// `.` and a name not known statically.
+    /// The name as typed when it may be a function of the script; `None` for `set` and a name
+    /// not known statically.
     function: Option<String>,
     args: Vec<Value>,
 }
@@ -275,7 +275,7 @@ struct Call {
 /// (`n=$(wc -l <f)`, `n=$1`). Every other name is tainted: a value with several pieces or other
 /// text, `+=`, a `read`/`mapfile`/`printf -v` target, a name the script never assigns. The
 /// integer shell variables are clean. The positional parameters are tainted when a call of a
-/// script function (its name as typed), `set`, `source`/`.` or a command whose name is not static
+/// script function (its name as typed), `set` or a command whose name is not static
 /// passes a value that is not clean.
 struct Taint {
     clean: BTreeSet<String>,
@@ -1038,7 +1038,8 @@ impl Lower {
     }
 
     /// A call that may set the positional parameters: of a script function by its name as typed,
-    /// `set` (after its options), `source`/`.` (after the file), or a name that is not static.
+    /// `set` (after its options), or a name that is not static. (`source f args` sets them only
+    /// inside `f`, which the IR does not hold.)
     fn calls(&self, cmd: &SimpleCommand, target: Option<&str>, first_arg: usize, has_glob: bool) {
         let env = EnvView::new();
         let (function, args): (Option<String>, &[Word]) = match target {
@@ -1059,7 +1060,6 @@ impl Lower {
                 }
                 (None, &args[i.min(args.len())..])
             }
-            Some("source" | ".") => (None, &cmd.args[(first_arg + 1).min(cmd.args.len())..]),
             _ => match cmd.name.static_value(&env) {
                 Some(name) if !cmd.name.parts.is_empty() => (Some(name), &cmd.args),
                 _ => return,

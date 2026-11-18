@@ -591,6 +591,29 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ("read b < f; n=\"a[$b\"; (( n ))".to_string(), "(("),
         // A name the script never assigns comes from the environment.
         ("(( x ))".to_string(), "(("),
+        // An expansion with an operator, a local copy of a tainted parameter, a call through a
+        // variable, `set` options before `--`, a nested `$((…))`.
+        (format!("{x}n=${{x:-1}}; (( n ))"), "(("),
+        (format!("{x}f() {{ local n=$1; (( n )); }}; f \"$x\""), "(("),
+        (format!("{x}g() {{ (( $1 )); }}; c=g; $c \"$x\""), "(("),
+        ("set -- '-a[$(rm -rf y)]'; (( $1 ))".to_string(), "(("),
+        (format!("{x}(( $((x)) ))"), "(("),
+        // Names that get a value at run time, also when the script assigns them an integer.
+        ("n=0; read n < f; (( n ))".to_string(), "(("),
+        ("n=0; read -r n < f; (( n ))".to_string(), "(("),
+        ("n=0; read -p p n < f; (( n ))".to_string(), "(("),
+        ("a=0; mapfile -t a < f; (( a ))".to_string(), "(("),
+        ("a=0; readarray -t a < f; (( a ))".to_string(), "(("),
+        ("n=0; printf -v n %s 1; (( n ))".to_string(), "(("),
+        ("n=0; printf -vn %s 1; (( n ))".to_string(), "(("),
+        // bash runs nothing in these, but the value is not on the allow-list: a split read, a
+        // `getopts` letter, a glob, a name only compared, a target that is not static.
+        ("a=0; read -ra a < f; (( a ))".to_string(), "(("),
+        ("o=0; getopts ab o; (( o ))".to_string(), "(("),
+        ("n=*; (( n ))".to_string(), "(("),
+        ("(( n == 1 )); (( n ))".to_string(), "(("),
+        ("z=1; v=n; declare \"$v=1\"; (( z ))".to_string(), "(("),
+        ("z=1; read \"$v\" < f; (( z ))".to_string(), "(("),
         // A function call or `set` carries a tainted argument into `$1`, `$@`.
         (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
@@ -662,6 +685,26 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "f() { local n=$1; (( n > 0 )); }; f 3".to_string(),
         "(( RANDOM % 2 ))".to_string(),
         "n=$((1 + 2)); (( n ))".to_string(),
+        "n=$(( $(wc -l < f) + 1 )); (( n ))".to_string(),
+        "n=$#; m=$?; p=$$; (( n + m + p ))".to_string(),
+        "(( RANDOM + LINENO + SECONDS + BASHPID + PPID + UID + EUID ))".to_string(),
+        "_x=1; n='(1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1)'; (( n ))".to_string(),
+        "x=; (( x ))".to_string(),
+        "n=$HOME; (( n ))".to_string(),
+        "set -o pipefail; (( $1 ))".to_string(),
+        "declare 'n=5'; (( n ))".to_string(),
+        // Arithmetic assigns integers.
+        "(( n = 1 )); (( n ))".to_string(),
+        "(( n += 1 )); (( n ))".to_string(),
+        "(( n++ )); (( n ))".to_string(),
+        "(( --n )); (( n ))".to_string(),
+        "(( n <<= 1 )); (( n ))".to_string(),
+        "(( a[0] = 1 )); (( a[0] ))".to_string(),
+        "let n=1; (( n ))".to_string(),
+        // Run-time output, quoted text and numbers name nothing.
+        "(( $(wc -l < f) > 1 ))".to_string(),
+        "(( `wc -l < f` > 1 ))".to_string(),
+        "(( 16#ff + 0x1F ))".to_string(),
         format!("{x}unset 'a[x]'"),
         format!("{x}echo \"$x\""),
     ] {
