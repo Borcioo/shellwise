@@ -17,7 +17,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use shellwise::adapter::check_json;
 use shellwise::config::Config;
 use shellwise::ir::EnvView;
-use shellwise::level::{Verdict, exit_code};
+use shellwise::level::{Finding, Verdict, exit_code};
 use shellwise::scan::raw_destructive;
 use shellwise::{
     BashProfile, CheckInput, Deadline, MAX_INPUT_BYTES, MAX_READ_BYTES, Os, Shell, check,
@@ -29,6 +29,9 @@ const EXIT_USAGE: i32 = 64;
 /// Exit code when the input cannot be read.
 const EXIT_IO: i32 = 74;
 const WORKER_STACK: usize = 64 * 1024 * 1024;
+/// The config load ends this long after the process start, inside the one deadline
+/// (`hook_timeout_ms` is at least `MIN_HOOK_TIMEOUT_MS`).
+const CONFIG_LOAD_MS: u64 = 1000;
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +61,9 @@ struct CheckArgs {
     /// Print the verdict as JSON.
     #[arg(long)]
     json: bool,
+    /// An integration config file; the user file overrides it, the repo file only raises.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
     /// The command (after `--`); read from stdin when absent.
     #[arg(last = true)]
     command: Vec<OsString>,
@@ -101,7 +107,13 @@ fn run(start: Instant) -> i32 {
 }
 
 fn run_check(start: Instant, args: CheckArgs) -> i32 {
-    let cfg = Config::default();
+    // The config comes first: the one deadline (and the stdin read under it) takes its budget. A
+    // config that does not load leaves the defaults and fails the analysis closed below.
+    let (cfg, cfg_findings, cfg_problem) =
+        match load_config(start, args.config.clone(), args.cwd.clone()) {
+            Ok((cfg, findings)) => (cfg, findings, None),
+            Err(reason) => (Config::default(), Vec::new(), Some(reason)),
+        };
     let deadline = test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &cfg));
 
     let (command, problem) = if args.command.is_empty() {
@@ -113,7 +125,9 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
                     Some("invalid UTF-8"),
                 ),
             },
-            Input::Unread(reason) => return finish(fail_closed_unread(reason), &args, reason),
+            Input::Unread(reason) => {
+                return finish(fail_closed_unread(reason), cfg_findings, &args, reason);
+            }
             Input::Error(e) => {
                 eprintln!("shellwise: cannot read stdin: {e}");
                 return EXIT_IO;
@@ -129,10 +143,11 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
     };
     if command.len() > MAX_READ_BYTES {
         let reason = "input over the hard size cap";
-        return finish(fail_closed_unread(reason), &args, reason);
+        return finish(fail_closed_unread(reason), cfg_findings, &args, reason);
     }
-    let problem =
-        problem.or((command.len() > MAX_INPUT_BYTES).then_some("input over the size cap"));
+    let problem = problem
+        .or(cfg_problem)
+        .or((command.len() > MAX_INPUT_BYTES).then_some("input over the size cap"));
     let (verdict, failed) = analyse(
         command,
         problem,
@@ -141,7 +156,46 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
         &cfg,
         deadline,
     );
-    finish(verdict, &args, failed)
+    finish(verdict, cfg_findings, &args, failed)
+}
+
+/// Load the config layers (`Config::discover`) on a worker thread, waiting at most
+/// `CONFIG_LOAD_MS` from the process start. `check` passes `--config` and `--cwd`; the
+/// `hook claude-code` adapter passes its `--config` and the event's `cwd`. `Err` is a fail-closed
+/// reason.
+fn load_config(
+    start: Instant,
+    integration: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+) -> Result<(Config, Vec<Finding>), &'static str> {
+    let budget = Deadline::new(start, CONFIG_LOAD_MS);
+    let (tx, rx) = mpsc::channel();
+    let job = move || {
+        if testhook_is("config-sleep") {
+            thread::sleep(std::time::Duration::from_secs(60));
+        }
+        let cwd = cwd.or_else(|| std::env::current_dir().ok());
+        let result = panic::catch_unwind(|| {
+            if testhook_is("config-panic") {
+                panic!("testhook: panic in the config load");
+            }
+            Config::discover(integration.as_deref(), cwd.as_deref())
+        });
+        let _ = tx.send(result);
+    };
+    let spawned = if testhook_is("config-spawn-fail") {
+        Err(io::Error::other("testhook: config-spawn-fail"))
+    } else {
+        thread::Builder::new().name("config".into()).spawn(job)
+    };
+    if spawned.is_err() {
+        return Err("the config thread did not start");
+    }
+    match rx.recv_timeout(budget.remaining()) {
+        Ok(Ok(loaded)) => Ok(loaded),
+        Ok(Err(_)) => Err("internal error while loading the config"),
+        Err(_) => Err("the config did not load before the deadline"),
+    }
 }
 
 enum Input {
@@ -256,10 +310,13 @@ fn run_checker(
 }
 
 /// Print the verdict and return the exit code. A fail-closed `ok` names its reason on stderr.
-fn finish(verdict: Verdict, args: &CheckArgs, failed: &str) -> i32 {
+fn finish(verdict: Verdict, cfg_findings: Vec<Finding>, args: &CheckArgs, failed: &str) -> i32 {
     if !failed.is_empty() && verdict.findings.is_empty() {
         eprintln!("shellwise: analysis failed ({failed}); the text is a simple read-only command");
     }
+    let mut findings = verdict.findings;
+    findings.extend(cfg_findings);
+    let verdict = Verdict::new(findings);
     let mut out = String::new();
     if args.json {
         out.push_str(&check_json::render(&verdict));
