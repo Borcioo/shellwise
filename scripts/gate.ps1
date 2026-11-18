@@ -5,7 +5,7 @@
 .DESCRIPTION
   Legs, in order: fmt, clippy, test-windows (cargo test --features oracle,testhooks),
   test-wsl (cargo test --features testhooks in WSL Ubuntu through the login shell from getent passwd, run as `<shell> -lic`, target dir under
-  the WSL home; installs rustup with its official installer when cargo is missing there), deny,
+  the WSL home, one per worktree; installs rustup with its official installer when cargo is missing there), deny,
   leak (python -I scripts/leak_check.py; needs SHELLWISE_CORPUS and SHELLWISE_DENYLIST).
   A test leg passes only with a count above 0. Logs go to target/gate/<leg>.log.
 
@@ -92,8 +92,10 @@ if ! command -v cargo >/dev/null 2>&1; then
   . "$HOME/.cargo/env"
   echo "gate: installed $(cargo --version)"
 fi
+if [ -z "$1" ] || [ ! -f "$1/Cargo.toml" ]; then echo "gate: no crate root in \$1 ('$1')"; exit 2; fi
 cd "$1"
-export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/target"
+# One target dir per worktree: cargo reuses a sibling worktree's artifacts as fresh in a shared one.
+export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/$(basename "$PWD")/target"
 cargo --version
 cargo test --features testhooks
 '@ -replace "`r`n", "`n"
