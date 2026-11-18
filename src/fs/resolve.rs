@@ -181,7 +181,16 @@ pub fn critical_reason(
             "drive root"
         });
     }
-    let key = path_key(&text, os);
+    // macOS volumes ignore case by default.
+    let key_of = |t: &str| {
+        let k = path_key(t, os);
+        if cfg!(target_os = "macos") {
+            k.to_lowercase()
+        } else {
+            k
+        }
+    };
+    let key = key_of(&text);
     let named: Vec<(&Path, &'static str, &'static str)> = home
         .map(|h| (h, "home folder", "ancestor of the home folder"))
         .into_iter()
@@ -196,7 +205,7 @@ pub fn critical_reason(
         .collect();
     let keys: Vec<(String, &'static str, &'static str)> = named
         .iter()
-        .map(|(p, exact, above)| (path_key(&p.to_string_lossy(), os), *exact, *above))
+        .map(|(p, exact, above)| (key_of(&p.to_string_lossy()), *exact, *above))
         .collect();
     if let Some((_, exact, _)) = keys.iter().find(|(k, _, _)| *k == key) {
         return Some(exact);
@@ -275,6 +284,21 @@ pub struct Location {
     fallback: Dirs,
     stack: Vec<Pushed>,
     prev: Option<ChainOp>,
+    /// A drive letter may have been mapped elsewhere (`subst`, `New-PSDrive`, `net use`).
+    remapped: bool,
+}
+
+/// `subst`, `New-PSDrive`, `net use`: after them a drive letter may name another folder.
+fn remaps_drives(c: &SimpleCommand) -> bool {
+    match command_name(c).as_str() {
+        "subst" | "new-psdrive" | "ndr" | "mount" => true,
+        "net" | "net.exe" => c
+            .args
+            .first()
+            .and_then(literal)
+            .is_some_and(|a| a.eq_ignore_ascii_case("use")),
+        _ => false,
+    }
 }
 
 impl Location {
@@ -293,6 +317,7 @@ impl Location {
             fallback: Dirs::default(),
             stack: Vec::new(),
             prev: None,
+            remapped: false,
         }
     }
 
@@ -323,6 +348,13 @@ impl Location {
 
     /// Advance past `stmt`.
     pub fn after(&mut self, stmt: &Stmt, env: &EnvView) {
+        let mut remap = false;
+        visit_stmt(stmt, &mut |n| {
+            if let Node::Cmd(c) = n {
+                remap |= remaps_drives(c);
+            }
+        });
+        self.remapped |= remap;
         match stmt {
             Stmt::Pipeline(p) => self.after_pipeline(p, env),
             Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
@@ -460,7 +492,15 @@ impl Location {
                     WordPart::Literal(s) => pwsh && s.contains(['*', '?', '[']),
                     _ => false,
                 });
-                if wild {
+                // Bash looks a relative name up in CDPATH first.
+                let searched = !pwsh
+                    && match w.parts.first() {
+                        Some(WordPart::Literal(s)) => !s.starts_with(['/', '.']),
+                        Some(WordPart::Tilde) => false,
+                        _ => true,
+                    };
+                let cdpath = env.get("CDPATH").is_some() || env.is_assigned("CDPATH");
+                if wild || (searched && cdpath) {
                     Dirs::unknown()
                 } else {
                     self.dir_from_word(w, env)
@@ -545,8 +585,8 @@ fn bash_location_arg(args: &[Word], push: bool) -> LocArg<'_> {
             rest = &rest[1..];
             break;
         }
-        if t.len() > 1 && t.starts_with('-') && t[1..].chars().all(|c| "LPe@".contains(c)) && !push
-        {
+        // `-P` is left out: `cd -P` resolves `..` after links, so it falls to Unknown below.
+        if t.len() > 1 && t.starts_with('-') && t[1..].chars().all(|c| "Le@".contains(c)) && !push {
             rest = &rest[1..];
             continue;
         }
@@ -800,6 +840,10 @@ pub fn env_view(shell: Shell, os: Os, vars: impl IntoIterator<Item = (String, St
             env.set(&env_name(&n), v);
         }
     }
+    // Only so a relative `cd` knows bash may search it.
+    if !pwsh && let Some(v) = lookup("CDPATH") {
+        env.set("CDPATH", v);
+    }
     env
 }
 
@@ -1048,7 +1092,7 @@ fn expand(w: &Word, env: &EnvView, shell: Shell, pwd: Option<&str>) -> Result<Ve
                     out.is_empty() && (s.starts_with("\\\\?\\") || s.starts_with("//?/"));
                 let mut cur = String::new();
                 for (i, ch) in s.chars().enumerate() {
-                    if pwsh && (ch == '*' || ch == '?') && !(verbatim && i == 2) {
+                    if pwsh && matches!(ch, '*' | '?' | '[' | ']') && !(verbatim && i == 2) {
                         if !cur.is_empty() {
                             out.push(Seg::lit(&std::mem::take(&mut cur)));
                         }
@@ -1168,6 +1212,69 @@ struct Plan {
     base: String,
     /// Components after `base`, each a list of segments.
     comps: Vec<Vec<Seg>>,
+    /// Folders none of whose ancestors may be a link: the text a bash `..` steps out of, which
+    /// the system resolves after links, not lexically.
+    link_free: Vec<String>,
+}
+
+/// Why a plan could not finish on the file system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanErr {
+    Timeout,
+    Unknown,
+}
+
+/// A path the hook cannot compare with the folders it protects: a mapped drive letter, a
+/// volume or device path, a loopback or administrative share (`\\localhost\C$\…`).
+fn is_alias(p: &str, loc: &Location) -> bool {
+    if loc.os != Os::Windows || p == "/" {
+        return false;
+    }
+    if loc.remapped {
+        return true;
+    }
+    let c = Canon::parse(p, Os::Windows);
+    if c.prefix.starts_with("\\\\?\\") {
+        return true;
+    }
+    if let Some(unc) = c.prefix.strip_prefix("\\\\") {
+        let (server, share) = unc.split_once('\\').unwrap_or((unc, ""));
+        let server = server.to_ascii_lowercase();
+        return share.is_empty()
+            || share.ends_with('$')
+            || matches!(server.as_str(), "localhost" | "." | "[::1]")
+            || server.starts_with("127.")
+            || server.contains(':');
+    }
+    false
+}
+
+/// The resolved folders each bash `..` in `text` steps out of.
+fn dotdot_prefixes(
+    text: &str,
+    base: Option<&str>,
+    loc: &Location,
+    env: &EnvView,
+) -> Result<Vec<String>, Fail> {
+    if !matches!(loc.shell, Shell::Bash(_)) {
+        return Ok(Vec::new());
+    }
+    let seps: &[char] = if loc.os == Os::Windows {
+        &['\\', '/']
+    } else {
+        &['/']
+    };
+    let mut out = Vec::new();
+    let mut start = 0;
+    for piece in text.split(seps) {
+        if piece == ".." {
+            let prefix = &text[..start];
+            let prefix = if prefix.is_empty() { "." } else { prefix };
+            out.push(absolutize(prefix, base, loc.shell, loc.os, env)?);
+        }
+        start += piece.len() + 1;
+    }
+    Ok(out)
 }
 
 fn split_comps(segs: &[Seg], os: Os) -> Vec<Vec<Seg>> {
@@ -1195,10 +1302,16 @@ fn split_comps(segs: &[Seg], os: Os) -> Vec<Vec<Seg>> {
 
 fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Result<Plan, Fail> {
     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
+    let link_free = dotdot_prefixes(&text, base, loc, env)?;
     if !segs.iter().any(|s| s.glob) {
+        let whole = absolutize(&text, base, loc.shell, loc.os, env)?;
+        if is_alias(&whole, loc) {
+            return Err(Fail::Unknown);
+        }
         return Ok(Plan {
-            base: absolutize(&text, base, loc.shell, loc.os, env)?,
+            base: whole,
             comps: Vec::new(),
+            link_free,
         });
     }
     // The literal text before the component holding the first glob is resolved as a path.
@@ -1229,7 +1342,7 @@ fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Resu
         prefix
     };
     let start = absolutize(&prefix, base, loc.shell, loc.os, env)?;
-    if start == "/" && loc.os == Os::Windows {
+    if (start == "/" && loc.os == Os::Windows) || is_alias(&start, loc) {
         return Err(Fail::Unknown);
     }
     Ok(Plan {
@@ -1239,6 +1352,7 @@ fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Resu
             .filter(|c| !c.is_empty())
             .cloned()
             .collect(),
+        link_free,
     })
 }
 
@@ -1249,12 +1363,25 @@ fn looks_short(p: &str) -> bool {
     })
 }
 
-fn run_plan(fs: &dyn Fs, p: &Plan, os: Os, deadline: &Deadline) -> Result<Vec<String>, TimedOut> {
+fn run_plan(fs: &dyn Fs, p: &Plan, os: Os, deadline: &Deadline) -> Result<Vec<String>, PlanErr> {
     let sep = if os == Os::Windows { '\\' } else { '/' };
+    for folder in &p.link_free {
+        for a in Path::new(folder).ancestors() {
+            if deadline.expired() {
+                return Err(PlanErr::Timeout);
+            }
+            match fs.lstat(a) {
+                Ok(m) if m.is_symlink => return Err(PlanErr::Unknown),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(PlanErr::Unknown),
+            }
+        }
+    }
     let mut cur = vec![p.base.clone()];
     for comp in &p.comps {
         if deadline.expired() {
-            return Err(TimedOut);
+            return Err(PlanErr::Timeout);
         }
         let text: String = comp.iter().map(|s| s.text.as_str()).collect();
         if !comp.iter().any(|s| s.glob) {
@@ -1276,18 +1403,27 @@ fn run_plan(fs: &dyn Fs, p: &Plan, os: Os, deadline: &Deadline) -> Result<Vec<St
             .literal_separator(true)
             .backslash_escape(false)
             .build()
-            .map(|g| g.compile_matcher());
+            .map(|g| g.compile_matcher())
+            .map_err(|_| PlanErr::Unknown)?;
         let mut next = Vec::new();
         for d in &cur {
-            for e in fs.read_dir(Path::new(d)).unwrap_or_default() {
+            let entries = match fs.read_dir(Path::new(d)) {
+                Ok(v) => v,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    Vec::new()
+                }
+                Err(_) => return Err(PlanErr::Unknown),
+            };
+            for e in entries {
                 let Some(name) = e.file_name().map(|n| n.to_string_lossy().into_owned()) else {
                     continue;
                 };
-                let hit = match &matcher {
-                    Ok(m) => m.is_match(&name),
-                    Err(_) => name == text,
-                };
-                if hit {
+                if matcher.is_match(&name) {
                     next.push(format!("{d}{sep}{name}"));
                 }
             }
@@ -1299,7 +1435,7 @@ fn run_plan(fs: &dyn Fs, p: &Plan, os: Os, deadline: &Deadline) -> Result<Vec<St
         let mut c = canonical(&c, os);
         if os == Os::Windows && looks_short(&c) {
             if deadline.expired() {
-                return Err(TimedOut);
+                return Err(PlanErr::Timeout);
             }
             if let Ok(long) = fs.long_path(Path::new(&c)) {
                 c = canonical(&long.to_string_lossy(), os);
@@ -1337,13 +1473,15 @@ pub fn target(
         }
     }
     let os = loc.os;
-    let needs_fs = plans
-        .iter()
-        .any(|p| !p.comps.is_empty() || (os == Os::Windows && looks_short(&p.base)));
+    let needs_fs = plans.iter().any(|p| {
+        !p.comps.is_empty()
+            || !p.link_free.is_empty()
+            || (os == Os::Windows && looks_short(&p.base))
+    });
     let paths = if needs_fs {
         let fs = Arc::clone(fs);
         let d = *deadline;
-        let run = move || -> Result<Vec<String>, TimedOut> {
+        let run = move || -> Result<Vec<String>, PlanErr> {
             let mut all = Vec::new();
             for p in &plans {
                 for x in run_plan(fs.as_ref(), p, os, &d)? {
@@ -1356,6 +1494,7 @@ pub fn target(
         };
         match bounded(deadline, run) {
             Ok(Ok(v)) => v,
+            Ok(Err(PlanErr::Unknown)) => return Target::UnknownLocation,
             _ => return Target::Timeout,
         }
     } else {

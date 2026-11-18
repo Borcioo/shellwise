@@ -550,6 +550,19 @@ fn windows_path_forms_resolve_as_the_shell_would() {
         ),
         (r"Temp:\x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
         (r"HKCU:\Software\x", Target::UnknownLocation),
+        // Aliases of local folders the critical check could not recognise.
+        (r"\\localhost\share\x", Target::UnknownLocation),
+        (r"\\127.0.0.1\share\x", Target::UnknownLocation),
+        (r"\\srv\C$\x", Target::UnknownLocation),
+        (r"\\srv", Target::UnknownLocation),
+        (
+            r"\\?\Volume{0b1c2d3e-0000-4000-8000-000000000001}\x",
+            Target::UnknownLocation,
+        ),
+        (
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\x",
+            Target::UnknownLocation,
+        ),
         ("", paths(&[])),
     ];
     for (text, want) in cases {
@@ -710,6 +723,11 @@ fn globs_expand_against_the_folder_and_time_out_with_it() {
         let quoted = lit(&format!(r"{}\a*", t.root.display()));
         let elsewhere = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w")));
         assert_eq!(resolve(&quoted, &elsewhere, &env), s(&["a1", "a2"]));
+        // A bracket expression is a wildcard too; an unclosed one cannot be read.
+        let bracket = lit(&format!(r"{}\[a]1", t.root.display()));
+        assert_eq!(resolve(&bracket, &elsewhere, &env), s(&["a1"]));
+        let open = lit(&format!(r"{}\[a1", t.root.display()));
+        assert_eq!(resolve(&open, &elsewhere, &env), Target::UnknownLocation);
     }
     // A glob in the middle of the path, the literal part around it kept as written.
     std::fs::create_dir(t.root.join("d1")).unwrap();
@@ -729,6 +747,87 @@ fn globs_expand_against_the_folder_and_time_out_with_it() {
     let r = target(&glob("*"), &loc, &env, &hang, &Deadline::new(start, 100));
     assert_eq!(r, Target::Timeout);
     assert!(start.elapsed() < Duration::from_millis(150));
+}
+
+fn host_bash() -> Shell {
+    if cfg!(windows) {
+        Shell::Bash(BashProfile::GitBash)
+    } else {
+        Shell::Bash(BashProfile::Posix)
+    }
+}
+
+#[test]
+fn a_glob_over_a_folder_the_hook_cannot_list_is_unknown() {
+    let fs = FakeFs::default()
+        .dir(&at("repo"))
+        .add(&at("repo/locked"), Node::Denied)
+        .shared();
+    let loc = Location::new(host_bash(), Os::host(), Some(Path::new(&at("repo"))));
+    let w = word_at(
+        vec![
+            WordPart::Literal(format!("locked{}", std::path::MAIN_SEPARATOR)),
+            WordPart::Glob("*".to_string()),
+        ],
+        0,
+    );
+    assert_eq!(
+        target(&w, &loc, &EnvView::new(), &fs, &far()),
+        Target::UnknownLocation
+    );
+}
+
+#[test]
+fn a_bash_dotdot_out_of_a_link_is_unknown() {
+    let fs = FakeFs::default()
+        .dir(&at("repo/sub"))
+        .link(&at("repo/l"), &at("elsewhere/deep"))
+        .shared();
+    let sep = std::path::MAIN_SEPARATOR;
+    let r = |shell: Shell, text: &str| {
+        let loc = Location::new(shell, Os::host(), Some(Path::new(&at("repo"))));
+        target(&lit(text), &loc, &EnvView::new(), &fs, &far())
+    };
+    let out_of_link = format!("l{sep}..{sep}x");
+    let out_of_dir = format!("sub{sep}..{sep}x");
+    assert_eq!(r(host_bash(), &out_of_link), Target::UnknownLocation);
+    assert_eq!(r(host_bash(), &out_of_dir), paths(&[&at("repo/x")]));
+    if cfg!(windows) {
+        // PowerShell and Win32 resolve `..` lexically.
+        assert_eq!(r(Shell::Pwsh, &out_of_link), paths(&[&at("repo/x")]));
+    }
+}
+
+#[test]
+fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
+    let (base, env) = win(Shell::Pwsh);
+    let x = lit(r"X:\sub");
+    assert_eq!(resolve(&x, &base, &env), paths(&[r"X:\sub"]));
+    for mapping in [
+        lits("subst", &["X:", r"C:\Profiles\u"]),
+        lits("New-PSDrive", &["-Name", "X", "-Root", r"C:\Profiles\u"]),
+        lits("net", &["use", "X:", r"\\srv\share"]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(mapping.clone(), Some(ChainOp::Seq)), &env);
+        assert_eq!(
+            resolve(&x, &loc, &env),
+            Target::UnknownLocation,
+            "{}",
+            mapping.typed
+        );
+        let glob = word_at(
+            vec![
+                WordPart::Literal(r"X:\".to_string()),
+                WordPart::Glob("*".to_string()),
+            ],
+            0,
+        );
+        assert_eq!(resolve(&glob, &loc, &env), Target::UnknownLocation);
+    }
+    let mut loc = base.clone();
+    loc.after(&stmt(lits("net", &["view"]), Some(ChainOp::Seq)), &env);
+    assert_eq!(resolve(&x, &loc, &env), paths(&[r"X:\sub"]));
 }
 
 // ---------------------------------------------------------------- location
@@ -880,10 +979,40 @@ fn bash_cd_without_an_argument_goes_home() {
     assert_eq!(resolve(&lit("y"), &loc, &env), paths(&[r"C:\Profiles\u\y"]));
     let mut loc = base.clone();
     loc.after(
-        &stmt(lits("cd", &["-P", "--", "/c/a"]), Some(ChainOp::And)),
+        &stmt(lits("cd", &["-L", "--", "/c/a"]), Some(ChainOp::And)),
         &env,
     );
     assert_eq!(resolve(&lit("y"), &loc, &env), paths(&[r"C:\a\y"]));
+    // `cd -P` resolves `..` after links.
+    let mut loc = base.clone();
+    loc.after(&stmt(lits("cd", &["-P", "/c/a"]), Some(ChainOp::And)), &env);
+    assert_eq!(resolve(&lit("y"), &loc, &env), Target::UnknownLocation);
+}
+
+#[test]
+fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
+    let shell = Shell::Bash(BashProfile::GitBash);
+    let host = [
+        ("USERPROFILE".to_string(), r"C:\Profiles\u".to_string()),
+        ("CDPATH".to_string(), r"C:\elsewhere".to_string()),
+    ];
+    let env = env_view(shell, Os::Windows, host);
+    let base = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));
+    let after_cd = |env: &EnvView, to: &str| {
+        let mut loc = base.clone();
+        loc.after(&stmt(lits("cd", &[to]), Some(ChainOp::And)), env);
+        resolve(&lit("y"), &loc, env)
+    };
+    assert_eq!(after_cd(&env, "sub"), Target::UnknownLocation);
+    assert_eq!(after_cd(&env, "./sub"), paths(&[r"C:\w\repo\sub\y"]));
+    let (_, mut plain) = win(shell);
+    assert_eq!(after_cd(&plain, "sub"), paths(&[r"C:\w\repo\sub\y"]));
+    mark_assigned(
+        &mut plain,
+        &script(vec![stmt(assign("CDPATH", "/x"), None)]),
+        "",
+    );
+    assert_eq!(after_cd(&plain, "sub"), Target::UnknownLocation);
 }
 
 #[test]
