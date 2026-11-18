@@ -1245,8 +1245,13 @@ enum Run<'a> {
     /// `command -v X`: describes X and runs nothing.
     Nothing,
     /// A wrapper whose command the hook cannot read (an option it does not model, a name that
-    /// is not a literal): any of `rest` may be that command or its arguments.
-    Unread { rest: &'a [Word], in_shell: bool },
+    /// is not a literal): any word of `rest` may be that command or its arguments; with `any`,
+    /// it may be any command.
+    Unread {
+        rest: &'a [Word],
+        in_shell: bool,
+        any: bool,
+    },
 }
 
 const WRAPPERS: [&str; 7] = ["builtin", "command", "time", "env", "sudo", "nohup", "exec"];
@@ -1263,10 +1268,7 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
         wrapped = true;
         // `/usr/bin/command` is a program, not the builtin.
         in_shell &= raw == wrapper && matches!(wrapper.as_str(), "builtin" | "command" | "time");
-        let unread = Run::Unread {
-            rest: args,
-            in_shell,
-        };
+        let start = args;
         // Skip the wrapper's options (and `env`'s and `sudo`'s `NAME=value` words).
         loop {
             let Some(first) = args.first() else {
@@ -1303,7 +1305,14 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
                 "env" if t == "-" || t == "-i" || t == "--ignore-environment" => args = &args[1..],
                 "env" if t == "-u" => args = args.get(2..).unwrap_or(&[]),
                 "env" if t.starts_with("--unset=") => args = &args[1..],
-                _ => return unread,
+                // `env -S 'cd ..'`, `--split-string=…`, `--chdir`: env may run anything.
+                _ => {
+                    return Run::Unread {
+                        rest: start,
+                        in_shell,
+                        any: wrapper == "env",
+                    };
+                }
             }
         }
         let Some(first) = args.first() else {
@@ -1313,6 +1322,7 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
             return Run::Unread {
                 rest: args,
                 in_shell,
+                any: false,
             };
         };
         raw = t.to_ascii_lowercase();
@@ -1335,8 +1345,12 @@ impl Run<'_> {
         match self {
             Run::Cmd { name, .. } => names.contains(&name.as_str()),
             Run::Nothing => false,
+            Run::Unread { any: true, .. } => true,
+            // A word may hold a whole command (`sh -c 'ln -s …'`).
             Run::Unread { rest, .. } => rest.iter().any(|w| match literal(w) {
-                Some(t) => names.contains(&base_name(&t.to_ascii_lowercase()).as_str()),
+                Some(t) => t
+                    .split_whitespace()
+                    .any(|t| names.contains(&base_name(&t.to_ascii_lowercase()).as_str())),
                 None => true,
             }),
         }

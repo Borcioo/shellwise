@@ -1571,6 +1571,8 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
         lits("command", &["-x", "cd", ".."]),
         // A program named like the builtin.
         lits("/usr/bin/command", &["cd", ".."]),
+        // A location command inside one word after an option the reader does not model.
+        lits("command", &["-x", "cd .."]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(unknown.clone(), and), &env);
@@ -1625,6 +1627,15 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
             lits("sudo", &["-u", "u", "ln", "-s", r"C:\x", "t/j"]),
             false,
         ),
+        // A command inside one word (`sh -c '…'`), or split from one by `env -S`: an env
+        // option the reader does not model may run anything.
+        (
+            lits("sudo", &["-u", "u", "sh", "-c", r"ln -s C:\x t/j"]),
+            false,
+        ),
+        (lits("env", &["-S", r"ln -s C:\x t/j"]), false),
+        (lits("env", &[r"--split-string=ln -s C:\x t/j"]), false),
+        (lits("env", &["-S", "X"]), false),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(link.clone(), seq), &env);
