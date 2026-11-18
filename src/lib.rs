@@ -113,12 +113,9 @@ pub fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
 /// The longest scan hit (in bytes) the fail-closed reason quotes.
 const MAX_QUOTED: usize = 80;
 
-/// The allow marker and its alias.
-const ALLOW_MARKERS: [&str; 2] = ["# shellwise: allow", "# baseline-guard: allow"];
-
-/// The verdict when the analysis cannot finish: `ok` when the raw text is a harmless simple
-/// command or ends in the allow marker, otherwise `danger`. The raw-text scan only names the
-/// destructive command it finds.
+/// The verdict when the analysis cannot finish: `ok` only when the raw text is a harmless simple
+/// command, otherwise `danger`. The allow marker has no effect here: without a parse nothing shows
+/// it is a comment or what the command deletes. The raw-text scan only names what it flags.
 pub fn fail_closed(command: &str, reason: &str) -> Verdict {
     fail_closed_with(command, reason, scan::raw_destructive)
 }
@@ -133,10 +130,10 @@ fn fail_closed_with(
 }
 
 /// The fail-closed verdict from a scan result (`None` when the scan did not finish). Only the
-/// harmless grammar or the allow marker clears the command; a scan hit sets the span and names
-/// the command, and otherwise the span is the whole text.
+/// harmless grammar clears the command; a scan hit sets the span and names the command, and
+/// otherwise the span is the whole text.
 pub fn scan_verdict(hit: Option<Option<Span>>, command: &str, reason: &str) -> Verdict {
-    if scan::harmless(command) || ends_in_allow_marker(command) {
+    if scan::harmless(command) {
         return Verdict::new(Vec::new());
     }
     let whole = Span {
@@ -168,16 +165,6 @@ fn not_simple(reason: &str) -> String {
     format!(
         "the command could not be analysed ({reason}) and is not a simple read-only command, so it may destroy data"
     )
-}
-
-/// Whether the raw text ends in the allow marker as a comment: the `#` starts the text or follows
-/// a space, and only whitespace follows the marker. The parse that finds real comments failed.
-fn ends_in_allow_marker(command: &str) -> bool {
-    let text = command.trim_end();
-    ALLOW_MARKERS.iter().any(|marker| {
-        text.strip_suffix(marker)
-            .is_some_and(|before| before.is_empty() || before.ends_with(' '))
-    })
 }
 
 /// The verdict for input that was not read whole (over the hard cap, stdin still open).
@@ -367,13 +354,12 @@ mod tests {
         assert!(missed.is_empty(), "not danger: {missed:?}");
     }
 
-    /// One harmless row per entry of the read-only list and per `--version` tool, plus case and
-    /// spacing variants.
+    /// One harmless row per entry of the read-only list and per `--version` tool, plus spacing
+    /// variants.
     const HARMLESS_ROWS: &[&str] = &[
         "git status",
         "ls src",
         "echo hi",
-        "cat notes.txt",
         "pwd",
         "git log main",
         "git diff HEAD",
@@ -383,7 +369,6 @@ mod tests {
         "tail a.txt",
         "wc a.txt",
         "which git",
-        "type ls",
         "git --version",
         "cargo --version",
         "rustc --version",
@@ -393,9 +378,6 @@ mod tests {
         "pwsh --version",
         "  echo hi  ",
         "echo  hi",
-        "LS src",
-        "Git Status",
-        "Cargo --VERSION",
         "echo rm x",
     ];
 
@@ -434,6 +416,7 @@ mod tests {
         "rm -rf x",
         "rm x",
         "lsx",
+        // Shorter than every entry it starts: only the length check refuses it.
         "git",
         "git -C x status",
         "git statusx",
@@ -460,6 +443,24 @@ mod tests {
         "git log \u{2015}output f",
         "ls /s",
         "echo \u{ef}",
+        // Words compare case-sensitively: git sends a mixed-case subcommand to alias lookup, and
+        // POSIX names differ by case.
+        "git Status",
+        "git Log",
+        "GIT DIFF",
+        "git Show",
+        "Git Status",
+        "LS src",
+        "Cargo --VERSION",
+        "Cargo --version",
+        "GIT --version",
+        "git --VERSION",
+        // `cat` and `type` are not listed: a device path blocks them.
+        "cat notes.txt",
+        "type ls",
+        "cat CON",
+        "type CON",
+        "cat ../../../../../../../dev/stdin",
     ];
 
     #[test]
@@ -478,23 +479,28 @@ mod tests {
     }
 
     #[test]
-    fn allow_marker_as_a_trailing_comment_lowers_the_fail_path_to_ok() {
-        let wrong = not_ok([
+    fn allow_marker_has_no_effect_on_a_failed_analysis() {
+        // Without a parse nothing shows the marker is a comment, nor what the command deletes.
+        let wrong = not_danger([
             "rm -rf x # shellwise: allow",
             "rm -rf x # baseline-guard: allow",
             "rm -rf x # shellwise: allow\n",
             "# shellwise: allow",
             "bash <(echo hi; echo 'rm -rf x') # shellwise: allow\r\n",
-        ]);
-        assert!(wrong.is_empty(), "not ok: {wrong:?}");
-        // Not a trailing comment: inside a string, glued to a word, or followed by more code.
-        let wrong = not_danger([
-            "echo '# shellwise: allow'; rm -rf x",
-            "rm -rf x# shellwise: allow",
-            "rm -rf x # shellwise: allow\nrm -rf y",
-            "bash -c 'rm -rf x # shellwise: allow'",
-            "rm -rf x # shellwise: allowed",
-            "rm -rf x # Shellwise: Allow",
+            // Critical targets.
+            "rm -rf / # shellwise: allow",
+            "rm -rf ~ # baseline-guard: allow",
+            "Remove-Item -Recurse -Force C:\\ # shellwise: allow",
+            "bash -c 'rm -rf /' # shellwise: allow",
+            "eval $(echo rm -rf /) # shellwise: allow",
+            "echo 'rm -rf /' | su # shellwise: allow",
+            // The shell does not read these as a comment.
+            "rm -rf x\\ # shellwise: allow",
+            "rm -rf x \\ # shellwise: allow",
+            "Remove-Item x` # shellwise: allow",
+            "Remove-Item x --% # shellwise: allow",
+            "rm -rf x <<EOF\n # shellwise: allow",
+            "rm -rf y\n # shellwise: allow",
         ]);
         assert!(wrong.is_empty(), "not danger: {wrong:?}");
     }

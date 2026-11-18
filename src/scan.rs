@@ -173,10 +173,10 @@ const METACHARACTERS: &str = ";&|<>()$`\\\"'{}[]*?~#";
 
 /// The read-only commands of the harmless grammar, as the words the text starts with. No word
 /// after them may start with `-` or `/` (a cmd or pwsh switch): an option can run a command or
-/// write a file (`rg --pre`, `git diff --output`).
+/// write a file (`rg --pre`, `git diff --output`). `cat` and `type` are left out: a device path
+/// blocks them.
 const READ_ONLY: &[&str] = &[
     "ls",
-    "cat",
     "echo",
     "pwd",
     "git status",
@@ -188,7 +188,6 @@ const READ_ONLY: &[&str] = &[
     "tail",
     "wc",
     "which",
-    "type",
 ];
 
 /// The tools for which `<tool> --version`, with no other word, is harmless.
@@ -196,7 +195,8 @@ const VERSION_TOOLS: &[&str] = &["git", "cargo", "rustc", "node", "npm", "python
 
 /// Whether a text whose analysis failed is still a harmless simple command: no metacharacter, and
 /// either a `READ_ONLY` command followed by words that are not options, or a `VERSION_TOOLS` tool
-/// followed by `--version` alone (ASCII case-insensitive, whole words).
+/// followed by `--version` alone. Words compare whole and case-sensitively, as written: git sends
+/// a mixed-case subcommand to alias lookup, and POSIX names differ by case.
 pub fn harmless(text: &str) -> bool {
     if text
         .chars()
@@ -205,20 +205,20 @@ pub fn harmless(text: &str) -> bool {
         return false;
     }
     let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
-    let same = |w: &str, e: &str| w.eq_ignore_ascii_case(e);
     if let [tool, flag] = words.as_slice()
-        && same(flag, "--version")
-        && VERSION_TOOLS.iter().any(|t| same(tool, t))
+        && *flag == "--version"
+        && VERSION_TOOLS.contains(tool)
     {
         return true;
     }
     READ_ONLY.iter().any(|entry| {
         let want: Vec<&str> = entry.split(' ').collect();
-        words.len() >= want.len()
-            && words.iter().zip(&want).all(|(w, e)| same(w, e))
-            && !words[want.len()..]
-                .iter()
-                .any(|w| w.starts_with('-') || w.starts_with('/'))
+        words.iter().zip(&want).all(|(w, e)| w == e)
+            && words.get(want.len()..).is_some_and(|rest| {
+                !rest
+                    .iter()
+                    .any(|w| w.starts_with('-') || w.starts_with('/'))
+            })
     })
 }
 

@@ -28,6 +28,11 @@ fn input_over_the_size_cap_fails_closed() {
     let mut harmless = " ".repeat(200 * 1024);
     harmless.push_str("echo hi");
     assert_ok(&run(CHECK, Some(harmless.as_bytes()), &[]));
+
+    // Padding past the cap with an allow marker must not clear a delete of `/`.
+    let mut marked = " ".repeat(64 * 1024 + 1);
+    marked.push_str("rm -rf / # shellwise: allow");
+    assert_failed(&run(CHECK, Some(marked.as_bytes()), &[]));
 }
 
 #[test]
@@ -182,9 +187,9 @@ mod hooks {
     }
 
     #[test]
-    fn allow_marker_lowers_a_failed_analysis_to_ok() {
+    fn allow_marker_has_no_effect_on_a_failed_analysis() {
         let cmd = "Get-Date; rm -rf x # shellwise: allow";
-        assert_ok(&hook("panic", cmd));
+        assert_failclosed_danger(&hook("panic", cmd), cmd, "rm -rf x");
     }
 
     #[test]
