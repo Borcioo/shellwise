@@ -1672,9 +1672,10 @@ fn runs_code(text: &str) -> bool {
     text.contains("$(") || text.contains('`')
 }
 
-/// The contents of each outermost `[…]` in `text`. Inside a subscript, as in bash, a `]` in
-/// quotes, after a backslash or in `$(…)`/`${…}` does not close it. An unclosed subscript runs to
-/// the end of the text (bash refuses it; reading it whole stays on the safe side).
+/// The contents of each outermost `[…]` in `text`. As in bash, a `]` in quotes, after a backslash
+/// or in `$(…)`/`${…}` does not close a subscript (and a `[` there opens none: bash evaluates no
+/// subscript after such text outside one). An unclosed subscript runs to the end of the text (bash
+/// refuses it; reading it whole stays on the safe side).
 fn subscripts(text: &str) -> Vec<&str> {
     let b = text.as_bytes();
     let mut out = Vec::new();
@@ -1693,7 +1694,6 @@ fn subscripts(text: &str) -> Vec<&str> {
                     out.push(&text[start..i]);
                 }
             }
-            _ if depth == 0 => {}
             b'\\' => i += 1,
             q @ (b'\'' | b'"' | b'`') => {
                 i += 1;
@@ -1750,8 +1750,9 @@ fn arith_scan(text: &str) -> (Vec<(usize, usize)>, bool) {
             };
             match next {
                 Some(d) if d.is_ascii_digit() || matches!(d, b'@' | b'*') => positional = true,
-                // `$(…)`, not `$((…))`: skip the command.
-                Some(b'(') if b.get(after + 1) != Some(&b'(') && after == i + 1 => {
+                // `$(…)`: skip the command. A `$((…))` goes too: bash expands it before the
+                // arithmetic it sits in, and it is read as its own arithmetic context.
+                Some(b'(') if after == i + 1 => {
                     let mut level = 0usize;
                     i += 1;
                     while i < b.len() {

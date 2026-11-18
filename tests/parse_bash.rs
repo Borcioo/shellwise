@@ -598,6 +598,19 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}g() {{ (( $1 )); }}; c=g; $c \"$x\""), "(("),
         ("set -- '-a[$(rm -rf y)]'; (( $1 ))".to_string(), "(("),
         (format!("{x}(( $((x)) ))"), "(("),
+        // A later tainted value spoils an earlier clean one: an array, a loop variable, a
+        // quoted `export`/`readonly` operand, a quoted `declare -i` operand.
+        ("a=0; a=('a[$(rm -rf y)]'); (( a ))".to_string(), "(("),
+        (
+            "v=0; for v in 'a[$(rm -rf y)]'; do (( v )); done".to_string(),
+            "((",
+        ),
+        ("x=0; export 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        (
+            "x=0; readonly 'x=a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (format!("{x}declare -i 'n=x'"), "declare"),
         // `+=` joins two clean names into the name of a tainted one.
         (
             "a=1; b=1; ab='a[$(rm -rf y)]'; n=a; n+=b; (( n ))".to_string(),
@@ -698,6 +711,9 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "n=$HOME; (( n ))".to_string(),
         "set -o pipefail; (( $1 ))".to_string(),
         "declare 'n=5'; (( n ))".to_string(),
+        "export 'n=5'; (( n ))".to_string(),
+        "readonly 'n=5'; (( n ))".to_string(),
+        "a=(1 2); (( a ))".to_string(),
         // Arithmetic assigns integers.
         "(( n = 1 )); (( n ))".to_string(),
         "(( n += 1 )); (( n ))".to_string(),
