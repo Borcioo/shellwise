@@ -598,6 +598,11 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}g() {{ (( $1 )); }}; c=g; $c \"$x\""), "(("),
         ("set -- '-a[$(rm -rf y)]'; (( $1 ))".to_string(), "(("),
         (format!("{x}(( $((x)) ))"), "(("),
+        // `+=` joins two clean names into the name of a tainted one.
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; n=a; n+=b; (( n ))".to_string(),
+            "((",
+        ),
         // Names that get a value at run time, also when the script assigns them an integer.
         ("n=0; read n < f; (( n ))".to_string(), "(("),
         ("n=0; read -r n < f; (( n ))".to_string(), "(("),
@@ -698,7 +703,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "(( n += 1 )); (( n ))".to_string(),
         "(( n++ )); (( n ))".to_string(),
         "(( --n )); (( n ))".to_string(),
+        "(( ++n )); (( n ))".to_string(),
+        "(( n-- )); (( n ))".to_string(),
         "(( n <<= 1 )); (( n ))".to_string(),
+        "(( n >>= 1 )); (( n ))".to_string(),
         "(( a[0] = 1 )); (( a[0] ))".to_string(),
         "let n=1; (( n ))".to_string(),
         // Run-time output, quoted text and numbers name nothing.

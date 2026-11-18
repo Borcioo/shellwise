@@ -362,7 +362,7 @@ impl Taint {
 /// A value as the taint rule reads it.
 fn classify(parts: &[WordPart]) -> Value {
     match parts {
-        [] | [WordPart::Subst(_) | WordPart::Block(_)] => Value::Clean,
+        [WordPart::Subst(_) | WordPart::Block(_)] => Value::Clean,
         // `$((…))`, also with the substitutions inside it: an integer.
         [WordPart::Var(v), rest @ ..]
             if v.starts_with("((")
@@ -1735,8 +1735,8 @@ fn subscripts(text: &str) -> Vec<&str> {
 }
 
 /// The byte ranges of the names arithmetic text reads (`a[x+$y]` → `a`, `x`, `y`), and whether
-/// it expands a positional parameter (`$1`, `${10}`, `$@`, `$*`). Numbers (`16#ff`), quoted text
-/// and the inside of `$(…)` and backticks (run-time output) name nothing.
+/// it expands a positional parameter (`$1`, `${10}`, `$@`, `$*`). Numbers (`16#ff`) and the
+/// inside of `$(…)` and backticks (run-time output) name nothing.
 fn arith_scan(text: &str) -> (Vec<(usize, usize)>, bool) {
     let b = text.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
@@ -1771,14 +1771,14 @@ fn arith_scan(text: &str) -> (Vec<(usize, usize)>, bool) {
                 _ => {}
             }
             i += 1;
-        } else if c == b'`' || c == b'\'' {
+        } else if c == b'`' {
             i += 1;
             while i < b.len() && b[i] != c {
                 i += 1;
             }
             i += 1;
         } else if c.is_ascii_digit() {
-            while i < b.len() && (word(b[i]) || b[i] == b'#' || b[i] == b'@') {
+            while i < b.len() && (word(b[i]) || b[i] == b'#') {
                 i += 1;
             }
         } else if word(c) {
