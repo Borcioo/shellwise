@@ -1431,6 +1431,181 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
 }
 
 #[test]
+fn a_wrapper_in_front_of_a_command_is_read_through() {
+    let bash = Shell::Bash(BashProfile::GitBash);
+    let (base, env) = win(bash);
+    let and = Some(ChainOp::And);
+    let seq = Some(ChainOp::Seq);
+    let repo = lit("repo");
+    let mut bad: Vec<String> = Vec::new();
+    let mut expect = |got: Target, want: &Target, label: String| {
+        if &got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    };
+    // `builtin cd .. && rm -rf repo`: the wrappers that run the builtin in this shell move it.
+    for wrapped in [
+        lits("builtin", &["cd", ".."]),
+        lits("command", &["cd", ".."]),
+        lits("command", &["-p", "cd", ".."]),
+        lits("command", &["--", "cd", ".."]),
+        lits("time", &["-p", "cd", ".."]),
+        lits("builtin", &["builtin", "cd", ".."]),
+        lits("command", &["builtin", "pushd", ".."]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(wrapped.clone(), and), &env);
+        expect(
+            resolve(&repo, &loc, &env),
+            &paths(&[r"C:\w\repo"]),
+            show(&wrapped),
+        );
+    }
+    // `command -v cd ..` only describes cd.
+    let mut loc = base.clone();
+    let describe = lits("command", &["-v", "cd", ".."]);
+    loc.after(&stmt(describe.clone(), and), &env);
+    expect(
+        resolve(&repo, &loc, &env),
+        &paths(&[r"C:\w\repo\repo"]),
+        show(&describe),
+    );
+    // A program cannot move this shell, but nothing proves what it does; an option the hook
+    // does not model or a name it cannot read hides the command.
+    for unknown in [
+        lits("env", &["cd", ".."]),
+        lits("sudo", &["cd", ".."]),
+        lits("exec", &["cd", ".."]),
+        lits("nohup", &["cd", ".."]),
+        lits("env", &["X=1", "cd", ".."]),
+        lits("builtin", &["-x", "cd", ".."]),
+        cmd("builtin", vec![var("c"), lit("..")]),
+        lits("command", &["-x", "cd", ".."]),
+        // A program named like the builtin.
+        lits("/usr/bin/command", &["cd", ".."]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(unknown.clone(), and), &env);
+        expect(resolve(&repo, &loc, &env), &MAY_BE_CRITICAL, show(&unknown));
+    }
+    // A loop whose body moves through a wrapper starts each pass somewhere unknown.
+    let body = script(vec![stmt(lits("builtin", &["cd", "sub"]), None)]);
+    let lp = Stmt::Loop {
+        body,
+        span: Span::default(),
+    };
+    expect(
+        resolve(&repo, &base.inner(&lp), &env),
+        &MAY_BE_CRITICAL,
+        "loop { builtin cd sub }".to_string(),
+    );
+    // PowerShell has no such builtins.
+    let (ps_base, ps_env) = win(Shell::Pwsh);
+    let mut loc = ps_base.clone();
+    let ps_command = lits("command", &["cd", ".."]);
+    loc.after(&stmt(ps_command.clone(), and), &ps_env);
+    expect(
+        resolve(&repo, &loc, &ps_env),
+        &MAY_BE_CRITICAL,
+        format!("pwsh {}", show(&ps_command)),
+    );
+    // Links made through a wrapper: where the wrapper is read, the link is placed; where it
+    // is not (`sudo -u`), it is a link somewhere unknown.
+    let ln = |pre: &[&str]| {
+        let mut args: Vec<Word> = pre.iter().map(|a| lit(a)).collect();
+        args.extend([
+            lit("ln"),
+            lit("-s"),
+            word_at(vec![WordPart::Tilde], 0),
+            lit("t/j"),
+        ]);
+        args
+    };
+    for (link, placed) in [
+        (cmd("sudo", ln(&[])), true),
+        (cmd("env", ln(&["X=1"])), true),
+        (cmd("env", ln(&["-i"])), true),
+        (cmd("env", ln(&["-"])), true),
+        (cmd("env", ln(&["-u", "X"])), true),
+        (cmd("env", ln(&["--unset=X"])), true),
+        (cmd("env", ln(&["--ignore-environment"])), true),
+        (cmd("exec", ln(&["-a", "x"])), true),
+        (cmd("exec", ln(&["-c"])), true),
+        (cmd("nohup", ln(&[])), true),
+        // Every word literal, so no word may be a drive mapping.
+        (
+            lits("sudo", &["-u", "u", "ln", "-s", r"C:\x", "t/j"]),
+            false,
+        ),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(link.clone(), seq), &env);
+        expect(
+            resolve(&lit("t"), &loc, &env),
+            &MAY_BE_CRITICAL,
+            show(&link),
+        );
+        let want = if placed {
+            paths(&[r"D:\elsewhere\u"])
+        } else {
+            MAY_BE_CRITICAL
+        };
+        expect(
+            resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
+            &want,
+            format!("{}: elsewhere", show(&link)),
+        );
+    }
+    for mapping in [
+        lits("env", &["subst", "X:", r"C:\Profiles\u"]),
+        lits("sudo", &["-u", "u", "subst", "X:", r"C:\Profiles\u"]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(mapping.clone(), seq), &env);
+        expect(
+            resolve(&lit(r"X:\sub"), &loc, &env),
+            &MAY_BE_CRITICAL,
+            show(&mapping),
+        );
+    }
+    // `builtin export TEMP=…; rm -rf $TEMP`: the wrapped builtin assigns the name.
+    let temp = var("TEMP");
+    for assigner in [
+        lits("builtin", &["export", r"TEMP=C:\Profiles\u"]),
+        lits("command", &["export", r"TEMP=C:\Profiles\u"]),
+        // An unread builtin may assign anything.
+        lits("builtin", &["-x", "export", r"TEMP=C:\Profiles\u"]),
+    ] {
+        let mut assigned = env.clone();
+        mark_assigned(
+            &mut assigned,
+            &script(vec![stmt(assigner.clone(), seq)]),
+            "",
+        );
+        expect(
+            resolve(&temp, &base, &assigned),
+            &Target::Dynamic(temp.span),
+            show(&assigner),
+        );
+    }
+    // A wrapper with nothing to run assigns nothing.
+    let mut plain = env.clone();
+    let alone = lits("command", &[]);
+    mark_assigned(&mut plain, &script(vec![stmt(alone.clone(), seq)]), "");
+    expect(
+        resolve(&temp, &base, &plain),
+        &paths(&[r"C:\Profiles\u\AppData\Local\Temp"]),
+        show(&alone),
+    );
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
 fn push_and_pop_location_restore_the_folder() {
     let (base, env) = win(Shell::Pwsh);
     let mut loc = base.clone();

@@ -583,11 +583,21 @@ pub struct Location {
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
 /// HardLink`, `ln -s`. `Some(None)`: a link at a place the hook cannot tell.
 fn created_link(c: &SimpleCommand) -> Option<Option<Word>> {
-    let lit_args: Vec<Option<String>> = c.args.iter().map(literal).collect();
-    match command_name(c).as_str() {
+    match unwrap(c) {
+        Run::Cmd { name, args, .. } => link_made(&name, args),
+        Run::Nothing => None,
+        run => run.may_be(&LINK_COMMANDS).then_some(None),
+    }
+}
+
+const LINK_COMMANDS: [&str; 4] = ["mklink", "ln", "new-item", "ni"];
+
+/// `created_link` for the command `name` run with `args`.
+fn link_made(name: &str, args: &[Word]) -> Option<Option<Word>> {
+    let lit_args: Vec<Option<String>> = args.iter().map(literal).collect();
+    match name {
         "mklink" => Some(
-            c.args
-                .iter()
+            args.iter()
                 .zip(&lit_args)
                 .find(|(_, t)| !t.as_deref().is_some_and(|t| t.starts_with('/')))
                 .map(|(w, _)| w.clone()),
@@ -596,7 +606,7 @@ fn created_link(c: &SimpleCommand) -> Option<Option<Word>> {
             let long = |t: &str, full: &str| t.len() > 2 && full.starts_with(t);
             let short = |t: &str| t.starts_with('-') && !t.starts_with("--") && t.len() > 1;
             // A variable, substitution or glob may carry `-s` and `-t`; `~` cannot.
-            if c.args.iter().any(|w| {
+            if args.iter().any(|w| {
                 w.parts
                     .iter()
                     .any(|p| !matches!(p, WordPart::Literal(_) | WordPart::Tilde))
@@ -632,8 +642,7 @@ fn created_link(c: &SimpleCommand) -> Option<Option<Word>> {
             {
                 return Some(None);
             }
-            let names: Vec<&Word> = c
-                .args
+            let names: Vec<&Word> = args
                 .iter()
                 .zip(&lit_args)
                 .filter(|(_, t)| !t.as_deref().is_some_and(|t| t.starts_with('-')))
@@ -645,7 +654,7 @@ fn created_link(c: &SimpleCommand) -> Option<Option<Word>> {
                 None
             })
         }
-        "new-item" | "ni" => new_item_link(&c.args),
+        "new-item" | "ni" => new_item_link(args),
         _ => None,
     }
 }
@@ -726,18 +735,32 @@ fn is_folder_or_file_type(t: &str) -> bool {
 
 /// `subst`, `New-PSDrive`, `net use`: after them a drive letter may name another folder.
 fn remaps_drives(c: &SimpleCommand) -> bool {
-    match command_name(c).as_str() {
-        "subst" | "new-psdrive" | "ndr" | "mount" | "mountvol" | "new-smbmapping" | "diskpart" => {
-            true
-        }
-        "net" | "net1" => c
-            .args
+    let (name, args) = match unwrap(c) {
+        Run::Cmd { name, args, .. } => (name, args),
+        Run::Nothing => return false,
+        run => return run.may_be(&REMAP_COMMANDS),
+    };
+    match name.as_str() {
+        "net" | "net1" => args
             .first()
             .and_then(literal)
             .is_some_and(|a| a.eq_ignore_ascii_case("use")),
-        _ => false,
+        n => REMAP_COMMANDS.contains(&n),
     }
 }
+
+/// The commands that map a drive letter (`net` and `net1` only with `use`).
+const REMAP_COMMANDS: [&str; 9] = [
+    "subst",
+    "new-psdrive",
+    "ndr",
+    "mount",
+    "mountvol",
+    "new-smbmapping",
+    "diskpart",
+    "net",
+    "net1",
+];
 
 impl Location {
     pub fn new(shell: Shell, os: Os, cwd: Option<&Path>) -> Location {
@@ -923,26 +946,50 @@ impl Location {
         if c.opaque {
             return Some(Dirs::unknown(UnknownKind::Dynamic));
         }
-        let raw = c
-            .canonical
-            .as_deref()
-            .unwrap_or(&c.typed)
-            .to_ascii_lowercase();
-        if raw != command_name(c) && is_location_command(c) {
-            // `.\cd.exe`, `/usr/bin/cd`: not the builtin, but nothing proves what it does.
-            return Some(Dirs::unknown(UnknownKind::MayBeCritical));
-        }
-        match command_name(c).as_str() {
-            "cd" | "chdir" | "sl" | "set-location" => Some(self.set_location(c, env, false)),
+        let unknown = Some(Dirs::unknown(UnknownKind::MayBeCritical));
+        let run = unwrap(c);
+        let (name, args) = match run {
+            Run::Nothing => return None,
+            // A wrapper that runs something unread in this shell may move it.
+            Run::Unread { in_shell, .. } => {
+                return if in_shell && run.may_be(&LOCATION_COMMANDS) {
+                    unknown
+                } else {
+                    None
+                };
+            }
+            Run::Cmd {
+                name,
+                raw,
+                args,
+                wrapped,
+                in_shell,
+            } => {
+                if !LOCATION_COMMANDS.contains(&name.as_str()) {
+                    return None;
+                }
+                let pwsh = matches!(self.shell, Shell::Pwsh | Shell::Powershell5);
+                // `.\cd.exe`, `/usr/bin/cd`, `env cd`: not the builtin, but nothing proves
+                // what it does.
+                if raw != name || (wrapped && (pwsh || !in_shell)) {
+                    return unknown;
+                }
+                (name, args)
+            }
+        };
+        match name.as_str() {
+            "cd" | "chdir" | "sl" | "set-location" => {
+                Some(self.set_location(&name, args, env, false))
+            }
             "pushd" | "push-location" => {
-                let to = self.set_location(c, env, true);
+                let to = self.set_location(&name, args, env, true);
                 self.stack.push(Pushed {
                     dirs: self.dirs.clone(),
                     certain,
                 });
                 Some(to)
             }
-            "popd" | "pop-location" => Some(match (c.args.is_empty(), self.stack.pop()) {
+            "popd" | "pop-location" => Some(match (args.is_empty(), self.stack.pop()) {
                 (
                     true,
                     Some(Pushed {
@@ -959,12 +1006,12 @@ impl Location {
         }
     }
 
-    fn set_location(&self, c: &SimpleCommand, env: &EnvView, push: bool) -> Dirs {
+    fn set_location(&self, name: &str, args: &[Word], env: &EnvView, push: bool) -> Dirs {
         let pwsh = matches!(self.shell, Shell::Pwsh | Shell::Powershell5);
         let path = if pwsh {
-            pwsh_location_arg(&command_name(c), &c.args)
+            pwsh_location_arg(name, args)
         } else {
-            bash_location_arg(&c.args, push)
+            bash_location_arg(args, push)
         };
         match path {
             LocArg::Word(w) => {
@@ -1140,11 +1187,20 @@ fn pwsh_location_arg<'a>(cmdlet: &str, args: &'a [Word]) -> LocArg<'a> {
 /// The command name as the dialect resolves it, lowercased, without its folder and without
 /// `.exe` / `.com` (`C:\Windows\System32\SUBST.EXE` → `subst`).
 fn command_name(c: &SimpleCommand) -> String {
-    let name = c
-        .canonical
+    base_name(&raw_name(c))
+}
+
+/// The command name as the dialect resolves it, lowercased, with its folder.
+fn raw_name(c: &SimpleCommand) -> String {
+    c.canonical
         .as_deref()
         .unwrap_or(&c.typed)
-        .to_ascii_lowercase();
+        .to_ascii_lowercase()
+}
+
+/// `raw` (lowercased) without its folder and without `.exe` / `.com`.
+fn base_name(raw: &str) -> String {
+    let name = raw.to_string();
     let base = name.rsplit(['\\', '/']).next().unwrap_or(&name);
     let base = base
         .strip_suffix(".exe")
@@ -1169,23 +1225,142 @@ fn literal(w: &Word) -> Option<String> {
     Some(out)
 }
 
+// ------------------------------------------------------------------ wrappers
+
+/// What a command runs once the wrappers in front of it are read (the delete guard's list plus
+/// `builtin`): `builtin`, `command` and `time` run it in this shell, `env`, `sudo`, `nohup` and
+/// `exec` start it as a program.
+enum Run<'a> {
+    Cmd {
+        /// `command_name` of the command run.
+        name: String,
+        /// Its name as written, lowercased (`raw_name`).
+        raw: String,
+        args: &'a [Word],
+        /// A wrapper was in front of it.
+        wrapped: bool,
+        /// Every wrapper in front runs it in this shell.
+        in_shell: bool,
+    },
+    /// `command -v X`: describes X and runs nothing.
+    Nothing,
+    /// A wrapper whose command the hook cannot read (an option it does not model, a name that
+    /// is not a literal): any of `rest` may be that command or its arguments.
+    Unread { rest: &'a [Word], in_shell: bool },
+}
+
+const WRAPPERS: [&str; 7] = ["builtin", "command", "time", "env", "sudo", "nohup", "exec"];
+
+/// `c` with its wrappers read.
+fn unwrap(c: &SimpleCommand) -> Run<'_> {
+    let mut name = command_name(c);
+    let mut raw = raw_name(c);
+    let mut args: &[Word] = &c.args;
+    let mut wrapped = false;
+    let mut in_shell = true;
+    while WRAPPERS.contains(&name.as_str()) {
+        let wrapper = std::mem::take(&mut name);
+        wrapped = true;
+        // `/usr/bin/command` is a program, not the builtin.
+        in_shell &= raw == wrapper && matches!(wrapper.as_str(), "builtin" | "command" | "time");
+        let unread = Run::Unread {
+            rest: args,
+            in_shell,
+        };
+        // Skip the wrapper's options (and `env`'s and `sudo`'s `NAME=value` words).
+        loop {
+            let Some(first) = args.first() else {
+                return Run::Nothing;
+            };
+            let Some(t) = literal(first) else { break };
+            if t == "--" {
+                args = &args[1..];
+                break;
+            }
+            let assigns = matches!(wrapper.as_str(), "env" | "sudo");
+            if assigns && !t.starts_with('-') && t.contains('=') {
+                args = &args[1..];
+                continue;
+            }
+            if !t.starts_with('-') {
+                break;
+            }
+            let flags = &t[1..];
+            let short = |set: &str| !flags.is_empty() && flags.chars().all(|f| set.contains(f));
+            match wrapper.as_str() {
+                "command" if short("pvV") => {
+                    if flags.contains(['v', 'V']) {
+                        return Run::Nothing;
+                    }
+                    args = &args[1..];
+                }
+                "time" if t == "-p" => args = &args[1..],
+                // `exec -a NAME` takes the next word.
+                "exec" if short("cla") => {
+                    let skip = if flags.contains('a') { 2 } else { 1 };
+                    args = args.get(skip..).unwrap_or(&[]);
+                }
+                "env" if t == "-" || t == "-i" || t == "--ignore-environment" => args = &args[1..],
+                "env" if t == "-u" => args = args.get(2..).unwrap_or(&[]),
+                "env" if t.starts_with("--unset=") => args = &args[1..],
+                _ => return unread,
+            }
+        }
+        let Some(first) = args.first() else {
+            return Run::Nothing;
+        };
+        let Some(t) = literal(first) else {
+            return Run::Unread {
+                rest: args,
+                in_shell,
+            };
+        };
+        raw = t.to_ascii_lowercase();
+        name = base_name(&raw);
+        args = &args[1..];
+    }
+    Run::Cmd {
+        name,
+        raw,
+        args,
+        wrapped,
+        in_shell,
+    }
+}
+
+impl Run<'_> {
+    /// The command run is named `names`, or may be one of them (a word the hook cannot read
+    /// counts).
+    fn may_be(&self, names: &[&str]) -> bool {
+        match self {
+            Run::Cmd { name, .. } => names.contains(&name.as_str()),
+            Run::Nothing => false,
+            Run::Unread { rest, .. } => rest.iter().any(|w| match literal(w) {
+                Some(t) => names.contains(&base_name(&t.to_ascii_lowercase()).as_str()),
+                None => true,
+            }),
+        }
+    }
+}
+
+const LOCATION_COMMANDS: [&str; 13] = [
+    "cd",
+    "chdir",
+    "sl",
+    "set-location",
+    "pushd",
+    "push-location",
+    "popd",
+    "pop-location",
+    "source",
+    ".",
+    "eval",
+    "invoke-expression",
+    "iex",
+];
+
 fn is_location_command(c: &SimpleCommand) -> bool {
-    c.opaque
-        || matches!(
-            command_name(c).as_str(),
-            "cd" | "chdir"
-                | "sl"
-                | "set-location"
-                | "pushd"
-                | "push-location"
-                | "popd"
-                | "pop-location"
-                | "source"
-                | "."
-                | "eval"
-                | "invoke-expression"
-                | "iex"
-        )
+    c.opaque || unwrap(c).may_be(&LOCATION_COMMANDS)
 }
 
 /// True when anything in `s` (nested bodies and substitutions included) may move.
@@ -1447,7 +1622,19 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     for (name, _) in &c.assigns {
         env.mark_dynamic(name.trim_start_matches('$'));
     }
-    let name = command_name(c);
+    // The command run, after wrappers (`builtin export X=…`); the names below are read from
+    // every argument, the wrapper's included, which can only mark more of them.
+    let name = match unwrap(c) {
+        Run::Cmd { name, .. } => name,
+        Run::Nothing => String::new(),
+        Run::Unread { in_shell, .. } => {
+            if in_shell {
+                env.mark_all_dynamic();
+                return;
+            }
+            String::new()
+        }
+    };
     if c.opaque
         || matches!(
             name.as_str(),
@@ -1476,23 +1663,23 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
         "export" | "declare" | "typeset" | "local" | "readonly" | "unset" | "read" | "mapfile"
         | "readarray" | "getopts" | "printf" | "let" | "set-variable" | "sv" | "new-variable"
         | "nv" | "remove-variable" | "rv" | "clear-variable" | "clv" => mark_names(env, false),
-        "env" => {
-            for (i, a) in args.iter().enumerate() {
-                match a.as_deref() {
-                    Some("-u") | Some("--unset") => {
-                        if let Some(Some(n)) = args.get(i + 1) {
-                            env.mark_dynamic(n);
-                        }
+        _ => {}
+    }
+    if command_name(c) == "env" {
+        for (i, a) in args.iter().enumerate() {
+            match a.as_deref() {
+                Some("-u") | Some("--unset") => {
+                    if let Some(Some(n)) = args.get(i + 1) {
+                        env.mark_dynamic(n);
                     }
-                    Some(t) if t.starts_with("--unset=") => env.mark_dynamic(&t[8..]),
-                    Some(t) if !t.starts_with('-') && t.contains('=') => {
-                        env.mark_dynamic(t.split_once('=').map_or(t, |(n, _)| n));
-                    }
-                    _ => {}
                 }
+                Some(t) if t.starts_with("--unset=") => env.mark_dynamic(&t[8..]),
+                Some(t) if !t.starts_with('-') && t.contains('=') => {
+                    env.mark_dynamic(t.split_once('=').map_or(t, |(n, _)| n));
+                }
+                _ => {}
             }
         }
-        _ => {}
     }
     let writer = PS_ITEM_WRITERS.contains(&name.as_str());
     for a in &args {
