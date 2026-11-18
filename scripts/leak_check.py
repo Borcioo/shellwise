@@ -27,6 +27,9 @@ import unicodedata
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE_DIR = "tests/leak_fixture/"
+# A fixture corpus and cases for the case-check control (not path fixtures).
+FIXTURE_CASES = "tests/leak_fixture/cases/"
+MIN_CHECKED_LENGTH = 40
 SEP = r"[\\/]+"
 # A real profile name; placeholders (`<name>`, `…`, `...`, `%USERNAME%`, `$env:USERNAME`) do not count.
 NAME_CHARS = r"(?![.])[^\\/\s'\"`<>|:*?()\[\]{},;…%$]+"
@@ -104,7 +107,7 @@ def load_terms(path):
 def load_corpus(folder):
     path = os.path.join(folder, "corpus.jsonl")
     if not os.path.isfile(path):
-        raise InputError("corpus.jsonl not found in SHELLWISE_CORPUS")
+        raise InputError("corpus.jsonl not found in %s" % ("SHELLWISE_CORPUS" if folder != FIXTURE_CASES else FIXTURE_CASES))
     commands = set()
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -118,11 +121,21 @@ def load_corpus(folder):
     return commands
 
 
-def case_commands(files):
-    """(file, row number, command) for every `command` string in tests/cases/*.toml."""
+def is_checked(command):
+    """Only a command that could identify a corpus row is checked: 40+ characters or a path."""
+    return len(command) >= MIN_CHECKED_LENGTH or "/" in command or "\\" in command
+
+
+def case_leaks(cases, corpus):
+    """(file, row number) of each checked case command that equals a corpus command."""
+    return [(rel, k) for rel, k, cmd in cases if is_checked(cmd) and cmd in corpus]
+
+
+def case_commands(files, folder="tests/cases/"):
+    """(file, row number, command) for every `command` string in <folder>*.toml."""
     out = []
     for rel in files:
-        if not (rel.startswith("tests/cases/") and rel.endswith(".toml")):
+        if not (rel.startswith(folder) and rel.endswith(".toml")):
             continue
         with open(os.path.join(ROOT, rel), "rb") as f:
             data = tomllib.load(f)
@@ -171,6 +184,30 @@ def read_text(rel):
         return f.read().decode("utf-8", "replace")
 
 
+def case_control(files):
+    """Problems with the case-check control: in the fixture, the long command and the short one
+    with a path must be flagged, the short one without a path must pass."""
+    try:
+        corpus = load_corpus(os.path.join(ROOT, FIXTURE_CASES))
+    except InputError as e:
+        return ["case fixture: %s" % e]
+    cases = case_commands(files, FIXTURE_CASES)
+    flagged = {cmd for rel, k, cmd in cases if (rel, k) in set(case_leaks(cases, corpus))}
+    # The expected answer comes from the fixture rows, never from is_checked.
+    with open(os.path.join(ROOT, FIXTURE_CASES, "cases.toml"), "rb") as f:
+        rows = tomllib.load(f).get("case", [])
+    want = {r["command"] for r in rows if r.get("expect_flagged") is True}
+    keep = {r["command"] for r in rows if r.get("expect_flagged") is False}
+    if not want or not keep:
+        return ["case fixture needs rows with expect_flagged = true and false"]
+    problems = []
+    if want - flagged:
+        problems.append("case fixture: %d expected row(s) not flagged" % len(want - flagged))
+    if keep & flagged:
+        problems.append("case fixture: %d short row(s) flagged" % len(keep & flagged))
+    return problems
+
+
 def controls(matchers, roots, terms, fixture_files):
     """Problems with the positive controls; each must be caught."""
     problems = []
@@ -209,7 +246,7 @@ def main():
 
     listed = [f for f in git("ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0") if f]
     files = [f for f in listed if os.path.isfile(os.path.join(ROOT, f))]
-    fixture_files = [f for f in files if f.startswith(FIXTURE_DIR)]
+    fixture_files = [f for f in files if f.startswith(FIXTURE_DIR) and not f.startswith(FIXTURE_CASES)]
     scanned = [f for f in files if not f.startswith(FIXTURE_DIR)]
 
     leaks = []
@@ -220,9 +257,9 @@ def main():
         sha, _, body = c.strip().partition("\n")
         leaks += ["commit %s line %d: %s" % (sha[:9], n, kind) for n, kind in matchers.findings(body)]
     cases = case_commands(scanned)
-    leaks += ["%s: command #%d is a corpus command" % (rel, k) for rel, k, cmd in cases if cmd in corpus]
+    leaks += ["%s: command #%d is a corpus command" % (rel, k) for rel, k in case_leaks(cases, corpus)]
 
-    problems = controls(matchers, roots, terms, fixture_files)
+    problems = controls(matchers, roots, terms, fixture_files) + case_control(files)
     if not scanned:
         problems.append("0 files read")
     counts = "files=%d commits=%d terms=%d cases=%d corpus=%d" % (

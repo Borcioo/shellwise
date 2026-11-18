@@ -8,6 +8,11 @@
   the WSL home; installs rustup with its official installer when cargo is missing there), deny,
   leak (python -I scripts/leak_check.py; needs SHELLWISE_CORPUS and SHELLWISE_DENYLIST).
   A test leg passes only with a count above 0. Logs go to target/gate/<leg>.log.
+
+  The `testhooks` feature (test-only rules that panic or sleep) is on in both test legs and clippy
+  runs with --all-features, so the fail-closed tests always run in the gate; plain `cargo test`
+  skips them. The leak leg's corpus match checks only tests/cases commands of 40+ characters or
+  with a path separator.
 #>
 param(
     [string]$Distro = 'Ubuntu'
