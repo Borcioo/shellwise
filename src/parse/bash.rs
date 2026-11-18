@@ -10,6 +10,7 @@
 //! an upper bound of the nesting the text can hold, and lowering stops at `ir::MAX_NESTING`.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::thread;
 
 use brush_parser::ast::{self, SourceLocation};
@@ -43,6 +44,9 @@ const MAX_STACK: usize = 1 << 30;
 /// Nested texts are parsed again, each on its own; all of them together may be at most this many
 /// times the command's length, so a deep nesting cannot make parsing quadratic.
 const REPARSE_FACTOR: usize = 32;
+
+/// Operators the grammar recurses on without opening a bracket or a keyword (`[[ ! ! … ]]`).
+const RECURSING_OPERATORS: &[&str] = &["!"];
 
 /// Words that open a nesting level in the grammar.
 const OPENING_KEYWORDS: &[&str] = &[
@@ -79,7 +83,9 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
                 opts: ParserOptions::default(),
                 reparse_budget: Cell::new(owned.len().saturating_mul(REPARSE_FACTOR)),
             };
-            lower.text(&owned, Origin::Exact(0), 0)
+            let mut script = lower.text(&owned, Origin::Exact(0), 0)?;
+            mark_tainted_arithmetic(&mut script);
+            Ok(script)
         });
     match worker {
         Err(_) => Err(error(whole, "the parser thread did not start", None)),
@@ -89,8 +95,8 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
     }
 }
 
-/// An upper bound of the nesting depth `src` can hold: every bracket, quote and opening keyword
-/// counts, whether or not it nests.
+/// An upper bound of the nesting depth `src` can hold: every bracket, quote, opening keyword and
+/// recursing operator counts, whether or not it nests.
 fn nesting_bound(src: &str) -> usize {
     let brackets = src
         .bytes()
@@ -100,7 +106,20 @@ fn nesting_bound(src: &str) -> usize {
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .filter(|w| OPENING_KEYWORDS.contains(w))
         .count();
-    brackets + keywords
+    let operators: usize = RECURSING_OPERATORS
+        .iter()
+        .map(|op| src.matches(op).count())
+        .sum();
+    // Inside `[[ … ]]` the test grammar nests `&&` and `||` too.
+    let test_operators: usize = src
+        .split("[[")
+        .skip(1)
+        .map(|after| {
+            let test = after.split("]]").next().unwrap_or_default();
+            test.matches("&&").count() + test.matches("||").count()
+        })
+        .sum();
+    brackets + keywords + operators + test_operators
 }
 
 /// The deepest run of open brackets, quotes ignored.
@@ -264,15 +283,20 @@ impl Lower {
             in_loop: false,
             depth,
         };
-        let mut stmts = Vec::new();
+        let mut out = Acc::default();
         for list in &program.complete_commands {
-            stmts.extend(self.list(&t, list, cx)?);
+            self.list(&t, list, cx, &mut out)?;
         }
-        Ok(script(stmts, comments(&t, &tokens)))
+        Ok(out.finish(comments(&t, &tokens)))
     }
 
-    fn list(&self, t: &Text, list: &ast::CompoundList, cx: Cx) -> Result<Vec<Stmt>, ParseError> {
-        let mut out = Vec::new();
+    fn list(
+        &self,
+        t: &Text,
+        list: &ast::CompoundList,
+        cx: Cx,
+        out: &mut Acc,
+    ) -> Result<(), ParseError> {
         for ast::CompoundListItem(and_or, sep) in &list.0 {
             let last = match sep {
                 ast::SeparatorOperator::Async => ChainOp::Background,
@@ -294,16 +318,18 @@ impl Lower {
             }
             ops.push(last);
             for (p, op) in pipelines.into_iter().zip(ops) {
-                out.extend(self.pipeline(t, p, op, cx)?);
+                out.push(self.pipeline(t, p, op, cx)?, op);
             }
         }
-        Ok(out)
+        Ok(())
     }
 
     /// A body: a list one level deeper.
     fn body(&self, t: &Text, list: &ast::CompoundList, cx: Cx) -> Result<Script, ParseError> {
         let span = list.location().map_or(t.whole(), |l| t.span(&l));
-        Ok(script(self.list(t, list, cx.deeper(span)?)?, Vec::new()))
+        let mut out = Acc::default();
+        self.list(t, list, cx.deeper(span)?, &mut out)?;
+        Ok(out.finish(Vec::new()))
     }
 
     fn pipeline(
@@ -313,11 +339,18 @@ impl Lower {
         chain: ChainOp,
         cx: Cx,
     ) -> Result<Vec<Stmt>, ParseError> {
-        if p.seq.iter().all(|c| matches!(c, ast::Command::Simple(_))) {
+        let plain = |c: &ast::Command| {
+            matches!(c, ast::Command::Simple(_) | ast::Command::ExtendedTest(..))
+        };
+        if p.seq.iter().all(plain) {
             let mut elems = Vec::new();
             for c in &p.seq {
-                if let ast::Command::Simple(s) = c {
-                    elems.push(Elem::Cmd(self.simple(t, s, cx)?));
+                match c {
+                    ast::Command::Simple(s) => elems.push(Elem::Cmd(self.simple(t, s, cx)?)),
+                    ast::Command::ExtendedTest(test, redirects) => {
+                        elems.push(Elem::Cmd(self.test_command(t, test, redirects, cx)?))
+                    }
+                    _ => {}
                 }
             }
             return Ok(vec![Stmt::Pipeline(Pipeline {
@@ -325,7 +358,7 @@ impl Lower {
                 chain: Some(chain),
             })]);
         }
-        // A compound stage is a statement of its own; the IR keeps no chain for it.
+        // A compound stage is a statement of its own; `Script::joins` keeps its chain.
         let mut stages = Vec::new();
         for c in &p.seq {
             stages.extend(self.command(t, c, cx)?);
@@ -349,33 +382,40 @@ impl Lower {
             }
             ast::Command::Function(f) => {
                 let ast::FunctionBody(cc, redirects) = &f.body;
-                let mut stmts = self.redirect_exprs(t, redirects.as_ref(), cx)?;
-                match cc {
-                    ast::CompoundCommand::BraceGroup(b) => {
-                        stmts.extend(self.body(t, &b.list, cx)?.stmts)
-                    }
-                    other => stmts.extend(self.compound(t, other, cx)?),
-                }
+                let pre = script(self.redirect_exprs(t, redirects.as_ref(), cx)?, Vec::new());
+                let body = match cc {
+                    ast::CompoundCommand::BraceGroup(b) => self.body(t, &b.list, cx)?,
+                    other => script(self.compound(t, other, cx)?, Vec::new()),
+                };
                 Ok(vec![Stmt::Func {
                     name: f.fname.value.clone(),
-                    body: script(stmts, Vec::new()),
+                    body: concat(pre, body),
                 }])
             }
-            ast::Command::ExtendedTest(test, redirects) => {
-                let span = t.span(&test.loc);
-                let mut args = Vec::new();
-                self.test_words(t, &test.expr, span, cx, &mut args)?;
-                let mut cmd = synthetic("[[", span, cx);
-                cmd.args = args;
-                for r in redirects.iter().flat_map(|r| r.0.iter()) {
-                    cmd.redirects.push(self.redirect(t, r, cx)?);
-                }
-                Ok(vec![Stmt::Pipeline(Pipeline {
-                    elems: vec![Elem::Cmd(cmd)],
-                    chain: None,
-                })])
-            }
+            ast::Command::ExtendedTest(test, redirects) => Ok(vec![Stmt::Pipeline(Pipeline {
+                elems: vec![Elem::Cmd(self.test_command(t, test, redirects, cx)?)],
+                chain: None,
+            })]),
         }
+    }
+
+    /// `[[ … ]]` as a command named `[[` whose arguments are the test's words.
+    fn test_command(
+        &self,
+        t: &Text,
+        test: &ast::ExtendedTestExprCommand,
+        redirects: &Option<ast::RedirectList>,
+        cx: Cx,
+    ) -> Result<SimpleCommand, ParseError> {
+        let span = t.span(&test.loc);
+        let mut args = Vec::new();
+        self.test_words(t, &test.expr, span, cx, &mut args)?;
+        let mut cmd = synthetic("[[", span, cx);
+        cmd.args = args;
+        for r in redirects.iter().flat_map(|r| r.0.iter()) {
+            cmd.redirects.push(self.redirect(t, r, cx)?);
+        }
+        Ok(cmd)
     }
 
     fn test_words(
@@ -394,13 +434,32 @@ impl Lower {
                 self.test_words(t, b, span, cx, out)
             }
             E::Not(a) | E::Parenthesized(a) => self.test_words(t, a, span, cx, out),
-            E::UnaryTest(_, w) => {
-                out.push(self.ast_word(t, w, span, cx)?);
+            E::UnaryTest(op, w) => {
+                let mut w = self.ast_word(t, w, span, cx)?;
+                if matches!(op, ast::UnaryPredicate::ShellVariableIsSetAndAssigned) {
+                    self.subscript_substs(&mut w, cx)?;
+                }
+                out.push(w);
                 Ok(())
             }
-            E::BinaryTest(_, a, b) => {
-                out.push(self.ast_word(t, a, span, cx)?);
-                out.push(self.ast_word(t, b, span, cx)?);
+            E::BinaryTest(op, a, b) => {
+                use ast::BinaryPredicate as B;
+                let arithmetic = matches!(
+                    op,
+                    B::ArithmeticEqualTo
+                        | B::ArithmeticNotEqualTo
+                        | B::ArithmeticLessThan
+                        | B::ArithmeticLessThanOrEqualTo
+                        | B::ArithmeticGreaterThan
+                        | B::ArithmeticGreaterThanOrEqualTo
+                );
+                for w in [a, b] {
+                    let mut w = self.ast_word(t, w, span, cx)?;
+                    if arithmetic {
+                        self.subscript_substs(&mut w, cx)?;
+                    }
+                    out.push(w);
+                }
                 Ok(())
             }
         }
@@ -437,7 +496,7 @@ impl Lower {
                 {
                     words.push(self.arith_word(&e.value, span, cx)?);
                 }
-                let mut out = expr_stmt(words);
+                let mut out = vec![arith_command(words, span, cx)];
                 out.push(Stmt::Loop {
                     body: self.body(t, &f.body.list, cx.looping())?,
                     span,
@@ -461,26 +520,27 @@ impl Lower {
                 out
             }
             C::IfClause(i) => {
-                let mut first = self.body(t, &i.condition, cx)?;
-                first.stmts.extend(self.body(t, &i.then, cx)?.stmts);
+                let first = concat(self.body(t, &i.condition, cx)?, self.body(t, &i.then, cx)?);
                 let mut branches = vec![first];
                 for e in i.elses.iter().flatten() {
-                    let mut b = match &e.condition {
+                    let condition = match &e.condition {
                         Some(c) => self.body(t, c, cx)?,
                         None => Script::default(),
                     };
-                    b.stmts.extend(self.body(t, &e.body, cx)?.stmts);
-                    branches.push(b);
+                    branches.push(concat(condition, self.body(t, &e.body, cx)?));
                 }
                 vec![Stmt::Cond { branches, span }]
             }
             C::WhileClause(w) | C::UntilClause(w) => {
                 let cx = cx.looping();
-                let mut body = self.body(t, &w.0, cx)?;
-                body.stmts.extend(self.body(t, &w.1.list, cx)?.stmts);
+                let body = concat(self.body(t, &w.0, cx)?, self.body(t, &w.1.list, cx)?);
                 vec![Stmt::Loop { body, span }]
             }
-            C::Arithmetic(a) => expr_stmt(vec![self.arith_word(&a.expr.value, span, cx)?]),
+            C::Arithmetic(a) => vec![arith_command(
+                vec![self.arith_word(&a.expr.value, span, cx)?],
+                span,
+                cx,
+            )],
             C::Coprocess(c) => {
                 let inner = self.command(t, &c.body, cx.deeper(span)?)?;
                 vec![Stmt::Block(script(inner, Vec::new()))]
@@ -563,10 +623,70 @@ impl Lower {
         } else {
             canonical(&cmd.name, self.profile)
         };
-        let evals_dynamic =
-            cmd.canonical.as_deref() == Some("eval") && cmd.args.iter().any(Word::is_dynamic);
-        cmd.opaque = cmd.name.is_dynamic() || has_glob || evals_dynamic;
+        let (target, first_arg, wrapped) = unwrap_builtins(&cmd, self.profile);
+        let runs_text = match target.as_deref() {
+            Some("eval") => true,
+            Some("source" | ".") => wrapped,
+            _ => false,
+        };
+        let runs_dynamic_text = runs_text && cmd.args.iter().skip(first_arg).any(Word::is_dynamic);
+        self.evaluated_operands(&mut cmd, target.as_deref(), first_arg, cx)?;
+        // A name no rule can match is opaque: a variable, a glob, anything without a canonical name.
+        let unknown_name = !cmd.name.parts.is_empty() && cmd.canonical.is_none();
+        cmd.opaque = cmd.name.is_dynamic() || has_glob || runs_dynamic_text || unknown_name;
         Ok(cmd)
+    }
+
+    /// Operands bash evaluates as arithmetic, where a `name[…]` subscript in a static string runs
+    /// its `$(…)` (`let 'a[$(…)]'`, `printf -v`, `read`, `test -v`, `declare`).
+    fn evaluated_operands(
+        &self,
+        cmd: &mut SimpleCommand,
+        target: Option<&str>,
+        first_arg: usize,
+        cx: Cx,
+    ) -> Result<(), ParseError> {
+        let env = EnvView::new();
+        let mut picked = Vec::new();
+        match target {
+            Some("let" | "read" | "declare" | "typeset" | "local") => {
+                picked.extend(first_arg..cmd.args.len())
+            }
+            Some("printf" | "test" | "[") => {
+                for i in first_arg..cmd.args.len() {
+                    match cmd.args[i].static_value(&env).as_deref() {
+                        Some("-v") => picked.push(i + 1),
+                        Some(v) if target == Some("printf") && v.starts_with("-v") => {
+                            picked.push(i)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        for i in picked {
+            if let Some(w) = cmd.args.get_mut(i) {
+                self.subscript_substs(w, cx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Append the commands in the `[…]` subscripts of a static word that bash evaluates.
+    fn subscript_substs(&self, w: &mut Word, cx: Cx) -> Result<(), ParseError> {
+        let Some(value) = w.static_value(&EnvView::new()) else {
+            return Ok(());
+        };
+        for sub in subscripts(&value) {
+            if runs_code(sub) {
+                self.charge(sub.len(), w.span)?;
+                let inner =
+                    self.word_text(sub, Origin::Inexact(w.span), w.span, cx.deeper(w.span)?)?;
+                w.parts.extend(commands_only(inner));
+            }
+        }
+        Ok(())
     }
 
     fn assignment(
@@ -582,8 +702,23 @@ impl Lower {
             ast::AssignmentName::VariableName(n) => n.clone(),
             ast::AssignmentName::ArrayElementName(n, index) => {
                 let w = self.word_text(index, Origin::Inexact(span), span, cx)?;
+                // The index is an arithmetic expression: bash expands it again, quotes removed.
+                let again = w.static_value(&EnvView::new()).filter(|v| runs_code(v));
                 if w.is_dynamic() {
                     out.push((n.clone(), w));
+                }
+                if let Some(v) = again {
+                    self.charge(v.len(), span)?;
+                    let inner =
+                        self.word_text(&v, Origin::Inexact(span), span, cx.deeper(span)?)?;
+                    out.push((
+                        n.clone(),
+                        Word {
+                            parts: commands_only(inner).collect(),
+                            span,
+                            quote: Quote::None,
+                        },
+                    ));
                 }
                 n.clone()
             }
@@ -838,14 +973,77 @@ fn commands_only(w: Word) -> impl Iterator<Item = WordPart> {
         .filter(|p| matches!(p, WordPart::Subst(_) | WordPart::Block(_)))
 }
 
-fn script(mut stmts: Vec<Stmt>, comments: Vec<Comment>) -> Script {
-    // The last statement joins nothing; a trailing `&` stays.
-    if let Some(Stmt::Pipeline(p)) = stmts.last_mut()
-        && p.chain == Some(ChainOp::Seq)
+fn script(stmts: Vec<Stmt>, comments: Vec<Comment>) -> Script {
+    let mut out = Acc::default();
+    out.push(stmts, ChainOp::Seq);
+    out.finish(comments)
+}
+
+/// `b` run after `a` (a body after its condition), joined by `;`.
+fn concat(a: Script, b: Script) -> Script {
+    let mut out = Acc {
+        stmts: a.stmts,
+        joins: a.joins,
+        next: Some(ChainOp::Seq),
+    };
+    if let Some(Stmt::Pipeline(p)) = out.stmts.last_mut()
+        && p.chain.is_none()
+        && !b.stmts.is_empty()
     {
-        p.chain = None;
+        p.chain = Some(ChainOp::Seq);
     }
-    Script { stmts, comments }
+    out.append(b);
+    out.finish(a.comments)
+}
+
+/// Statements in order, each with the operator joining it to the one before.
+#[derive(Default)]
+struct Acc {
+    stmts: Vec<Stmt>,
+    joins: Vec<Option<ChainOp>>,
+    /// The operator after the last pipeline pushed.
+    next: Option<ChainOp>,
+}
+
+impl Acc {
+    /// The statements one pipeline lowered to; all of them share its join. `after` is the operator
+    /// that follows the pipeline.
+    fn push(&mut self, stmts: Vec<Stmt>, after: ChainOp) {
+        let join = if self.stmts.is_empty() {
+            None
+        } else {
+            self.next
+        };
+        self.joins.extend(std::iter::repeat_n(join, stmts.len()));
+        self.stmts.extend(stmts);
+        self.next = Some(after);
+    }
+
+    /// Append a body that runs after the statements so far (an `if` body after its condition).
+    fn append(&mut self, body: Script) {
+        let first = self.joins.len();
+        self.stmts.extend(body.stmts);
+        self.joins.extend(body.joins);
+        self.joins.resize(self.stmts.len(), None);
+        if first < self.joins.len() && first > 0 {
+            self.joins[first] = Some(ChainOp::Seq);
+        }
+        self.next = Some(ChainOp::Seq);
+    }
+
+    fn finish(mut self, comments: Vec<Comment>) -> Script {
+        // The last statement joins nothing; a trailing `&` stays.
+        if let Some(Stmt::Pipeline(p)) = self.stmts.last_mut()
+            && p.chain == Some(ChainOp::Seq)
+        {
+            p.chain = None;
+        }
+        Script {
+            stmts: self.stmts,
+            comments,
+            joins: self.joins,
+        }
+    }
 }
 
 /// Words that run commands (substitutions), as an expression statement; none when no word does.
@@ -892,7 +1090,26 @@ fn literal(text: &str, span: Span) -> Word {
 
 /// The command a static name runs: its last path component; Git Bash finds `RM.exe` as `rm`.
 fn canonical(name: &Word, profile: BashProfile) -> Option<String> {
-    let value = name.static_value(&EnvView::new())?;
+    let value = match name.static_value(&EnvView::new()) {
+        Some(v) => v,
+        // `~/bin/rm`: the home folder is not known here, the command still is.
+        None => match &name.parts[..] {
+            [WordPart::Tilde, rest @ ..] => {
+                let mut tail = String::new();
+                for p in rest {
+                    match p {
+                        WordPart::Literal(s) => tail.push_str(s),
+                        _ => return None,
+                    }
+                }
+                if !tail.starts_with('/') {
+                    return None;
+                }
+                tail
+            }
+            _ => return None,
+        },
+    };
     let seps: &[char] = match profile {
         BashProfile::GitBash => &['/', '\\'],
         BashProfile::Posix => &['/'],
@@ -908,9 +1125,171 @@ fn canonical(name: &Word, profile: BashProfile) -> Option<String> {
     (!base.is_empty()).then_some(base)
 }
 
+/// Text that runs a command when bash expands it.
+fn runs_code(text: &str) -> bool {
+    text.contains("$(") || text.contains('`')
+}
+
+/// The contents of each outermost `[…]` in `text`.
+fn subscripts(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, b) in text.bytes().enumerate() {
+        match b {
+            b'[' => {
+                if depth == 0 {
+                    start = i + 1;
+                }
+                depth += 1;
+            }
+            b']' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(&text[start..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `(( … ))` (and a `for (( … ))` header) as a command named `((`.
+fn arith_command(words: Vec<Word>, span: Span, cx: Cx) -> Stmt {
+    let mut cmd = synthetic("((", span, cx);
+    cmd.args = words;
+    Stmt::Pipeline(Pipeline {
+        elems: vec![Elem::Cmd(cmd)],
+        chain: None,
+    })
+}
+
+/// A command that evaluates arithmetic naming a variable the script sets to text that runs a
+/// command (`x='a[$(…)]'; (( x ))`): whether bash runs it is not known here, so it is opaque.
+fn mark_tainted_arithmetic(script: &mut Script) {
+    let mut tainted = BTreeSet::new();
+    visit_commands(script, &mut |c| {
+        for (name, w) in &c.assigns {
+            if w.static_value(&EnvView::new())
+                .is_some_and(|v| runs_code(&v))
+            {
+                tainted.insert(name.clone());
+            }
+        }
+    });
+    if tainted.is_empty() {
+        return;
+    }
+    visit_commands(script, &mut |c| {
+        // `(( … ))` itself holds its expression as a `((…))` part, matched below.
+        let arithmetic_command = matches!(c.canonical.as_deref(), Some("let" | "[["));
+        let words = std::iter::once(&c.name)
+            .chain(c.args.iter())
+            .chain(c.assigns.iter().map(|(_, w)| w));
+        let mut mentions = false;
+        for w in words {
+            for p in &w.parts {
+                let text = match p {
+                    WordPart::Var(v) if v.starts_with("((") => v.as_str(),
+                    WordPart::Var(v) | WordPart::Literal(v) | WordPart::Glob(v)
+                        if arithmetic_command =>
+                    {
+                        v.as_str()
+                    }
+                    _ => continue,
+                };
+                mentions |= text
+                    .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .any(|id| tainted.contains(id));
+            }
+        }
+        if mentions {
+            c.opaque = true;
+        }
+    });
+}
+
+/// Every simple command, also inside bodies and substitutions.
+fn visit_commands(script: &mut Script, f: &mut dyn FnMut(&mut SimpleCommand)) {
+    for st in &mut script.stmts {
+        match st {
+            Stmt::Pipeline(p) => {
+                for e in &mut p.elems {
+                    match e {
+                        Elem::Cmd(c) => {
+                            f(c);
+                            let words = std::iter::once(&mut c.name)
+                                .chain(c.args.iter_mut())
+                                .chain(c.assigns.iter_mut().map(|(_, w)| w));
+                            for w in words {
+                                visit_word(w, f);
+                            }
+                            for r in &mut c.redirects {
+                                match r {
+                                    Redirect::File { target, .. } => visit_word(target, f),
+                                    Redirect::Heredoc { body, .. } => visit_word(body, f),
+                                }
+                            }
+                        }
+                        Elem::Method(m) => m.args.iter_mut().for_each(|w| visit_word(w, f)),
+                        Elem::Expr(w) => visit_word(w, f),
+                    }
+                }
+            }
+            Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
+                visit_commands(body, f)
+            }
+            Stmt::Cond { branches, .. } => branches.iter_mut().for_each(|b| visit_commands(b, f)),
+        }
+    }
+}
+
+fn visit_word(w: &mut Word, f: &mut dyn FnMut(&mut SimpleCommand)) {
+    for p in &mut w.parts {
+        if let WordPart::Subst(s) | WordPart::Block(s) = p {
+            visit_commands(s, f);
+        }
+    }
+}
+
+/// Words that run the command named by their first operand.
+const WRAPPERS: &[&str] = &["builtin", "command", "exec"];
+
+/// The command `builtin`, `command` and `exec` (with their options) run, the index of its first
+/// argument, and whether a wrapper was there. `None` when the wrapped name is not static.
+fn unwrap_builtins(cmd: &SimpleCommand, profile: BashProfile) -> (Option<String>, usize, bool) {
+    let env = EnvView::new();
+    let mut name = cmd.canonical.clone();
+    let mut i = 0;
+    let mut wrapped = false;
+    while let Some(wrapper) = name.as_deref().filter(|n| WRAPPERS.contains(n)) {
+        let wrapper = wrapper.to_string();
+        wrapped = true;
+        while let Some(v) = cmd.args.get(i).and_then(|w| w.static_value(&env)) {
+            if v == "--" {
+                i += 1;
+                break;
+            }
+            if !v.starts_with('-') || v == "-" {
+                break;
+            }
+            // `exec -a NAME`: the option takes the next word.
+            if wrapper == "exec" && v.contains('a') {
+                i += 1;
+            }
+            i += 1;
+        }
+        name = cmd.args.get(i).and_then(|w| canonical(w, profile));
+        i += 1;
+    }
+    (name, i, wrapped)
+}
+
 /// Unquoted text bash expands into file names or several words.
 fn is_glob(text: &str) -> bool {
-    text.contains(['*', '?', '['])
+    text.contains(['*', '?'])
+        // A `[` without a `]` after it matches only itself (the `[` command).
+        || text.find('[').is_some_and(|i| text[i..].contains(']'))
         || (text.contains('{') && (text.contains(',') || text.contains("..")))
         || ["@(", "!(", "+("].iter().any(|x| text.contains(x))
 }

@@ -62,6 +62,51 @@ fn and_list_is_two_commands_joined_by_and() {
 }
 
 #[test]
+fn every_statement_keeps_the_operator_before_it() {
+    use ChainOp::{And, Background, Or, Seq};
+    let cases: &[(&str, &[Option<ChainOp>])] = &[
+        (
+            "[[ -d y ]] || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        (
+            "( true ) || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        (
+            "{ true; } || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        (
+            "if true; then :; fi || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        ("for f in a; do :; done && rm x", &[None, Some(And)]),
+        ("a; b & c", &[None, Some(Seq), Some(Background)]),
+        ("a\nb", &[None, Some(Seq)]),
+        // The word-list substitution and the loop are one statement of the chain.
+        (
+            "true || for f in $(ls); do :; done",
+            &[None, Some(Or), Some(Or)],
+        ),
+    ];
+    for (src, want) in cases {
+        let s = ok(src);
+        let got: Vec<_> = (0..s.stmts.len()).map(|i| s.join(i)).collect();
+        assert_eq!(got, *want, "{src}");
+    }
+    match &ok("[[ -d y ]] || cd x").stmts[0] {
+        Stmt::Pipeline(p) => assert_eq!(p.chain, Some(Or), "[[ ]] keeps its pipeline chain"),
+        other => panic!("{other:?}"),
+    }
+    let s = ok("while cd x; do rm -rf .; done");
+    match &s.stmts[..] {
+        [Stmt::Loop { body, .. }] => assert_eq!(body.join(1), Some(Seq), "body after condition"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn loops_mark_their_commands() {
     for src in [
         "for w in a b; do rm \"$w\"; done",
@@ -70,8 +115,9 @@ fn loops_mark_their_commands() {
         "for ((i=0; i<3; i++)); do rm x; done",
     ] {
         let s = ok(src);
+        // `for (( … ))` puts its header first, as a `((` command.
         let body = match &s.stmts[..] {
-            [Stmt::Loop { body, .. }] => body,
+            [Stmt::Loop { body, .. }] | [_, Stmt::Loop { body, .. }] => body,
             other => panic!("{src}: {other:?}"),
         };
         let inner = commands(body);
@@ -143,9 +189,26 @@ fn dynamic_execution_is_opaque_and_xargs_shows_its_command() {
         "\"$(which rm)\" x",
         "${RM:-rm} x",
         "r? -rf x",
+        "~ x",
+        r#"builtin eval "$c""#,
+        r#"command eval "$c""#,
+        r#"exec eval "$c""#,
+        r#"command -p eval "$c""#,
+        r#"exec -a name eval "$c""#,
+        r#"builtin source "$f""#,
+        r#"command . "$f""#,
+        r#"exec source "$f""#,
     ] {
         let c = commands(&ok(src))[0].clone();
         assert!(c.opaque, "{src}");
+    }
+    for src in [
+        "builtin eval 'echo hi'",
+        r#"command ls "$d""#,
+        "exec git status",
+    ] {
+        let c = commands(&ok(src))[0].clone();
+        assert!(!c.opaque, "{src}");
     }
     let c = commands(&ok("eval 'echo hi'"))[0].clone();
     assert!(!c.opaque, "static eval text is a nested script, not opaque");
@@ -212,7 +275,7 @@ fn hidden_commands_inside_words_are_found() {
         ("echo \"a `rm x` b\"", &["echo", "rm"]),
         ("echo $((1 + $(rm x)))", &["echo", "rm"]),
         ("[[ -n $(rm x) ]]", &["[[", "rm"]),
-        ("(( $(rm x) ))", &["rm"]),
+        ("(( $(rm x) ))", &["((", "rm"]),
         ("case $(git branch) in main) rm x;; esac", &["git", "rm"]),
         (
             "echo $(echo $(echo $(git status)))",
@@ -223,6 +286,60 @@ fn hidden_commands_inside_words_are_found() {
     ];
     for (src, want) in cases {
         assert_eq!(names(&ok(src)), *want, "{src}");
+    }
+}
+
+/// Each row checked in Git Bash 5.2 with a canary file: a "runs" row created it, a "no" row did not.
+#[test]
+fn subscripts_bash_evaluates_run_their_substitutions() {
+    let runs: &[(&str, &[&str])] = &[
+        ("let 'a[$(rm -rf x)]'", &["let", "rm"]),
+        ("builtin let 'a[$(rm -rf x)]'", &["builtin", "rm"]),
+        ("printf -v 'a[$(rm -rf x)]' %s 1", &["printf", "rm"]),
+        ("printf -v'a[$(rm -rf x)]' x", &["printf", "rm"]),
+        ("read 'a[$(rm -rf x)]' < f", &["read", "rm"]),
+        ("read -r 'a[$(rm -rf x)]' < f", &["read", "rm"]),
+        ("test -v 'a[$(rm -rf x)]'", &["test", "rm"]),
+        ("[ -v 'a[$(rm -rf x)]' ]", &["[", "rm"]),
+        ("[[ -v 'a[$(rm -rf x)]' ]]", &["[[", "rm"]),
+        ("[[ 1 -eq 'a[$(rm -rf x)]' ]]", &["[[", "rm"]),
+        ("[[ 'a[$(rm -rf x)]' -lt 1 ]]", &["[[", "rm"]),
+        ("x['$(rm -rf x)']=1", &["<none>", "rm"]),
+        ("declare 'a[$(rm -rf x)]=1'", &["declare", "rm"]),
+        ("typeset 'a[`rm -rf x`]=1'", &["typeset", "rm"]),
+        ("f() { local 'a[$(rm -rf x)]=1'; }", &["local", "rm"]),
+    ];
+    let no: &[(&str, &[&str])] = &[
+        ("unset 'a[$(rm -rf x)]'", &["unset"]),
+        ("export 'a[$(rm -rf x)]'=1", &["export"]),
+        ("let '$(rm -rf x)'", &["let"]),
+        ("echo 'a[$(rm -rf x)]'", &["echo"]),
+        ("[[ -n 'a[$(rm -rf x)]' ]]", &["[["]),
+    ];
+    for (src, want) in runs.iter().chain(no) {
+        assert_eq!(names(&ok(src)), *want, "{src}");
+    }
+}
+
+#[test]
+fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
+    let set = "x='a[$(rm -rf y)]'; ";
+    for (cmd, name) in [
+        ("(( x ))", "(("),
+        ("(( $x ))", "(("),
+        ("echo $(( x + 1 ))", "echo"),
+        ("let x", "let"),
+        ("[[ x -eq 1 ]]", "[["),
+    ] {
+        let src = format!("{set}{cmd}");
+        let s = ok(&src);
+        let c = commands(&s);
+        let c = c.iter().find(|c| bash_util::name_of(c) == name).unwrap();
+        assert!(c.opaque, "{src}");
+    }
+    for src in ["x='a[$(rm -rf y)]'; echo x", "y=1; (( y ))", "(( x ))"] {
+        let s = ok(src);
+        assert!(commands(&s).iter().all(|c| !c.opaque), "{src}");
     }
 }
 
@@ -293,6 +410,12 @@ fn canonical_name_per_profile() {
         ("'C:\\x\\rm.exe' -rf x", BashProfile::GitBash, Some("rm")),
         ("'C:\\x\\rm' -rf x", BashProfile::Posix, Some("C:\\x\\rm")),
         ("$x status", BashProfile::Posix, None),
+        ("~/bin/rm -rf x", BashProfile::Posix, Some("rm")),
+        (
+            "~/bin/GIT.exe clean -fdx",
+            BashProfile::GitBash,
+            Some("git"),
+        ),
     ];
     for (src, profile, want) in cases {
         let s = parse(src, profile).unwrap();
@@ -365,6 +488,10 @@ fn comments_are_collected_with_their_trailing_flag() {
 
 /// A deep nesting of each construct that recurses in the parser, `n` levels.
 fn nested(kind: &str, n: usize) -> String {
+    let (pre, post) = match kind {
+        k if k.starts_with("test_") => ("[[ ", " ]]"),
+        _ => ("", ""),
+    };
     let (open, mid, close) = match kind {
         "subst" => ("echo $(", "true", ")"),
         "paren" => ("(", "true", ")"),
@@ -382,16 +509,28 @@ fn nested(kind: &str, n: usize) -> String {
         "masked_subst" => ("echo $(: ] ", "true", ")"),
         "masked_brace" => ("{ : ]; ", "true", "; }"),
         "masked_param" => ("${x:-]", "y", "}"),
+        // `!` and `&&`/`||` recurse in the parser without opening a bracket or a keyword.
+        "bang" => ("! ", "true", ""),
+        "test_not" => ("! ", "-n x", ""),
+        "test_and" => ("x && ", "x", ""),
+        "test_or" => ("x || ", "x", ""),
+        "test_paren" => ("( ", "x", " )"),
+        "test_not_paren" => ("! ( ", "x", " )"),
+        "test_masked_paren" => ("] || ( ", "x", " )"),
         _ => unreachable!(),
     };
-    format!("{}{mid}{}", open.repeat(n), close.repeat(n))
+    format!("{pre}{}{mid}{}{post}", open.repeat(n), close.repeat(n))
 }
 
 /// Each construct and the guard that must refuse 64 KiB of it.
 const BRACKETS: &str = "brackets nested deeper than 200 levels";
 const LOWERING: &str = "nesting deeper than 200 levels";
 const BUDGET: &str = "nested text too large to parse in time";
-const NESTED_KINDS: [(&str, &str); 15] = [
+/// 64 KiB of a two-byte operator (`! `) is 32k levels: past the stack cap in a debug build, which
+/// sizes 64 KiB per level; a release build (16 KiB per level) parses it and lowering decides.
+const STACK_CAP: &str = "nesting too deep to parse safely";
+const PARSES: &str = "parses";
+const NESTED_KINDS: [(&str, &str); 22] = [
     ("subst", BRACKETS),
     ("paren", BRACKETS),
     ("brace", BRACKETS),
@@ -408,6 +547,28 @@ const NESTED_KINDS: [(&str, &str); 15] = [
     ("masked_subst", BUDGET),
     ("masked_brace", LOWERING),
     ("masked_param", BUDGET),
+    // `! ! … cmd` is one negated pipeline, but every `!` counts toward the stack bound.
+    (
+        "bang",
+        if cfg!(debug_assertions) {
+            STACK_CAP
+        } else {
+            PARSES
+        },
+    ),
+    (
+        "test_not",
+        if cfg!(debug_assertions) {
+            STACK_CAP
+        } else {
+            LOWERING
+        },
+    ),
+    ("test_and", LOWERING),
+    ("test_or", LOWERING),
+    ("test_paren", BRACKETS),
+    ("test_not_paren", BRACKETS),
+    ("test_masked_paren", LOWERING),
 ];
 
 #[test]
@@ -419,6 +580,10 @@ fn nesting_past_the_limit_is_an_error_not_a_crash() {
         assert!(src.len() > 60 * 1024, "{kind}: {}", src.len());
         let got = parse(&src, BashProfile::GitBash);
         if guard.is_empty() {
+            continue;
+        }
+        if guard == PARSES {
+            assert!(got.is_ok(), "{kind}: {got:?}");
             continue;
         }
         assert_eq!(got.expect_err(kind).message, guard, "{kind}");
@@ -517,6 +682,15 @@ fn gap_table_rows_lower_to_the_commands_bash_runs() {
         } else {
             let s = got.unwrap_or_else(|e| panic!("{:?}: {e:?}", r.command));
             assert_eq!(names(&s), r.commands, "{:?}", r.command);
+            for c in commands(&s) {
+                if !c.name.parts.is_empty() && c.canonical.is_none() {
+                    assert!(
+                        c.opaque,
+                        "a name no rule can match must be opaque: {:?}",
+                        r.command
+                    );
+                }
+            }
         }
     }
 }
