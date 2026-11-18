@@ -578,7 +578,8 @@ pub struct Location {
     new_links: Vec<String>,
     /// An earlier statement creates a link at a place the hook cannot tell.
     new_link_unknown: bool,
-    /// `read_script` found nothing that may define or redefine a drive or a command.
+    /// `read_script` found only harmless commands: nothing defines or redefines a drive or a
+    /// command.
     names_fixed: bool,
 }
 
@@ -822,10 +823,10 @@ impl Location {
     }
 
     /// Read the whole command once, before the first target: a path on a built-in drive that is
-    /// no file system is no file only when nothing anywhere in the command may define or
-    /// redefine a drive or a command. Until then it may be a folder.
+    /// no file system is no file only when every part of the command is in a small harmless set
+    /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
-        self.names_fixed = !may_redefine(script);
+        self.names_fixed = only_harmless(script, self.shell, self.os);
     }
 
     pub fn os(&self) -> Os {
@@ -1502,79 +1503,73 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
     }
 }
 
-/// Anything in `s` (nested bodies and substitutions included) may define or redefine a drive or
-/// a command: a drive, alias or module command, a function, a dot-source or `iex`, a script or
-/// a module-qualified name, an alias or function path, an opaque, unread or expression
-/// statement, a call on a drive or the session state.
-fn may_redefine(s: &Script) -> bool {
-    let mut hit = false;
+/// Every part of `s` (nested bodies and substitutions included) is in a small set that cannot
+/// define or redefine a drive or a command: no method call, function, expression, script block,
+/// opaque or unread command, and every command is one `harmless` accepts. An allow-list: a
+/// spelling it does not know is not harmless.
+fn only_harmless(s: &Script, shell: Shell, os: Os) -> bool {
+    let mut ok = true;
     visit_script(s, &mut |n| {
-        hit |= match n {
-            Node::Cmd(c) => command_may_redefine(c),
-            Node::Method(m) => {
-                let call = format!("{}.{}", m.type_name, m.method).to_ascii_lowercase();
-                call.contains("drive") || call.contains("sessionstate")
-            }
-            Node::Loop(_) => false,
-            Node::Func | Node::Expr => true,
+        ok &= match n {
+            Node::Cmd(c) => harmless(c, shell, os),
+            Node::Loop(_) => true,
+            Node::Method(_) | Node::Func | Node::Expr => false,
         }
     });
-    hit
+    ok
 }
 
-/// The commands that define or redefine a drive, an alias, a module's commands or run text.
-const REDEFINERS: [&str; 22] = [
-    "new-psdrive",
-    "ndr",
-    "mount",
-    "remove-psdrive",
-    "rdr",
-    "set-alias",
-    "sal",
-    "new-alias",
-    "nal",
-    "import-alias",
-    "ipal",
-    "remove-alias",
-    "import-module",
-    "ipmo",
-    "new-module",
-    "nmo",
-    "import-pssession",
-    "ipsn",
-    ".",
-    "invoke-expression",
-    "iex",
-    "source",
-];
-
-fn command_may_redefine(c: &SimpleCommand) -> bool {
-    if c.opaque {
-        return true;
+/// `c` is the Remove-Item family on literal paths outside `Alias:` and `Function:`, a `Get-*` or
+/// `Write-*` cmdlet, `echo`, `Test-Path`, a `cd` to a literal path or an assignment alone, named
+/// plainly, without a wrapper, a script block or an assignment `plain_assign` refuses.
+fn harmless(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    let block = cmd_words(c)
+        .iter()
+        .any(|w| w.parts.iter().any(|p| matches!(p, WordPart::Block(_))));
+    if c.opaque || block || !c.assigns.iter().all(|(n, _)| plain_assign(n)) {
+        return false;
     }
-    let name = match unwrap(c) {
-        Run::Cmd { name, raw, .. } => {
-            // `Microsoft.PowerShell.Management\New-PSDrive`, `.\setup.ps1`, `setup.ps1`.
-            if raw.contains(['\\', '/']) || raw.ends_with(".ps1") || raw.ends_with(".psm1") {
-                return true;
-            }
-            name
-        }
-        Run::Nothing => return false,
-        Run::Unread { .. } => return true,
+    let Run::Cmd {
+        name,
+        raw,
+        args,
+        wrapped: false,
+        ..
+    } = unwrap(c)
+    else {
+        return false;
     };
-    if REDEFINERS.contains(&name.as_str()) {
-        return true;
+    let literals = || args.iter().all(|w| literal(w).is_some());
+    match name.as_str() {
+        "" => args.is_empty(),
+        _ if raw != name => false,
+        "echo" | "test-path" => true,
+        n if n.starts_with("get-") || n.starts_with("write-") => true,
+        "cd" | "chdir" | "sl" | "set-location" => literals(),
+        _ if delete_by(c, shell, os) == DeleteBy::Provider => args.iter().all(|w| {
+            literal(w).is_some_and(|t| {
+                let lower = t.to_ascii_lowercase();
+                !lower.contains("alias:") && !lower.contains("function:")
+            })
+        }),
+        _ => false,
     }
-    // `Set-Item Function:Remove-Item {…}`, `Remove-Item Alias:rm`, `Set-Item $p …`.
-    let writer = PS_ITEM_WRITERS.contains(&name.as_str());
-    c.args.iter().any(|w| match literal(w) {
-        Some(t) => {
-            let lower = t.to_ascii_lowercase();
-            lower.contains("alias:") || lower.contains("function:")
+}
+
+/// `$x`, `$env:X`, `$variable:x`: an assignment to a plain name, with no other drive or scope
+/// (`${function:f}`, `$global:x`) and no property (`$x.y`).
+fn plain_assign(name: &str) -> bool {
+    let name = name.trim_start_matches('$');
+    let var = match name.split_once(':') {
+        None => name,
+        Some((scope, var))
+            if scope.eq_ignore_ascii_case("env") || scope.eq_ignore_ascii_case("variable") =>
+        {
+            var
         }
-        None => writer,
-    })
+        Some(_) => return false,
+    };
+    !var.is_empty() && var.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 // ------------------------------------------------------------------ environment
@@ -1853,9 +1848,8 @@ pub enum Target {
     /// A relative path where the location is unknown, or a path form the hook cannot place.
     UnknownLocation(UnknownKind),
     /// A path on a built-in PowerShell drive that is no file system (`Env:FOO`, `HKCU:\x`),
-    /// deleted by `DeleteBy::Provider` in a command `Location::read_script` found nothing in that
-    /// may redefine a drive or a command: no file target, so the delete rule leaves it to other
-    /// rules.
+    /// deleted by `DeleteBy::Provider` in a command `Location::read_script` found only harmless
+    /// commands in: no file target, so the delete rule leaves it to other rules.
     NotAFile,
     /// The deadline passed while expanding the word.
     Timeout,
@@ -1934,14 +1928,14 @@ enum Fail {
 /// are left out: deleting there may make a later delete another command (`read_script`).
 const NON_FS_DRIVES: [&str; 6] = ["env", "variable", "cert", "hkcu", "hklm", "wsman"];
 
-/// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`) with no `.` or `..` step
-/// and no stream suffix.
+/// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`) with no `.` or `..` step,
+/// no stream suffix and no `,` or `;` (`Env:FOO,bar` is a list that holds the file `bar`).
 fn on_non_fs_drive(text: &str) -> bool {
     let Some((drive, rest)) = text.split_once(':') else {
         return false;
     };
     NON_FS_DRIVES.iter().any(|d| drive.eq_ignore_ascii_case(d))
-        && !rest.contains(':')
+        && !rest.contains([':', ',', ';'])
         && !rest.split(['\\', '/']).any(|c| c == "." || c == "..")
 }
 

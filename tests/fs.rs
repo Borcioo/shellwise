@@ -1489,19 +1489,95 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             format!("{alias} Env:FOO"),
         );
     }
-    // The location does not matter: `Pop-Location; Remove-Item Env:X`, `cd $x; …`, `cd $x && …`.
+    // Only a command whose every part is in a small harmless set proves the drive (Ruling 30):
+    // the Remove-Item family, Get-*, Write-*, echo, Test-Path, a cd to a literal path, a plain,
+    // `env:` or `variable:` assignment.
+    let set = |name: &str, value: &str| stmt(assign(name, value), seq);
     for (label, before) in [
+        ("cd literal;", stmt(lits("cd", &[r"C:\x"]), seq)),
+        (
+            "Set-Location literal &&",
+            stmt(lits("Set-Location", &[r"C:\x"]), Some(ChainOp::And)),
+        ),
+        ("Get-ChildItem", stmt(lits("Get-ChildItem", &["Env:"]), seq)),
+        ("Write-Host", stmt(lits("Write-Host", &["x"]), seq)),
+        ("echo", stmt(cmd("echo", vec![var("x")]), seq)),
+        ("Test-Path", stmt(lits("Test-Path", &["Env:FOO"]), seq)),
+        ("$x =", set("x", "1")),
+        ("$env:X =", set("env:X", "1")),
+        ("$variable:y =", set("variable:y", "1")),
+        ("another delete", stmt(ri("Env:BAR"), seq)),
+    ] {
+        expect(
+            judge(vec![before], ri("Env:FOO"), Vec::new()),
+            &Target::NotAFile,
+            format!("harmless {label}"),
+        );
+    }
+    // Anything else, the location commands the hook follows included.
+    let block = |stmts: Vec<Stmt>| word_at(vec![WordPart::Block(Box::new(script(stmts)))], 0);
+    for (label, other) in [
         ("Pop-Location;", stmt(lits("Pop-Location", &[]), seq)),
         ("cd $x;", stmt(cmd("cd", vec![var("x")]), seq)),
         (
             "cd $x &&",
             stmt(cmd("cd", vec![var("x")]), Some(ChainOp::And)),
         ),
+        ("git status", stmt(lits("git", &["status"]), seq)),
+        // The three notes: `${function:Remove-Item} = {…}`, `[scriptblock]::Create(…)`,
+        // `Invoke-Command $sb`, `% { … }`.
+        (
+            "function: assignment",
+            stmt(
+                {
+                    let mut c = assign("function:Remove-Item", "");
+                    c.assigns[0].1 = block(Vec::new());
+                    c
+                },
+                seq,
+            ),
+        ),
+        (
+            "scriptblock::Create",
+            method("scriptblock", "Create", vec![lit("x")]),
+        ),
+        (
+            "Invoke-Command $sb",
+            stmt(cmd("Invoke-Command", vec![var("sb")]), seq),
+        ),
+        (
+            "% { echo }",
+            stmt(
+                cmd(
+                    "ForEach-Object",
+                    vec![block(vec![stmt(lits("echo", &["x"]), None)])],
+                ),
+                seq,
+            ),
+        ),
+        ("$global:x =", set("global:x", "1")),
+        ("$x.y =", set("x.y", "1")),
+        (
+            "Remove-Item $p",
+            stmt(cmd("Remove-Item", vec![var("p")]), seq),
+        ),
+        (
+            "wrapped Get-",
+            stmt(lits("command", &["Get-ChildItem"]), seq),
+        ),
     ] {
         expect(
-            judge(vec![before], ri("Env:FOO"), Vec::new()),
-            &Target::NotAFile,
-            format!("{label} Env:FOO"),
+            judge(vec![other], ri("Env:FOO"), Vec::new()),
+            &MAY_BE_CRITICAL,
+            format!("not harmless {label}"),
+        );
+    }
+    // A path list (`Env:FOO,bar` deletes the file `bar` too) or a `;` in the path word.
+    for text in ["Env:FOO,bar", "Env:FOO;bar"] {
+        expect(
+            judge(Vec::new(), ri(text), Vec::new()),
+            &MAY_BE_CRITICAL,
+            format!("list {text}"),
         );
     }
     // A drive name PowerShell does not build in may be a profile's file-system drive. Removing
