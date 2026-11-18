@@ -408,6 +408,7 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
         ("let 'a[$(echo ])+$(rm -rf x)]'", &["let", "echo", "rm"]),
         ("let 'a[${y:-]}+$(rm -rf x)]'", &["let", "rm"]),
         ("let 'a[\\]+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[\"\\\"]\"+$(rm -rf x)]'", &["let", "rm"]),
         // The value assigned to an integer name is arithmetic.
         (
             "declare -i n; n='a[$(rm -rf x)]'",
@@ -564,6 +565,20 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ("n='a['; n+='$(rm -rf y)]'; (( n ))".to_string(), "(("),
         ("read b < f; a='a['; n=$a$b; (( n ))".to_string(), "(("),
         ("read b < f; n='a['; n+=$b; (( n ))".to_string(), "(("),
+        (
+            "read b < f; c=$b; a='a['; n=$a$c; (( n ))".to_string(),
+            "((",
+        ),
+        ("a='a['; n=$a$(cat f); (( n ))".to_string(), "(("),
+        (
+            "read b < f; n='a['; declare \"n+=$b\"; (( n ))".to_string(),
+            "((",
+        ),
+        (
+            "declare 'a[1]=a[$(rm -rf y)]'; (( a[1] ))".to_string(),
+            "((",
+        ),
+        ("my_x='a[$(rm -rf y)]'; (( my_x ))".to_string(), "(("),
         // A function call or `set` carries a tainted argument into `$1`, `$@`.
         (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
@@ -624,6 +639,7 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
     for src in [
         format!("{x}echo ${{x:-d}}"),
         "a=1; b=2; n=$a$b; (( n ))".to_string(),
+        "b=2; n=1; n+=$b; (( n ))".to_string(),
         format!("{x}echo \"$x\"; (( $1 ))"),
         format!("{x}unset 'a[x]'"),
         format!("{x}echo \"$x\""),
