@@ -1595,7 +1595,12 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     // A cd inside a substitution in an argument.
     let inner = script(vec![stmt(lits("cd", &["sub"]), None)]);
     let arg = word_at(vec![WordPart::Subst(Box::new(inner))], 0);
-    unknown_after(vec![stmt(cmd("echo", vec![arg]), seq)]);
+    unknown_after(vec![stmt(cmd("echo", vec![arg.clone()]), seq)]);
+    // The same causes joined by `&&`, where no known folder is left: each cause's own kind.
+    unknown_after(vec![stmt(cmd("echo", vec![arg]), and)]);
+    unknown_after(vec![stmt(lits("Pop-Location", &[]), and)]);
+    unknown_after(vec![stmt(lits("Invoke-Expression", &["cd sub"]), and)]);
+    unknown_after(vec![stmt(lits("Set-Location", &["-Path:sub*"]), and)]);
     // A statement without a location change keeps it.
     let mut loc = base.clone();
     loc.after(&stmt(lits("echo", &["x"]), seq), &env);
