@@ -89,20 +89,92 @@ fn every_statement_keeps_the_operator_before_it() {
             "true || for f in $(ls); do :; done",
             &[None, Some(Or), Some(Or)],
         ),
+        (
+            "(( x )) || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
     ];
     for (src, want) in cases {
         let s = ok(src);
         let got: Vec<_> = (0..s.stmts.len()).map(|i| s.join(i)).collect();
         assert_eq!(got, *want, "{src}");
     }
-    match &ok("[[ -d y ]] || cd x").stmts[0] {
-        Stmt::Pipeline(p) => assert_eq!(p.chain, Some(Or), "[[ ]] keeps its pipeline chain"),
-        other => panic!("{other:?}"),
+    // Every pipeline followed by `&&`/`||` carries that operator, in every nested list too.
+    let mut bad = Vec::new();
+    for src in [
+        "(( x )) || cd /tmp/x && rm -rf .",
+        "[[ -d y ]] && cd /tmp/x || rm -rf .",
+        "echo $( (( x )) || cd /tmp/x && rm -rf . )",
+        "cat <<EOF\n$( (( x )) && rm -rf . )\nEOF",
+        "if (( x )) || cd /tmp/x; then rm -rf .; fi",
+        "f() { (( x )) && rm -rf .; }",
+        "while (( x )) && cd y; do rm -rf .; done",
+    ] {
+        chains_agree(&ok(src), src, &mut bad);
     }
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+    let chains: Vec<_> = [
+        "[[ -d y ]] || cd x",
+        "(( x )) || cd x",
+        "(( x )) > f || cd x",
+    ]
+    .iter()
+    .map(|src| match &ok(src).stmts[0] {
+        Stmt::Pipeline(p) => p.chain,
+        other => panic!("{src}: {other:?}"),
+    })
+    .collect();
+    assert_eq!(chains, [Some(Or); 3], "each keeps its pipeline chain");
     let s = ok("while cd x; do rm -rf .; done");
     match &s.stmts[..] {
         [Stmt::Loop { body, .. }] => assert_eq!(body.join(1), Some(Seq), "body after condition"),
         other => panic!("{other:?}"),
+    }
+}
+
+/// Each pipeline whose next statement is joined by `&&` or `||` has that operator as its chain,
+/// in `s` and in every list nested in it.
+fn chains_agree(s: &Script, src: &str, bad: &mut Vec<String>) {
+    for (i, st) in s.stmts.iter().enumerate() {
+        let next = s.join(i + 1);
+        if let Stmt::Pipeline(p) = st
+            && matches!(next, Some(ChainOp::And | ChainOp::Or))
+            && p.chain != next
+        {
+            bad.push(format!(
+                "{src}: statement {i} chain {:?}, next {next:?}",
+                p.chain
+            ));
+        }
+        match st {
+            Stmt::Pipeline(p) => {
+                for e in &p.elems {
+                    let words: Vec<&shellwise::ir::Word> = match e {
+                        shellwise::ir::Elem::Cmd(c) => c
+                            .args
+                            .iter()
+                            .chain(c.redirects.iter().map(|r| match r {
+                                Redirect::File { target, .. } => target,
+                                Redirect::Heredoc { body, .. } => body,
+                            }))
+                            .collect(),
+                        shellwise::ir::Elem::Expr(w) => vec![w],
+                        shellwise::ir::Elem::Method(_) => Vec::new(),
+                    };
+                    for w in words {
+                        for part in &w.parts {
+                            if let WordPart::Subst(inner) = part {
+                                chains_agree(inner, src, bad);
+                            }
+                        }
+                    }
+                }
+            }
+            Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
+                chains_agree(body, src, bad)
+            }
+            Stmt::Cond { branches, .. } => branches.iter().for_each(|b| chains_agree(b, src, bad)),
+        }
     }
 }
 
@@ -308,17 +380,50 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
         ("declare 'a[$(rm -rf x)]=1'", &["declare", "rm"]),
         ("typeset 'a[`rm -rf x`]=1'", &["typeset", "rm"]),
         ("f() { local 'a[$(rm -rf x)]=1'; }", &["local", "rm"]),
+        // Parameter offsets and lengths are arithmetic.
+        (
+            "s=abc; echo ${s:0:'a[$(rm -rf x)]'}",
+            &["<none>", "echo", "rm"],
+        ),
+        (
+            "s=abc; echo ${s:'a[$(rm -rf x)]'}",
+            &["<none>", "echo", "rm"],
+        ),
+        (
+            "s=abc; echo ${s:'a[$(rm -rf x)]':1}",
+            &["<none>", "echo", "rm"],
+        ),
+        // A subscript ends at its own `]`, not at one inside quotes or a substitution.
+        ("let 'a[\"]\"+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[$(echo \"]\")+$(rm -rf x)]'", &["let", "echo", "rm"]),
+        ("let 'a[b[1]+$(rm -rf x)]'", &["let", "rm"]),
+        // The value assigned to an integer name is arithmetic.
+        (
+            "declare -i n; n='a[$(rm -rf x)]'",
+            &["declare", "<none>", "rm"],
+        ),
+        // bash refuses an unclosed subscript; it is read to the end, on the safe side.
+        ("let 'a[$(rm -rf x)'", &["let", "rm"]),
     ];
     let no: &[(&str, &[&str])] = &[
+        ("a=(1); let 'a[\"[\"]+$(rm -rf x)'", &["<none>", "let"]),
         ("unset 'a[$(rm -rf x)]'", &["unset"]),
         ("export 'a[$(rm -rf x)]'=1", &["export"]),
         ("let '$(rm -rf x)'", &["let"]),
         ("echo 'a[$(rm -rf x)]'", &["echo"]),
         ("[[ -n 'a[$(rm -rf x)]' ]]", &["[["]),
     ];
-    for (src, want) in runs.iter().chain(no) {
-        assert_eq!(names(&ok(src)), *want, "{src}");
-    }
+    // Every failing row is listed, not only the first.
+    let bad: Vec<String> = runs
+        .iter()
+        .chain(no)
+        .filter_map(|(src, want)| {
+            let got = parse(src, BashProfile::GitBash).map(|s| names(&s));
+            let pass = got.as_ref().is_ok_and(|g| g == want);
+            (!pass).then(|| format!("{src}: {got:?}"))
+        })
+        .collect();
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
 }
 
 #[test]
@@ -338,9 +443,6 @@ fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
         let c = c.iter().find(|c| bash_util::name_of(c) == name).unwrap();
         assert!(c.opaque, "{src}");
     }
-    // `declare -i n`: the later assignment evaluates its value.
-    let s = ok("declare -i n; n='a[$(rm -rf y)]'");
-    assert!(commands(&s)[1].opaque, "assignment to a declare -i name");
     // `declare -n r='a[$(…)]'`: the operand's subscript is lowered like `declare 'a[…]=1'`.
     assert_eq!(
         names(&ok("declare -n r='a[$(rm -rf y)]'; echo $r")),
@@ -356,6 +458,146 @@ fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
         let s = ok(src);
         assert!(commands(&s).iter().all(|c| !c.opaque), "{src}");
     }
+}
+
+/// A name is tainted when a static value assigned to it holds `$(…)` or a backtick inside `[…]`,
+/// or names a tainted name; every arithmetic context that reads one is opaque. Each row checked in
+/// Git Bash 5.2 with a canary file.
+#[test]
+fn arithmetic_reading_a_tainted_name_is_opaque() {
+    let x = "x='a[$(rm -rf y)]'; ";
+    // (row, the command that must be opaque: the last one with this name)
+    let runs: &[(String, &str)] = &[
+        // integer assignment
+        (format!("{x}declare -i n; n=x"), "<none>"),
+        (format!("{x}declare -i n; n+=x"), "<none>"),
+        (format!("{x}declare -i n=x"), "declare"),
+        (format!("{x}typeset -i n=x"), "typeset"),
+        (format!("f() {{ {x}local -i n=x; }}"), "local"),
+        (format!("{x}declare -i n; n=\"$x\""), "<none>"),
+        // copies
+        (format!("{x}y=x; (( y ))"), "(("),
+        (format!("{x}y=x+1; (( y ))"), "(("),
+        (format!("{x}y=$x; (( y ))"), "(("),
+        (format!("{x}y=\"$x\"; (( y ))"), "(("),
+        (format!("{x}declare -n r=x; (( r ))"), "(("),
+        (format!("{x}b=(x); (( b ))"), "(("),
+        // order does not matter: bash evaluates the copy when it reads it
+        ("y=x; x='a[$(rm -rf y)]'; (( y ))".to_string(), "(("),
+        (
+            "f() { (( y )); }; y=x; x='a[$(rm -rf y)]'; f".to_string(),
+            "((",
+        ),
+        // declaration builtins, quoted operands, arrays, loop variables, positionals
+        ("declare x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("typeset x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("export x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("readonly x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        (
+            "f() { local x='a[$(rm -rf y)]'; (( x )); }".to_string(),
+            "((",
+        ),
+        ("declare 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("a=('a[$(rm -rf y)]'); (( a ))".to_string(), "(("),
+        ("a=(1 'a[$(rm -rf y)]'); (( a[1] ))".to_string(), "(("),
+        ("a[1]='a[$(rm -rf y)]'; (( a[1] ))".to_string(), "(("),
+        ("a=([2]='a[$(rm -rf y)]'); (( a[2] ))".to_string(), "(("),
+        (
+            "for v in 'a[$(rm -rf y)]'; do (( v )); done".to_string(),
+            "((",
+        ),
+        (
+            "set -- 'a[$(rm -rf y)]'; declare -i n; n=\"$1\"".to_string(),
+            "<none>",
+        ),
+        (
+            "f() { declare -i n; n=\"$1\"; }; f 'a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        // arithmetic contexts
+        (format!("{x}let n=x"), "let"),
+        (format!("{x}echo ${{a[x]}}"), "echo"),
+        (format!("{x}echo ${{#a[x]}}"), "echo"),
+        (format!("{x}echo ${{a[x]:-d}}"), "echo"),
+        (format!("{x}echo ${{!a[x]}}"), "echo"),
+        (format!("{x}echo ${{a[x]#1}}"), "echo"),
+        (format!("{x}s=abc; echo ${{s:x}}"), "echo"),
+        (format!("{x}s=abc; echo ${{s:0:x}}"), "echo"),
+        (format!("{x}a[x]=1"), "<none>"),
+        (format!("{x}printf -v 'a[x]' %s 1"), "printf"),
+        (format!("{x}read 'a[x]' <<< 1"), "read"),
+        (format!("{x}test -v 'a[x]'"), "test"),
+        (format!("{x}[[ -v a[x] ]]"), "[["),
+        (format!("{x}declare 'a[x]=1'"), "declare"),
+        (format!("{x}for (( i = x; i < 0; i++ )); do :; done"), "(("),
+        (format!("{x}while (( x )); do break; done"), "(("),
+        (format!("{x}(( x )) || true"), "(("),
+    ];
+    // Every failing row is listed, not only the first.
+    let mut bad = Vec::new();
+    for (src, name) in runs {
+        let s = ok(src);
+        let c = commands(&s);
+        let c = c
+            .iter()
+            .rev()
+            .find(|c| bash_util::name_of(c) == *name)
+            .unwrap_or_else(|| panic!("{src}: no {name}"));
+        if !c.opaque {
+            bad.push(format!("not opaque: {src}"));
+        }
+    }
+    // Contexts outside any command: the script gets an opaque `((` command.
+    for src in [
+        format!("{x}case ${{a[x]}} in *) ;; esac"),
+        format!("{x}for f in ${{a[x]}}; do :; done"),
+        format!("{x}{{ :; }} > \"${{a[x]}}\""),
+    ] {
+        let s = ok(&src);
+        if !commands(&s)
+            .iter()
+            .any(|c| c.opaque && bash_util::name_of(c) == "((")
+        {
+            bad.push(format!("no opaque ((: {src}"));
+        }
+    }
+    // bash runs nothing here: no subscript in the value, a plain expansion, `unset`.
+    for src in [
+        "x='$(rm -rf y)'; (( x ))".to_string(),
+        format!("{x}echo ${{x:-d}}"),
+        format!("{x}unset 'a[x]'"),
+        format!("{x}echo \"$x\""),
+    ] {
+        let s = ok(&src);
+        if commands(&s).iter().any(|c| c.opaque) {
+            bad.push(format!("opaque: {src}"));
+        }
+    }
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+}
+
+/// A chain of `n` copies, written last link first: `x<n>=x<n-1>; …; x0='a[$(…)]'`.
+fn copy_chain(n: usize) -> String {
+    let mut s: String = (1..=n)
+        .rev()
+        .map(|i| format!("x{i}=x{}; ", i - 1))
+        .collect();
+    s.push_str("x0='a[$(rm -rf y)]'; ");
+    s
+}
+
+#[test]
+fn taint_propagation_stops_at_64_steps_and_then_every_arithmetic_is_opaque() {
+    let last = |src: String| commands(&ok(&src)).last().unwrap().opaque;
+    let got = [
+        last(format!("{}(( x64 ))", copy_chain(64))),
+        last(format!("{}(( z ))", copy_chain(64))),
+        last(format!("{}(( z ))", copy_chain(65))),
+        last(format!("{}echo z", copy_chain(65))),
+    ];
+    // 64 steps: the copy is tracked and an untainted name stays plain; at 65 every arithmetic
+    // context is opaque, a command without arithmetic is not.
+    assert_eq!(got, [true, false, true, false]);
 }
 
 #[test]
@@ -505,6 +747,7 @@ fn comments_are_collected_with_their_trailing_flag() {
 fn nested(kind: &str, n: usize) -> String {
     let (pre, post) = match kind {
         k if k.starts_with("test_") => ("[[ ", " ]]"),
+        k if k.starts_with("let_") => ("let 'a[", "]'"),
         _ => ("", ""),
     };
     let (open, mid, close) = match kind {
@@ -533,6 +776,10 @@ fn nested(kind: &str, n: usize) -> String {
         "test_paren" => ("( ", "x", " )"),
         "test_not_paren" => ("! ( ", "x", " )"),
         "test_masked_paren" => ("] || ( ", "x", " )"),
+        // Parameter offsets and subscripts bash evaluates as arithmetic.
+        "offset" => ("echo ${s:0:", "1", "}"),
+        "let_bracket" => ("a[", "$(rm x)", "]"),
+        "let_quoted" => ("\"]\"", "$(rm x)", ""),
         _ => unreachable!(),
     };
     format!("{pre}{}{mid}{}{post}", open.repeat(n), close.repeat(n))
@@ -546,7 +793,7 @@ const BUDGET: &str = "nested text too large to parse in time";
 /// sizes 64 KiB per level; a release build (16 KiB per level) parses it and lowering decides.
 const STACK_CAP: &str = "nesting too deep to parse safely";
 const PARSES: &str = "parses";
-const NESTED_KINDS: [(&str, &str); 23] = [
+const NESTED_KINDS: [(&str, &str); 26] = [
     ("subst", BRACKETS),
     ("paren", BRACKETS),
     ("brace", BRACKETS),
@@ -586,6 +833,17 @@ const NESTED_KINDS: [(&str, &str); 23] = [
     ("test_paren", BRACKETS),
     ("test_not_paren", BRACKETS),
     ("test_masked_paren", LOWERING),
+    ("offset", BRACKETS),
+    ("let_bracket", BRACKETS),
+    // One subscript holding many quoted `]`: flat, but every `"` counts toward the stack bound.
+    (
+        "let_quoted",
+        if cfg!(debug_assertions) {
+            STACK_CAP
+        } else {
+            PARSES
+        },
+    ),
 ];
 
 #[test]
@@ -664,6 +922,12 @@ fn long_flat_lists_parse() {
         let s = ok(&src);
         assert!(commands(&s).len() > 1000, "{sep:?}");
     }
+    // 64 KiB of copies: propagation stops at its bound, so every arithmetic context is opaque.
+    let mut src = copy_chain(64 * 1024 / 12);
+    src.push_str("(( z ))");
+    assert!(src.len() > 60 * 1024, "{}", src.len());
+    let s = ok(&src);
+    assert!(commands(&s).last().unwrap().opaque, "copy chain");
 }
 
 // ---------- gap table ----------

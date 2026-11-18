@@ -9,7 +9,7 @@
 //! the process with no verdict. So the whole parse runs on its own thread whose stack is sized from
 //! an upper bound of the nesting the text can hold, and lowering stops at `ir::MAX_NESTING`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::thread;
 
@@ -78,14 +78,15 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
         .name("bash-parse".into())
         .stack_size(stack)
         .spawn(move || {
-            let lower = Lower {
-                profile,
-                opts: ParserOptions::default(),
-                reparse_budget: Cell::new(owned.len().saturating_mul(REPARSE_FACTOR)),
-            };
-            let mut script = lower.text(&owned, Origin::Exact(0), 0)?;
-            mark_tainted_arithmetic(&mut script);
-            Ok(script)
+            // The first pass finds the tainted names; only when there are some does a second pass
+            // lower the script again, marking each arithmetic context that reads one.
+            let first = Lower::new(profile, owned.len(), Taint::default());
+            let script = first.text(&owned, Origin::Exact(0), 0)?;
+            let taint = first.taint();
+            if taint.is_empty() {
+                return Ok(script);
+            }
+            Lower::new(profile, owned.len(), taint).text(&owned, Origin::Exact(0), 0)
         });
     match worker {
         Err(_) => Err(error(whole, "the parser thread did not start", None)),
@@ -234,14 +235,126 @@ impl Cx {
     }
 }
 
+/// At most this many names are tainted through copies; past it every arithmetic context is opaque.
+const MAX_TAINT_STEPS: usize = 64;
+
+/// Names whose value runs a command when bash evaluates it as arithmetic.
+///
+/// A name is tainted when a static value assigned to it holds `$(…)` or a backtick inside `[…]`
+/// (`x='a[$(…)]'`), or when a value assigned to it names a tainted name (`y=x`, `y=$x`). The
+/// order of the assignments does not matter. Values bash gets at run time (`read`, `printf -v`,
+/// command output) are not tracked.
+#[derive(Default)]
+struct Taint {
+    names: BTreeSet<String>,
+    /// A command's static argument holds such text, so `$1`, `$@` … may be tainted.
+    positional: bool,
+    /// Propagation went past `MAX_TAINT_STEPS`: every arithmetic context reads a tainted name.
+    all: bool,
+    /// Names declared integer (`declare -i n`): a value assigned to one is arithmetic.
+    integers: BTreeSet<String>,
+}
+
+impl Taint {
+    fn is_empty(&self) -> bool {
+        self.names.is_empty() && !self.positional && !self.all
+    }
+
+    /// Whether arithmetic over `text` reads a tainted name.
+    fn reads(&self, text: &str) -> bool {
+        self.all
+            || identifiers(text).any(|id| self.names.contains(id))
+            || (self.positional && reads_positional(text))
+    }
+
+    fn compute(
+        assigned: &[(String, String)],
+        positional: bool,
+        integers: BTreeSet<String>,
+    ) -> Taint {
+        let mut t = Taint {
+            names: assigned
+                .iter()
+                .filter(|(_, v)| holds_code_subscript(v))
+                .map(|(n, _)| n.clone())
+                .collect(),
+            positional,
+            all: false,
+            integers,
+        };
+        let mut steps = 0;
+        loop {
+            let before = steps;
+            for (name, value) in assigned {
+                if !t.names.contains(name) && t.reads(value) {
+                    steps += 1;
+                    if steps > MAX_TAINT_STEPS {
+                        t.all = true;
+                        return t;
+                    }
+                    t.names.insert(name.clone());
+                }
+            }
+            if steps == before {
+                return t;
+            }
+        }
+    }
+}
+
 struct Lower {
     profile: BashProfile,
     opts: ParserOptions,
     /// Bytes of nested text (inside substitutions) still allowed to be parsed again.
     reparse_budget: Cell<usize>,
+    /// The tainted names found by the first pass (empty in the first pass).
+    taint: Taint,
+    /// An arithmetic context read a tainted name since the enclosing command started.
+    tainted_read: Cell<bool>,
+    /// Every value assigned to a name, as text (`value_text`).
+    assigned: RefCell<Vec<(String, String)>>,
+    /// A command's static argument holds a subscript that runs a command.
+    positional: Cell<bool>,
+    integers: RefCell<BTreeSet<String>>,
 }
 
 impl Lower {
+    fn new(profile: BashProfile, len: usize, taint: Taint) -> Lower {
+        Lower {
+            profile,
+            opts: ParserOptions::default(),
+            reparse_budget: Cell::new(len.saturating_mul(REPARSE_FACTOR)),
+            taint,
+            tainted_read: Cell::new(false),
+            assigned: RefCell::default(),
+            positional: Cell::new(false),
+            integers: RefCell::default(),
+        }
+    }
+
+    /// The tainted names, from what this pass collected.
+    fn taint(self) -> Taint {
+        Taint::compute(
+            &self.assigned.into_inner(),
+            self.positional.get(),
+            self.integers.into_inner(),
+        )
+    }
+
+    /// Bash evaluates `text` as arithmetic for the command being lowered.
+    fn read_arith(&self, text: &str) {
+        if self.taint.reads(text) {
+            self.tainted_read.set(true);
+        }
+    }
+
+    /// Record a value assigned to `name`.
+    fn assigned(&self, name: &str, value: &Word) {
+        self.assigned
+            .borrow_mut()
+            .push((name.to_string(), value_text(value)));
+    }
+
     /// Take `len` bytes of nested text from the budget.
     fn charge(&self, len: usize, span: Span) -> Result<(), ParseError> {
         let left = self.reparse_budget.get();
@@ -284,8 +397,21 @@ impl Lower {
             depth,
         };
         let mut out = Acc::default();
+        let outer = self.tainted_read.replace(false);
         for list in &program.complete_commands {
             self.list(&t, list, cx, &mut out)?;
+        }
+        // A tainted read outside any command (`case ${a[x]} in`, a compound's redirect target).
+        if self.tainted_read.replace(outer) {
+            let mut cmd = synthetic("((", t.whole(), cx);
+            cmd.opaque = true;
+            out.push(
+                vec![Stmt::Pipeline(Pipeline {
+                    elems: vec![Elem::Cmd(cmd)],
+                    chain: Some(ChainOp::Seq),
+                })],
+                ChainOp::Seq,
+            );
         }
         Ok(out.finish(comments(&t, &tokens)))
     }
@@ -339,8 +465,14 @@ impl Lower {
         chain: ChainOp,
         cx: Cx,
     ) -> Result<Vec<Stmt>, ParseError> {
+        // `(( … ))` and `[[ … ]]` are commands of their pipeline, so they keep its chain.
         let plain = |c: &ast::Command| {
-            matches!(c, ast::Command::Simple(_) | ast::Command::ExtendedTest(..))
+            matches!(
+                c,
+                ast::Command::Simple(_)
+                    | ast::Command::ExtendedTest(..)
+                    | ast::Command::Compound(ast::CompoundCommand::Arithmetic(_), _)
+            )
         };
         if p.seq.iter().all(plain) {
             let mut elems = Vec::new();
@@ -349,6 +481,16 @@ impl Lower {
                     ast::Command::Simple(s) => elems.push(Elem::Cmd(self.simple(t, s, cx)?)),
                     ast::Command::ExtendedTest(test, redirects) => {
                         elems.push(Elem::Cmd(self.test_command(t, test, redirects, cx)?))
+                    }
+                    ast::Command::Compound(ast::CompoundCommand::Arithmetic(a), redirects) => {
+                        let span = t.span(&a.loc);
+                        elems.push(Elem::Cmd(self.arith_command(
+                            t,
+                            &[&a.expr.value],
+                            span,
+                            redirects.as_ref(),
+                            cx,
+                        )?))
                     }
                     _ => {}
                 }
@@ -407,6 +549,7 @@ impl Lower {
         redirects: &Option<ast::RedirectList>,
         cx: Cx,
     ) -> Result<SimpleCommand, ParseError> {
+        let outer = self.tainted_read.replace(false);
         let span = t.span(&test.loc);
         let mut args = Vec::new();
         self.test_words(t, &test.expr, span, cx, &mut args)?;
@@ -415,6 +558,28 @@ impl Lower {
         for r in redirects.iter().flat_map(|r| r.0.iter()) {
             cmd.redirects.push(self.redirect(t, r, cx)?);
         }
+        cmd.opaque = self.tainted_read.replace(outer);
+        Ok(cmd)
+    }
+
+    /// `(( … ))` (and a `for (( … ))` header) as a command named `((`.
+    fn arith_command(
+        &self,
+        t: &Text,
+        exprs: &[&str],
+        span: Span,
+        redirects: Option<&ast::RedirectList>,
+        cx: Cx,
+    ) -> Result<SimpleCommand, ParseError> {
+        let outer = self.tainted_read.replace(false);
+        let mut cmd = synthetic("((", span, cx);
+        for e in exprs {
+            cmd.args.push(self.arith_word(e, span, cx)?);
+        }
+        for r in redirects.iter().flat_map(|r| r.0.iter()) {
+            cmd.redirects.push(self.redirect(t, r, cx)?);
+        }
+        cmd.opaque = self.tainted_read.replace(outer);
         Ok(cmd)
     }
 
@@ -456,6 +621,7 @@ impl Lower {
                 for w in [a, b] {
                     let mut w = self.ast_word(t, w, span, cx)?;
                     if arithmetic {
+                        self.read_arith(&value_text(&w));
                         self.subscript_substs(&mut w, cx)?;
                     }
                     out.push(w);
@@ -479,7 +645,9 @@ impl Lower {
             C::ForClause(f) => {
                 let mut words = Vec::new();
                 for w in f.values.iter().flatten() {
-                    words.push(self.ast_word(t, w, span, cx)?);
+                    let w = self.ast_word(t, w, span, cx)?;
+                    self.assigned(&f.variable_name, &w);
+                    words.push(w);
                 }
                 let mut out = expr_stmt(words);
                 out.push(Stmt::Loop {
@@ -489,14 +657,16 @@ impl Lower {
                 out
             }
             C::ArithmeticForClause(f) => {
-                let mut words = Vec::new();
-                for e in [&f.initializer, &f.condition, &f.updater]
+                let exprs: Vec<&str> = [&f.initializer, &f.condition, &f.updater]
                     .into_iter()
                     .flatten()
-                {
-                    words.push(self.arith_word(&e.value, span, cx)?);
-                }
-                let mut out = vec![arith_command(words, span, cx)];
+                    .map(|e| e.value.as_str())
+                    .collect();
+                // The header runs before the loop: `;` joins them.
+                let mut out = vec![Stmt::Pipeline(Pipeline {
+                    elems: vec![Elem::Cmd(self.arith_command(t, &exprs, span, None, cx)?)],
+                    chain: Some(ChainOp::Seq),
+                })];
                 out.push(Stmt::Loop {
                     body: self.body(t, &f.body.list, cx.looping())?,
                     span,
@@ -536,11 +706,17 @@ impl Lower {
                 let body = concat(self.body(t, &w.0, cx)?, self.body(t, &w.1.list, cx)?);
                 vec![Stmt::Loop { body, span }]
             }
-            C::Arithmetic(a) => vec![arith_command(
-                vec![self.arith_word(&a.expr.value, span, cx)?],
-                span,
-                cx,
-            )],
+            // A pipeline lowers `(( … ))` itself; this is `coproc (( … ))`.
+            C::Arithmetic(a) => vec![Stmt::Pipeline(Pipeline {
+                elems: vec![Elem::Cmd(self.arith_command(
+                    t,
+                    &[&a.expr.value],
+                    span,
+                    None,
+                    cx,
+                )?)],
+                chain: None,
+            })],
             C::Coprocess(c) => {
                 let inner = self.command(t, &c.body, cx.deeper(span)?)?;
                 vec![Stmt::Block(script(inner, Vec::new()))]
@@ -572,6 +748,7 @@ impl Lower {
         cx: Cx,
     ) -> Result<SimpleCommand, ParseError> {
         use ast::CommandPrefixOrSuffixItem as I;
+        let outer = self.tainted_read.replace(false);
         let span = s.location().map_or(t.whole(), |l| t.span(&l));
         let mut cmd = synthetic("", span, cx);
         cmd.name.parts.clear();
@@ -630,11 +807,54 @@ impl Lower {
             _ => false,
         };
         let runs_dynamic_text = runs_text && cmd.args.iter().skip(first_arg).any(Word::is_dynamic);
+        // A function or `set` gets its positional parameters from the arguments.
+        if cmd
+            .args
+            .iter()
+            .any(|w| holds_code_subscript(&value_text(w)))
+        {
+            self.positional.set(true);
+        }
+        self.declarations(&cmd, target.as_deref(), first_arg);
         self.evaluated_operands(&mut cmd, target.as_deref(), first_arg, cx)?;
         // A name no rule can match is opaque: a variable, a glob, anything without a canonical name.
         let unknown_name = !cmd.name.parts.is_empty() && cmd.canonical.is_none();
-        cmd.opaque = cmd.name.is_dynamic() || has_glob || runs_dynamic_text || unknown_name;
+        let tainted_read = self.tainted_read.replace(outer);
+        cmd.opaque =
+            cmd.name.is_dynamic() || has_glob || runs_dynamic_text || unknown_name || tainted_read;
         Ok(cmd)
+    }
+
+    /// The operands of a declaration builtin (`declare -i n=x`, `local 'x=…'`): what they assign,
+    /// the names they declare integer, and the values those get.
+    fn declarations(&self, cmd: &SimpleCommand, target: Option<&str>, first_arg: usize) {
+        if !matches!(
+            target,
+            Some("declare" | "typeset" | "local" | "export" | "readonly")
+        ) {
+            return;
+        }
+        let texts: Vec<String> = cmd.args.iter().skip(first_arg).map(value_text).collect();
+        let integer = texts.iter().any(|v| v.starts_with('-') && v.contains('i'));
+        for v in texts.iter().filter(|v| !v.starts_with('-')) {
+            let (name, value) = match v.split_once('=') {
+                Some((n, value)) => (n, Some(value)),
+                None => (v.as_str(), None),
+            };
+            let name = name.split('[').next().unwrap_or_default();
+            let name = name.strip_suffix('+').unwrap_or(name);
+            if integer {
+                self.integers.borrow_mut().insert(name.to_string());
+            }
+            if let Some(value) = value {
+                if integer {
+                    self.read_arith(value);
+                }
+                self.assigned
+                    .borrow_mut()
+                    .push((name.to_string(), value.to_string()));
+            }
+        }
     }
 
     /// Operands bash evaluates as arithmetic, where a `name[…]` subscript in a static string runs
@@ -648,6 +868,11 @@ impl Lower {
     ) -> Result<(), ParseError> {
         let env = EnvView::new();
         let mut picked = Vec::new();
+        if target == Some("let") {
+            for w in cmd.args.iter().skip(first_arg) {
+                self.read_arith(&value_text(w));
+            }
+        }
         match target {
             Some("let" | "read" | "declare" | "typeset" | "local") => {
                 picked.extend(first_arg..cmd.args.len())
@@ -675,18 +900,29 @@ impl Lower {
 
     /// Append the commands in the `[…]` subscripts of a static word that bash evaluates.
     fn subscript_substs(&self, w: &mut Word, cx: Cx) -> Result<(), ParseError> {
+        for sub in subscripts(&value_text(w)) {
+            self.read_arith(sub);
+        }
+        let parts = self.subscript_commands(w, cx)?;
+        w.parts.extend(parts);
+        Ok(())
+    }
+
+    /// The commands in the `[…]` subscripts of a static word, as `Subst` parts.
+    fn subscript_commands(&self, w: &Word, cx: Cx) -> Result<Vec<WordPart>, ParseError> {
+        let mut out = Vec::new();
         let Some(value) = w.static_value(&EnvView::new()) else {
-            return Ok(());
+            return Ok(out);
         };
         for sub in subscripts(&value) {
             if runs_code(sub) {
                 self.charge(sub.len(), w.span)?;
                 let inner =
                     self.word_text(sub, Origin::Inexact(w.span), w.span, cx.deeper(w.span)?)?;
-                w.parts.extend(commands_only(inner));
+                out.extend(commands_only(inner));
             }
         }
-        Ok(())
+        Ok(out)
     }
 
     fn assignment(
@@ -701,6 +937,7 @@ impl Lower {
         let name = match &a.name {
             ast::AssignmentName::VariableName(n) => n.clone(),
             ast::AssignmentName::ArrayElementName(n, index) => {
+                self.read_arith(index);
                 let w = self.word_text(index, Origin::Inexact(span), span, cx)?;
                 // The index is an arithmetic expression: bash expands it again, quotes removed.
                 let again = w.static_value(&EnvView::new()).filter(|v| runs_code(v));
@@ -733,14 +970,25 @@ impl Lower {
                     }
                     _ => Origin::Inexact(span),
                 };
-                out.push((name, self.word_text(&w.value, origin, span, cx)?));
+                let mut value = self.word_text(&w.value, origin, span, cx)?;
+                self.assigned(&name, &value);
+                // A value assigned to an integer name is arithmetic.
+                if self.taint.integers.contains(&name) {
+                    self.read_arith(&value_text(&value));
+                    self.subscript_substs(&mut value, cx)?;
+                }
+                out.push((name, value));
             }
             ast::AssignmentValue::Array(items) => {
                 for (key, value) in items {
                     if let Some(k) = key {
-                        out.push((name.clone(), self.ast_word(t, k, span, cx)?));
+                        let k = self.ast_word(t, k, span, cx)?;
+                        self.read_arith(&value_text(&k));
+                        out.push((name.clone(), k));
                     }
-                    out.push((name.clone(), self.ast_word(t, value, span, cx)?));
+                    let value = self.ast_word(t, value, span, cx)?;
+                    self.assigned(&name, &value);
+                    out.push((name.clone(), value));
                 }
             }
         }
@@ -928,6 +1176,7 @@ impl Lower {
                         } => out.push(WordPart::Var(sp.to_string())),
                         _ => {
                             let inner = braced.unwrap_or(raw);
+                            self.parameter_arith(pe, span, cx, out)?;
                             // A name that never resolves: the value depends on the operator.
                             out.push(WordPart::Var(inner.to_string()));
                             if inner.contains(['$', '`']) {
@@ -950,9 +1199,44 @@ impl Lower {
         Ok(())
     }
 
+    /// What a parameter expansion evaluates as arithmetic: its subscript (`${a[x]}`), its offset
+    /// and length (`${s:o:l}`, whose quoted subscripts run their `$(…)`), and with `!` the value
+    /// of the parameter, which names a variable, subscript included.
+    fn parameter_arith(
+        &self,
+        pe: &ParameterExpr,
+        span: Span,
+        cx: Cx,
+        out: &mut Vec<WordPart>,
+    ) -> Result<(), ParseError> {
+        let Some((parameter, indirect)) = parameter_of(pe) else {
+            return Ok(());
+        };
+        if let Parameter::NamedWithIndex { index, .. } = parameter {
+            self.read_arith(index);
+        }
+        if indirect {
+            self.read_arith(&parameter.to_string());
+        }
+        if let ParameterExpr::Substring { offset, length, .. } = pe {
+            for e in std::iter::once(offset).chain(length) {
+                self.read_arith(&e.value);
+                // An unquoted `$(…)` is a part of the expansion already.
+                if runs_code(&e.value) && e.value.contains('[') {
+                    self.charge(e.value.len(), span)?;
+                    let w =
+                        self.word_text(&e.value, Origin::Inexact(span), span, cx.deeper(span)?)?;
+                    out.extend(self.subscript_commands(&w, cx)?);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// An arithmetic expression as a word: a value that never resolves, plus the substitutions it
     /// runs.
     fn arith_word(&self, expr: &str, span: Span, cx: Cx) -> Result<Word, ParseError> {
+        self.read_arith(expr);
         let mut parts = vec![WordPart::Var(format!("(({expr}))"))];
         if expr.contains(['$', '`']) {
             self.charge(expr.len(), span)?;
@@ -1130,12 +1414,15 @@ fn runs_code(text: &str) -> bool {
     text.contains("$(") || text.contains('`')
 }
 
-/// The contents of each outermost `[…]` in `text`.
+/// The contents of each outermost `[…]` in `text`. Inside a subscript, as in bash, a `]` in
+/// quotes, after a backslash or in `$(…)`/`${…}` does not close it. An unclosed subscript runs to
+/// the end of the text (bash refuses it; reading it whole stays on the safe side).
 fn subscripts(text: &str) -> Vec<&str> {
+    let b = text.as_bytes();
     let mut out = Vec::new();
-    let (mut depth, mut start) = (0usize, 0usize);
-    for (i, b) in text.bytes().enumerate() {
-        match b {
+    let (mut depth, mut start, mut i) = (0usize, 0usize, 0usize);
+    while i < b.len() {
+        match b[i] {
             b'[' => {
                 if depth == 0 {
                     start = i + 1;
@@ -1148,129 +1435,177 @@ fn subscripts(text: &str) -> Vec<&str> {
                     out.push(&text[start..i]);
                 }
             }
+            _ if depth == 0 => {}
+            b'\\' => i += 1,
+            q @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    if q != b'\'' && b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'$' if matches!(b.get(i + 1), Some(b'(' | b'{')) => {
+                let (open, close) = if b[i + 1] == b'(' {
+                    (b'(', b')')
+                } else {
+                    (b'{', b'}')
+                };
+                let mut level = 0usize;
+                i += 1;
+                while i < b.len() {
+                    if b[i] == open {
+                        level += 1;
+                    } else if b[i] == close {
+                        level -= 1;
+                        if level == 0 {
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+            }
             _ => {}
+        }
+        i += 1;
+    }
+    if depth > 0 {
+        out.push(&text[start..]);
+    }
+    out
+}
+
+/// Text holding a `[…]` subscript that runs a command when bash evaluates it.
+fn holds_code_subscript(text: &str) -> bool {
+    subscripts(text).iter().any(|s| runs_code(s))
+}
+
+/// The names in arithmetic text (`a[x+$y]` → `a`, `x`, `y`).
+fn identifiers(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|id| id.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_'))
+}
+
+/// Whether text expands a positional parameter (`$1`, `${10}`, `$@`, `$*`).
+fn reads_positional(text: &str) -> bool {
+    let b = text.as_bytes();
+    (0..b.len()).filter(|&i| b[i] == b'$').any(|i| {
+        let next = match b.get(i + 1) {
+            Some(b'{') => b.get(i + 2),
+            other => other,
+        };
+        next.is_some_and(|c| c.is_ascii_digit() || matches!(c, b'@' | b'*'))
+    })
+}
+
+/// A word as the text bash evaluates: literals as written, each variable as `${name}`, each
+/// substitution's output left out.
+fn value_text(w: &Word) -> String {
+    let mut out = String::new();
+    for p in &w.parts {
+        match p {
+            WordPart::Literal(s) | WordPart::Glob(s) => out.push_str(s),
+            WordPart::Var(v) => {
+                out.push_str("${");
+                out.push_str(v);
+                out.push('}');
+            }
+            WordPart::Tilde => out.push('~'),
+            WordPart::Subst(_) | WordPart::Block(_) => {}
         }
     }
     out
 }
 
-/// `(( … ))` (and a `for (( … ))` header) as a command named `((`.
-fn arith_command(words: Vec<Word>, span: Span, cx: Cx) -> Stmt {
-    let mut cmd = synthetic("((", span, cx);
-    cmd.args = words;
-    Stmt::Pipeline(Pipeline {
-        elems: vec![Elem::Cmd(cmd)],
-        chain: None,
-    })
-}
-
-/// A command that evaluates a variable the script sets to text that runs a command — arithmetic
-/// (`x='a[$(…)]'; (( x ))`), `${!x}`, an assignment to a `declare -i` name: whether bash runs it
-/// is not known here, so it is opaque.
-fn mark_tainted_arithmetic(script: &mut Script) {
-    let env = EnvView::new();
-    let mut tainted = BTreeSet::new();
-    // Names declared integer (`declare -i n`): assigning to one evaluates the value.
-    let mut integers = BTreeSet::new();
-    visit_commands(script, &mut |c| {
-        for (name, w) in &c.assigns {
-            if w.static_value(&env).is_some_and(|v| runs_code(&v)) {
-                tainted.insert(name.clone());
-            }
+/// The parameter of an expansion and whether it is indirect (`${!x}`).
+fn parameter_of(pe: &ParameterExpr) -> Option<(&Parameter, bool)> {
+    use ParameterExpr as P;
+    match pe {
+        P::Parameter {
+            parameter,
+            indirect,
         }
-        if matches!(
-            c.canonical.as_deref(),
-            Some("declare" | "typeset" | "local")
-        ) {
-            let values: Vec<String> = c.args.iter().filter_map(|w| w.static_value(&env)).collect();
-            let integer = values.iter().any(|v| v.starts_with('-') && v.contains('i'));
-            if integer {
-                for v in values.iter().filter(|v| !v.starts_with('-')) {
-                    integers.insert(v.split('=').next().unwrap_or_default().to_string());
-                }
-            }
+        | P::UseDefaultValues {
+            parameter,
+            indirect,
+            ..
         }
-    });
-    if tainted.is_empty() {
-        return;
-    }
-    visit_commands(script, &mut |c| {
-        let integer_assigned = c.assigns.iter().any(|(name, w)| {
-            integers.contains(name) && w.static_value(&env).is_some_and(|v| runs_code(&v))
-        });
-        if integer_assigned {
-            c.opaque = true;
+        | P::AssignDefaultValues {
+            parameter,
+            indirect,
+            ..
         }
-        // `(( … ))` itself holds its expression as a `((…))` part, matched below.
-        let arithmetic_command = matches!(c.canonical.as_deref(), Some("let" | "[["));
-        let words = std::iter::once(&c.name)
-            .chain(c.args.iter())
-            .chain(c.assigns.iter().map(|(_, w)| w));
-        let mut mentions = false;
-        for w in words {
-            for p in &w.parts {
-                let text = match p {
-                    WordPart::Var(v) if v.starts_with("((") => v.as_str(),
-                    // `${!y}`: the value of `y` names the variable, subscript included.
-                    WordPart::Var(v) if v.starts_with('!') => v.as_str(),
-                    WordPart::Var(v) | WordPart::Literal(v) | WordPart::Glob(v)
-                        if arithmetic_command =>
-                    {
-                        v.as_str()
-                    }
-                    _ => continue,
-                };
-                mentions |= text
-                    .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                    .any(|id| tainted.contains(id));
-            }
+        | P::IndicateErrorIfNullOrUnset {
+            parameter,
+            indirect,
+            ..
         }
-        if mentions {
-            c.opaque = true;
+        | P::UseAlternativeValue {
+            parameter,
+            indirect,
+            ..
         }
-    });
-}
-
-/// Every simple command, also inside bodies and substitutions.
-fn visit_commands(script: &mut Script, f: &mut dyn FnMut(&mut SimpleCommand)) {
-    for st in &mut script.stmts {
-        match st {
-            Stmt::Pipeline(p) => {
-                for e in &mut p.elems {
-                    match e {
-                        Elem::Cmd(c) => {
-                            f(c);
-                            let words = std::iter::once(&mut c.name)
-                                .chain(c.args.iter_mut())
-                                .chain(c.assigns.iter_mut().map(|(_, w)| w));
-                            for w in words {
-                                visit_word(w, f);
-                            }
-                            for r in &mut c.redirects {
-                                match r {
-                                    Redirect::File { target, .. } => visit_word(target, f),
-                                    Redirect::Heredoc { body, .. } => visit_word(body, f),
-                                }
-                            }
-                        }
-                        Elem::Method(m) => m.args.iter_mut().for_each(|w| visit_word(w, f)),
-                        Elem::Expr(w) => visit_word(w, f),
-                    }
-                }
-            }
-            Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
-                visit_commands(body, f)
-            }
-            Stmt::Cond { branches, .. } => branches.iter_mut().for_each(|b| visit_commands(b, f)),
+        | P::ParameterLength {
+            parameter,
+            indirect,
         }
-    }
-}
-
-fn visit_word(w: &mut Word, f: &mut dyn FnMut(&mut SimpleCommand)) {
-    for p in &mut w.parts {
-        if let WordPart::Subst(s) | WordPart::Block(s) = p {
-            visit_commands(s, f);
+        | P::RemoveSmallestSuffixPattern {
+            parameter,
+            indirect,
+            ..
         }
+        | P::RemoveLargestSuffixPattern {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::RemoveSmallestPrefixPattern {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::RemoveLargestPrefixPattern {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::Substring {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::Transform {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::UppercaseFirstChar {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::UppercasePattern {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::LowercaseFirstChar {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::LowercasePattern {
+            parameter,
+            indirect,
+            ..
+        }
+        | P::ReplaceSubstring {
+            parameter,
+            indirect,
+            ..
+        } => Some((parameter, *indirect)),
+        P::VariableNames { .. } | P::MemberKeys { .. } => None,
     }
 }
 

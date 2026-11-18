@@ -17,6 +17,12 @@ Without `-- COMMAND` the command is read from stdin. Exit codes: 0 ok/warn, 1 br
 3 critical, 64 usage error. `--json` prints
 `{"version":1,"level":…,"findings":[{"rule","level","message","fix","span":{"start","end"}}]}`.
 
+## Limits
+
+- Bash: a value the shell gets at run time (`read`, `printf -v`, command output) is not tracked
+  when arithmetic later evaluates it, so a `$(…)` hidden in such a value's array subscript is not
+  seen.
+
 ## Develop
 
 ```
