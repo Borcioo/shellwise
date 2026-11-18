@@ -296,6 +296,234 @@ pub fn repo_root(
     })?
 }
 
+// ------------------------------------------------------------------ PowerShell parameters
+
+/// The parameter a written PowerShell parameter name binds to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamMatch {
+    /// The parameter's full name.
+    Exact(&'static str),
+    /// The name fits several parameters: PowerShell refuses the command.
+    Ambiguous,
+    /// No parameter fits, or the cmdlet is not modelled.
+    Unknown,
+}
+
+struct Param {
+    name: &'static str,
+    aliases: &'static [&'static str],
+    switch: bool,
+}
+
+const fn value(name: &'static str, aliases: &'static [&'static str]) -> Param {
+    Param {
+        name,
+        aliases,
+        switch: false,
+    }
+}
+
+const fn switch(name: &'static str, aliases: &'static [&'static str]) -> Param {
+    Param {
+        name,
+        aliases,
+        switch: true,
+    }
+}
+
+// Parameter lists from pwsh 7.7: `(Get-Command <cmdlet>).Parameters.Values | ForEach-Object {
+// $_.Name, $_.Aliases, $_.SwitchParameter }`, split into the cmdlet's own and the common ones by
+// `[System.Management.Automation.Cmdlet]::CommonParameters` and `::OptionalCommonParameters`.
+
+/// `New-Item` (`ni`).
+const NEW_ITEM: &[Param] = &[
+    value("Path", &[]),
+    value("Name", &[]),
+    value("ItemType", &["Type"]),
+    value("Value", &["Target"]),
+    switch("Force", &[]),
+    value("Credential", &[]),
+];
+
+/// `Set-Location` (`cd`, `chdir`, `sl`) and `Push-Location` (`pushd`): the same list.
+const SET_LOCATION: &[Param] = &[
+    value("Path", &[]),
+    value("LiteralPath", &["PSPath", "LP"]),
+    switch("PassThru", &[]),
+    value("StackName", &[]),
+];
+
+/// The common parameters of every cmdlet.
+const COMMON: &[Param] = &[
+    switch("Verbose", &["vb"]),
+    switch("Debug", &["db"]),
+    value("ErrorAction", &["ea"]),
+    value("WarningAction", &["wa"]),
+    value("InformationAction", &["infa"]),
+    value("ProgressAction", &["proga"]),
+    value("ErrorVariable", &["ev"]),
+    value("WarningVariable", &["wv"]),
+    value("InformationVariable", &["iv"]),
+    value("OutVariable", &["ov"]),
+    value("OutBuffer", &["ob"]),
+    value("PipelineVariable", &["pv"]),
+];
+
+/// The common parameters of a cmdlet that supports `-WhatIf` (`New-Item` does).
+const SHOULD_PROCESS: &[Param] = &[switch("WhatIf", &["wi"]), switch("Confirm", &["cf"])];
+
+/// The cmdlet's own parameters and its common ones; `None` for a cmdlet not modelled.
+fn cmdlet_params(cmdlet: &str) -> Option<(&'static [Param], Vec<&'static Param>)> {
+    let lower = cmdlet.to_ascii_lowercase();
+    let (own, should_process) = match lower.as_str() {
+        "new-item" | "ni" => (NEW_ITEM, true),
+        "set-location" | "sl" | "cd" | "chdir" | "push-location" | "pushd" => (SET_LOCATION, false),
+        _ => return None,
+    };
+    let mut common: Vec<&'static Param> = COMMON.iter().collect();
+    if should_process {
+        common.extend(SHOULD_PROCESS.iter());
+    }
+    Some((own, common))
+}
+
+/// The dashes PowerShell starts a parameter with.
+const DASHES: [char; 4] = ['-', '\u{2013}', '\u{2014}', '\u{2015}'];
+
+/// A written word as PowerShell reads it: `-Name` or `-Name:value` is a parameter (a dash, then
+/// a letter, `_` or `?`); `(name, inline value)`, the value `Some("")` for `-Name:` alone, which
+/// takes the next word.
+fn param_token(t: &str) -> Option<(&str, Option<&str>)> {
+    let rest = t.strip_prefix(DASHES)?;
+    if !rest.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '?') {
+        return None;
+    }
+    Some(match rest.split_once(':') {
+        Some((n, v)) => (n, Some(v)),
+        None => (rest, None),
+    })
+}
+
+/// How PowerShell binds `written` (`-Ty`, `-ItemType:Junction`) for `cmdlet`: ignoring case, a
+/// full name or alias first, then any prefix of a name or alias; when the prefix fits several
+/// parameters and exactly one of them is the cmdlet's own (not a common one), that one.
+pub fn pwsh_param(cmdlet: &str, written: &str) -> ParamMatch {
+    match bind(cmdlet, written) {
+        Bound::One(p) => ParamMatch::Exact(p.name),
+        Bound::Ambiguous => ParamMatch::Ambiguous,
+        Bound::None => ParamMatch::Unknown,
+    }
+}
+
+enum Bound {
+    One(&'static Param),
+    Ambiguous,
+    None,
+}
+
+fn bind(cmdlet: &str, written: &str) -> Bound {
+    let Some((name, _)) = param_token(written) else {
+        return Bound::None;
+    };
+    let Some((own, common)) = cmdlet_params(cmdlet) else {
+        return Bound::None;
+    };
+    let lower = name.to_lowercase();
+    let all: Vec<(&'static Param, bool)> = own
+        .iter()
+        .map(|p| (p, false))
+        .chain(common.into_iter().map(|p| (p, true)))
+        .collect();
+    let spellings = |p: &'static Param| {
+        std::iter::once(p.name)
+            .chain(p.aliases.iter().copied())
+            .map(str::to_lowercase)
+    };
+    if let Some((p, _)) = all.iter().find(|(p, _)| spellings(p).any(|s| s == lower)) {
+        return Bound::One(p);
+    }
+    let fits: Vec<(&'static Param, bool)> = all
+        .iter()
+        .filter(|(p, _)| spellings(p).any(|s| s.starts_with(&lower)))
+        .copied()
+        .collect();
+    match fits.as_slice() {
+        [] => Bound::None,
+        [(p, _)] => Bound::One(p),
+        _ => match fits
+            .iter()
+            .filter(|(_, common)| !common)
+            .collect::<Vec<_>>()[..]
+        {
+            [(p, _)] => Bound::One(p),
+            _ => Bound::Ambiguous,
+        },
+    }
+}
+
+/// One argument of a PowerShell command, as the binder sees it.
+enum PwshArg<'a> {
+    /// `-Name value`, `-Name:value`, a switch: the parameter, its value (`None` for a switch
+    /// written without one) and the index of the next argument.
+    Param {
+        name: &'static str,
+        value: Option<PwshValue<'a>>,
+        next: usize,
+    },
+    /// A positional value.
+    Positional(&'a Word),
+    /// A splat, or a variable or substitution where a parameter name may be: it may carry any
+    /// parameter the command does not name itself.
+    Opaque,
+    /// An ambiguous or unknown parameter, or one without its value: PowerShell refuses the
+    /// command, and the hook cannot tell how the rest binds.
+    Unbound,
+}
+
+enum PwshValue<'a> {
+    Word(&'a Word),
+    /// The text after `-Name:`.
+    Inline(String),
+}
+
+/// The argument at `i` of `cmdlet`'s `args`.
+fn pwsh_arg<'a>(cmdlet: &str, args: &'a [Word], i: usize) -> PwshArg<'a> {
+    let w = &args[i];
+    let Some(t) = literal(w) else {
+        return PwshArg::Opaque;
+    };
+    if w.quote == crate::ir::Quote::None && t.len() > 1 && t.starts_with('@') {
+        return PwshArg::Opaque;
+    }
+    let Some((_, inline)) = param_token(&t) else {
+        return PwshArg::Positional(w);
+    };
+    let Bound::One(p) = bind(cmdlet, &t) else {
+        return PwshArg::Unbound;
+    };
+    match inline {
+        Some(v) if !v.is_empty() => PwshArg::Param {
+            name: p.name,
+            value: Some(PwshValue::Inline(v.to_string())),
+            next: i + 1,
+        },
+        None if p.switch => PwshArg::Param {
+            name: p.name,
+            value: None,
+            next: i + 1,
+        },
+        // `-Name value`, and `-Name: value` (a switch too: `-Force: $false`).
+        _ => match args.get(i + 1) {
+            Some(v) => PwshArg::Param {
+                name: p.name,
+                value: Some(PwshValue::Word(v)),
+                next: i + 2,
+            },
+            None => PwshArg::Unbound,
+        },
+    }
+}
+
 // ------------------------------------------------------------------ location
 
 /// Candidate folders: the command may be in any of `known`, or somewhere unknown.
@@ -354,7 +582,7 @@ pub struct Location {
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
 /// HardLink`, `ln -s`. `Some(None)`: a link at a place the hook cannot tell.
-fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
+fn created_link(c: &SimpleCommand) -> Option<Option<Word>> {
     let lit_args: Vec<Option<String>> = c.args.iter().map(literal).collect();
     match command_name(c).as_str() {
         "mklink" => Some(
@@ -362,7 +590,7 @@ fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
                 .iter()
                 .zip(&lit_args)
                 .find(|(_, t)| !t.as_deref().is_some_and(|t| t.starts_with('/')))
-                .map(|(w, _)| w),
+                .map(|(w, _)| w.clone()),
         ),
         "ln" => {
             let long = |t: &str, full: &str| t.len() > 2 && full.starts_with(t);
@@ -412,73 +640,81 @@ fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
                 .map(|(w, _)| w)
                 .collect();
             Some(if names.len() >= 2 {
-                names.last().copied()
+                names.last().map(|w| (*w).clone())
             } else {
                 None
             })
         }
-        "new-item" | "ni" => {
-            // Parameters as (lowercased name, inline value, index of the argument).
-            let param = |i: usize| {
-                let t = lit_args[i].as_deref()?.to_ascii_lowercase();
-                if !t.starts_with('-') {
-                    return None;
-                }
-                Some(match t.split_once(':') {
-                    Some((n, v)) => (n.to_string(), Some(v.to_string())),
-                    None => (t, None),
-                })
-            };
-            let is =
-                |name: &str, full: &str, min: usize| name.len() >= min && full.starts_with(name);
-            let is_type = |n: &str| is(n, "-itemtype", 3) || n == "-type";
-            // The item type: `None` when not given, `Some(None)` when not static.
-            let mut kind: Option<Option<String>> = None;
-            for i in 0..c.args.len() {
-                if let Some((n, inline)) = param(i)
-                    && is_type(&n)
-                {
-                    let v = inline.or_else(|| lit_args.get(i + 1).cloned().flatten());
-                    kind = Some(v.map(|v| v.to_ascii_lowercase()));
-                }
-            }
-            // A splat or a variable may carry `-ItemType Junction` or `-Path`.
-            let opaque_arg = c.args.iter().any(|w| literal(w).is_none());
-            match &kind {
-                Some(Some(k)) if is_folder_or_file_type(k) => return None,
-                _ if opaque_arg => return Some(None),
-                Some(_) => {}
-                // No `-ItemType`: a file.
-                None => return None,
-            }
-            // Where: `-Path x` or the first positional argument; anything else is not certain.
-            let mut path: Option<&Word> = None;
-            let mut i = 0;
-            while i < c.args.len() {
-                match param(i) {
-                    Some((n, inline)) => {
-                        let takes_value = inline.is_none();
-                        if is(&n, "-path", 2) && takes_value {
-                            path = c.args.get(i + 1);
-                        } else if !(is_type(&n)
-                            || is(&n, "-value", 2)
-                            || is(&n, "-target", 2)
-                            || is(&n, "-force", 2))
-                        {
-                            return Some(None);
-                        }
-                        let switch = is(&n, "-force", 2);
-                        i += if takes_value && !switch { 2 } else { 1 };
-                    }
-                    None => {
-                        path.get_or_insert(&c.args[i]);
-                        i += 1;
-                    }
-                }
-            }
-            Some(path)
-        }
+        "new-item" | "ni" => new_item_link(&c.args),
         _ => None,
+    }
+}
+
+/// `created_link` for `New-Item`, its parameters bound as PowerShell binds them.
+fn new_item_link(args: &[Word]) -> Option<Option<Word>> {
+    // The item type: `None` when not given, `Some(None)` when not static.
+    let mut kind: Option<Option<String>> = None;
+    let mut path: Option<Word> = None;
+    // `-Name`, an extra positional value: the link is not where `path` says.
+    let mut elsewhere = false;
+    // A splat or a variable may carry `-ItemType Junction` or `-Path`.
+    let mut opaque = false;
+    // A parameter the hook cannot bind: it cannot tell what the rest means.
+    let mut unbound = false;
+    let mut i = 0;
+    while i < args.len() {
+        match pwsh_arg("new-item", args, i) {
+            PwshArg::Param { name, value, next } => {
+                let text = |v: &Option<PwshValue>| match v {
+                    Some(PwshValue::Inline(t)) => Some(t.clone()),
+                    Some(PwshValue::Word(w)) => literal(w),
+                    None => None,
+                };
+                match name {
+                    "ItemType" => kind = Some(text(&value).map(|k| k.to_ascii_lowercase())),
+                    "Path" => {
+                        path = match value {
+                            Some(PwshValue::Word(w)) => Some(w.clone()),
+                            Some(PwshValue::Inline(t)) => Some(Word {
+                                parts: vec![WordPart::Literal(t)],
+                                span: args[i].span,
+                                quote: args[i].quote,
+                            }),
+                            None => None,
+                        }
+                    }
+                    "Name" => elsewhere = true,
+                    _ => {}
+                }
+                i = next;
+            }
+            PwshArg::Positional(w) => {
+                if path.is_some() {
+                    elsewhere = true;
+                }
+                path.get_or_insert_with(|| w.clone());
+                i += 1;
+            }
+            PwshArg::Opaque => {
+                opaque = true;
+                i += 1;
+            }
+            PwshArg::Unbound => {
+                unbound = true;
+                i += 1;
+            }
+        }
+    }
+    if unbound {
+        return Some(None);
+    }
+    match &kind {
+        // A second `-ItemType` from a splat would be a binding error.
+        Some(Some(k)) if is_folder_or_file_type(k) => None,
+        _ if opaque || elsewhere => Some(None),
+        Some(_) => Some(path),
+        // No `-ItemType`: a file.
+        None => None,
     }
 }
 
@@ -562,7 +798,7 @@ impl Location {
     /// Advance past `stmt`.
     pub fn after(&mut self, stmt: &Stmt, env: &EnvView) {
         let mut remap = false;
-        let mut links: Vec<Option<&Word>> = Vec::new();
+        let mut links: Vec<Option<Word>> = Vec::new();
         visit_stmt(stmt, &mut |n| match n {
             Node::Cmd(c) => {
                 remap |= remaps_drives(c);
@@ -579,7 +815,7 @@ impl Location {
         self.remapped |= remap;
         for l in links {
             let d = match l {
-                Some(w) => self.dir_from_word(w, env),
+                Some(w) => self.dir_from_word(&w, env),
                 None => Dirs::unknown(UnknownKind::MayBeCritical),
             };
             self.new_link_unknown |= d.unknown.is_some();
@@ -726,7 +962,7 @@ impl Location {
     fn set_location(&self, c: &SimpleCommand, env: &EnvView, push: bool) -> Dirs {
         let pwsh = matches!(self.shell, Shell::Pwsh | Shell::Powershell5);
         let path = if pwsh {
-            pwsh_location_arg(&c.args)
+            pwsh_location_arg(&command_name(c), &c.args)
         } else {
             bash_location_arg(&c.args, push)
         };
@@ -863,56 +1099,39 @@ fn bash_location_arg(args: &[Word], push: bool) -> LocArg<'_> {
     }
 }
 
-fn pwsh_location_arg(args: &[Word]) -> LocArg<'_> {
+/// The folder `Set-Location`/`Push-Location` (as `cmdlet`) goes to, its parameters bound as
+/// PowerShell binds them; any parameter but these four makes it unknown.
+fn pwsh_location_arg<'a>(cmdlet: &str, args: &'a [Word]) -> LocArg<'a> {
     let mut found: Option<LocArg> = None;
     let mut i = 0;
     while i < args.len() {
-        let w = &args[i];
-        let text = literal(w);
-        match text.as_deref() {
-            Some(t) if t.starts_with('-') && t.len() > 1 => {
-                let (name, inline) = match t.split_once(':') {
-                    Some((n, v)) => (n.to_ascii_lowercase(), Some(v.to_string())),
-                    None => (t.to_ascii_lowercase(), None),
-                };
-                let is = |full: &str, min: usize| name.len() >= min && full.starts_with(&name);
-                if is("-passthru", 3) {
-                    i += 1;
-                    continue;
+        let value = match pwsh_arg(cmdlet, args, i) {
+            PwshArg::Param { name, value, next } => {
+                i = next;
+                match (name, value) {
+                    ("PassThru" | "StackName", _) => continue,
+                    ("Path", Some(PwshValue::Inline(t))) => LocArg::Text(t),
+                    ("LiteralPath", Some(PwshValue::Inline(t))) => LocArg::LiteralText(t),
+                    ("Path" | "LiteralPath", Some(PwshValue::Word(w))) => LocArg::Word(w),
+                    _ => return LocArg::Unknown,
                 }
-                let literal_path = is("-literalpath", 3) || name == "-lp" || is("-pspath", 3);
-                if is("-stackname", 2) || name == "-path" || literal_path {
-                    let value = match inline {
-                        Some(v) => Some(if literal_path {
-                            LocArg::LiteralText(v)
-                        } else {
-                            LocArg::Text(v)
-                        }),
-                        None => {
-                            i += 1;
-                            args.get(i).map(LocArg::Word)
-                        }
-                    };
-                    if !is("-stackname", 2) {
-                        let Some(v) = value else {
-                            return LocArg::Unknown;
-                        };
-                        if found.replace(v).is_some() {
-                            return LocArg::Unknown;
-                        }
-                    }
-                    i += 1;
-                    continue;
-                }
-                return LocArg::Unknown;
             }
-            Some("-") | Some("+") => return LocArg::Unknown,
-            _ => {
-                if found.replace(LocArg::Word(w)).is_some() {
-                    return LocArg::Unknown;
-                }
+            PwshArg::Positional(w) => {
                 i += 1;
+                match literal(w).as_deref() {
+                    Some("-") | Some("+") => return LocArg::Unknown,
+                    _ => LocArg::Word(w),
+                }
             }
+            // A variable is a positional value: it resolves as a dynamic word.
+            PwshArg::Opaque if literal(&args[i]).is_none() => {
+                i += 1;
+                LocArg::Word(&args[i - 1])
+            }
+            PwshArg::Opaque | PwshArg::Unbound => return LocArg::Unknown,
+        };
+        if found.replace(value).is_some() {
+            return LocArg::Unknown;
         }
     }
     found.unwrap_or(LocArg::Unknown)

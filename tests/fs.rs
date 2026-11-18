@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use shellwise::fs::resolve::{
-    Location, Target, UnknownKind, critical_by_identity, critical_reason, env_view, mark_assigned,
-    repo_root, target,
+    Location, ParamMatch, Target, UnknownKind, critical_by_identity, critical_reason, env_view,
+    mark_assigned, pwsh_param, repo_root, target,
 };
 use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
 use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
@@ -57,6 +57,23 @@ fn cmd(name: &str, args: Vec<Word>) -> SimpleCommand {
 
 fn lits(name: &str, args: &[&str]) -> SimpleCommand {
     cmd(name, args.iter().map(|a| lit(a)).collect())
+}
+
+/// The command as text, for a failure message.
+fn show(c: &SimpleCommand) -> String {
+    let word = |w: &Word| -> String {
+        w.parts
+            .iter()
+            .map(|p| match p {
+                WordPart::Literal(s) => s.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    };
+    std::iter::once(c.typed.clone())
+        .chain(c.args.iter().map(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn stmt(c: SimpleCommand, chain: Option<ChainOp>) -> Stmt {
@@ -955,27 +972,99 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
             ps,
             lits("New-Item", &["-ItemType", "", r"t\j"]),
         ),
+        // Parameter names as PowerShell binds them (pwsh 7.7 StaticParameterBinder: each binds
+        // ItemType): any unambiguous prefix of the name or its alias `Type`, in any case, also
+        // where only common parameters share the prefix (`-i`), with `-Name:value`, `-Name:
+        // value` and any dash PowerShell accepts.
+        (
+            "New-Item -Ty Junction",
+            ps,
+            lits("New-Item", &["-Ty", "Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -Typ Junction",
+            ps,
+            lits("New-Item", &["-Typ", "Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -it Junction",
+            ps,
+            lits("New-Item", &["-it", "Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -ItemType:Junction",
+            ps,
+            lits("New-Item", &["-ItemType:Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -type Junction",
+            ps,
+            lits("New-Item", &["-type", "Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -i Junction",
+            ps,
+            lits("New-Item", &["-i", "Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -TY:Junction",
+            ps,
+            lits("New-Item", &["-TY:Junction", "-Path", r"t\j"]),
+        ),
+        (
+            "New-Item -ItemType: Junction",
+            ps,
+            lits("New-Item", &["-ItemType:", "Junction", "-Path", r"t\j"]),
+        ),
+        (
+            "New-Item <en dash>ItemType Junction",
+            ps,
+            lits("New-Item", &["\u{2013}ItemType", "Junction", r"t\j"]),
+        ),
+        (
+            "New-Item -Path:t\\j -ItemType Junction",
+            ps,
+            lits("New-Item", &[r"-Path:t\j", "-ItemType", "Junction"]),
+        ),
+        (
+            "New-Item -ItemType: Junction t\\j",
+            ps,
+            lits("New-Item", &["-ItemType:", "Junction", r"t\j"]),
+        ),
+        // A switch takes no value.
+        (
+            "New-Item -Force -ItemType Junction",
+            ps,
+            lits("New-Item", &["-Force", "-ItemType", "Junction", r"t\j"]),
+        ),
     ];
+    // Every row is checked; the failures are listed together.
+    let mut bad: Vec<String> = Vec::new();
+    let mut expect = |got: Target, want: &Target, label: String| {
+        if &got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    };
     for (name, shell, link) in rows {
         let (base, env) = win(shell);
         let mut loc = base.clone();
-        assert_eq!(
+        expect(
             resolve(&lit("t"), &loc, &env),
-            paths(&[r"C:\w\repo\t"]),
-            "{name}: before"
+            &paths(&[r"C:\w\repo\t"]),
+            format!("{name}: before"),
         );
         loc.after(&stmt(link, seq), &env);
         for gone in ["t", r"t\j", r"t\other", "."] {
-            assert_eq!(
+            expect(
                 resolve(&lit(gone), &loc, &env),
-                MAY_BE_CRITICAL,
-                "{name}: {gone}"
+                &MAY_BE_CRITICAL,
+                format!("{name}: {gone}"),
             );
         }
-        assert_eq!(
+        expect(
             resolve(&lit("u"), &loc, &env),
-            paths(&[r"C:\w\repo\u"]),
-            "{name}: unrelated"
+            &paths(&[r"C:\w\repo\u"]),
+            format!("{name}: unrelated"),
         );
     }
     // Not a link: a plain folder, a hard link left out on purpose.
@@ -991,14 +1080,18 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
             vec![lit("-ItemType"), lit("Directory"), var("p")],
         ),
         lits("New-Item", &[r"t\j"]),
+        // Common parameters bind and take their value.
+        lits(
+            "New-Item",
+            &["-ItemType", "Directory", "-ea", "Stop", "-Verbose", r"t\j"],
+        ),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(plain.clone(), seq), &env);
-        assert_eq!(
+        expect(
             resolve(&lit("t"), &loc, &env),
-            paths(&[r"C:\w\repo\t"]),
-            "{}",
-            plain.typed
+            &paths(&[r"C:\w\repo\t"]),
+            format!("plain {}", show(&plain)),
         );
     }
     // A link at a place the hook cannot tell: every later target is unknown.
@@ -1023,17 +1116,45 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
         cmd("New-Item", vec![lit(r"t\j"), var("opts")]),
         // A non-literal `ln` argument may carry `-s` and `-t`.
         cmd("ln", vec![var("opts"), lit(r"C:\x"), lit("t/j")]),
+        // A prefix PowerShell finds ambiguous (`-t`: ItemType's alias Type, Value's alias
+        // Target), or one no parameter has: the hook cannot tell what binds.
+        lits("New-Item", &["-t", "Junction", r"t\j"]),
+        lits("New-Item", &["-ItemType", "Directory", "-o", "x", r"t\j"]),
+        lits("New-Item", &["-Bogus", "Junction", r"t\j"]),
+        // A splat.
+        lits("New-Item", &["@p"]),
+        // A second positional value: PowerShell refuses it.
+        lits("New-Item", &["-ItemType", "Junction", r"t\j", "x"]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(vague.clone(), seq), &env);
         // A folder outside the repo: only "a link somewhere unknown" makes it unknown.
-        assert_eq!(
+        expect(
             resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
-            MAY_BE_CRITICAL,
-            "{}",
-            vague.typed
+            &MAY_BE_CRITICAL,
+            format!("vague {}", show(&vague)),
         );
     }
+    // `-1` is a value, not a parameter: the link is `-1`.
+    let mut loc = base.clone();
+    let numeric = lits("New-Item", &["-1", "-ItemType", "Junction"]);
+    loc.after(&stmt(numeric, seq), &env);
+    expect(
+        resolve(&lit("-1"), &loc, &env),
+        &MAY_BE_CRITICAL,
+        "New-Item -1: -1".to_string(),
+    );
+    expect(
+        resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
+        &paths(&[r"D:\elsewhere\u"]),
+        "New-Item -1: unrelated".to_string(),
+    );
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
     let mut loc = base.clone();
     loc.after(
         &method(
@@ -1089,6 +1210,70 @@ fn an_unknown_target_that_may_name_a_critical_folder_says_so() {
         0,
     );
     assert_eq!(resolve(&pwd, &loc, &env), DYNAMIC_LOCATION);
+}
+
+#[test]
+fn pwsh_param_binds_a_written_name_as_powershell_does() {
+    use ParamMatch::{Ambiguous, Exact, Unknown};
+    // Expected values: pwsh 7.7 `StaticParameterBinder::BindCommand` on `<cmdlet> <name> x`.
+    let cases: &[(&str, &str, ParamMatch)] = &[
+        ("New-Item", "-Ty", Exact("ItemType")),
+        ("New-Item", "-Typ", Exact("ItemType")),
+        ("New-Item", "-it", Exact("ItemType")),
+        ("New-Item", "-ItemType:Junction", Exact("ItemType")),
+        ("New-Item", "-type", Exact("ItemType")),
+        ("New-Item", "-i", Exact("ItemType")),
+        ("ni", "-I", Exact("ItemType")),
+        ("New-Item", "-t", Ambiguous),
+        ("New-Item", "-v", Exact("Value")),
+        ("New-Item", "-Target", Exact("Value")),
+        ("New-Item", "-n", Exact("Name")),
+        ("New-Item", "-f", Exact("Force")),
+        ("New-Item", "-c", Exact("Credential")),
+        ("New-Item", "-w", Ambiguous),
+        ("New-Item", "-wi", Exact("WhatIf")),
+        ("New-Item", "-e", Ambiguous),
+        // An alias that is also a prefix of another parameter (WarningVariable).
+        ("New-Item", "-wa", Exact("WarningAction")),
+        ("New-Item", "-p", Exact("Path")),
+        ("New-Item", "-o", Ambiguous),
+        ("New-Item", "-pr", Exact("ProgressAction")),
+        ("New-Item", "-in", Ambiguous),
+        ("New-Item", "-Bogus", Unknown),
+        ("New-Item", "\u{2014}Ty", Exact("ItemType")),
+        ("Set-Location", "-P", Ambiguous),
+        ("Set-Location", "-Pa", Ambiguous),
+        ("Set-Location", "-Pat", Exact("Path")),
+        ("Set-Location", "-L", Exact("LiteralPath")),
+        ("Set-Location", "-PSP", Exact("LiteralPath")),
+        ("sl", "-lp:x", Exact("LiteralPath")),
+        ("Set-Location", "-S", Exact("StackName")),
+        ("cd", "-pas", Exact("PassThru")),
+        ("Set-Location", "-o", Ambiguous),
+        ("Set-Location", "-pr", Exact("ProgressAction")),
+        // Set-Location has no -WhatIf.
+        ("Set-Location", "-wi", Unknown),
+        ("Push-Location", "-S", Exact("StackName")),
+        ("pushd", "-P", Ambiguous),
+        // Not a parameter, or a cmdlet the hook does not model.
+        ("New-Item", "-5", Unknown),
+        ("New-Item", "-", Unknown),
+        ("New-Item", "x", Unknown),
+        ("Remove-Item", "-Recurse", Unknown),
+    ];
+    let bad: Vec<String> = cases
+        .iter()
+        .filter_map(|(cmdlet, written, want)| {
+            let got = pwsh_param(cmdlet, written);
+            (got != *want).then(|| format!("{cmdlet} {written}: got {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------- location
@@ -1157,18 +1342,33 @@ fn cd_moves_the_location_and_a_cd_that_may_fail_keeps_the_old_one() {
         paths(&[r"C:\", r"C:\w"])
     );
     // Absolute and parameter forms.
-    for args in [
+    let bad = [
         &[r"C:\a\b\c"][..],
         &["-LiteralPath", r"C:\a\b\c"],
         &["-Path:C:\\a\\b\\c"],
         &["-PassThru", "-Path", r"C:\a\b\c"],
-    ] {
-        assert_eq!(
-            run(vec![stmt(lits("Set-Location", args), Some(ChainOp::And))]),
-            paths(&[r"C:\a"]),
-            "{args:?}"
-        );
-    }
+        // Bound as pwsh 7.7's StaticParameterBinder binds them.
+        &["-L", r"C:\a\b\c"],
+        &["-PSP", r"C:\a\b\c"],
+        &["-pat", r"C:\a\b\c"],
+        &["-pas", r"C:\a\b\c"],
+        &["-Path:", r"C:\a\b\c"],
+        &["\u{2013}Path", r"C:\a\b\c"],
+        // `-LiteralPath` reads no wildcard.
+        &[r"-LiteralPath:C:\a\b\c*"],
+    ]
+    .iter()
+    .filter_map(|args| {
+        let got = run(vec![stmt(lits("Set-Location", args), Some(ChainOp::And))]);
+        (got != paths(&[r"C:\a"])).then(|| format!("{args:?}: got {got:?}"))
+    })
+    .collect::<Vec<_>>();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }
 
 #[test]
@@ -1202,6 +1402,10 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     unknown_after(vec![stmt(lits("Invoke-Expression", &["cd sub"]), seq)]);
     unknown_after(vec![stmt(lits("cd", &["HKCU:\\x"]), seq)]);
     unknown_after(vec![stmt(lits("Set-Location", &["-Bogus", "x"]), seq)]);
+    // Ambiguous for the binder (`-P`: Path, PassThru, LiteralPath's alias PSPath).
+    unknown_after(vec![stmt(lits("Set-Location", &["-P", "x"]), seq)]);
+    unknown_after(vec![stmt(lits("Set-Location", &["@p"]), seq)]);
+    unknown_after(vec![stmt(lits("Set-Location", &["-Path"]), seq)]);
     unknown_after(vec![stmt(lits("Pop-Location", &[]), seq)]);
     unknown_after(vec![stmt(lits(r".\cd.exe", &["sub"]), seq)]);
     unknown_after(vec![Stmt::Loop {
