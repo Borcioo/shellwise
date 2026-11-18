@@ -238,16 +238,32 @@ impl Cx {
 /// At most this many names are tainted through copies; past it every arithmetic context is opaque.
 const MAX_TAINT_STEPS: usize = 64;
 
+/// Commands whose arguments become the positional parameters, besides the script's functions.
+const SETS_POSITIONALS: &[&str] = &["set", "source", "."];
+
+/// One value assigned to a name, as the taint rule reads it.
+struct Assigned {
+    name: String,
+    /// The value as `value_text` gives it.
+    text: String,
+    /// The variable each expansion in the value reads; `None` for a substitution or an expansion
+    /// with an operator. An append (`n+=…`) reads the name itself first.
+    expansions: Vec<Option<String>>,
+}
+
 /// Names whose value runs a command when bash evaluates it as arithmetic.
 ///
-/// A name is tainted when a static value assigned to it holds `$(…)` or a backtick inside `[…]`
-/// (`x='a[$(…)]'`), or when a value assigned to it names a tainted name (`y=x`, `y=$x`). The
-/// order of the assignments does not matter. Values bash gets at run time (`read`, `printf -v`,
-/// command output) are not tracked.
+/// A name is tainted when a static value assigned to it holds `$(…)` or a backtick
+/// (`x='a[$(…)]'`, `b='$(…)]'`), when a value assigned to it names a tainted name (`y=x`, `y=$x`),
+/// or when the value joins several expansions (`n=$a$b`, `n+=$b`) of which one is not a name the
+/// script only ever sets to static text. The positional parameters are tainted when a call of a
+/// function or `set` passes such text or a tainted name. The order of the assignments does not
+/// matter. A single value bash gets at run time (`read`, `printf -v`, command output) is not
+/// tracked.
 #[derive(Default)]
 struct Taint {
     names: BTreeSet<String>,
-    /// A command's static argument holds such text, so `$1`, `$@` … may be tainted.
+    /// `$1`, `$@` … may be tainted.
     positional: bool,
     /// Propagation went past `MAX_TAINT_STEPS`: every arithmetic context reads a tainted name.
     all: bool,
@@ -268,33 +284,86 @@ impl Taint {
             || (self.positional && reads_positional(text))
     }
 
+    /// `calls`: each command's target and argument texts; `functions`: the names the script
+    /// defines as functions.
     fn compute(
-        assigned: &[(String, String)],
-        positional: bool,
+        assigned: &[Assigned],
+        calls: &[(String, Vec<String>)],
+        functions: &BTreeSet<String>,
         integers: BTreeSet<String>,
     ) -> Taint {
+        // Names that may hold a value bash gets at run time: never assigned here (the environment,
+        // `read`, positionals), or assigned a substitution, an expansion with an operator or such
+        // a name. Past the step bound every name assigned an expansion counts.
+        let known: BTreeSet<&str> = assigned.iter().map(|a| a.name.as_str()).collect();
+        let mut runtime: BTreeSet<&str> = BTreeSet::new();
+        for round in 0.. {
+            let before = runtime.len();
+            for a in assigned {
+                let reads_runtime = a.expansions.iter().any(|e| match e {
+                    None => true,
+                    Some(m) => {
+                        *m != a.name
+                            && (round > MAX_TAINT_STEPS
+                                || !known.contains(m.as_str())
+                                || runtime.contains(m.as_str()))
+                    }
+                });
+                if reads_runtime {
+                    runtime.insert(&a.name);
+                }
+            }
+            if runtime.len() == before {
+                break;
+            }
+        }
+        let is_runtime = |n: &str| !known.contains(n) || runtime.contains(n);
+        let joins_dynamic = |a: &Assigned| {
+            a.expansions.len() > 1
+                && a.expansions
+                    .iter()
+                    .any(|e| e.as_deref().is_none_or(is_runtime))
+        };
+        let callers: Vec<&Vec<String>> = calls
+            .iter()
+            .filter(|(target, _)| {
+                SETS_POSITIONALS.contains(&target.as_str()) || functions.contains(target)
+            })
+            .map(|(_, args)| args)
+            .collect();
         let mut t = Taint {
             names: assigned
                 .iter()
-                .filter(|(_, v)| holds_code_subscript(v))
-                .map(|(n, _)| n.clone())
+                .filter(|a| runs_code(&a.text) || joins_dynamic(a))
+                .map(|a| a.name.clone())
                 .collect(),
-            positional,
+            positional: callers.iter().any(|args| args.iter().any(|v| runs_code(v))),
             all: false,
             integers,
         };
         let mut steps = 0;
         loop {
             let before = steps;
-            for (name, value) in assigned {
-                if !t.names.contains(name) && t.reads(value) {
-                    steps += 1;
-                    if steps > MAX_TAINT_STEPS {
-                        t.all = true;
+            let mut step = |t: &mut Taint| {
+                steps += 1;
+                if steps > MAX_TAINT_STEPS {
+                    t.all = true;
+                }
+                t.all
+            };
+            for a in assigned {
+                if !t.names.contains(&a.name) && t.reads(&a.text) {
+                    if step(&mut t) {
                         return t;
                     }
-                    t.names.insert(name.clone());
+                    t.names.insert(a.name.clone());
                 }
+            }
+            if !t.positional && callers.iter().any(|args| args.iter().any(|v| t.reads(v))) {
+                if step(&mut t) {
+                    return t;
+                }
+                t.positional = true;
             }
             if steps == before {
                 return t;
@@ -312,10 +381,12 @@ struct Lower {
     taint: Taint,
     /// An arithmetic context read a tainted name since the enclosing command started.
     tainted_read: Cell<bool>,
-    /// Every value assigned to a name, as text (`value_text`).
-    assigned: RefCell<Vec<(String, String)>>,
-    /// A command's static argument holds a subscript that runs a command.
-    positional: Cell<bool>,
+    /// Every value assigned to a name.
+    assigned: RefCell<Vec<Assigned>>,
+    /// Every simple command's target and argument texts.
+    calls: RefCell<Vec<(String, Vec<String>)>>,
+    /// The names of the functions the script defines.
+    functions: RefCell<BTreeSet<String>>,
     integers: RefCell<BTreeSet<String>>,
 }
 
@@ -328,7 +399,8 @@ impl Lower {
             taint,
             tainted_read: Cell::new(false),
             assigned: RefCell::default(),
-            positional: Cell::new(false),
+            calls: RefCell::default(),
+            functions: RefCell::default(),
             integers: RefCell::default(),
         }
     }
@@ -337,7 +409,8 @@ impl Lower {
     fn taint(self) -> Taint {
         Taint::compute(
             &self.assigned.into_inner(),
-            self.positional.get(),
+            &self.calls.into_inner(),
+            &self.functions.into_inner(),
             self.integers.into_inner(),
         )
     }
@@ -349,11 +422,33 @@ impl Lower {
         }
     }
 
-    /// Record a value assigned to `name`.
-    fn assigned(&self, name: &str, value: &Word) {
-        self.assigned
-            .borrow_mut()
-            .push((name.to_string(), value_text(value)));
+    /// Record a value assigned to `name`; `append` for `name+=value`.
+    fn assigned(&self, name: &str, value: &Word, append: bool) {
+        self.record(name, value_text(value), &value.parts, append);
+    }
+
+    /// Record `text` assigned to `name`, with the parts that hold its expansions.
+    fn record(&self, name: &str, text: String, parts: &[WordPart], append: bool) {
+        let mut expansions: Vec<Option<String>> = Vec::new();
+        if append {
+            expansions.push(Some(name.to_string()));
+        }
+        for p in parts {
+            match p {
+                WordPart::Var(v) => expansions.push(
+                    v.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "_@*#?$!-".contains(c))
+                        .then(|| v.clone()),
+                ),
+                WordPart::Subst(_) | WordPart::Block(_) => expansions.push(None),
+                _ => {}
+            }
+        }
+        self.assigned.borrow_mut().push(Assigned {
+            name: name.to_string(),
+            text,
+            expansions,
+        });
     }
 
     /// Take `len` bytes of nested text from the budget.
@@ -524,6 +619,7 @@ impl Lower {
                 Ok(out)
             }
             ast::Command::Function(f) => {
+                self.functions.borrow_mut().insert(f.fname.value.clone());
                 let ast::FunctionBody(cc, redirects) = &f.body;
                 let pre = script(self.redirect_exprs(t, redirects.as_ref(), cx)?, Vec::new());
                 let body = match cc {
@@ -647,7 +743,7 @@ impl Lower {
                 let mut words = Vec::new();
                 for w in f.values.iter().flatten() {
                     let w = self.ast_word(t, w, span, cx)?;
-                    self.assigned(&f.variable_name, &w);
+                    self.assigned(&f.variable_name, &w, false);
                     words.push(w);
                 }
                 let mut out = expr_stmt(words);
@@ -809,12 +905,9 @@ impl Lower {
         };
         let runs_dynamic_text = runs_text && cmd.args.iter().skip(first_arg).any(Word::is_dynamic);
         // A function or `set` gets its positional parameters from the arguments.
-        if cmd
-            .args
-            .iter()
-            .any(|w| holds_code_subscript(&value_text(w)))
-        {
-            self.positional.set(true);
+        if let Some(target) = &target {
+            let args = cmd.args.iter().skip(first_arg).map(value_text).collect();
+            self.calls.borrow_mut().push((target.clone(), args));
         }
         self.declarations(&cmd, target.as_deref(), first_arg);
         self.evaluated_operands(&mut cmd, target.as_deref(), first_arg, cx)?;
@@ -835,15 +928,25 @@ impl Lower {
         ) {
             return;
         }
-        let texts: Vec<String> = cmd.args.iter().skip(first_arg).map(value_text).collect();
-        let integer = texts.iter().any(|v| v.starts_with('-') && v.contains('i'));
-        for v in texts.iter().filter(|v| !v.starts_with('-')) {
+        let words: Vec<(String, &Word)> = cmd
+            .args
+            .iter()
+            .skip(first_arg)
+            .map(|w| (value_text(w), w))
+            .collect();
+        let integer = words
+            .iter()
+            .any(|(v, _)| v.starts_with('-') && v.contains('i'));
+        for (v, w) in words.iter().filter(|(v, _)| !v.starts_with('-')) {
             let (name, value) = match v.split_once('=') {
                 Some((n, value)) => (n, Some(value)),
                 None => (v.as_str(), None),
             };
             let name = name.split('[').next().unwrap_or_default();
-            let name = name.strip_suffix('+').unwrap_or(name);
+            let (name, append) = match name.strip_suffix('+') {
+                Some(n) => (n, true),
+                None => (name, false),
+            };
             if integer {
                 self.integers.borrow_mut().insert(name.to_string());
             }
@@ -851,9 +954,8 @@ impl Lower {
                 if integer {
                     self.read_arith(value);
                 }
-                self.assigned
-                    .borrow_mut()
-                    .push((name.to_string(), value.to_string()));
+                // The operand's expansions all sit in the value: the name is literal.
+                self.record(name, value.to_string(), &w.parts, append);
             }
         }
     }
@@ -972,7 +1074,7 @@ impl Lower {
                     _ => Origin::Inexact(span),
                 };
                 let mut value = self.word_text(&w.value, origin, span, cx)?;
-                self.assigned(&name, &value);
+                self.assigned(&name, &value, a.append);
                 // A value assigned to an integer name is arithmetic.
                 if self.taint.integers.contains(&name) {
                     self.read_arith(&value_text(&value));
@@ -988,7 +1090,7 @@ impl Lower {
                         out.push((name.clone(), k));
                     }
                     let value = self.ast_word(t, value, span, cx)?;
-                    self.assigned(&name, &value);
+                    self.assigned(&name, &value, false);
                     out.push((name.clone(), value));
                 }
             }
@@ -1475,11 +1577,6 @@ fn subscripts(text: &str) -> Vec<&str> {
         out.push(&text[start..]);
     }
     out
-}
-
-/// Text holding a `[…]` subscript that runs a command when bash evaluates it.
-fn holds_code_subscript(text: &str) -> bool {
-    subscripts(text).iter().any(|s| runs_code(s))
 }
 
 /// The names in arithmetic text (`a[x+$y]` → `a`, `x`, `y`).

@@ -555,6 +555,22 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             "f() { declare -i n; n=\"$@\"; }; f 'a[$(rm -rf y)]'".to_string(),
             "<none>",
         ),
+        // Fragments joined into a subscript: by expansion, by `+=`, or with a value bash reads at
+        // run time.
+        (
+            "a='a['; b='$(rm -rf y)]'; n=$a$b; (( n ))".to_string(),
+            "((",
+        ),
+        ("n='a['; n+='$(rm -rf y)]'; (( n ))".to_string(), "(("),
+        ("read b < f; a='a['; n=$a$b; (( n ))".to_string(), "(("),
+        ("read b < f; n='a['; n+=$b; (( n ))".to_string(), "(("),
+        // A function call or `set` carries a tainted argument into `$1`, `$@`.
+        (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
+        (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
+        (
+            format!("{x}f() {{ declare -i n; n=\"$@\"; }}; f \"$x\""),
+            "<none>",
+        ),
         // A substitution after the read does not hide it.
         (format!("{x}echo ${{a[x]}} $(true)"), "echo"),
         // Every parameter operator keeps the subscript arithmetic.
@@ -603,10 +619,12 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             bad.push(format!("no opaque ((: {src}"));
         }
     }
-    // bash runs nothing here: no subscript in the value, a plain expansion, `unset`.
+    // bash runs nothing here: a plain expansion, `unset`, static fragments, an argument of a
+    // command that is not a function.
     for src in [
-        "x='$(rm -rf y)'; (( x ))".to_string(),
         format!("{x}echo ${{x:-d}}"),
+        "a=1; b=2; n=$a$b; (( n ))".to_string(),
+        format!("{x}echo \"$x\"; (( $1 ))"),
         format!("{x}unset 'a[x]'"),
         format!("{x}echo \"$x\""),
     ] {
@@ -970,6 +988,16 @@ fn long_flat_lists_parse() {
     assert!(src.len() > 60 * 1024, "{}", src.len());
     let s = ok(&src);
     assert!(commands(&s).last().unwrap().opaque, "copy chain");
+    // 64 KiB of copies of a value read at run time, last link first, then a join with it.
+    let n = 64 * 1024 / 14;
+    let mut src: String = (1..=n)
+        .rev()
+        .map(|i| format!("x{i}=$x{}; ", i - 1))
+        .collect();
+    src.push_str(&format!("read x0 < f; a=1; n=$a$x{n}; (( n ))"));
+    assert!(src.len() > 60 * 1024, "{}", src.len());
+    let s = ok(&src);
+    assert!(commands(&s).last().unwrap().opaque, "run-time copy chain");
 }
 
 // ---------- gap table ----------
