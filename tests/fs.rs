@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use shellwise::fs::resolve::{
-    Location, Target, critical_by_identity, critical_reason, env_view, mark_assigned, repo_root,
-    target,
+    Location, Target, UnknownKind, critical_by_identity, critical_reason, env_view, mark_assigned,
+    repo_root, target,
 };
 use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
 use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
@@ -89,6 +89,11 @@ fn far() -> Deadline {
 fn real() -> SharedFs {
     Arc::new(RealFs)
 }
+
+/// A target the hook cannot place that may be a critical folder under another name.
+const MAY_BE_CRITICAL: Target = Target::UnknownLocation(UnknownKind::MayBeCritical);
+/// A relative target in a folder a variable or substitution chose.
+const DYNAMIC_LOCATION: Target = Target::UnknownLocation(UnknownKind::Dynamic);
 
 fn paths(v: &[&str]) -> Target {
     Target::Paths(v.iter().map(PathBuf::from).collect())
@@ -575,13 +580,13 @@ fn windows_path_forms_resolve_as_the_shell_would() {
         (r"C:\x", paths(&[r"C:\x"])),
         ("C:/x/", paths(&[r"C:\x"])),
         (r"c:\x\.\y\..\z", paths(&[r"c:\x\z"])),
-        ("C:x", Target::UnknownLocation),
-        ("C:", Target::UnknownLocation),
+        ("C:x", MAY_BE_CRITICAL),
+        ("C:", MAY_BE_CRITICAL),
         (r"\\?\C:\x", paths(&[r"C:\x"])),
         (r"\\.\C:\x", paths(&[r"C:\x"])),
-        (r"\\?\UNC\srv\share\x", Target::UnknownLocation),
-        (r"\\srv\share\x", Target::UnknownLocation),
-        ("//srv/share/x", Target::UnknownLocation),
+        (r"\\?\UNC\srv\share\x", MAY_BE_CRITICAL),
+        (r"\\srv\share\x", MAY_BE_CRITICAL),
+        ("//srv/share/x", MAY_BE_CRITICAL),
         (r"sub\x", paths(&[r"C:\w\repo\sub\x"])),
         (r"..\..\..\..", paths(&[r"C:\"])),
         (r"\x", paths(&[r"C:\x"])),
@@ -595,27 +600,24 @@ fn windows_path_forms_resolve_as_the_shell_would() {
             paths(&[r"C:\x"]),
         ),
         (r"Temp:\x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
-        (r"HKCU:\Software\x", Target::UnknownLocation),
+        (r"HKCU:\Software\x", MAY_BE_CRITICAL),
         // NTFS stream forms name the folder itself (`rd /s` deletes it).
-        (r"C:\w\repo::$INDEX_ALLOCATION", Target::UnknownLocation),
-        (r"C:\w\repo:$I30:$INDEX_ALLOCATION", Target::UnknownLocation),
-        (r"~::$INDEX_ALLOCATION", Target::UnknownLocation),
-        (r"sub\f:stream", Target::UnknownLocation),
-        (r"f::$DATA", Target::UnknownLocation),
-        (r"C:\w\*::$INDEX_ALLOCATION", Target::UnknownLocation),
+        (r"C:\w\repo::$INDEX_ALLOCATION", MAY_BE_CRITICAL),
+        (r"C:\w\repo:$I30:$INDEX_ALLOCATION", MAY_BE_CRITICAL),
+        (r"~::$INDEX_ALLOCATION", MAY_BE_CRITICAL),
+        (r"sub\f:stream", MAY_BE_CRITICAL),
+        (r"f::$DATA", MAY_BE_CRITICAL),
+        (r"C:\w\*::$INDEX_ALLOCATION", MAY_BE_CRITICAL),
         // Aliases of local folders the critical check could not recognise.
-        (r"\\localhost\share\x", Target::UnknownLocation),
-        (r"\\127.0.0.1\share\x", Target::UnknownLocation),
-        (r"\\srv\C$\x", Target::UnknownLocation),
-        (r"\\srv", Target::UnknownLocation),
+        (r"\\localhost\share\x", MAY_BE_CRITICAL),
+        (r"\\127.0.0.1\share\x", MAY_BE_CRITICAL),
+        (r"\\srv\C$\x", MAY_BE_CRITICAL),
+        (r"\\srv", MAY_BE_CRITICAL),
         (
             r"\\?\Volume{0b1c2d3e-0000-4000-8000-000000000001}\x",
-            Target::UnknownLocation,
+            MAY_BE_CRITICAL,
         ),
-        (
-            r"\\?\GLOBALROOT\Device\HarddiskVolume1\x",
-            Target::UnknownLocation,
-        ),
+        (r"\\?\GLOBALROOT\Device\HarddiskVolume1\x", MAY_BE_CRITICAL),
         ("", paths(&[])),
     ];
     for (text, want) in cases {
@@ -634,9 +636,9 @@ fn git_bash_path_forms_map_msys_paths_to_windows_ones() {
         ("/c/", paths(&[r"C:\"])),
         ("/", paths(&["/"])),
         ("/tmp/x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
-        ("/usr/bin", Target::UnknownLocation),
+        ("/usr/bin", MAY_BE_CRITICAL),
         ("C:/x", paths(&[r"C:\x"])),
-        ("//srv/share/x", Target::UnknownLocation),
+        ("//srv/share/x", MAY_BE_CRITICAL),
         ("sub/x", paths(&[r"C:\w\repo\sub\x"])),
     ];
     for (text, want) in cases {
@@ -675,8 +677,8 @@ fn a_relative_path_without_a_location_is_unknown() {
     let shell = Shell::Pwsh;
     let loc = Location::new(shell, Os::Windows, None);
     let env = EnvView::new();
-    assert_eq!(resolve(&lit("x"), &loc, &env), Target::UnknownLocation);
-    assert_eq!(resolve(&lit(r"\x"), &loc, &env), Target::UnknownLocation);
+    assert_eq!(resolve(&lit("x"), &loc, &env), MAY_BE_CRITICAL);
+    assert_eq!(resolve(&lit(r"\x"), &loc, &env), MAY_BE_CRITICAL);
     assert_eq!(resolve(&lit(r"C:\x"), &loc, &env), paths(&[r"C:\x"]));
 }
 
@@ -712,7 +714,7 @@ fn dynamic_words_resolve_only_from_the_env_view() {
     assert_eq!(resolve(&pwd, &loc, &env), paths(&[r"C:\w\repo\x"]));
     // `$PWD` where the location is unknown.
     let nowhere = Location::new(Shell::Pwsh, Os::Windows, None);
-    assert_eq!(resolve(&pwd, &nowhere, &env), Target::UnknownLocation);
+    assert_eq!(resolve(&pwd, &nowhere, &env), MAY_BE_CRITICAL);
     // PowerShell's `~` without a known profile.
     assert_eq!(
         resolve(&lit(r"~\x"), &loc, &EnvView::new()),
@@ -780,7 +782,7 @@ fn globs_expand_against_the_folder_and_time_out_with_it() {
         let bracket = lit(&format!(r"{}\[a]1", t.root.display()));
         assert_eq!(resolve(&bracket, &elsewhere, &env), s(&["a1"]));
         let open = lit(&format!(r"{}\[a1", t.root.display()));
-        assert_eq!(resolve(&open, &elsewhere, &env), Target::UnknownLocation);
+        assert_eq!(resolve(&open, &elsewhere, &env), MAY_BE_CRITICAL);
     }
     // A glob in the middle of the path, the literal part around it kept as written.
     std::fs::create_dir(t.root.join("d1")).unwrap();
@@ -826,7 +828,7 @@ fn a_glob_over_a_folder_the_hook_cannot_list_is_unknown() {
     );
     assert_eq!(
         target(&w, &loc, &EnvView::new(), &fs, &far()),
-        Target::UnknownLocation
+        MAY_BE_CRITICAL
     );
 }
 
@@ -843,7 +845,7 @@ fn a_bash_dotdot_out_of_a_link_is_unknown() {
     };
     let out_of_link = format!("l{sep}..{sep}x");
     let out_of_dir = format!("sub{sep}..{sep}x");
-    assert_eq!(r(host_bash(), &out_of_link), Target::UnknownLocation);
+    assert_eq!(r(host_bash(), &out_of_link), MAY_BE_CRITICAL);
     assert_eq!(r(host_bash(), &out_of_dir), paths(&[&at("repo/x")]));
     if cfg!(windows) {
         // PowerShell and Win32 resolve `..` lexically.
@@ -875,7 +877,7 @@ fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
         loc.after(&stmt(mapping.clone(), Some(ChainOp::Seq)), &env);
         assert_eq!(
             resolve(&x, &loc, &env),
-            Target::UnknownLocation,
+            MAY_BE_CRITICAL,
             "{}",
             mapping.typed
         );
@@ -886,7 +888,7 @@ fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
             ],
             0,
         );
-        assert_eq!(resolve(&glob, &loc, &env), Target::UnknownLocation);
+        assert_eq!(resolve(&glob, &loc, &env), MAY_BE_CRITICAL);
     }
     let mut loc = base.clone();
     loc.after(&stmt(lits("net", &["view"]), Some(ChainOp::Seq)), &env);
@@ -966,7 +968,7 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
         for gone in ["t", r"t\j", r"t\other", "."] {
             assert_eq!(
                 resolve(&lit(gone), &loc, &env),
-                Target::UnknownLocation,
+                MAY_BE_CRITICAL,
                 "{name}: {gone}"
             );
         }
@@ -1027,7 +1029,7 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
         // A folder outside the repo: only "a link somewhere unknown" makes it unknown.
         assert_eq!(
             resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
-            Target::UnknownLocation,
+            MAY_BE_CRITICAL,
             "{}",
             vague.typed
         );
@@ -1043,13 +1045,50 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
     );
     assert_eq!(
         resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
-        Target::UnknownLocation
+        MAY_BE_CRITICAL
     );
     // An item type the hook cannot read counts as a link.
     let mut loc = base.clone();
     let dyn_kind = cmd("New-Item", vec![lit("-ItemType"), var("k"), lit(r"t\j")]);
     loc.after(&stmt(dyn_kind, seq), &env);
-    assert_eq!(resolve(&lit("t"), &loc, &env), Target::UnknownLocation);
+    assert_eq!(resolve(&lit("t"), &loc, &env), MAY_BE_CRITICAL);
+}
+
+#[test]
+fn an_unknown_target_that_may_name_a_critical_folder_says_so() {
+    let seq = Some(ChainOp::Seq);
+    let (base, env) = win(Shell::Pwsh);
+    // A share root may be this machine's drive root under another name.
+    assert_eq!(resolve(&lit(r"\\srv\share\"), &base, &env), MAY_BE_CRITICAL);
+    // `New-Item $f -Force; Remove-Item -Recurse -Force C:\`: the link may be anywhere.
+    let mut loc = base.clone();
+    loc.after(
+        &stmt(cmd("New-Item", vec![var("f"), lit("-Force")]), seq),
+        &env,
+    );
+    assert_eq!(resolve(&lit(r"C:\"), &loc, &env), MAY_BE_CRITICAL);
+    // A drive letter mapped earlier in the command.
+    let mut loc = base.clone();
+    loc.after(&stmt(lits("subst", &["X:", r"C:\Profiles\u"]), seq), &env);
+    assert_eq!(resolve(&lit(r"X:\"), &loc, &env), MAY_BE_CRITICAL);
+    // `rm -rf "$d"` stays a dynamic word.
+    let bash = Shell::Bash(BashProfile::GitBash);
+    let (bash_loc, bash_env) = win(bash);
+    let mut d = var("d");
+    d.quote = Quote::Double;
+    assert_eq!(resolve(&d, &bash_loc, &bash_env), Target::Dynamic(d.span));
+    // A relative target in a folder a variable chose: `cd $x; rm -rf ..`, `$PWD\x`.
+    let mut loc = base.clone();
+    loc.after(&stmt(cmd("cd", vec![var("x")]), seq), &env);
+    assert_eq!(resolve(&lit(".."), &loc, &env), DYNAMIC_LOCATION);
+    let pwd = word_at(
+        vec![
+            WordPart::Var("PWD".to_string()),
+            WordPart::Literal(r"\x".to_string()),
+        ],
+        0,
+    );
+    assert_eq!(resolve(&pwd, &loc, &env), DYNAMIC_LOCATION);
 }
 
 // ---------------------------------------------------------------- location
@@ -1137,25 +1176,34 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     let (base, env) = win(Shell::Pwsh);
     let rel = lit("y");
     let abs = lit(r"C:\abs");
-    let unknown_after = |stmts: Vec<Stmt>| {
+    let unknown_as = |want: Target, stmts: Vec<Stmt>| {
         let mut loc = base.clone();
         after_all(&mut loc, &script(stmts), &env);
-        assert_eq!(resolve(&rel, &loc, &env), Target::UnknownLocation);
+        assert_eq!(resolve(&rel, &loc, &env), want);
         assert_eq!(resolve(&abs, &loc, &env), paths(&[r"C:\abs"]));
     };
+    let unknown_after = |stmts: Vec<Stmt>| unknown_as(MAY_BE_CRITICAL, stmts);
     let seq = Some(ChainOp::Seq);
-    unknown_after(vec![stmt(cmd("cd", vec![var("x")]), seq)]);
+    // A folder a variable chose is as dynamic as the variable.
+    unknown_as(DYNAMIC_LOCATION, vec![stmt(cmd("cd", vec![var("x")]), seq)]);
+    let mut opaque = lits("x", &[]);
+    opaque.opaque = true;
+    unknown_as(DYNAMIC_LOCATION, vec![stmt(opaque, seq)]);
+    // Where both apply, the location may be critical.
+    unknown_after(vec![
+        stmt(cmd("cd", vec![var("x")]), seq),
+        stmt(lits("cd", &["sub*"]), seq),
+    ]);
     unknown_after(vec![stmt(lits("cd", &["-"]), seq)]);
     unknown_after(vec![stmt(lits("Set-Location", &[]), seq)]);
     unknown_after(vec![stmt(lits("cd", &["C:x"]), seq)]);
     unknown_after(vec![stmt(lits("cd", &["sub*"]), seq)]);
+    unknown_after(vec![stmt(lits("Set-Location", &["-Path:sub*"]), seq)]);
+    unknown_after(vec![stmt(lits("Invoke-Expression", &["cd sub"]), seq)]);
     unknown_after(vec![stmt(lits("cd", &["HKCU:\\x"]), seq)]);
     unknown_after(vec![stmt(lits("Set-Location", &["-Bogus", "x"]), seq)]);
     unknown_after(vec![stmt(lits("Pop-Location", &[]), seq)]);
     unknown_after(vec![stmt(lits(r".\cd.exe", &["sub"]), seq)]);
-    let mut opaque = lits("x", &[]);
-    opaque.opaque = true;
-    unknown_after(vec![stmt(opaque, seq)]);
     unknown_after(vec![Stmt::Loop {
         body: script(vec![stmt(lits("cd", &["sub"]), None)]),
         span: Span::default(),
@@ -1200,6 +1248,16 @@ fn bash_cd_without_an_argument_goes_home() {
     let mut loc = base.clone();
     loc.after(&stmt(lits("cd", &[]), Some(ChainOp::And)), &env);
     assert_eq!(resolve(&lit("y"), &loc, &env), paths(&[r"C:\Profiles\u\y"]));
+    // `HOME=… ; cd`: the folder comes from the assignment.
+    let mut assigned = env.clone();
+    mark_assigned(
+        &mut assigned,
+        &script(vec![stmt(assign("HOME", "/x"), None)]),
+        "",
+    );
+    let mut loc = base.clone();
+    loc.after(&stmt(lits("cd", &[]), Some(ChainOp::And)), &assigned);
+    assert_eq!(resolve(&lit("y"), &loc, &assigned), DYNAMIC_LOCATION);
     let mut loc = base.clone();
     loc.after(
         &stmt(lits("cd", &["-L", "--", "/c/a"]), Some(ChainOp::And)),
@@ -1209,7 +1267,7 @@ fn bash_cd_without_an_argument_goes_home() {
     // `cd -P` resolves `..` after links.
     let mut loc = base.clone();
     loc.after(&stmt(lits("cd", &["-P", "/c/a"]), Some(ChainOp::And)), &env);
-    assert_eq!(resolve(&lit("y"), &loc, &env), Target::UnknownLocation);
+    assert_eq!(resolve(&lit("y"), &loc, &env), MAY_BE_CRITICAL);
 }
 
 #[test]
@@ -1226,10 +1284,10 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
         loc.after(&stmt(lits("cd", &[to]), Some(ChainOp::And)), env);
         resolve(&lit("y"), &loc, env)
     };
-    assert_eq!(after_cd(&env, "sub"), Target::UnknownLocation);
+    assert_eq!(after_cd(&env, "sub"), MAY_BE_CRITICAL);
     assert_eq!(after_cd(&env, "./sub"), paths(&[r"C:\w\repo\sub\y"]));
     // `.hidden` is searched in CDPATH like any other relative name.
-    assert_eq!(after_cd(&env, ".hidden"), Target::UnknownLocation);
+    assert_eq!(after_cd(&env, ".hidden"), MAY_BE_CRITICAL);
     // The same name split over two literal parts.
     let split = word_at(
         vec![
@@ -1240,7 +1298,7 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
     );
     let mut loc = base.clone();
     loc.after(&stmt(cmd("cd", vec![split]), Some(ChainOp::And)), &env);
-    assert_eq!(resolve(&lit("y"), &loc, &env), Target::UnknownLocation);
+    assert_eq!(resolve(&lit("y"), &loc, &env), MAY_BE_CRITICAL);
     // `.` followed by a variable is no `.`.
     let dot_var = word_at(
         vec![
@@ -1251,7 +1309,7 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
     );
     let mut loc = base.clone();
     loc.after(&stmt(cmd("cd", vec![dot_var]), Some(ChainOp::And)), &env);
-    assert_eq!(resolve(&lit("y"), &loc, &env), Target::UnknownLocation);
+    assert_eq!(resolve(&lit("y"), &loc, &env), MAY_BE_CRITICAL);
     // `$CDPATH` never resolves to the hook's own value.
     let w = var("CDPATH");
     let loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));
@@ -1263,7 +1321,7 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
         &script(vec![stmt(assign("CDPATH", "/x"), None)]),
         "",
     );
-    assert_eq!(after_cd(&plain, "sub"), Target::UnknownLocation);
+    assert_eq!(after_cd(&plain, "sub"), MAY_BE_CRITICAL);
 }
 
 #[test]
@@ -1282,16 +1340,13 @@ fn bodies_that_run_later_or_repeatedly_start_at_an_unknown_location() {
     let y = lit("y");
     assert_eq!(
         resolve(&y, &base.inner(&lp(cd_body)), &env),
-        Target::UnknownLocation
+        MAY_BE_CRITICAL
     );
     assert_eq!(
         resolve(&y, &base.inner(&lp(plain_body.clone())), &env),
         paths(&[r"C:\w\repo\y"])
     );
-    assert_eq!(
-        resolve(&y, &base.inner(&func), &env),
-        Target::UnknownLocation
-    );
+    assert_eq!(resolve(&y, &base.inner(&func), &env), MAY_BE_CRITICAL);
     assert_eq!(
         resolve(&y, &base.inner(&Stmt::Block(plain_body)), &env),
         paths(&[r"C:\w\repo\y"])
@@ -1336,16 +1391,17 @@ fn git_dash_c_moves_the_location_for_that_command_only() {
         resolve(&y, &git(vec![lit("clean"), lit("-C"), lit(r"C:\a")]), &env),
         paths(&[r"C:\w\repo\y"])
     );
-    for args in [
-        vec![lit("-C"), var("x"), lit("clean")],
-        vec![lit("--work-tree=x"), lit("clean")],
-        vec![lit("--git-dir"), lit("x"), lit("clean")],
+    for (args, want) in [
+        (vec![lit("-C"), var("x"), lit("clean")], DYNAMIC_LOCATION),
+        (vec![var("opts"), lit("clean")], DYNAMIC_LOCATION),
+        (vec![lit("-C")], MAY_BE_CRITICAL),
+        (vec![lit("--work-tree=x"), lit("clean")], MAY_BE_CRITICAL),
+        (
+            vec![lit("--git-dir"), lit("x"), lit("clean")],
+            MAY_BE_CRITICAL,
+        ),
     ] {
-        assert_eq!(
-            resolve(&y, &git(args.clone()), &env),
-            Target::UnknownLocation,
-            "{args:?}"
-        );
+        assert_eq!(resolve(&y, &git(args.clone()), &env), want, "{args:?}");
     }
     assert_eq!(resolve(&y, &base, &env), paths(&[r"C:\w\repo\y"]));
 }

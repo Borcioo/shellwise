@@ -302,14 +302,15 @@ pub fn repo_root(
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Dirs {
     known: Vec<String>,
-    unknown: bool,
+    /// The command may be somewhere unknown, and why.
+    unknown: Option<UnknownKind>,
 }
 
 impl Dirs {
-    fn unknown() -> Dirs {
+    fn unknown(kind: UnknownKind) -> Dirs {
         Dirs {
             known: Vec::new(),
-            unknown: true,
+            unknown: Some(kind),
         }
     }
 
@@ -319,7 +320,7 @@ impl Dirs {
                 self.known.push(d.clone());
             }
         }
-        self.unknown |= other.unknown;
+        self.unknown = self.unknown.max(other.unknown);
     }
 }
 
@@ -507,9 +508,9 @@ impl Location {
         let dirs = match cwd.map(|c| Canon::parse(&c.to_string_lossy(), os)) {
             Some(c) if c.rooted && (os == Os::Posix || !c.prefix.is_empty()) => Dirs {
                 known: vec![c.render()],
-                unknown: false,
+                unknown: None,
             },
-            _ => Dirs::unknown(),
+            _ => Dirs::unknown(UnknownKind::MayBeCritical),
         };
         Location {
             shell,
@@ -534,10 +535,19 @@ impl Location {
 
     /// The candidate folders, `None` when one of them is unknown.
     pub fn dirs(&self) -> Option<Vec<PathBuf>> {
-        if self.dirs.unknown {
+        if self.dirs.unknown.is_some() {
             return None;
         }
         Some(self.dirs.known.iter().map(PathBuf::from).collect())
+    }
+
+    /// The kind of an unknown `fail` gives, read in this location.
+    fn kind_of(&self, fail: Fail) -> UnknownKind {
+        match fail {
+            Fail::Dynamic => UnknownKind::Dynamic,
+            Fail::Unknown => UnknownKind::MayBeCritical,
+            Fail::NoLocation => self.dirs.unknown.unwrap_or(UnknownKind::MayBeCritical),
+        }
     }
 
     fn with_dirs(&self, dirs: Dirs) -> Location {
@@ -570,9 +580,9 @@ impl Location {
         for l in links {
             let d = match l {
                 Some(w) => self.dir_from_word(w, env),
-                None => Dirs::unknown(),
+                None => Dirs::unknown(UnknownKind::MayBeCritical),
             };
-            self.new_link_unknown |= d.unknown;
+            self.new_link_unknown |= d.unknown.is_some();
             self.new_links.extend(d.known);
         }
         match stmt {
@@ -586,7 +596,7 @@ impl Location {
 
     fn after_nested(&mut self, changes: bool) {
         if changes {
-            self.dirs = Dirs::unknown();
+            self.dirs = Dirs::unknown(UnknownKind::MayBeCritical);
         }
         self.end_chain(Some(ChainOp::Seq));
     }
@@ -612,7 +622,7 @@ impl Location {
             }
         }
         if p.elems.iter().any(elem_nests_location_change) {
-            changed = Some(Dirs::unknown());
+            changed = Some(Dirs::unknown(UnknownKind::MayBeCritical));
         }
         if let Some(new) = changed {
             if certain {
@@ -630,8 +640,10 @@ impl Location {
     /// a loop whose body moves (the next pass starts where the last one ended).
     pub fn inner(&self, stmt: &Stmt) -> Location {
         match stmt {
-            Stmt::Func { .. } => self.with_dirs(Dirs::unknown()),
-            Stmt::Loop { body, .. } if changes_location(body) => self.with_dirs(Dirs::unknown()),
+            Stmt::Func { .. } => self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical)),
+            Stmt::Loop { body, .. } if changes_location(body) => {
+                self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
+            }
             _ => self.with_dirs(self.dirs.clone()),
         }
     }
@@ -643,7 +655,7 @@ impl Location {
         let mut i = 0;
         while i < args.len() {
             let Some(t) = literal(&args[i]) else {
-                return loc.with_dirs(Dirs::unknown());
+                return loc.with_dirs(Dirs::unknown(UnknownKind::Dynamic));
             };
             if !t.starts_with('-') {
                 break;
@@ -652,15 +664,17 @@ impl Location {
                 "-C" => {
                     let d = match args.get(i + 1) {
                         Some(w) => loc.dir_from_word(w, env),
-                        None => Dirs::unknown(),
+                        None => Dirs::unknown(UnknownKind::MayBeCritical),
                     };
                     loc.dirs = d;
                     i += 2;
                 }
                 "-c" | "--namespace" | "--config-env" => i += 2,
-                "--git-dir" | "--work-tree" => return loc.with_dirs(Dirs::unknown()),
+                "--git-dir" | "--work-tree" => {
+                    return loc.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical));
+                }
                 _ if t.starts_with("--git-dir=") || t.starts_with("--work-tree=") => {
-                    return loc.with_dirs(Dirs::unknown());
+                    return loc.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical));
                 }
                 _ => i += 1,
             }
@@ -671,7 +685,7 @@ impl Location {
     /// The folders after `c` when it changes the location, else `None`.
     fn apply(&mut self, c: &SimpleCommand, env: &EnvView, certain: bool) -> Option<Dirs> {
         if c.opaque {
-            return Some(Dirs::unknown());
+            return Some(Dirs::unknown(UnknownKind::Dynamic));
         }
         let raw = c
             .canonical
@@ -680,7 +694,7 @@ impl Location {
             .to_ascii_lowercase();
         if raw != command_name(c) && is_location_command(c) {
             // `.\cd.exe`, `/usr/bin/cd`: not the builtin, but nothing proves what it does.
-            return Some(Dirs::unknown());
+            return Some(Dirs::unknown(UnknownKind::MayBeCritical));
         }
         match command_name(c).as_str() {
             "cd" | "chdir" | "sl" | "set-location" => Some(self.set_location(c, env, false)),
@@ -700,9 +714,11 @@ impl Location {
                         certain: true,
                     }),
                 ) => dirs,
-                _ => Dirs::unknown(),
+                _ => Dirs::unknown(UnknownKind::MayBeCritical),
             }),
-            "source" | "." | "eval" | "invoke-expression" | "iex" => Some(Dirs::unknown()),
+            "source" | "." | "eval" | "invoke-expression" | "iex" => {
+                Some(Dirs::unknown(UnknownKind::MayBeCritical))
+            }
             _ => None,
         }
     }
@@ -745,14 +761,14 @@ impl Location {
                     };
                 let cdpath = env.get(CDPATH_SEEN).is_some() || env.is_assigned("CDPATH");
                 if wild || (searched && cdpath) {
-                    Dirs::unknown()
+                    Dirs::unknown(UnknownKind::MayBeCritical)
                 } else {
                     self.dir_from_word(w, env)
                 }
             }
             LocArg::Text(t) => {
                 if pwsh && t.contains(['*', '?', '[']) {
-                    Dirs::unknown()
+                    Dirs::unknown(UnknownKind::MayBeCritical)
                 } else {
                     self.dir_from_segs(&[Seg::lit(&t)], env)
                 }
@@ -760,9 +776,10 @@ impl Location {
             LocArg::LiteralText(t) => self.dir_from_segs(&[Seg::lit(&t)], env),
             LocArg::Home => match env.home() {
                 Some(h) => self.dir_from_segs(&[Seg::lit(h)], env),
-                None => Dirs::unknown(),
+                // `HOME` is assigned in the command.
+                None => Dirs::unknown(UnknownKind::Dynamic),
             },
-            LocArg::Unknown => Dirs::unknown(),
+            LocArg::Unknown => Dirs::unknown(UnknownKind::MayBeCritical),
         }
     }
 
@@ -775,12 +792,12 @@ impl Location {
                     match absolutize(&text, base, self.shell, self.os, env) {
                         Ok(p) => out.union(&Dirs {
                             known: vec![p],
-                            unknown: false,
+                            unknown: None,
                         }),
-                        Err(_) => return Dirs::unknown(),
+                        Err(f) => return Dirs::unknown(self.kind_of(f)),
                     }
                 }
-                Err(_) => return Dirs::unknown(),
+                Err(f) => return Dirs::unknown(self.kind_of(f)),
             }
         }
         out
@@ -793,9 +810,9 @@ impl Location {
             match absolutize(&text, base, self.shell, self.os, env) {
                 Ok(p) => out.union(&Dirs {
                     known: vec![p],
-                    unknown: false,
+                    unknown: None,
                 }),
-                Err(_) => return Dirs::unknown(),
+                Err(f) => return Dirs::unknown(self.kind_of(f)),
             }
         }
         out
@@ -804,7 +821,7 @@ impl Location {
     /// Every candidate folder; `None` stands for the unknown one.
     fn bases(&self) -> Vec<Option<&str>> {
         let mut v: Vec<Option<&str>> = self.dirs.known.iter().map(|d| Some(d.as_str())).collect();
-        if self.dirs.unknown {
+        if self.dirs.unknown.is_some() {
             v.push(None);
         }
         v
@@ -1300,9 +1317,23 @@ pub enum Target {
     /// A part of the word cannot be known before the command runs.
     Dynamic(Span),
     /// A relative path where the location is unknown, or a path form the hook cannot place.
-    UnknownLocation,
+    UnknownLocation(UnknownKind),
     /// The deadline passed while expanding the word.
     Timeout,
+}
+
+/// Why a target is unknown, which decides its level. Ordered: where both apply,
+/// `MayBeCritical` wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UnknownKind {
+    /// The location comes from a variable or substitution (`cd $x`): `dynamic-target`, like a
+    /// dynamic word.
+    Dynamic,
+    /// The hook cannot tell which folder the path names, and it may be a drive root, the home
+    /// folder or the repo root under another name: a share or volume path, a remapped drive, a
+    /// tree an earlier statement links, a location the hook cannot follow. Reported as
+    /// critical, so the allow marker cannot lower it.
+    MayBeCritical,
 }
 
 #[derive(Debug, Clone)]
@@ -1323,7 +1354,10 @@ impl Seg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fail {
     Dynamic,
+    /// A path the hook cannot place or compare.
     Unknown,
+    /// A relative path, and the folder it is relative to is unknown: as unknown as that folder.
+    NoLocation,
 }
 
 fn is_pwd(name: &str, shell: Shell) -> bool {
@@ -1370,7 +1404,7 @@ fn expand(w: &Word, env: &EnvView, shell: Shell, pwd: Option<&str>) -> Result<Ve
                 if env.is_assigned(name) {
                     return Err(Fail::Dynamic);
                 }
-                out.push(Seg::lit(pwd.ok_or(Fail::Unknown)?));
+                out.push(Seg::lit(pwd.ok_or(Fail::NoLocation)?));
             }
             WordPart::Var(name) => out.push(Seg::lit(env.get(name).ok_or(Fail::Dynamic)?)),
             WordPart::Tilde => out.push(Seg::lit(env.home().ok_or(Fail::Dynamic)?)),
@@ -1403,7 +1437,7 @@ fn absolutize(
         }
     }
     let join = |base: Option<&str>, rel: &str| -> Result<String, Fail> {
-        let b = base.ok_or(Fail::Unknown)?;
+        let b = base.ok_or(Fail::NoLocation)?;
         let sep = if os == Os::Windows { '\\' } else { '/' };
         Ok(canonical(&format!("{b}{sep}{rel}"), os))
     };
@@ -1705,7 +1739,7 @@ pub fn target(
         let segs = match expand(word, env, loc.shell, base) {
             Ok(s) => s,
             Err(Fail::Dynamic) => return Target::Dynamic(word.span),
-            Err(Fail::Unknown) => return Target::UnknownLocation,
+            Err(f) => return Target::UnknownLocation(loc.kind_of(f)),
         };
         if segs.iter().all(|s| s.text.is_empty()) {
             return Target::Paths(Vec::new());
@@ -1713,7 +1747,7 @@ pub fn target(
         match plan(&segs, base, loc, env) {
             Ok(p) => plans.push(p),
             Err(Fail::Dynamic) => return Target::Dynamic(word.span),
-            Err(Fail::Unknown) => return Target::UnknownLocation,
+            Err(f) => return Target::UnknownLocation(loc.kind_of(f)),
         }
     }
     let os = loc.os;
@@ -1738,7 +1772,9 @@ pub fn target(
         };
         match bounded(deadline, run) {
             Ok(Ok(v)) => v,
-            Ok(Err(PlanErr::Unknown)) => return Target::UnknownLocation,
+            Ok(Err(PlanErr::Unknown)) => {
+                return Target::UnknownLocation(UnknownKind::MayBeCritical);
+            }
             _ => return Target::Timeout,
         }
     } else {
@@ -1751,7 +1787,7 @@ pub fn target(
         all
     };
     if paths.iter().any(|p| loc.near_new_link(p)) {
-        return Target::UnknownLocation;
+        return Target::UnknownLocation(UnknownKind::MayBeCritical);
     }
     Target::Paths(paths.into_iter().map(PathBuf::from).collect())
 }
