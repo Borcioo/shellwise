@@ -1,0 +1,63 @@
+# Destructive commands: the delete family and the git discard family.
+#
+# One table drives the raw-text destructive scan (fail-closed paths), the delete/discard matchers
+# and tools/corpus/extract.py. Keep it to the schema below; readers reject anything else.
+#
+# [[command]]
+# names        = ["rm", ...]   command names, matched case-insensitively against a simple command's
+#                              first words. A name with spaces ("git reset") matches that many words;
+#                              for git, global options before the subcommand (-C <dir>, -c <k=v>,
+#                              --git-dir=<dir>, ...) are skipped. A path or `.exe` on the first word
+#                              is ignored (`/usr/bin/rm`, `git.exe`).
+# shells       = ["bash", ...] where the name applies: "bash", "pwsh" or "cmd" (the cmd.exe body of
+#                              `cmd /c ...`).
+# requires_any = ["--hard"]    the command counts only when one of its later words matches one of
+#                              these; [] means always. "--long" matches the word or "--long=<v>"; a
+#                              bash short flag "-f" also matches inside a cluster ("-fd"); "/s"
+#                              matches case-insensitively; any other entry ("--", ".") matches the
+#                              word exactly.
+
+[[command]]
+names = ["rm", "rmdir", "unlink", "shred"]
+shells = ["bash"]
+requires_any = []
+
+[[command]]
+names = ["Remove-Item", "ri", "rm", "rmdir", "rd", "del", "erase", "Clear-Content"]
+shells = ["pwsh"]
+requires_any = []
+
+[[command]]
+names = ["[IO.Directory]::Delete", "[System.IO.Directory]::Delete", "[IO.File]::Delete", "[System.IO.File]::Delete"]
+shells = ["pwsh"]
+requires_any = []
+
+[[command]]
+names = ["rd", "rmdir", "del", "erase"]
+shells = ["cmd"]
+requires_any = []
+
+[[command]]
+names = ["robocopy"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = ["/mir", "/purge"]
+
+[[command]]
+names = ["git clean"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = ["-f", "--force"]
+
+[[command]]
+names = ["git reset"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = ["--hard", "--merge", "--keep"]
+
+[[command]]
+names = ["git checkout"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = ["--", ".", "-f", "--force"]
+
+[[command]]
+names = ["git restore", "git worktree remove", "git stash drop", "git stash clear"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = []
