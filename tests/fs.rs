@@ -940,6 +940,7 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     unknown_after(vec![stmt(lits("cd", &["HKCU:\\x"]), seq)]);
     unknown_after(vec![stmt(lits("Set-Location", &["-Bogus", "x"]), seq)]);
     unknown_after(vec![stmt(lits("Pop-Location", &[]), seq)]);
+    unknown_after(vec![stmt(lits(r".\cd.exe", &["sub"]), seq)]);
     let mut opaque = lits("x", &[]);
     opaque.opaque = true;
     unknown_after(vec![stmt(opaque, seq)]);
@@ -1017,6 +1018,28 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
     assert_eq!(after_cd(&env, "./sub"), paths(&[r"C:\w\repo\sub\y"]));
     // `.hidden` is searched in CDPATH like any other relative name.
     assert_eq!(after_cd(&env, ".hidden"), Target::UnknownLocation);
+    // The same name split over two literal parts.
+    let split = word_at(
+        vec![
+            WordPart::Literal(".".to_string()),
+            WordPart::Literal("hidden".to_string()),
+        ],
+        0,
+    );
+    let mut loc = base.clone();
+    loc.after(&stmt(cmd("cd", vec![split]), Some(ChainOp::And)), &env);
+    assert_eq!(resolve(&lit("y"), &loc, &env), Target::UnknownLocation);
+    // `.` followed by a variable is no `.`.
+    let dot_var = word_at(
+        vec![
+            WordPart::Literal(".".to_string()),
+            WordPart::Var("USERPROFILE".to_string()),
+        ],
+        0,
+    );
+    let mut loc = base.clone();
+    loc.after(&stmt(cmd("cd", vec![dot_var]), Some(ChainOp::And)), &env);
+    assert_eq!(resolve(&lit("y"), &loc, &env), Target::UnknownLocation);
     // `$CDPATH` never resolves to the hook's own value.
     let w = var("CDPATH");
     let loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));

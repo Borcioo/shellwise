@@ -455,6 +455,15 @@ impl Location {
         if c.opaque {
             return Some(Dirs::unknown());
         }
+        let raw = c
+            .canonical
+            .as_deref()
+            .unwrap_or(&c.typed)
+            .to_ascii_lowercase();
+        if raw != command_name(c) && is_location_command(c) {
+            // `.\cd.exe`, `/usr/bin/cd`: not the builtin, but nothing proves what it does.
+            return Some(Dirs::unknown());
+        }
         match command_name(c).as_str() {
             "cd" | "chdir" | "sl" | "set-location" => Some(self.set_location(c, env, false)),
             "pushd" | "push-location" => {
@@ -495,17 +504,26 @@ impl Location {
                     _ => false,
                 });
                 // Bash looks a relative name up in CDPATH first.
-                let searched = !pwsh
-                    && match w.parts.first() {
-                        Some(WordPart::Literal(s)) => {
-                            !(s.starts_with('/')
-                                || s == "."
-                                || s == ".."
-                                || s.starts_with("./")
-                                || s.starts_with("../"))
-                        }
-                        Some(WordPart::Tilde) => false,
-                        _ => true,
+                let searched =
+                    !pwsh && !w.parts.first().is_some_and(|p| *p == WordPart::Tilde) && {
+                        // The literal text the word starts with, and whether anything follows it.
+                        let lits = w
+                            .parts
+                            .iter()
+                            .take_while(|p| matches!(p, WordPart::Literal(_)))
+                            .count();
+                        let head: String = w.parts[..lits]
+                            .iter()
+                            .map(|p| match p {
+                                WordPart::Literal(s) => s.as_str(),
+                                _ => "",
+                            })
+                            .collect();
+                        let whole = lits == w.parts.len();
+                        !(head.starts_with('/')
+                            || head.starts_with("./")
+                            || head.starts_with("../")
+                            || (whole && (head == "." || head == "..")))
                     };
                 let cdpath = env.get(CDPATH_SEEN).is_some() || env.is_assigned("CDPATH");
                 if wild || (searched && cdpath) {
