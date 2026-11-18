@@ -769,7 +769,7 @@ fn windows_path_forms_resolve_as_the_shell_would() {
             paths(&[r"C:\x"]),
         ),
         (r"Temp:\x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
-        (r"HKCU:\Software\x", MAY_BE_CRITICAL),
+        (r"HKCU:\Software\x", Target::NotAFile),
         // NTFS stream forms name the folder itself (`rd /s` deletes it).
         (r"C:\w\repo::$INDEX_ALLOCATION", MAY_BE_CRITICAL),
         (r"C:\w\repo:$I30:$INDEX_ALLOCATION", MAY_BE_CRITICAL),
@@ -1372,6 +1372,98 @@ fn an_unknown_target_that_may_name_a_critical_folder_says_so() {
         0,
     );
     assert_eq!(resolve(&pwd, &loc, &env), DYNAMIC_LOCATION);
+}
+
+#[test]
+fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
+    let seq = Some(ChainOp::Seq);
+    let (base, env) = win(Shell::Pwsh);
+    let mut bad: Vec<String> = Vec::new();
+    let mut expect = |got: Target, want: &Target, label: String| {
+        if &got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    };
+    // Every built-in drive whose provider is no file system, in any case and path form.
+    let not_files = [
+        "Env:FOO",
+        "env:foo",
+        r"Env:\FOO",
+        "Env:/FOO",
+        "Env:FOO*",
+        "Env:",
+        "Variable:x",
+        r"variable:\x*",
+        "Function:f",
+        "Alias:a",
+        r"Cert:\CurrentUser\My\x",
+        r"HKCU:\Software\x",
+        r"hklm:\SOFTWARE\x",
+        r"WSMan:\localhost\x",
+    ];
+    for text in not_files {
+        expect(
+            resolve(&lit(text), &base, &env),
+            &Target::NotAFile,
+            text.to_string(),
+        );
+    }
+    // The location does not matter: `Pop-Location; Remove-Item Env:X`, `cd $x; …`, `cd $x && …`.
+    for (label, before) in [
+        ("Pop-Location;", stmt(lits("Pop-Location", &[]), seq)),
+        ("cd $x;", stmt(cmd("cd", vec![var("x")]), seq)),
+        (
+            "cd $x &&",
+            stmt(cmd("cd", vec![var("x")]), Some(ChainOp::And)),
+        ),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&before, &env);
+        expect(
+            resolve(&lit("Env:FOO"), &loc, &env),
+            &Target::NotAFile,
+            format!("{label} Env:FOO"),
+        );
+    }
+    // A drive name PowerShell does not build in may be a profile's file-system drive.
+    for text in [r"Proj:\x", r"Environment:\x", r"HKCC:\x"] {
+        expect(
+            resolve(&lit(text), &base, &env),
+            &MAY_BE_CRITICAL,
+            text.to_string(),
+        );
+    }
+    // `Remove-PSDrive Env; New-PSDrive Env -PSProvider FileSystem -Root C:\` maps the name to
+    // the file system (pwsh 7.7 accepts it).
+    let mut loc = base.clone();
+    loc.after(
+        &stmt(
+            lits(
+                "New-PSDrive",
+                &["Env", "-PSProvider", "FileSystem", "-Root", r"C:\"],
+            ),
+            seq,
+        ),
+        &env,
+    );
+    expect(
+        resolve(&lit("Env:FOO"), &loc, &env),
+        &MAY_BE_CRITICAL,
+        "New-PSDrive; Env:FOO".to_string(),
+    );
+    // In bash `Env:FOO` is a file `Env` with a stream.
+    let (bash_loc, bash_env) = win(Shell::Bash(BashProfile::GitBash));
+    expect(
+        resolve(&lit("Env:FOO"), &bash_loc, &bash_env),
+        &MAY_BE_CRITICAL,
+        "bash Env:FOO".to_string(),
+    );
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }
 
 #[test]

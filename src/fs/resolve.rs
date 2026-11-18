@@ -804,7 +804,7 @@ impl Location {
     fn kind_of(&self, fail: Fail) -> UnknownKind {
         match fail {
             Fail::Dynamic => UnknownKind::Dynamic,
-            Fail::Unknown => UnknownKind::MayBeCritical,
+            Fail::Unknown | Fail::NotAFile => UnknownKind::MayBeCritical,
             // A known candidate is dropped with the unknown one (`cd $x; rm -rf ..` from the
             // repo root), and it may be critical.
             Fail::NoLocation if !self.dirs.known.is_empty() => UnknownKind::MayBeCritical,
@@ -1752,6 +1752,9 @@ pub enum Target {
     Dynamic(Span),
     /// A relative path where the location is unknown, or a path form the hook cannot place.
     UnknownLocation(UnknownKind),
+    /// A path on a built-in PowerShell drive that is no file system (`Env:FOO`, `HKCU:\x`):
+    /// no file target, so the delete rule leaves it to other rules.
+    NotAFile,
     /// The deadline passed while expanding the word.
     Timeout,
 }
@@ -1792,6 +1795,19 @@ enum Fail {
     Unknown,
     /// A relative path, and the folder it is relative to is unknown: as unknown as that folder.
     NoLocation,
+    /// A path on a built-in PowerShell drive that is no file system.
+    NotAFile,
+}
+
+/// The built-in PowerShell drives whose provider is no file system.
+const NON_FS_DRIVES: [&str; 8] = [
+    "env", "variable", "function", "alias", "cert", "hkcu", "hklm", "wsman",
+];
+
+/// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`).
+fn on_non_fs_drive(text: &str) -> bool {
+    text.split_once(':')
+        .is_some_and(|(drive, _)| NON_FS_DRIVES.iter().any(|d| drive.eq_ignore_ascii_case(d)))
 }
 
 fn is_pwd(name: &str, shell: Shell) -> bool {
@@ -2010,6 +2026,9 @@ fn split_comps(segs: &[Seg], os: Os) -> Vec<Vec<Seg>> {
 
 fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Result<Plan, Fail> {
     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
+    if matches!(loc.shell, Shell::Pwsh | Shell::Powershell5) && on_non_fs_drive(&text) {
+        return Err(Fail::NotAFile);
+    }
     let link_free = dotdot_prefixes(&text, base, loc, env)?;
     if !segs.iter().any(|s| s.glob) {
         let whole = absolutize(&text, base, loc.shell, loc.os, env)?;
@@ -2181,6 +2200,8 @@ pub fn target(
         match plan(&segs, base, loc, env) {
             Ok(p) => plans.push(p),
             Err(Fail::Dynamic) => return Target::Dynamic(word.span),
+            // `New-PSDrive Env -PSProvider FileSystem` may have mapped the name to a folder.
+            Err(Fail::NotAFile) if !loc.remapped => return Target::NotAFile,
             Err(f) => return Target::UnknownLocation(loc.kind_of(f)),
         }
     }
