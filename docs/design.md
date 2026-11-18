@@ -176,7 +176,8 @@ The highest finding wins; all findings are listed. Exit 64+ is a usage or intern
   deadline) → `danger` (`analysis-failed`), unless the whole raw text matches the harmless grammar:
   no shell metacharacter (``; & | < > ( ) $ ` \ " ' { } [ ] * ? ~ #``, newline) and a first word
   from a short read-only list (`ls`, `cat`, `echo`, `pwd`, `git status|log|diff|show`, `grep`,
-  `rg`, `head`, `tail`, `wc`, `which`, `type`, `<tool> --version`). The raw-text scan only names
+  `head`, `tail`, `wc`, `which`, `type`) with no later word starting with `-`, or a sole
+  `--version` after `git`, `cargo`, `rustc`, `node`, `npm`, `python` or `pwsh`. The raw-text scan only names
   the destructive command in the reason; it never clears a command. The allow marker is matched in
   the raw text on this path (the parse that fills `Script.comments` failed). Measured on the
   corpus: 2 of 22,346 bash rows (0.009 %) fall on this path without being shell syntax errors.
