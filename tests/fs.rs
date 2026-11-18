@@ -935,6 +935,24 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
             bash,
             lits("ln", &["--symbolic", r"C:\x", "t/j"]),
         ),
+        // The provider accepts a prefix or a wildcard of the item type.
+        (
+            "New-Item -ItemType junc",
+            ps,
+            lits("New-Item", &["-ItemType", "junc", "-Path", r"t\j"]),
+        ),
+        (
+            "New-Item -ItemType sym*",
+            ps,
+            lits("New-Item", &["-ItemType", "sym*", r"t\j"]),
+        ),
+        ("ln --sym", bash, lits("ln", &["--sym", r"C:\x", "t/j"])),
+        // An empty item type is no proven folder or file.
+        (
+            "New-Item -ItemType ''",
+            ps,
+            lits("New-Item", &["-ItemType", "", r"t\j"]),
+        ),
     ];
     for (name, shell, link) in rows {
         let (base, env) = win(shell);
@@ -963,6 +981,14 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
     for plain in [
         lits("New-Item", &["-ItemType", "Directory", "-Path", r"t\j"]),
         lits("ln", &[r"C:\x", "t/j"]),
+        // Provably a folder or a file.
+        lits("New-Item", &["-ItemType", "dir", "-Path", r"t\j"]),
+        lits("New-Item", &["-ItemType", "F", r"t\j"]),
+        cmd(
+            "New-Item",
+            vec![lit("-ItemType"), lit("Directory"), var("p")],
+        ),
+        lits("New-Item", &[r"t\j"]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(plain.clone(), seq), &env);
@@ -985,12 +1011,20 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
         ),
         lits("ln", &["-s", r"C:\x"]),
         cmd("mklink", vec![lit("/J"), var("x"), lit(r"C:\x")]),
+        // `-t`/`--target-directory` and options the hook does not model place it elsewhere.
+        lits("ln", &["-s", "-t", "d", r"C:\x"]),
+        lits("ln", &["-st", "d", r"C:\x"]),
+        lits("ln", &["--target-directory=d", "-s", r"C:\x"]),
+        lits("ln", &["-s", "--suffix=~", r"C:\x", "t/j"]),
+        // A splat or a variable may carry `-ItemType Junction`.
+        cmd("New-Item", vec![var("p")]),
+        cmd("New-Item", vec![lit(r"t\j"), var("opts")]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(vague.clone(), seq), &env);
         // A folder outside the repo: only "a link somewhere unknown" makes it unknown.
         assert_eq!(
-            resolve(&lit(r"C:\elsewhere\u"), &loc, &env),
+            resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
             Target::UnknownLocation,
             "{}",
             vague.typed
@@ -1006,7 +1040,7 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
         &env,
     );
     assert_eq!(
-        resolve(&lit(r"C:\elsewhere\u"), &loc, &env),
+        resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
         Target::UnknownLocation
     );
     // An item type the hook cannot read counts as a link.

@@ -364,11 +364,36 @@ fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
                 .map(|(w, _)| w),
         ),
         "ln" => {
-            let symbolic = lit_args.iter().flatten().any(|t| {
-                t == "--symbolic" || (t.starts_with('-') && !t.starts_with("--") && t.contains('s'))
-            });
+            let long = |t: &str, full: &str| t.len() > 2 && full.starts_with(t);
+            let short = |t: &str| t.starts_with('-') && !t.starts_with("--") && t.len() > 1;
+            let symbolic = lit_args
+                .iter()
+                .flatten()
+                .any(|t| long(t, "--symbolic") || (short(t) && t.contains('s')));
             if !symbolic {
                 return None;
+            }
+            // Options beyond these (`-t`, `--target-directory`, `--suffix`, …) put the link
+            // somewhere this code does not follow.
+            let modelled = |t: &str| {
+                t == "--"
+                    || (short(t) && t[1..].chars().all(|c| "sfnvi".contains(c)))
+                    || [
+                        "--symbolic",
+                        "--force",
+                        "--no-dereference",
+                        "--verbose",
+                        "--interactive",
+                    ]
+                    .iter()
+                    .any(|full| long(t, full))
+            };
+            if lit_args
+                .iter()
+                .flatten()
+                .any(|t| t.starts_with('-') && t != "-" && !modelled(t))
+            {
+                return Some(None);
             }
             let names: Vec<&Word> = c
                 .args
@@ -408,10 +433,14 @@ fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
                     kind = Some(v.map(|v| v.to_ascii_lowercase()));
                 }
             }
+            // A splat or a variable may carry `-ItemType Junction` or `-Path`.
+            let opaque_arg = c.args.iter().any(|w| literal(w).is_none());
             match &kind {
-                Some(Some(k)) if is_link_type(k) => {}
-                Some(None) => {}
-                _ => return None,
+                Some(Some(k)) if is_folder_or_file_type(k) => return None,
+                _ if opaque_arg => return Some(None),
+                Some(_) => {}
+                // No `-ItemType`: a file.
+                None => return None,
             }
             // Where: `-Path x` or the first positional argument; anything else is not certain.
             let mut path: Option<&Word> = None;
@@ -444,8 +473,10 @@ fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
     }
 }
 
-fn is_link_type(t: &str) -> bool {
-    matches!(t, "junction" | "symboliclink" | "hardlink")
+/// An `-ItemType` value (lowercased) that is provably `Directory` or `File`: the provider takes
+/// any prefix, so `dir` and `f` count; anything else (a wildcard included) may be a link type.
+fn is_folder_or_file_type(t: &str) -> bool {
+    !t.is_empty() && ("directory".starts_with(t) || "file".starts_with(t))
 }
 
 /// `subst`, `New-PSDrive`, `net use`: after them a drive letter may name another folder.
