@@ -150,6 +150,10 @@ pub struct EnvView {
     vars: BTreeMap<String, String>,
     dynamic: BTreeSet<String>,
     home: Option<String>,
+    /// Names compare ignoring ASCII case (PowerShell).
+    fold_case: bool,
+    /// Something in the command may have assigned any name (`source`, `eval`, a dynamic name).
+    all_dynamic: bool,
 }
 
 impl EnvView {
@@ -157,8 +161,24 @@ impl EnvView {
         EnvView::default()
     }
 
+    /// A view whose names compare ignoring ASCII case, as PowerShell's do.
+    pub fn case_insensitive() -> EnvView {
+        EnvView {
+            fold_case: true,
+            ..EnvView::default()
+        }
+    }
+
+    fn key(&self, name: &str) -> String {
+        if self.fold_case {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_string()
+        }
+    }
+
     pub fn set(&mut self, name: &str, value: &str) {
-        self.vars.insert(name.to_string(), value.to_string());
+        self.vars.insert(self.key(name), value.to_string());
     }
 
     pub fn set_home(&mut self, home: &str) {
@@ -167,17 +187,31 @@ impl EnvView {
 
     /// Mark a name as assigned in the command: it no longer resolves.
     pub fn mark_dynamic(&mut self, name: &str) {
-        self.dynamic.insert(name.to_string());
+        self.dynamic.insert(self.key(name));
+    }
+
+    /// Mark every name as assigned: nothing resolves any more, `~` included.
+    pub fn mark_all_dynamic(&mut self) {
+        self.all_dynamic = true;
+    }
+
+    /// True when the command may assign `name`.
+    pub fn is_assigned(&self, name: &str) -> bool {
+        self.all_dynamic || self.dynamic.contains(&self.key(name))
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
-        if self.dynamic.contains(name) {
+        if self.is_assigned(name) {
             return None;
         }
-        self.vars.get(name).map(String::as_str)
+        self.vars.get(&self.key(name)).map(String::as_str)
     }
 
+    /// The folder `~` stands for; `None` once the command may assign `HOME`.
     pub fn home(&self) -> Option<&str> {
+        if self.is_assigned("HOME") {
+            return None;
+        }
         self.home.as_deref()
     }
 }

@@ -92,7 +92,7 @@ impl Deadline {
 /// Analyse one command. Rules run on the IR; there is no parser yet, so the IR is empty.
 pub fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
     let script = Script::default();
-    let fs = fs::RealFs;
+    let fs: fs::SharedFs = std::sync::Arc::new(fs::RealFs);
     let ctx = rules::Ctx {
         input,
         script: &script,
