@@ -1557,6 +1557,28 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
                 seq,
             ),
         ),
+        // A harmless name with a script block, or written by a variable.
+        (
+            "Write-Host { echo }",
+            stmt(
+                cmd(
+                    "Write-Host",
+                    vec![block(vec![stmt(lits("echo", &["x"]), None)])],
+                ),
+                seq,
+            ),
+        ),
+        (
+            "opaque echo",
+            stmt(
+                {
+                    let mut c = lits("echo", &["x"]);
+                    c.opaque = true;
+                    c
+                },
+                seq,
+            ),
+        ),
         ("$global:x =", set("global:x", "1")),
         ("$x.y =", set("x.y", "1")),
         (
@@ -1628,6 +1650,22 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         judge(Vec::new(), opaque, Vec::new()),
         &MAY_BE_CRITICAL,
         "note 1 opaque delete".to_string(),
+    );
+    // The reader decides on its own: a .NET call (`[IO.Directory]::Delete('Env:FOO')`) in a
+    // command whose other parts are harmless.
+    let mut harmless_loc = base.clone();
+    harmless_loc.read_script(&script(vec![stmt(ri("Env:BAR"), seq)]));
+    expect(
+        sorted(target(
+            &lit("Env:FOO"),
+            &harmless_loc,
+            &env,
+            NATIVE,
+            &real(),
+            &far(),
+        )),
+        &MAY_BE_CRITICAL,
+        "note 1 native reader".to_string(),
     );
     // Note 2: anything anywhere in the command that may define or redefine a drive or a command,
     // before the delete or after it.
@@ -1766,9 +1804,9 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         &MAY_BE_CRITICAL,
         "bash Env:FOO".to_string(),
     );
-    // Even when a caller says a provider reads it.
+    // Even when a caller says a provider reads it, in a command with nothing else in it.
     let mut read = bash_loc.clone();
-    read.read_script(&script(vec![stmt(ri("Env:FOO"), seq)]));
+    read.read_script(&script(vec![stmt(lits("echo", &["x"]), seq)]));
     expect(
         sorted(target(
             &lit("Env:FOO"),
