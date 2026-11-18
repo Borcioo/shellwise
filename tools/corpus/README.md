@@ -45,10 +45,11 @@ duplicates, calls outside the window, no result) and exits 1 when it reads no tr
 ## baseline.py
 
 ```
-git -C <host setup repo> log --diff-filter=A --format=%H -- plugins/the-host-plugin/tools/baseline-guard/baseline_guard.py
-git -C <host setup repo> show <that commit>:plugins/the-host-plugin/tools/baseline-guard/baseline_guard.py > <scratch>/first_guard.py
-python -I tools/corpus/baseline.py --baseline-guard <path to baseline_guard.py> --first-guard <scratch>/first_guard.py \
-    --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --out "$SHELLWISE_CORPUS/baseline.jsonl" \
+git -C <host setup repo> log --diff-filter=A --format=%H -- <baseline_guard.py path>
+git -C <host setup repo> log -1 --format=%cI <that commit>
+git -C <host setup repo> show <that commit>:<baseline_guard.py path> > <scratch>/first_guard.py
+python -I tools/corpus/baseline.py --baseline-guard <baseline_guard.py path> --first-guard <scratch>/first_guard.py \
+    --first-guard-date <that commit's date> --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --out "$SHELLWISE_CORPUS/baseline.jsonl" \
     --report docs/baseline.md --known "$SHELLWISE_CORPUS/known.jsonl"
 ```
 
@@ -66,9 +67,11 @@ non-destructive rows with no finding.
 
 Replaying the `denied-hook` rows with `denied_by = baseline-guard` is a positive control that replay
 works, not a coverage target. Each such row that does not replay to a deny today gets a computed cause:
-`target gone` (the row's cwd, or a drive path the deny message names, does not exist now), else
-`rule narrowed` (baseline-guard at its first commit, `--first-guard`, does not deny it either), else
-`unexplained`.
+`target gone` (a git command, the rules that read the disk, whose cwd or a drive path the deny message
+names does not exist now), else `rule narrowed` (a row dated before `--first-guard-date`, which
+baseline-guard at its first commit, `--first-guard`, does not deny either), else `unexplained`. The rows of
+git commands that do not replay are replayed a second time with the disk check neutralised (every
+folder exists); the report gives both counts.
 
 The run fails (exit 1, one `FAIL:` line each) on 0 rows for a shell, 0 destructive rows, 0 baseline
 denies, 0 baseline-guard hook denies, a replay call that raised, a known slice short of 10 + 10, or more
@@ -78,8 +81,9 @@ than 5 % of the rows that do not replay being `unexplained`.
 
 The single table of the delete and git-discard families; its schema is documented at the top of the
 file. The extractor's matcher is deliberately simple and independent of shellwise: it splits raw text
-into simple commands, skips prefixes such as `sudo` or `$x =`, scans `bash -c` / `pwsh -Command` /
-`cmd /c` bodies, and matches names case-insensitively.
+into simple commands (heredoc bodies and PowerShell here-strings are text), skips prefixes such as
+`sudo` or `$x =`, scans `bash -c` / `pwsh -Command` / `cmd /c` bodies and the command a `find -exec`
+clause runs, and matches names case-insensitively.
 
 ## Tests
 

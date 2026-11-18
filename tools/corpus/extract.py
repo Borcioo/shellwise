@@ -29,6 +29,8 @@ EXCERPT = 300
 
 # A PreToolUse hook that denied the call: "PreToolUse:<Tool> hook error: <hook>: <reason>".
 HOOK_RE = re.compile(r"\s*(?:Error:\s*)?PreToolUse:\w+ hook error:?\s*(?:([A-Za-z][\w.-]{0,40}):)?")
+# A PreToolUse plugin hook deny: "Permission to use <Tool> denied by plugin(s) <name>, ...: <reason>".
+PLUGIN_DENY_RE = re.compile(r"\s*(?:Error:\s*)?Permission to use \w+ denied by plugin(?:s|\(s\))? ([\w.-]+)")
 # Denials Claude Code reports without a toolDenialKind flag (seen in transcripts), by the kind they belong to.
 UNFLAGGED_DENIALS = (
     (re.compile(r"\s*(?:Error:\s*)?The user doesn't want to"), "user-rejected"),
@@ -54,20 +56,25 @@ def load_table(path=TABLE):
         raise ValueError("%s: expected only [[command]] rows" % path)
     table = []
     for k, row in enumerate(rows):
-        if not isinstance(row, dict) or set(row) != {"names", "shells", "requires_any"}:
-            raise ValueError("%s: row %d needs exactly names, shells, requires_any" % (path, k + 1))
-        for key in ("names", "shells", "requires_any"):
+        if not isinstance(row, dict) or not {"names", "shells", "requires_any"} <= set(row) <= \
+                {"names", "shells", "requires_any", "unless_any"}:
+            raise ValueError("%s: row %d needs names, shells, requires_any and may add unless_any" % (path, k + 1))
+        for key in set(row):
             value = row[key]
             if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
                 raise ValueError("%s: row %d: %s must be a list of strings" % (path, k + 1, key))
         if not row["names"] or not row["shells"] or not set(row["shells"]) <= SHELLS:
             raise ValueError("%s: row %d: names and shells (%s) must be non-empty" % (path, k + 1, "/".join(sorted(SHELLS))))
         table.append({"names": [n.lower().split() for n in row["names"]], "shells": set(row["shells"]),
-                      "requires_any": list(row["requires_any"])})
+                      "requires_any": list(row["requires_any"]), "unless_any": list(row.get("unless_any", []))})
     return table
 
 
 SEPARATORS = set("\n;|&(){}")
+# `<<[-] DELIM`, DELIM bare, 'quoted', "quoted" or \escaped (groups 2, 3, 4); a heredoc body is text, not commands.
+HEREDOC = re.compile(r"<<(?!<)(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z_][\w.-]*))")
+# `@'` or `@"` ending its line: a PowerShell here-string, closed by a quote and `@` at column 0.
+HERE_STRING = re.compile(r"@(['\"])[ \t]*\r?\n")
 
 
 def segments(text, shell):
@@ -89,11 +96,38 @@ def segments(text, shell):
             out.append(words)
         words = []
 
+    pending = []   # (delimiter, strip leading tabs) of the heredocs whose body starts after this line
+
+    def skip_bodies(pos):
+        for delim, tabs in pending:
+            while pos < n:
+                nl = text.find("\n", pos)
+                line = text[pos:n if nl < 0 else nl].rstrip("\r")
+                pos = n if nl < 0 else nl + 1
+                if (line.lstrip("\t") if tabs else line) == delim:
+                    break
+        pending.clear()
+        return pos
+
     while i < n:
         c = text[i]
         if c in " \t\r":
             end_word()
             i += 1
+        elif c == "\n" and pending:
+            end_segment()
+            i = skip_bodies(i + 1)
+        elif c == "<" and shell == "bash" and HEREDOC.match(text, i):
+            m = HEREDOC.match(text, i)
+            end_word()
+            pending.append((next(g for g in m.groups()[1:] if g is not None), bool(m.group(1))))
+            i = m.end()
+        elif c == "@" and shell == "pwsh" and cur is None and HERE_STRING.match(text, i):
+            m = HERE_STRING.match(text, i)
+            close = text.find("\n" + m.group(1) + "@", m.end() - 1)
+            cur = text[m.end():n if close < 0 else close]
+            quoted = True
+            i = n if close < 0 else close + 3
         elif c in SEPARATORS or (c == "`" and shell == "bash"):
             end_segment()
             i += 1
@@ -132,7 +166,8 @@ PREFIX_WORDS = {"sudo", "command", "exec", "nohup", "time", "xargs", "env", "&",
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 PS_VAR = re.compile(r"^(\[[\w.\[\]]+\])*\$[\w:]+$")
 NESTED = {"bash": "bash", "sh": "bash", "pwsh": "pwsh", "powershell": "pwsh", "cmd": "cmd"}
-NESTED_FLAG = re.compile(r"^(-[a-z]*c|-command|-c|/c|/k)$", re.I)
+NESTED_FLAG = re.compile(r"^(-[a-z]*c|-command|-c|//?c|//?k)$", re.I)
+EXEC_FLAGS = {"-exec", "-execdir", "-ok", "-okdir"}
 GIT_VALUE_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 
 
@@ -164,6 +199,8 @@ def flag_matches(entry, word):
     if re.match(r"^-[A-Za-z]$", entry):
         return bool(re.match(r"^-[A-Za-z]*%s[A-Za-z]*$" % entry[1], word))
     if entry.startswith("/"):
+        if word.startswith("//"):   # Git Bash spells cmd's /MIR as //MIR
+            word = word[1:]
         return word.lower() == entry.lower()
     return word == entry
 
@@ -183,25 +220,42 @@ def match_name(name_words, words):
     return k
 
 
-def destructive_hits(table, tool, command, depth=0):
-    """[(name, args)] for each simple command of command that the table names; args are the words after the
-    name. A nested `bash -c`, `pwsh -Command` or `cmd /c` body is scanned with that shell's rows."""
-    shell = TOOL_SHELL.get(tool, tool)
-    hits = []
+def expand(shell, words, depth):
+    """(shell, words) of a simple command, prefixes stripped. A nested `bash -c`, `pwsh -Command` or `cmd /c`
+    body is expanded with that shell, and so is the command each `-exec`/`-execdir`/`-ok`/`-okdir` clause of
+    `find` runs (up to `;` or `+`; `{}` has already split the segment)."""
+    words = strip_prefix(words)
+    if not words or depth > 4:
+        return
+    nested = NESTED.get(base_name(words[0][0]))
+    if nested:
+        for k in range(1, len(words)):
+            if NESTED_FLAG.match(words[k][0]) and not words[k][1]:
+                body = " ".join(v for v, _ in words[k + 1:])
+                yield from simple_commands(nested, body, depth + 1)
+                break
+        return
+    yield shell, words
+    if base_name(words[0][0]) == "find":
+        for k, (v, quoted) in enumerate(words):
+            if not quoted and v in EXEC_FLAGS:
+                end = next((j for j in range(k + 1, len(words)) if not words[j][1] and words[j][0] in (";", "+")),
+                           len(words))
+                yield from expand(shell, words[k + 1:end], depth + 1)
+
+
+def simple_commands(shell, command, depth=0):
     if not isinstance(command, str) or depth > 4:
-        return hits
+        return
     for words in segments(command, shell):
-        words = strip_prefix(words)
-        if not words:
-            continue
-        nested = NESTED.get(base_name(words[0][0]))
-        if nested:
-            for k in range(1, len(words)):
-                if NESTED_FLAG.match(words[k][0]) and not words[k][1]:
-                    body = " ".join(v for v, _ in words[k + 1:])
-                    hits += destructive_hits(table, nested, body, depth + 1)
-                    break
-            continue
+        yield from expand(shell, words, depth)
+
+
+def destructive_hits(table, tool, command):
+    """[(name, args)] for each simple command of command that the table names; args are the words after the
+    name."""
+    hits = []
+    for shell, words in simple_commands(TOOL_SHELL.get(tool, tool), command):
         for row in table:
             if shell not in row["shells"]:
                 continue
@@ -210,8 +264,11 @@ def destructive_hits(table, tool, command, depth=0):
                 if end is None:
                     continue
                 args = [v for v, _ in words[end:]]
-                if not row["requires_any"] or any(flag_matches(e, a) for e in row["requires_any"] for a in args):
-                    hits.append((" ".join(name_words), args))
+                if row["requires_any"] and not any(flag_matches(e, a) for e in row["requires_any"] for a in args):
+                    continue
+                if any(flag_matches(e, a) for e in row["unless_any"] for a in args):
+                    continue
+                hits.append((" ".join(name_words), args))
     return hits
 
 
@@ -251,6 +308,9 @@ def label_of(text, is_error, denial_kind):
     m = HOOK_RE.match(text)
     if m and is_error:
         return "denied-hook", m.group(1) or "(unnamed)"
+    m = PLUGIN_DENY_RE.match(text)
+    if m and is_error:
+        return "denied-hook", m.group(1)
     if isinstance(denial_kind, str) and denial_kind:
         return "denied-permission", denial_kind
     if is_error:

@@ -1,7 +1,7 @@
 """Replay baseline-guard over the corpus: the baseline every shellwise rule is measured against.
 
 Usage: python -I tools/corpus/baseline.py --baseline-guard <baseline_guard.py> --first-guard <first baseline_guard.py>
-           --corpus <corpus.jsonl> --out <baseline.jsonl> [--report <baseline.md>] [--known <known.jsonl>]
+           --first-guard-date <date> --corpus <corpus.jsonl> --out <baseline.jsonl> [--report <baseline.md>] [--known <known.jsonl>]
 
 --first-guard is baseline_guard.py as of its first commit in the host setup repo (`git log --diff-filter=A`,
 then `git show <commit>:<path>`): a hook deny that neither it nor today's version replays is "rule narrowed".
@@ -13,9 +13,13 @@ its check() and check_installed() on each row's command and cwd. Commands are ne
 10 rows baseline-guard denies (different rules) and 10 ok, non-destructive rows, {"id", "expected_rules"}.
 Exits 1 when a check fails: 0 rows for a shell, 0 destructive rows, 0 baseline denies, or more than 5 % of
 the baseline-guard hook denies that do not replay having no computed cause (target gone, rule narrowed).
+--first-guard-date is that first commit's date (`git log --format=%cI`): only rows dated before it can be
+"rule narrowed"; "target gone" is for git commands, the rules that read the disk. The rows of git commands
+that do not replay are replayed a second time with the disk check neutralised, and both counts are reported.
 """
 import argparse
 import collections
+import contextlib
 import importlib.util
 import json
 import os
@@ -89,11 +93,47 @@ def target_gone(row):
     return False
 
 
-def shortfall_cause(row, first_guard):
-    """Why a baseline-guard hook deny does not replay today, computed: the target it resolved is gone, or the
-    first committed baseline-guard does not deny it either (the rule was narrowed before that), else unexplained."""
-    if target_gone(row):
+def is_git_row(extract, row):
+    """True when a simple command of the row is git: the git rules, and the junction rule behind `git worktree
+    remove`, are the baseline-guard rules that read the disk."""
+    shell = extract.TOOL_SHELL.get(row["tool"], row["tool"])
+    return any(extract.base_name(words[0][0]) == "git" for _, words in extract.simple_commands(shell, row["command"]))
+
+
+@contextlib.contextmanager
+def disk_neutralised():
+    """Every folder and path exists: the replay with the disk check switched off."""
+    real = os.path.isdir, os.path.exists
+    os.path.isdir = os.path.exists = lambda path: True
+    try:
+        yield
+    finally:
+        os.path.isdir, os.path.exists = real
+
+
+def replay_neutralised(guard, rows):
+    """{id: True} for each row that replays to a deny with the disk neutralised; a call that raises is no deny."""
+    found = {}
+    with disk_neutralised():
+        for row in rows:
+            for fn in (guard.check, guard.check_installed):
+                try:
+                    if deny_rules(fn(row["tool"], row["command"], row.get("cwd"))):
+                        found[row["id"]] = True
+                except Exception:
+                    pass
+    return found
+
+
+def shortfall_cause(extract, row, first_guard, first_date):
+    """Why a baseline-guard hook deny does not replay today, computed: for a rule that reads the disk (git), the
+    target it resolved is gone; for a row dated before the first committed baseline-guard, that version does not
+    deny it either (the rule was narrowed before that); anything else is unexplained."""
+    if is_git_row(extract, row) and target_gone(row):
         return CAUSE_TARGET
+    ts = extract.parse_ts(row.get("ts"))
+    if ts is None or ts >= first_date:
+        return CAUSE_UNEXPLAINED
     try:
         first = deny_rules(first_guard.check(row["tool"], row["command"], row.get("cwd"))) + \
             deny_rules(first_guard.check_installed(row["tool"], row["command"], row.get("cwd")))
@@ -140,7 +180,7 @@ def table_lines(header, rows):
     return lines
 
 
-def report(rows, base, stats_file, table, extract, first_guard):
+def report(rows, base, stats_file, table, extract, first_guard, first_date, neutral):
     by_id = {b["id"]: b for b in base}
     per = collections.Counter((r["label"], r["tool"]) for r in rows)
     destr = collections.Counter(r["tool"] for r in rows if r["destructive"])
@@ -155,8 +195,9 @@ def report(rows, base, stats_file, table, extract, first_guard):
     hooks = collections.Counter(r["denied_by"] for r in rows if r["label"] == "denied-hook")
     sg = [r for r in rows if r["label"] == "denied-hook" and r["denied_by"] == "baseline-guard"]
     replayed = [r for r in sg if by_id[r["id"]]["full"] or by_id[r["id"]]["installed"]]
-    causes = collections.Counter(shortfall_cause(r, first_guard) for r in sg
+    causes = collections.Counter(shortfall_cause(extract, r, first_guard, first_date) for r in sg
                                  if not (by_id[r["id"]]["full"] or by_id[r["id"]]["installed"]))
+    replayed_neutral = len(replayed) + sum(1 for r in sg if r["id"] in neutral)
     missed = len(sg) - len(replayed)
 
     failures = []
@@ -208,14 +249,18 @@ def report(rows, base, stats_file, table, extract, first_guard):
     L += table_lines(["Hook", "Rows"], sorted(hooks.items(), key=lambda kv: (-kv[1], kv[0])))
     L += ["", "## Replay of baseline-guard hook denies", ""]
     if sg:
-        L.append("%d of %d rows that baseline-guard denied in the session replay to a deny today (%.1f %%). The check "
-                 "is a positive control: each row that does not replay gets a computed cause, and the run fails "
-                 "when more than %d %% of them are unexplained." % (len(replayed), len(sg),
-                                                                    100.0 * len(replayed) / len(sg), UNEXPLAINED_MAX * 100))
+        L.append("Rows that baseline-guard denied in the session, replayed today on the real disk: %d of %d (%.1f %%); "
+                 "with the disk check neutralised: %d of %d (%.1f %%), where every folder exists and the rows of git "
+                 "commands, which read the disk, are replayed a second time. The check is a positive control: each "
+                 "row that does not replay on the real disk gets a computed cause, and the run fails when more than "
+                 "%d %% of them are unexplained."
+                 % (len(replayed), len(sg), 100.0 * len(replayed) / len(sg), replayed_neutral, len(sg),
+                    100.0 * replayed_neutral / len(sg), UNEXPLAINED_MAX * 100))
     if missed:
-        L += ["", "Rows that no longer replay, by cause: `target gone` = the row's cwd or a drive path the deny "
-              "message names does not exist now; `rule narrowed` = baseline-guard at its first commit in the host setup "
-              "repo does not deny the row either; anything else is `unexplained`.", ""]
+        L += ["", "Rows that no longer replay, by cause: `target gone` = a git command whose cwd, or a drive path "
+              "the deny message names, does not exist now; `rule narrowed` = a row dated before baseline-guard's "
+              "first commit in the host setup repo, which that version does not deny either; anything else is "
+              "`unexplained`.", ""]
         L += table_lines(["Cause", "Rows"], [(c, causes[c]) for c in (CAUSE_TARGET, CAUSE_NARROWED, CAUSE_UNEXPLAINED)])
     L.append("")
     return L, failures
@@ -226,6 +271,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--baseline-guard", required=True)
     ap.add_argument("--first-guard", required=True, help="baseline_guard.py as of its first commit in the host setup repo")
+    ap.add_argument("--first-guard-date", required=True,
+                    help="commit date of that first commit (ISO 8601, `git log --format=%%cI`)")
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--report")
@@ -234,6 +281,10 @@ def main(argv=None):
     sys.dont_write_bytecode = True   # neither the corpus tools nor baseline-guard's folder get a __pycache__
     extract = load_module("corpus_extract", os.path.join(HERE, "extract.py"))
     table = extract.load_table()
+    first_date = extract.parse_ts(args.first_guard_date)
+    if first_date is None:
+        print("FAIL: --first-guard-date is not an ISO 8601 date")
+        return 1
     with open(args.corpus, encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
     if not rows:
@@ -243,11 +294,15 @@ def main(argv=None):
     first_guard = load_guard(args.first_guard, "baseline_guard_first")
     stats = collections.Counter()
     base = replay(guard, rows, stats)
+    by_id = {b["id"]: b for b in base}
+    neutral = replay_neutralised(guard, [r for r in rows if r["label"] == "denied-hook" and r["denied_by"] == "baseline-guard"
+                                         and not (by_id[r["id"]]["full"] or by_id[r["id"]]["installed"])
+                                         and is_git_row(extract, r)])
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         for b in base:
             f.write(json.dumps(b) + "\n")
     lines, failures = report(rows, base, os.path.splitext(args.corpus)[0] + ".stats.json", table, extract,
-                             first_guard)
+                             first_guard, first_date, neutral)
     if stats:
         lines += ["## Replay errors", ""] + table_lines(["Error", "Rows"], sorted(stats.items())) + [""]
         failures.append("FAIL: %d replay calls raised" % sum(stats.values()))

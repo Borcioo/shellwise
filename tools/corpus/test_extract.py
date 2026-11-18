@@ -96,7 +96,16 @@ def build_projects(root):
     main.result("t-cancel", "The user doesn't want to take this action right now. STOP.", is_error=True,
                 toolDenialKind="cancelled")
     main.call("t-perm2", "Bash", "ls")
-    main.result("t-perm2", "Permission to use Bash denied by plugin example: no.", is_error=True)
+    main.result("t-perm2", "Permission for this command was denied.", is_error=True)
+    # a PreToolUse plugin hook deny reads "Permission to use <Tool> denied by plugin(s) <name>: ..."
+    main.call("t-plug", "Bash", "ls -la")
+    main.result("t-plug", "Permission to use Bash denied by plugin(s) alpha-guard, beta.hook: no.", is_error=True,
+                toolDenialKind="permission-rule")
+    main.call("t-plug1", "Bash", "pwd")
+    main.result("t-plug1", "Permission to use Bash denied by plugin example-hook: no.", is_error=True)
+    # hook text in a result that is not an error is quoted text, not a deny
+    main.call("t-quoted", "Bash", "echo quoted")
+    main.result("t-quoted", HOOK_TEXT)
     main.call("t-fail", "Bash", "false")
     main.result("t-fail", [{"type": "text", "text": "Exit code 1\r\nboom " + "x" * 400}], is_error=True)
     main.call("t-old", "Bash", "echo old", days_ago=40)
@@ -159,6 +168,9 @@ class ExtractTests(unittest.TestCase):
             ("rm -rf x", "denied-permission", "user-rejected"),
             ("rmdir y", "denied-permission", "cancelled"),
             ("ls", "denied-permission", "permission-rule"),
+            ("ls -la", "denied-hook", "alpha-guard"),
+            ("pwd", "denied-hook", "example-hook"),
+            ("echo quoted", "ok", None),
             ("false", "failed", None),
             ("git reset --hard", "ok", None),
         ]
@@ -194,7 +206,7 @@ class ExtractTests(unittest.TestCase):
 
     def test_bad_lines_skipped(self):
         self.assertEqual(self.code, 0, self.stderr)
-        self.assertEqual(sum(len(v) for v in self.rows.values()), 9, sorted(self.rows))
+        self.assertEqual(sum(len(v) for v in self.rows.values()), 12, sorted(self.rows))
 
     def test_destructive_flag_in_rows(self):
         self.assertTrue(self.row("rm -rf x")["destructive"])
@@ -205,6 +217,15 @@ class ExtractTests(unittest.TestCase):
             code, out, err = run(EXTRACT, "--projects", empty, "--days", "30", "--out", os.path.join(empty, "c.jsonl"))
         self.assertEqual(code, 1)
         self.assertIn("FAIL: read 0 transcripts", out + err)
+
+    def test_zero_rows_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            t = Transcript("sess-empty")
+            t.call("t-orphan", "Bash", "echo no result")   # a call whose result never arrived
+            t.write(os.path.join(root, "proj", "sess-empty.jsonl"))
+            code, out, err = run(EXTRACT, "--projects", root, "--days", "30", "--out", os.path.join(root, "c.jsonl"))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL: 0 rows from 1 transcripts", out + err)
 
 
 class DestructiveTests(unittest.TestCase):
@@ -238,6 +259,48 @@ class DestructiveTests(unittest.TestCase):
             ("Bash", "git checkout develop", False),
             ("Bash", 'git commit -m "rm old file"', False),
             ("PowerShell", "Get-Item x", False),
+            # find: -delete, and the command an -exec/-execdir/-ok/-okdir clause runs
+            ("Bash", "find . -name x -delete", True),
+            ("Bash", "find . -name x -print", False),
+            ("Bash", "find . -exec rm -rf {} +", True),
+            ("Bash", "find . -execdir rm {} \\;", True),
+            ("Bash", "find . -ok rm {} \\;", True),
+            ("Bash", "find . -okdir rm {} \\;", True),
+            ("Bash", "find . -exec grep x {} +", False),
+            ("Bash", "find . -exec git clean -f '{}' \\; -n", True),   # the clause ends at \; so -n is find's
+            ("Bash", "find . -exec sh -c 'rm -rf x' \\;", True),
+            # Git Bash spells cmd's switches with a doubled slash
+            ("Bash", "cmd //c rd x", True),
+            ("Bash", "cmd //k del x", True),
+            ("Bash", "robocopy a b //MIR", True),
+            ("Bash", "robocopy a b //E", False),
+            # git switch discards uncommitted work only with a force flag
+            ("Bash", "git switch -f x", True),
+            ("Bash", "git switch --force x", True),
+            ("Bash", "git switch --discard-changes x", True),
+            ("Bash", "git switch x", False),
+            # unless_any: a dry run or an index-only restore is not destructive
+            ("Bash", "git clean -fn", False),
+            ("Bash", "git clean -f --dry-run", False),
+            ("Bash", "git clean -fd", True),
+            ("Bash", "git restore --staged f", False),
+            ("Bash", "git restore -S f", False),
+            ("Bash", "git restore --staged --worktree f", True),
+            ("Bash", "git restore -SW f", True),
+            ("Bash", "git restore f", True),
+            # heredoc bodies are text; the command line around them is not
+            ("Bash", "cat <<EOF\nrm -rf x\nEOF\n", False),
+            ("Bash", "cat <<'EOF'\nrm -rf x\nEOF\n", False),
+            ("Bash", 'cat <<"EOF"\nrm -rf x\nEOF\n', False),
+            ("Bash", "cat <<-EOF\n\trm -rf x\n\tEOF\n", False),
+            ("Bash", "cat <<-EOF\n\tbody\n\tEOF\nrm x\n", True),
+            ("Bash", "cat <<EOF | rm x\nbody\nEOF\n", True),
+            ("Bash", "cat <<EOF\nbody\nEOF\nrm x\n", True),
+            # PowerShell here-strings: an apostrophe inside @'...'@ does not close it; only a marker at column 0 does
+            ("PowerShell", "$x = @'\nit's a note\nrm -rf x\n'@", False),
+            ("PowerShell", "$x = @\"\nrm -rf x\n\"@", False),
+            ("PowerShell", "$x = @'\nsay '@ now\nrm -rf x\n'@", False),
+            ("PowerShell", "$x = @'\nrm -rf x\n'@\nRemove-Item y", True),
         ]
         for tool, command, expected in cases:
             with self.subTest(command=command):
@@ -248,13 +311,24 @@ class DestructiveTests(unittest.TestCase):
         for bad in ('[[command]]\nnames = "rm"\nshells = ["bash"]\nrequires_any = []\n',
                     '[[command]]\nnames = ["rm"]\nshells = ["zsh"]\nrequires_any = []\n',
                     '[[command]]\nnames = ["rm"]\nshells = ["bash"]\nrequires_any = 3\n',
-                    '[[command]]\nnames = ["rm"]\nshells = ["bash"]\n'):
+                    '[[command]]\nnames = ["rm"]\nshells = ["bash"]\n',
+                    '[[command]]\nnames = ["rm"]\nshells = ["bash"]\nrequires_any = []\nunless_any = "-n"\n'):
             with self.subTest(bad=bad), tempfile.TemporaryDirectory() as d:
                 path = os.path.join(d, "t.toml")
                 with open(path, "w", encoding="utf-8", newline="") as f:
                     f.write(bad)
                 with self.assertRaises(ValueError):
                     ex.load_table(path)
+
+    def test_unless_any_is_optional(self):
+        ex = load_extract()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.toml")
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write('[[command]]\nnames = ["rm"]\nshells = ["bash"]\nrequires_any = []\nunless_any = ["-n"]\n\n'
+                        '[[command]]\nnames = ["rmdir"]\nshells = ["bash"]\nrequires_any = []\n')
+            table = ex.load_table(path)
+        self.assertEqual([r["unless_any"] for r in table], [["-n"], []])
 
 
 FAKE_GUARD = r'''
@@ -264,9 +338,11 @@ class Finding:
     def __init__(self, rule, deny, message):
         self.rule, self.deny, self.message = rule, deny, message
 
-def _rules(cmd):
+def _rules(cmd, cwd=None):
     if os.environ.get("BASELINE_GUARD"):
         return []
+    if cmd.startswith(("git disk", "other disk")) and cwd and os.path.isdir(cwd):   # a rule that reads the disk
+        return [Finding("git-disk", True, "m")]
     if cmd.startswith("deny-"):
         return [Finding(cmd.split()[0], True, "m"), Finding("note", False, "m")]
     if cmd.startswith("warn"):
@@ -274,10 +350,10 @@ def _rules(cmd):
     return []
 
 def check(tool, cmd, cwd=None):
-    return _rules(cmd)
+    return _rules(cmd, cwd)
 
 def check_installed(tool, cmd, cwd=None):
-    return [f for f in _rules(cmd) if f.rule != "deny-full-only"]
+    return [f for f in _rules(cmd, cwd) if f.rule != "deny-full-only"]
 '''
 
 
@@ -333,7 +409,7 @@ class BaselineTests(unittest.TestCase):
         report = os.path.join(self.tmp.name, "baseline.md")
         known = os.path.join(self.tmp.name, "known.jsonl")
         code, stdout, stderr = run(BASELINE, "--baseline-guard", self.guard, "--first-guard", self.first,
-                                   "--corpus", self.corpus(rows),
+                                   "--first-guard-date", iso(10), "--corpus", self.corpus(rows),
                                    "--out", out, "--report", report, "--known", known, env=env)
         return code, stdout + stderr, out, report, known
 
@@ -396,17 +472,19 @@ class BaselineTests(unittest.TestCase):
         self.assertIn("FAIL: 0 baseline denies", output)
 
     def unreplayed_rows(self):
-        """One baseline-guard hook deny per computed cause, none of which today's guard denies."""
+        """One baseline-guard hook deny per computed cause, none of which today's guard denies. The rows are older
+        than the first baseline-guard commit (--first-guard-date is 10 days ago)."""
         rows = self.good_rows()
         hook = "PreToolUse:Bash hook error: baseline-guard: "
         gone = os.path.join(self.tmp.name, "removed-worktree")
-        rows.append(dict(corpus_row(len(rows), "Bash", "echo cwd-gone", "denied-hook", "baseline-guard",
-                                    excerpt=hook + "`git checkout` on f throws away edits."), cwd=gone))
-        rows.append(dict(corpus_row(len(rows), "PowerShell", "echo path-gone", "denied-hook", "baseline-guard",
+        rows.append(dict(corpus_row(len(rows), "Bash", "git checkout f", "denied-hook", "baseline-guard",
+                                    excerpt=hook + "`git checkout` on f throws away edits."), cwd=gone, ts=iso(30)))
+        rows.append(dict(corpus_row(len(rows), "PowerShell", "git worktree remove x", "denied-hook", "baseline-guard",
                                     excerpt=hook + "`git worktree remove` deletes through junctions: %s holds a "
-                                    "junction." % gone), cwd=self.tmp.name))
+                                    "junction." % gone), cwd=self.tmp.name, ts=iso(30)))
         rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", "baseline-guard",
-                                    excerpt=hook + "something the first version did not deny"), cwd=self.tmp.name))
+                                    excerpt=hook + "something the first version did not deny"), cwd=self.tmp.name,
+                         ts=iso(30)))
         return rows
 
     def test_unreplayed_rows_get_computed_causes(self):
@@ -423,12 +501,56 @@ class BaselineTests(unittest.TestCase):
         rows = self.unreplayed_rows()
         rows.append(dict(corpus_row(len(rows), "Bash", "old-deny x", "denied-hook", "baseline-guard",
                                     excerpt="PreToolUse:Bash hook error: baseline-guard: still denied at first commit"),
-                         cwd=self.tmp.name))
+                         cwd=self.tmp.name, ts=iso(30)))
         code, output, *_ = self.baseline(rows)
         self.assertEqual(code, 1, output)
         self.assertIn("FAIL: 1 of 4 baseline-guard hook denies that do not replay are unexplained", output)
         self.assertIn("target gone: 2", output)
         self.assertIn("rule narrowed: 1", output)
+
+    def test_target_gone_only_for_rules_that_read_the_disk(self):
+        # a gone cwd explains a git row, not a row of a rule that never reads the disk
+        rows = self.good_rows()
+        rows.append(dict(corpus_row(len(rows), "Bash", "echo cwd-gone", "denied-hook", "baseline-guard",
+                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"),
+                         cwd=os.path.join(self.tmp.name, "removed"), ts=iso(1)))
+        code, output, *_ = self.baseline(rows)
+        self.assertEqual(code, 1, output)
+        self.assertIn("FAIL: 1 of 1 baseline-guard hook denies that do not replay are unexplained", output)
+        self.assertIn("unexplained: 1", output)
+
+    def test_rule_narrowed_only_before_the_first_commit(self):
+        # the same row, dated after the first baseline-guard commit: narrowing cannot explain it
+        rows = self.good_rows()
+        rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", "baseline-guard",
+                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"), cwd=self.tmp.name,
+                         ts=iso(1)))
+        code, output, *_ = self.baseline(rows)
+        self.assertEqual(code, 1, output)
+        self.assertIn("FAIL: 1 of 1 baseline-guard hook denies that do not replay are unexplained", output)
+
+    def test_disk_rule_replays_on_the_real_disk_and_with_the_disk_neutralised(self):
+        rows = self.good_rows()
+        rows.append(dict(corpus_row(len(rows), "Bash", "git disk a", "denied-hook", "baseline-guard",
+                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"),
+                         cwd=os.path.join(self.tmp.name, "removed"), ts=iso(30)))
+        # a row that is not a git command is not replayed a second time, whatever the guard does with the disk
+        rows.append(dict(corpus_row(len(rows), "Bash", "other disk b", "denied-hook", "baseline-guard",
+                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"),
+                         cwd=os.path.join(self.tmp.name, "removed"), ts=iso(30)))
+        code, output, out, report, known = self.baseline(rows)
+        self.assertEqual(code, 0, output)
+        with open(report, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("real disk: 10 of 12", text)
+        self.assertIn("disk check neutralised: 11 of 12", text)
+
+    def test_fails_when_the_known_slice_is_short(self):
+        rows = [r for r in self.good_rows() if not r["id"].startswith("a") and r["command"] not in
+                ["deny-rule%d x" % k for k in range(3, 10)]]
+        code, output, *_ = self.baseline(rows)
+        self.assertEqual(code, 1, output)
+        self.assertIn("FAIL: known slice has 4 deny and 10 ok rows, needs 10 each", output)
 
 
 if __name__ == "__main__":

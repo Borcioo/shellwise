@@ -14,8 +14,16 @@
 # requires_any = ["--hard"]    the command counts only when one of its later words matches one of
 #                              these; [] means always. "--long" matches the word or "--long=<v>"; a
 #                              bash short flag "-f" also matches inside a cluster ("-fd"); "/s"
-#                              matches case-insensitively; any other entry ("--", ".") matches the
-#                              word exactly.
+#                              matches case-insensitively (a leading "//" as Git Bash writes it
+#                              counts as "/"); any other entry ("--", ".") matches the word exactly.
+# unless_any   = ["-n"]        optional, same matching as requires_any: a command with a later word
+#                              matching any of these is not destructive, whatever requires_any says.
+#
+# Scope: what deletes or discards files and uncommitted work. `git branch -D` and `git push --force`
+# rewrite refs, not the working tree, and are out of scope.
+#
+# `find` is listed for -delete; the command an -exec/-execdir/-ok/-okdir clause runs is scanned as a
+# simple command of its own.
 
 [[command]]
 names = ["rm", "rmdir", "unlink", "shred"]
@@ -46,6 +54,7 @@ requires_any = ["/mir", "/purge"]
 names = ["git clean"]
 shells = ["bash", "pwsh", "cmd"]
 requires_any = ["-f", "--force"]
+unless_any = ["-n", "--dry-run"]
 
 [[command]]
 names = ["git reset"]
@@ -58,6 +67,29 @@ shells = ["bash", "pwsh", "cmd"]
 requires_any = ["--", ".", "-f", "--force"]
 
 [[command]]
-names = ["git restore", "git worktree remove", "git stash drop", "git stash clear"]
+names = ["git switch"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = ["-f", "--force", "--discard-changes"]
+
+# `git restore` writes the working tree unless it is limited to the index (--staged / -S); with
+# --worktree / -W it writes the tree whatever else is given.
+[[command]]
+names = ["git restore"]
 shells = ["bash", "pwsh", "cmd"]
 requires_any = []
+unless_any = ["--staged", "-S"]
+
+[[command]]
+names = ["git restore"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = ["--worktree", "-W"]
+
+[[command]]
+names = ["git worktree remove", "git stash drop", "git stash clear"]
+shells = ["bash", "pwsh", "cmd"]
+requires_any = []
+
+[[command]]
+names = ["find"]
+shells = ["bash"]
+requires_any = ["-delete"]
