@@ -1569,6 +1569,25 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             ),
         ),
         ("ndr", stmt(lits("ndr", &["Env"]), seq)),
+        ("mount", stmt(lits("mount", &["Env"]), seq)),
+        ("rdr", stmt(lits("rdr", &["Env"]), seq)),
+        ("nal", stmt(lits("nal", &["rm", "x"]), seq)),
+        ("Import-Alias", stmt(lits("Import-Alias", &["a.csv"]), seq)),
+        ("ipal", stmt(lits("ipal", &["a.csv"]), seq)),
+        ("New-Module", stmt(lits("New-Module", &["x"]), seq)),
+        ("nmo", stmt(lits("nmo", &["x"]), seq)),
+        (
+            "Import-PSSession",
+            stmt(lits("Import-PSSession", &["s"]), seq),
+        ),
+        ("ipsn", stmt(lits("ipsn", &["s"]), seq)),
+        (
+            "Invoke-Expression",
+            stmt(lits("Invoke-Expression", &["x"]), seq),
+        ),
+        ("source", stmt(lits("source", &["x"]), seq)),
+        ("psm1", stmt(lits("m.psm1", &[]), seq)),
+        ("bare ps1", stmt(lits("setup.ps1", &[]), seq)),
         (
             "Remove-PSDrive",
             stmt(lits("Remove-PSDrive", &["Env"]), seq),
@@ -1608,9 +1627,14 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         ("opaque", stmt(opaque, seq)),
         ("Start-Process", stmt(lits("Start-Process", &["pwsh"]), seq)),
         (
-            "SessionState method",
-            method("ExecutionContext.SessionState.Drive", "New", Vec::new()),
+            "Drive method",
+            method("ExecutionContext.Drive", "New", Vec::new()),
         ),
+        (
+            "SessionState method",
+            method("ExecutionContext.SessionState", "Get", Vec::new()),
+        ),
+        ("slash path", stmt(lits("./x", &[]), seq)),
         (
             "expression",
             Stmt::Pipeline(Pipeline {
@@ -1658,6 +1682,21 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         resolve(&lit("Env:FOO"), &bash_loc, &bash_env),
         &MAY_BE_CRITICAL,
         "bash Env:FOO".to_string(),
+    );
+    // Even when a caller says a provider reads it.
+    let mut read = bash_loc.clone();
+    read.read_script(&script(vec![stmt(ri("Env:FOO"), seq)]));
+    expect(
+        sorted(target(
+            &lit("Env:FOO"),
+            &read,
+            &bash_env,
+            DeleteBy::Provider,
+            &real(),
+            &far(),
+        )),
+        &MAY_BE_CRITICAL,
+        "bash Env:FOO read by a provider".to_string(),
     );
     // Who reads the drive (note 1): Remove-Item and its aliases in PowerShell, as the OS defines
     // them (pwsh on Linux has no `rm`/`rmdir` alias).
@@ -2179,12 +2218,6 @@ fn a_command_the_hook_cannot_read_as_plain_arguments_may_be_any_command() {
                 format!("{label}: {gone}"),
             );
         }
-        // It may map a drive: a built-in name may be a folder now.
-        expect(
-            resolve(&lit("Env:FOO"), &loc, &ps_env),
-            &MAY_BE_CRITICAL,
-            format!("{label}: Env:FOO"),
-        );
         // It may make a link anywhere (POSIX has no drive aliases to hide it).
         let mut loc = posix_base.clone();
         loc.after(&stmt(row.clone(), seq), &posix_env);
