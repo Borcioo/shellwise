@@ -1232,7 +1232,7 @@ fn literal(w: &Word) -> Option<String> {
 
 /// What a command runs once the wrappers in front of it are read (the delete guard's list plus
 /// `builtin`): `builtin`, `command` and `time` run it in this shell, `env`, `sudo`, `nohup` and
-/// `exec` start it as a program; `Start-Process` is never read, only its words.
+/// `exec` start it as a program; `Start-Process` is never read.
 enum Run<'a> {
     Cmd {
         /// `command_name` of the command run.
@@ -1247,14 +1247,10 @@ enum Run<'a> {
     },
     /// `command -v X`: describes X and runs nothing.
     Nothing,
-    /// A wrapper whose command the hook cannot read (an option it does not model, a name that
-    /// is not a literal): any word of `rest` may be that command or its arguments; with `any`,
-    /// it may be any command.
-    Unread {
-        rest: &'a [Word],
-        in_shell: bool,
-        any: bool,
-    },
+    /// A wrapper whose command the hook cannot read (`Start-Process`, an option it does not
+    /// model, a name that is not a literal): it may be any command. Its words are never read
+    /// as names, because a shell behind it may split them on `;`, `&&`, `,`, `^` or decode them.
+    Unread { in_shell: bool },
 }
 
 const WRAPPERS: [&str; 7] = ["builtin", "command", "time", "env", "sudo", "nohup", "exec"];
@@ -1271,18 +1267,13 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
     let mut in_shell = true;
     // `Start-Process ln -ArgumentList '…'`: a program with arguments the reader does not parse.
     if START_PROCESS.contains(&name.as_str()) {
-        return Run::Unread {
-            rest: args,
-            in_shell: false,
-            any: false,
-        };
+        return Run::Unread { in_shell: false };
     }
     while WRAPPERS.contains(&name.as_str()) {
         let wrapper = std::mem::take(&mut name);
         wrapped = true;
         // `/usr/bin/command` is a program, not the builtin.
         in_shell &= raw == wrapper && matches!(wrapper.as_str(), "builtin" | "command" | "time");
-        let start = args;
         // Skip the wrapper's options (and `env`'s and `sudo`'s `NAME=value` words).
         loop {
             let Some(first) = args.first() else {
@@ -1319,25 +1310,15 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
                 "env" if t == "-" || t == "-i" || t == "--ignore-environment" => args = &args[1..],
                 "env" if t == "-u" => args = args.get(2..).unwrap_or(&[]),
                 "env" if t.starts_with("--unset=") => args = &args[1..],
-                // `env -S 'cd ..'`, `--split-string=…`, `--chdir`: env may run anything.
-                _ => {
-                    return Run::Unread {
-                        rest: start,
-                        in_shell,
-                        any: wrapper == "env",
-                    };
-                }
+                // `env -S 'cd ..'`, `sudo -u u sh -c '…'`: an option the reader does not model.
+                _ => return Run::Unread { in_shell },
             }
         }
         let Some(first) = args.first() else {
             return Run::Nothing;
         };
         let Some(t) = literal(first) else {
-            return Run::Unread {
-                rest: args,
-                in_shell,
-                any: false,
-            };
+            return Run::Unread { in_shell };
         };
         raw = t.to_ascii_lowercase();
         name = base_name(&raw);
@@ -1353,20 +1334,12 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
 }
 
 impl Run<'_> {
-    /// The command run is named `names`, or may be one of them (a word the hook cannot read
-    /// counts).
+    /// The command run is named `names`, or may be one of them (an unread one may be any).
     fn may_be(&self, names: &[&str]) -> bool {
         match self {
             Run::Cmd { name, .. } => names.contains(&name.as_str()),
             Run::Nothing => false,
-            Run::Unread { any: true, .. } => true,
-            // A word may hold a whole command (`sh -c 'ln -s …'`).
-            Run::Unread { rest, .. } => rest.iter().any(|w| match literal(w) {
-                Some(t) => t
-                    .split_whitespace()
-                    .any(|t| names.contains(&base_name(&t.to_ascii_lowercase()).as_str())),
-                None => true,
-            }),
+            Run::Unread { .. } => true,
         }
     }
 }

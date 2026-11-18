@@ -1855,13 +1855,13 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
             show(&mapping),
         );
     }
-    // A Start-Process whose words name no link command makes none.
+    // Every Start-Process may run any command, whatever its words name.
     let mut loc = base.clone();
     let notepad = lits("Start-Process", &["notepad", "-ArgumentList", "x.txt"]);
     loc.after(&stmt(notepad.clone(), seq), &env);
     expect(
         resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
-        &paths(&[r"D:\elsewhere\u"]),
+        &MAY_BE_CRITICAL,
         show(&notepad),
     );
     // `builtin export TEMP=…; rm -rf $TEMP`: the wrapped builtin assigns the name.
@@ -1893,6 +1893,68 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
         &paths(&[r"C:\Profiles\u\AppData\Local\Temp"]),
         show(&alone),
     );
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
+fn a_command_the_hook_cannot_read_as_plain_arguments_may_be_any_command() {
+    let seq = Some(ChainOp::Seq);
+    // `New-Item -ItemType Junction t\j -Value C:\` as pwsh's UTF-16LE base64.
+    let encoded = "-EncodedCommand,TgBlAHcALQBJAHQAZQBtACAALQBJAHQAZQBtAFQAeQBwAGUAIABKAHUAbgBjAHQAaQBvAG4AIAB0AFwAagAgAC0AVgBhAGwAdQBlACAAQwA6AFwA";
+    let rows = [
+        // Start-Process: an array that arrives as one word, cmd's `&&` and `^`, an encoded
+        // script.
+        lits("Start-Process", &["cmd", r"/c,mklink /J t\j %USERPROFILE%"]),
+        lits("Start-Process", &["cmd", r"/c echo&&mklink /J t\j C:\"]),
+        lits("Start-Process", &["cmd", r"/c m^klink /J t\j C:\"]),
+        lits("Start-Process", &["pwsh", "-ArgumentList", encoded]),
+        // Behind a wrapper option the reader does not model, a shell reads the word.
+        lits("sudo", &["-u", "u", "sh", "-c", "true;ln -s ~ t/j"]),
+        lits("sudo", &["-u", "u", "sh", "-c", "true&&ln -s ~ t/j"]),
+        lits("sudo", &["-u", "u", "sh", "-c", "(ln -s ~ t/j)"]),
+        lits("sudo", &["-u", "u", "sh", "-c", r"l\n -s ~ t/j"]),
+    ];
+    let mut bad: Vec<String> = Vec::new();
+    let mut expect = |got: Target, want: &Target, label: String| {
+        if &got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    };
+    let (ps_base, ps_env) = win(Shell::Pwsh);
+    let posix = Shell::Bash(BashProfile::Posix);
+    let posix_base = Location::new(posix, Os::Posix, Some(Path::new("/w/repo")));
+    let posix_env = env_view(posix, Os::Posix, [("HOME".to_string(), "/h".to_string())]);
+    for row in rows {
+        let label = show(&row);
+        let mut loc = ps_base.clone();
+        loc.after(&stmt(row.clone(), seq), &ps_env);
+        for gone in ["t", r"D:\elsewhere\u"] {
+            expect(
+                resolve(&lit(gone), &loc, &ps_env),
+                &MAY_BE_CRITICAL,
+                format!("{label}: {gone}"),
+            );
+        }
+        // It may map a drive: a built-in name may be a folder now.
+        expect(
+            resolve(&lit("Env:FOO"), &loc, &ps_env),
+            &MAY_BE_CRITICAL,
+            format!("{label}: Env:FOO"),
+        );
+        // It may make a link anywhere (POSIX has no drive aliases to hide it).
+        let mut loc = posix_base.clone();
+        loc.after(&stmt(row.clone(), seq), &posix_env);
+        expect(
+            resolve(&lit("/elsewhere/u"), &loc, &posix_env),
+            &MAY_BE_CRITICAL,
+            format!("{label}: posix /elsewhere/u"),
+        );
+    }
     assert!(
         bad.is_empty(),
         "{} rows failed:\n{}",
