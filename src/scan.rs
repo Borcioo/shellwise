@@ -184,7 +184,8 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
             let words = normalize(&s.words);
             segment_hits(table, &words, depth, false, &mut out);
             for start in wrapper_suffixes(&s.words) {
-                segment_hits(table, &normalize(&s.words[start..]), depth, false, &mut out);
+                // The raw slice: no copy per start, so a long segment stays linear.
+                segment_hits(table, &s.words[start..], depth, false, &mut out);
             }
             // `iex('…')`, `[scriptblock]::Create('…')`: the argument is the next segment.
             if words.len() == 1
@@ -326,6 +327,10 @@ const WRAPPERS: [(&str, &[&str], usize); 13] = [
             "--type",
             "--other-user",
             "--close-from",
+            "-R",
+            "--chroot",
+            "-T",
+            "--command-timeout",
         ],
         0,
     ),
@@ -613,9 +618,9 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
                     break;
                 }
                 if base_name(v) == "env"
-                    && let Some(body) = split_string(o, words.get(k + 1))
+                    && let Some((body, used)) = split_string(o, words.get(k + 1))
                 {
-                    // `env -S 'cmd args'`: the value is the command.
+                    // `env -S 'cmd args'`: the value is the command, read like any other.
                     let span = words[k].span;
                     let mut out: Vec<Tok> = body
                         .split_whitespace()
@@ -625,16 +630,16 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
                             span,
                         })
                         .collect();
-                    let skip = if o.contains('=') || o.len() > 2 && !o.starts_with("--") {
-                        1
-                    } else {
-                        2
-                    };
-                    out.extend(words[(k + skip).min(words.len())..].iter().cloned());
-                    return out;
+                    out.extend(words[(k + used).min(words.len())..].iter().cloned());
+                    return normalize(&out);
                 }
-                // `--opt=value` carries its value; a known option takes the next word.
-                k += if !o.contains('=') && opts.contains(&o) {
+                // `--opt=value` carries its value; a known option, or getopt's unambiguous
+                // abbreviation of a long one, takes the next word.
+                let takes_value = opts.contains(&o)
+                    || (o.starts_with("--")
+                        && o.len() >= 3
+                        && opts.iter().any(|x| x.starts_with("--") && x.starts_with(o)));
+                k += if !o.contains('=') && takes_value {
                     2
                 } else {
                     1
@@ -680,30 +685,46 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
     out
 }
 
-/// The value of `env -S`/`--split-string`, glued or in the next word.
-fn split_string(o: &str, next: Option<&Tok>) -> Option<String> {
-    if o == "-S" || o == "--split-string" {
-        return next.map(|w| w.value.clone());
+/// The body of `env -S`/`--split-string` (any getopt abbreviation, or `S` inside a short option
+/// cluster such as `-iS`), glued or in the next word, and how many words it used.
+fn split_string(o: &str, next: Option<&Tok>) -> Option<(String, usize)> {
+    let from_next = || next.map(|w| (w.value.clone(), 2));
+    if let Some(long) = o.strip_prefix("--") {
+        let (name, value) = match long.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (long, None),
+        };
+        if name.is_empty() || !"split-string".starts_with(name) {
+            return None;
+        }
+        return match value {
+            Some(v) => Some((v.to_string(), 1)),
+            None => from_next(),
+        };
     }
-    if let Some(v) = o.strip_prefix("--split-string=") {
-        return Some(v.to_string());
+    let cluster = o.strip_prefix('-')?;
+    let at = cluster.find('S')?;
+    if !cluster[..at].bytes().all(|b| b.is_ascii_alphabetic()) {
+        return None;
     }
-    o.strip_prefix("-S")
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
+    let rest = &cluster[at + 1..];
+    if rest.is_empty() {
+        from_next()
+    } else {
+        Some((rest.to_string(), 1))
+    }
 }
 
-/// After a wrapper, every later word that is not an option may start the command: an option the
-/// wrapper table does not know may take a value (`sudo -X foo rm`).
+/// After a wrapper anywhere in the segment, every later word that is not an option may start
+/// the command: an option the wrapper table does not know may take a value (`sudo -X foo rm`).
 fn wrapper_suffixes(words: &[Tok]) -> Vec<usize> {
     let Some(w) = words
         .iter()
-        .take(4)
         .position(|t| !t.quoted && WRAPPERS.iter().any(|(n, _, _)| *n == base_name(&t.value)))
     else {
         return Vec::new();
     };
-    (w + 1..words.len().min(w + 9))
+    (w + 1..words.len())
         .filter(|&k| !words[k].value.starts_with('-'))
         .collect()
 }
@@ -1188,6 +1209,10 @@ mod tests {
         "env -S 'rm -rf x'",
         "env --split-string='rm -rf x'",
         "sudo -X foo rm -rf x",
+        "env -iS 'rm -rf x'",
+        "env --split-str='rm -rf x'",
+        "env -S 'X=1 rm -rf x'",
+        "X=1 Y=2 Z=3 W=4 sudo -X a b c d e f g h i rm -rf x",
         // I3: PowerShell here-strings, CR-only lines, Unicode blanks and quotes
         "@'\na'\n'@; Remove-Item x; echo '\n'",
         "@\"\na\"\n\"@; Remove-Item x; echo \"\n\"",
@@ -1286,6 +1311,14 @@ mod tests {
             .filter(|cmd| raw_destructive(cmd).is_none())
             .collect();
         assert!(missed.is_empty(), "missed: {missed:?}");
+    }
+
+    #[test]
+    fn long_wrapper_segments_stay_linear() {
+        let cmd = format!("sudo {}rm -rf x", "a ".repeat(20_000));
+        let start = std::time::Instant::now();
+        assert!(raw_destructive(&cmd).is_some());
+        assert!(start.elapsed().as_millis() < 2000, "{:?}", start.elapsed());
     }
 
     #[test]
