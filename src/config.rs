@@ -16,6 +16,8 @@ pub const CONFIG_REPO_IGNORED: &str = "config-repo-ignored";
 pub const REPO_FILE: &str = ".shellwise.toml";
 /// The analysis ends this long before the host's hook timeout.
 pub const HOOK_MARGIN_MS: u64 = 1500;
+/// A config file larger than this is ignored (`config-invalid`).
+pub const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Policies {
@@ -307,8 +309,29 @@ pub fn repo_file(cwd: &Path) -> Option<PathBuf> {
 /// Read and parse one layer; `None` (with a finding, except a missing user or repo file) when
 /// it cannot be used.
 fn read_layer(path: &Path, layer: Layer, out: &mut Vec<Finding>) -> Option<toml::Table> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+    // A repo could ship a FIFO, a device or a link there: reading it could block until the
+    // deadline and fail the whole check closed, which only the raw scan survives.
+    if matches!(layer, Layer::Repo) {
+        match path.symlink_metadata() {
+            Ok(m) if m.file_type().is_file() => {}
+            Ok(_) => {
+                out.push(invalid_layer(layer, path, "is not a regular file"));
+                return None;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                out.push(invalid_layer(layer, path, &format!("cannot be read: {e}")));
+                return None;
+            }
+        }
+    }
+    let text = match read_capped(path) {
+        Ok(Some(text)) => text,
+        Ok(None) => {
+            let why = format!("is larger than {MAX_CONFIG_BYTES} bytes");
+            out.push(invalid_layer(layer, path, &why));
+            return None;
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound && !matches!(layer, Layer::Integration) => {
             return None;
         }
@@ -329,6 +352,21 @@ fn read_layer(path: &Path, layer: Layer, out: &mut Vec<Finding>) -> Option<toml:
             None
         }
     }
+}
+
+/// The file's text, or `None` when it is larger than `MAX_CONFIG_BYTES`.
+fn read_capped(path: &Path) -> io::Result<Option<String>> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_CONFIG_BYTES {
+        return Ok(None);
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "not UTF-8"))
 }
 
 fn level(v: &toml::Value) -> Result<Level, String> {

@@ -5,7 +5,9 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use shellwise::config::{CONFIG_INVALID, CONFIG_REPO_IGNORED, Config, REPO_FILE, repo_file};
+use shellwise::config::{
+    CONFIG_INVALID, CONFIG_REPO_IGNORED, Config, MAX_CONFIG_BYTES, REPO_FILE, repo_file,
+};
 use shellwise::level::{Finding, Level};
 
 /// A fresh, empty folder for one test.
@@ -231,6 +233,82 @@ fn malformed_toml_ignores_only_that_layer() {
         };
         assert_eq!(cfg.level("r", Level::Warn), want, "{broken}");
     }
+}
+
+#[test]
+fn repo_file_must_be_a_regular_file() {
+    let d = scratch("repo_not_regular");
+    let user = write(&d, "user.toml", "gate_commands = ['g']\n");
+    let target = write(&d, "target.toml", "[levels]\nr = 'critical'\n");
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut rows = vec![("folder", d.join("folder").join(REPO_FILE))];
+    fs::create_dir_all(&rows[0].1).unwrap();
+    #[cfg(unix)]
+    {
+        let link = d.join("link").join(REPO_FILE);
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        rows.push(("symlink", link));
+    }
+    let _ = &target;
+    for (kind, repo) in rows {
+        let (cfg, findings) = Config::load(None, Some(&user), Some(&repo));
+        assert_eq!(rules(&findings), [CONFIG_INVALID], "{kind}: {findings:?}");
+        assert!(
+            findings[0].message.contains("not a regular file"),
+            "{kind}: {}",
+            findings[0].message
+        );
+        assert_eq!(
+            cfg.gate_commands,
+            ["g"],
+            "{kind}: the user layer still applies"
+        );
+        assert_eq!(cfg.level("r", Level::Warn), Level::Warn, "{kind}");
+    }
+}
+
+#[test]
+fn an_oversized_file_ignores_that_layer() {
+    let d = scratch("oversized");
+    let pad = format!("# {}\n", "x".repeat(MAX_CONFIG_BYTES as usize));
+    let big = format!("{pad}gate_commands = ['big']\n");
+    for (layer, name) in [
+        ("integration", "integ.toml"),
+        ("user", "user.toml"),
+        ("repo", REPO_FILE),
+    ] {
+        let p = write(&d, name, &big);
+        let (i, u, r) = match layer {
+            "integration" => (Some(p.as_path()), None, None),
+            "user" => (None, Some(p.as_path()), None),
+            _ => (None, None, Some(p.as_path())),
+        };
+        let (cfg, findings) = Config::load(i, u, r);
+        assert_eq!(rules(&findings), [CONFIG_INVALID], "{layer}: {findings:?}");
+        assert!(
+            findings[0].message.contains("larger than"),
+            "{layer}: {}",
+            findings[0].message
+        );
+        assert_eq!(cfg, Config::default(), "{layer}");
+    }
+    // An endless source stops at the cap instead of filling memory.
+    #[cfg(unix)]
+    {
+        let (_, findings) = Config::load(Some(Path::new("/dev/zero")), None, None);
+        assert_eq!(
+            rules(&findings),
+            [CONFIG_INVALID],
+            "/dev/zero: {findings:?}"
+        );
+    }
+    // Just under the cap still loads.
+    let pad = format!("# {}\n", "x".repeat(MAX_CONFIG_BYTES as usize - 100));
+    let p = write(&d, "user.toml", &format!("{pad}gate_commands = ['ok']\n"));
+    let (cfg, findings) = Config::load(None, Some(&p), None);
+    assert!(findings.is_empty(), "{findings:?}");
+    assert_eq!(cfg.gate_commands, ["ok"]);
 }
 
 #[test]
