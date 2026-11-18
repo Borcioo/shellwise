@@ -79,6 +79,12 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
     if !meta.is_dir {
         return WalkResult::Clean;
     }
+    // A folder on another device is a mount point: `rm -rf` crosses it.
+    let root_dev = match fs.device(root) {
+        Ok(d) => d,
+        Err(e) if not_found(&e) => return WalkResult::Clean,
+        Err(_) => return WalkResult::Unreadable(root.to_path_buf()),
+    };
     let inside = path_key(&root.to_string_lossy(), os);
     let mut found = Vec::new();
     let done = |found: Vec<Link>, otherwise: WalkResult| {
@@ -116,7 +122,24 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
                     }
                 }
             } else if m.is_dir {
-                todo.push_back(e);
+                let same_device = match (root_dev, fs.device(&e)) {
+                    (None, _) => true,
+                    (Some(r), Ok(d)) => d == Some(r),
+                    (Some(_), Err(err)) if not_found(&err) => continue,
+                    (Some(_), Err(_)) => return done(found, WalkResult::Unreadable(e)),
+                };
+                if same_device {
+                    todo.push_back(e);
+                } else {
+                    // Another device, or one that cannot be read.
+                    found.push(Link {
+                        path: e,
+                        kind: LinkKind::MountPoint,
+                    });
+                    if found.len() >= MAX_REPORTED {
+                        return WalkResult::Outside(found);
+                    }
+                }
             }
         }
     }

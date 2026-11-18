@@ -139,12 +139,18 @@ enum Node {
     Denied,
 }
 
+/// A device id `FakeFs::device` refuses to read.
+const DEVICE_ERROR: u64 = u64::MAX;
+
 /// An in-memory tree; every ancestor of an added node is a folder.
 #[derive(Default)]
 struct FakeFs {
     nodes: BTreeMap<PathBuf, Node>,
     long: BTreeMap<PathBuf, PathBuf>,
     ids: BTreeMap<PathBuf, u64>,
+    /// Devices; when any is set, a node without one is on device 1, and `DEVICE_ERROR` cannot
+    /// be read.
+    devs: BTreeMap<PathBuf, Option<u64>>,
 }
 
 impl FakeFs {
@@ -221,6 +227,18 @@ impl Fs for FakeFs {
         match self.nodes.get(p) {
             Some(Node::Link(_, k)) => Ok(*k),
             _ => Err(io::Error::other("no readable link")),
+        }
+    }
+
+    fn device(&self, p: &Path) -> io::Result<Option<u64>> {
+        match self.nodes.get(p) {
+            None => Err(io::Error::from(io::ErrorKind::NotFound)),
+            Some(Node::Denied) => Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+            Some(_) if self.devs.is_empty() => Ok(None),
+            Some(_) => match self.devs.get(p).copied().unwrap_or(Some(1)) {
+                Some(DEVICE_ERROR) => Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+                d => Ok(d),
+            },
         }
     }
 }
@@ -555,6 +573,76 @@ fn walk_times_out_within_the_remaining_time_when_a_call_never_returns() {
         let took = start.elapsed();
         assert_eq!(r, WalkResult::Timeout, "{call}");
         assert!(took < Duration::from_millis(250), "{call}: {took:?}");
+    }
+}
+
+/// `rm -rf ./data` where `data/vol` is a bind mount: GNU rm crosses mount points.
+#[cfg(unix)]
+#[test]
+fn walk_counts_a_folder_on_another_device_as_a_mount_point() {
+    let mut fake = FakeFs::default()
+        .dir(&at("data/sub/deep"))
+        .dir(&at("data/vol/x"))
+        .dir(&at("data/unread"));
+    fake.devs.insert(PathBuf::from(at("data/vol")), Some(2));
+    fake.devs.insert(PathBuf::from(at("data/vol/x")), Some(2));
+    // A folder whose device cannot be read counts too.
+    fake.devs.insert(PathBuf::from(at("data/unread")), None);
+    let fs = fake.shared();
+    assert_eq!(
+        outside_links(Path::new(&at("data")), &fs, &far()),
+        WalkResult::Outside(vec![
+            lk(at("data/unread"), LinkKind::MountPoint),
+            lk(at("data/vol"), LinkKind::MountPoint),
+        ])
+    );
+    // The same tree on one device is clean.
+    let one = FakeFs::default()
+        .dir(&at("data/sub/deep"))
+        .dir(&at("data/vol/x"))
+        .shared();
+    assert_eq!(
+        outside_links(Path::new(&at("data")), &one, &far()),
+        WalkResult::Clean
+    );
+    // A device the walk cannot read, on the root or a folder in it.
+    for (refused, want) in [
+        ("data", WalkResult::Unreadable(PathBuf::from(at("data")))),
+        (
+            "data/sub",
+            WalkResult::Unreadable(PathBuf::from(at("data/sub"))),
+        ),
+    ] {
+        let mut fake = FakeFs::default().dir(&at("data/sub/deep"));
+        fake.devs
+            .insert(PathBuf::from(at(refused)), Some(DEVICE_ERROR));
+        let fs = fake.shared();
+        assert_eq!(
+            outside_links(Path::new(&at("data")), &fs, &far()),
+            want,
+            "{refused}"
+        );
+    }
+}
+
+/// The real file system reports the device: `/dev/shm` and `/dev/pts` are mounts under `/dev`.
+#[cfg(target_os = "linux")]
+#[test]
+fn real_fs_walk_reports_a_mount_inside_the_tree() {
+    let fs = real();
+    let dev = fs.device(Path::new("/dev")).unwrap();
+    let shm = fs.device(Path::new("/dev/shm")).unwrap();
+    assert!(
+        dev.is_some() && shm.is_some() && dev != shm,
+        "{dev:?} {shm:?}"
+    );
+    match outside_links(Path::new("/dev"), &fs, &far()) {
+        WalkResult::Outside(links) => assert!(
+            links.iter().any(|l| l.kind == LinkKind::MountPoint
+                && [Path::new("/dev/shm"), Path::new("/dev/pts")].contains(&l.path.as_path())),
+            "{links:?}"
+        ),
+        other => panic!("{other:?}"),
     }
 }
 

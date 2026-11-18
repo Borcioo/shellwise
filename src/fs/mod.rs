@@ -42,6 +42,12 @@ pub trait Fs: Send + Sync {
     fn file_id(&self, _p: &Path) -> io::Result<Option<FileId>> {
         Ok(None)
     }
+    /// The device `p` itself is on (`st_dev`, not following a final link); `None` when the
+    /// file system cannot tell. The walk counts a folder on another device than its root as a
+    /// mount point (a Windows mount point is a link, `lstat` already reports it).
+    fn device(&self, _p: &Path) -> io::Result<Option<u64>> {
+        Ok(None)
+    }
 }
 
 /// One file's identity: two paths with equal ids name the same file or folder.
@@ -152,6 +158,12 @@ impl Fs for RealFs {
             volume: m.dev(),
             index: m.ino(),
         }))
+    }
+
+    #[cfg(not(windows))]
+    fn device(&self, p: &Path) -> io::Result<Option<u64>> {
+        use std::os::unix::fs::MetadataExt;
+        Ok(Some(std::fs::symlink_metadata(p)?.dev()))
     }
 
     #[cfg(not(windows))]
