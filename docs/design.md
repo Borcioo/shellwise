@@ -172,9 +172,14 @@ The highest finding wins; all findings are listed. Exit 64+ is a usage or intern
   `dynamic-target` / `walk-timeout`, level from config (default `danger`). In the Claude Code
   adapter a verdict whose only deny is shim-eligible `dynamic-target` runs under the shim instead
   (next sections); everything else about it stays as here.
-- A parse failure: `danger` when the raw text holds a destructive command name, `ok` otherwise (the
-  shell will report its own syntax error). Never a silent allow of a destructive command.
-- An internal error (panic, I/O error outside a walk): same as a parse failure.
+- A failed analysis (parse error, panic, internal error, input over the cap, invalid UTF-8,
+  deadline) → `danger` (`analysis-failed`), unless the whole raw text matches the harmless grammar:
+  no shell metacharacter (``; & | < > ( ) $ ` \ " ' { } [ ] * ? ~ #``, newline) and a first word
+  from a short read-only list (`ls`, `cat`, `echo`, `pwd`, `git status|log|diff|show`, `grep`,
+  `rg`, `head`, `tail`, `wc`, `which`, `type`, `<tool> --version`). The raw-text scan only names
+  the destructive command in the reason; it never clears a command. The allow marker is matched in
+  the raw text on this path (the parse that fills `Script.comments` failed). Measured on the
+  corpus: 2 of 22,346 bash rows (0.009 %) fall on this path without being shell syntax errors.
 
 ### Delete guard
 
