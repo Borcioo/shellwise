@@ -142,6 +142,10 @@ fn repo_layer_cannot_lower_levels() {
         assert_eq!(findings[0].level, Level::Warn, "{line}");
         assert_eq!(cfg.level(rule, default), want, "{line}");
     }
+    // No other layer sets the rule: the repo value is a floor and cannot go under the default.
+    let repo = write(&d, REPO_FILE, "[levels]\nunset = 'warn'\n");
+    let (cfg, _) = Config::load(None, Some(&user), Some(&repo));
+    assert_eq!(cfg.level("unset", Level::Danger), Level::Danger);
 }
 
 #[test]
@@ -240,18 +244,17 @@ fn repo_file_must_be_a_regular_file() {
     let d = scratch("repo_not_regular");
     let user = write(&d, "user.toml", "gate_commands = ['g']\n");
     let target = write(&d, "target.toml", "[levels]\nr = 'critical'\n");
-    #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut rows = vec![("folder", d.join("folder").join(REPO_FILE))];
-    fs::create_dir_all(&rows[0].1).unwrap();
+    let folder = d.join("folder").join(REPO_FILE);
+    fs::create_dir_all(&folder).unwrap();
+    let link = d.join("link").join(REPO_FILE);
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
     #[cfg(unix)]
-    {
-        let link = d.join("link").join(REPO_FILE);
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        rows.push(("symlink", link));
-    }
-    let _ = &target;
-    for (kind, repo) in rows {
+    let made = std::os::unix::fs::symlink(&target, &link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(&target, &link);
+    // A missing privilege fails the test: the row must run on every platform.
+    made.unwrap_or_else(|e| panic!("cannot create a file symlink: {e}"));
+    for (kind, repo) in [("folder", folder), ("symlink", link)] {
         let (cfg, findings) = Config::load(None, Some(&user), Some(&repo));
         assert_eq!(rules(&findings), [CONFIG_INVALID], "{kind}: {findings:?}");
         assert!(
@@ -366,7 +369,6 @@ fn walk_budget_is_clamped_under_the_hook_timeout() {
         ("walk_budget_ms = 9500", 8500),
         ("walk_budget_ms = 3000", 3000),
         ("hook_timeout_ms = 3000", 1500),
-        ("hook_timeout_ms = 1000", 0),
         ("walk_budget_ms = 8500", 8500),
     ];
     for (text, want) in rows {
@@ -375,6 +377,25 @@ fn walk_budget_is_clamped_under_the_hook_timeout() {
         assert!(findings.is_empty(), "{text}: {findings:?}");
         assert_eq!(cfg.walk_budget_ms, want, "{text}");
     }
+}
+
+/// Under 3000 ms nothing would be left for the analysis after the config load and the margin.
+#[test]
+fn hook_timeout_below_3000_is_invalid() {
+    let d = scratch("hook_floor");
+    let user = write(&d, "user.toml", "hook_timeout_ms = 2999\n");
+    let (cfg, findings) = Config::load(None, Some(&user), None);
+    assert_eq!(rules(&findings), [CONFIG_INVALID], "{findings:?}");
+    assert!(
+        findings[0].message.contains("`hook_timeout_ms`"),
+        "{}",
+        findings[0].message
+    );
+    assert_eq!(cfg.hook_timeout_ms, 10000);
+    let user = write(&d, "user.toml", "hook_timeout_ms = 3000\n");
+    let (cfg, findings) = Config::load(None, Some(&user), None);
+    assert!(findings.is_empty(), "{findings:?}");
+    assert_eq!(cfg.hook_timeout_ms, 3000);
 }
 
 #[test]
@@ -478,13 +499,13 @@ fn check_reports_config_findings() {
     assert_eq!(finding_rules(&r), [CONFIG_REPO_IGNORED], "{}", r.stdout);
 }
 
-/// The `slow` test hook sleeps 1 s inside the analysis; a 2000 ms hook timeout leaves a 500 ms
-/// deadline, so the analysis fails closed instead of finishing.
+/// The `slow` test hook sleeps 1 s inside the analysis; a 500 ms walk budget is the deadline, so
+/// the analysis fails closed instead of finishing.
 #[cfg(feature = "testhooks")]
 #[test]
 fn check_takes_the_deadline_from_each_layer() {
     let slow = [("SHELLWISE_TESTHOOK", "slow")];
-    let short = "hook_timeout_ms = 2000\n";
+    let short = "walk_budget_ms = 500\n";
     let cmd = "rm -rf x";
 
     // Integration file.
@@ -514,20 +535,53 @@ fn check_takes_the_deadline_from_each_layer() {
     );
 }
 
+/// A stalled config load ends at its own 1000 ms bound, well inside any hook timeout.
 #[cfg(feature = "testhooks")]
 #[test]
 fn check_fails_closed_when_the_config_does_not_load_in_time() {
     let d = scratch("cli_config_sleep");
-    let env = [
-        ("SHELLWISE_TESTHOOK", "config-sleep"),
-        ("SHELLWISE_TESTHOOK_DEADLINE_MS", "300"),
-    ];
+    user_config(&d, "hook_timeout_ms = 5000\n");
+    let env = [("SHELLWISE_TESTHOOK", "config-sleep")];
     let cmd = "rm -rf x";
     let r = check(&d, &[], cmd, &env);
     common::assert_failclosed_danger(&r, cmd, "rm -rf x");
-    // The wait ends at the deadline, not when the stuck load would finish (60 s).
-    assert!(r.elapsed.as_secs() < 10, "took {:?}", r.elapsed);
+    // 1000 ms bound plus process start under a parallel test run; under the 3000 ms minimum
+    // hook timeout.
+    assert!(r.elapsed.as_millis() < 2500, "took {:?}", r.elapsed);
     let r = check(&d, &[], "Get-Date", &env);
     assert_eq!(r.code, 0, "{}", r.stdout);
     assert_eq!(r.json()["level"], "ok");
+}
+
+/// A panic in the config load and a config thread that cannot start both fail closed.
+#[cfg(feature = "testhooks")]
+#[test]
+fn check_fails_closed_when_the_config_load_breaks() {
+    let d = scratch("cli_config_breaks");
+    let cmd = "rm -rf x";
+    for mode in ["config-panic", "config-spawn-fail"] {
+        let r = check(&d, &[], cmd, &[("SHELLWISE_TESTHOOK", mode)]);
+        common::assert_failclosed_danger(&r, cmd, "rm -rf x");
+        let r = check(&d, &[], "Get-Date", &[("SHELLWISE_TESTHOOK", mode)]);
+        assert_eq!(r.code, 0, "{mode}: {}", r.stdout);
+        assert!(r.stderr.contains("config"), "{mode}: {}", r.stderr);
+    }
+}
+
+/// Linux: `$XDG_CONFIG_HOME` when it is absolute, else `~/.config`.
+#[cfg(all(unix, not(target_os = "macos"), feature = "testhooks"))]
+#[test]
+fn check_finds_the_user_file_under_home_without_xdg() {
+    let slow = [("SHELLWISE_TESTHOOK", "slow")];
+    let cmd = "rm -rf x";
+    let d = scratch("cli_home_config");
+    let dir = d.join(".config").join("shellwise");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.toml"), "walk_budget_ms = 500\n").unwrap();
+    for xdg in ["", "relative/dir"] {
+        let mut env = vec![("XDG_CONFIG_HOME", xdg)];
+        env.extend_from_slice(&slow);
+        let r = check(&d, &[], cmd, &env);
+        common::assert_failclosed_danger(&r, cmd, "rm -rf x");
+    }
 }

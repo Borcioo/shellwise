@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -20,10 +21,27 @@ impl Run {
     }
 }
 
-/// Run `shellwise <args>` with `stdin` bytes and extra environment variables.
+/// An empty folder outside any repo: the default user config dir and working directory of every
+/// run, so the machine's own config files never reach a test.
+fn isolated_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join("shellwise-tests-empty");
+    std::fs::create_dir_all(&dir).expect("create the isolated folder");
+    if let Some(repo) = dir.ancestors().find(|d| d.join(".git").exists()) {
+        panic!("the isolated folder {dir:?} is inside the repo {repo:?}");
+    }
+    dir
+}
+
+/// Run `shellwise <args>` with `stdin` bytes and extra environment variables. `env` may override
+/// `APPDATA`, `XDG_CONFIG_HOME` and `HOME`, which point at an empty folder by default.
 pub fn run(args: &[&str], stdin: Option<&[u8]>, env: &[(&str, &str)]) -> Run {
+    let empty = isolated_dir();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_shellwise"));
     cmd.args(args)
+        .current_dir(&empty)
+        .env("APPDATA", &empty)
+        .env("XDG_CONFIG_HOME", &empty)
+        .env("HOME", &empty)
         .env_remove("SHELLWISE_TESTHOOK")
         .env_remove("SHELLWISE_TESTHOOK_DEADLINE_MS")
         .stdin(Stdio::piped())

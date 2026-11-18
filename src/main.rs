@@ -23,6 +23,9 @@ const EXIT_USAGE: i32 = 64;
 /// Exit code when the input cannot be read.
 const EXIT_IO: i32 = 74;
 const WORKER_STACK: usize = 64 * 1024 * 1024;
+/// The config load ends this long after the process start, inside the one deadline
+/// (`hook_timeout_ms` is at least `MIN_HOOK_TIMEOUT_MS`).
+const CONFIG_LOAD_MS: u64 = 1000;
 
 #[derive(Parser)]
 #[command(
@@ -152,31 +155,36 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
     finish(verdict, cfg_findings, &args, "")
 }
 
-/// Load the config layers (`Config::discover`) on a worker thread, waiting at most until the
-/// default deadline. `check` passes `--config` and `--cwd`; the `hook claude-code` adapter passes
-/// its `--config` and the event's `cwd`. `Err` is a fail-closed reason.
+/// Load the config layers (`Config::discover`) on a worker thread, waiting at most
+/// `CONFIG_LOAD_MS` from the process start. `check` passes `--config` and `--cwd`; the
+/// `hook claude-code` adapter passes its `--config` and the event's `cwd`. `Err` is a fail-closed
+/// reason.
 fn load_config(
     start: Instant,
     integration: Option<PathBuf>,
     cwd: Option<PathBuf>,
 ) -> Result<(Config, Vec<Finding>), &'static str> {
-    let budget =
-        test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &Config::default()));
+    let budget = Deadline::new(start, CONFIG_LOAD_MS);
     let (tx, rx) = mpsc::channel();
     let job = move || {
         if testhook_is("config-sleep") {
             thread::sleep(std::time::Duration::from_secs(60));
         }
         let cwd = cwd.or_else(|| std::env::current_dir().ok());
-        let result =
-            panic::catch_unwind(|| Config::discover(integration.as_deref(), cwd.as_deref()));
+        let result = panic::catch_unwind(|| {
+            if testhook_is("config-panic") {
+                panic!("testhook: panic in the config load");
+            }
+            Config::discover(integration.as_deref(), cwd.as_deref())
+        });
         let _ = tx.send(result);
     };
-    if thread::Builder::new()
-        .name("config".into())
-        .spawn(job)
-        .is_err()
-    {
+    let spawned = if testhook_is("config-spawn-fail") {
+        Err(io::Error::other("testhook: config-spawn-fail"))
+    } else {
+        thread::Builder::new().name("config".into()).spawn(job)
+    };
+    if spawned.is_err() {
         return Err("the config thread did not start");
     }
     match rx.recv_timeout(budget.remaining()) {

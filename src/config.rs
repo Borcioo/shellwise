@@ -16,6 +16,9 @@ pub const CONFIG_REPO_IGNORED: &str = "config-repo-ignored";
 pub const REPO_FILE: &str = ".shellwise.toml";
 /// The analysis ends this long before the host's hook timeout.
 pub const HOOK_MARGIN_MS: u64 = 1500;
+/// A smaller `hook_timeout_ms` is `config-invalid`: the config load (1000 ms) and the margin must
+/// leave time for the analysis.
+pub const MIN_HOOK_TIMEOUT_MS: u64 = 3000;
 /// A config file larger than this is ignored (`config-invalid`).
 pub const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
@@ -157,7 +160,12 @@ impl Config {
                 "ask_instead_of_deny" => strings(value).map(|v| self.ask_instead_of_deny = v),
                 "dynamic_target" => level(value).map(|v| self.dynamic_target = v),
                 "walk_budget_ms" => millis(value).map(|v| self.walk_budget_ms = v),
-                "hook_timeout_ms" => millis(value).map(|v| self.hook_timeout_ms = v),
+                "hook_timeout_ms" => match millis(value) {
+                    Ok(v) if v < MIN_HOOK_TIMEOUT_MS => {
+                        Err(format!("below the minimum {MIN_HOOK_TIMEOUT_MS}"))
+                    }
+                    other => other.map(|v| self.hook_timeout_ms = v),
+                },
                 "protected" => paths(value, dir).map(|v| self.protected = v),
                 "gate_commands" => strings(value).map(|v| self.gate_commands = v),
                 "bat_launchers" => strings(value).map(|v| self.bat_launchers = v),
