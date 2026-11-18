@@ -94,7 +94,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 if [ -z "$1" ] || [ ! -f "$1/Cargo.toml" ]; then echo "gate: no crate root at $1"; exit 2; fi
 cd "$1"
-# One target dir per worktree: cargo reuses a sibling worktree's artifacts as fresh in a shared one.
+# One target dir per worktree: in a shared one cargo reuses the build of a sibling worktree as fresh.
 export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/$(basename "$PWD")/target"
 cargo --version
 cargo test --features testhooks
