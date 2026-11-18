@@ -55,6 +55,30 @@ fn input_over_the_hard_cap_is_danger_without_scanning() {
     );
 }
 
+#[test]
+fn chained_env_split_strings_get_a_verdict() {
+    // Each `env -S` link nests one more command. The invalid byte makes the raw scan decide; past
+    // its depth limit nothing proves the tail harmless, so both tails are danger, printed as JSON.
+    for tail in ["rm -rf x", "echo hi"] {
+        let mut cmd = "env -S ".repeat(9000).into_bytes();
+        cmd.extend_from_slice(tail.as_bytes());
+        cmd.extend_from_slice(b" #\xff");
+        let r = run(&["check", "--shell", "bash", "--json"], Some(&cmd), &[]);
+        assert_eq!(
+            r.code, 2,
+            "{tail}: stdout {:?} stderr {:?}",
+            r.stdout, r.stderr
+        );
+        assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+        // The default deadline is 8 s; one more second covers the process start.
+        assert!(
+            r.elapsed < std::time::Duration::from_secs(9),
+            "{:?}",
+            r.elapsed
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn argv_that_is_not_unicode_fails_closed() {

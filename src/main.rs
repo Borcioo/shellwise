@@ -188,12 +188,15 @@ fn analyse(
     let command = Arc::new(command);
     let (scan_tx, scan_rx) = mpsc::channel();
     let text = Arc::clone(&command);
-    let scan = thread::Builder::new().name("scan".into()).spawn(move || {
-        if testhook_is("panic-scan-sleep") {
-            thread::sleep(std::time::Duration::from_secs(60));
-        }
-        let _ = scan_tx.send(panic::catch_unwind(|| raw_destructive(&text)));
-    });
+    let scan = thread::Builder::new()
+        .name("scan".into())
+        .stack_size(WORKER_STACK)
+        .spawn(move || {
+            if testhook_is("panic-scan-sleep") {
+                thread::sleep(std::time::Duration::from_secs(60));
+            }
+            let _ = scan_tx.send(panic::catch_unwind(|| raw_destructive(&text)));
+        });
 
     let reason = match problem {
         Some(reason) => reason,

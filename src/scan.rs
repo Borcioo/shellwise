@@ -3,6 +3,8 @@
 //! matches the names and flags of `data/destructive.toml` from every shell. Over-matching is the
 //! safe side here: the scan only runs when the real analysis could not finish.
 
+use std::borrow::Cow;
+use std::cell::Cell;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -11,8 +13,56 @@ use crate::level::Span;
 
 const TABLE_TEXT: &str = include_str!("../data/destructive.toml");
 const SHELLS: [&str; 3] = ["bash", "pwsh", "cmd"];
-/// `bash -c "…"` inside `pwsh -c "…"` …: deeper bodies are not scanned.
+/// Nested bodies (`bash -c "…"` inside `pwsh -c "…"`, `env -S '…'`) and wrappers (`sudo`,
+/// `timeout 5`) each cost one level; past this the command is unreadable.
 const MAX_DEPTH: usize = 4;
+/// The scan's work for one input, in steps (a character segmented, a word examined): this many
+/// per input byte, plus a base. Past it the input is unreadable.
+const BUDGET_PER_BYTE: usize = 16;
+const BUDGET_BASE: usize = 1 << 18;
+/// The cost of one word-level step (a walk step, a reading tried), in byte steps.
+const WORD: usize = 8;
+
+/// The work left for one scan. Every loop over the input spends from it, so hostile nesting ends
+/// in an unreadable verdict instead of a hang or a stack overflow.
+struct Budget {
+    left: Cell<usize>,
+    spent: Cell<bool>,
+}
+
+impl Budget {
+    fn for_input(len: usize) -> Budget {
+        Budget {
+            left: Cell::new(
+                len.saturating_mul(BUDGET_PER_BYTE)
+                    .saturating_add(BUDGET_BASE),
+            ),
+            spent: Cell::new(false),
+        }
+    }
+
+    /// Take `n` steps; false, from now on, once fewer remain.
+    fn spend(&self, n: usize) -> bool {
+        match self.left.get().checked_sub(n) {
+            Some(left) if !self.spent.get() => {
+                self.left.set(left);
+                true
+            }
+            _ => {
+                self.spent.set(true);
+                false
+            }
+        }
+    }
+
+    fn spent(&self) -> bool {
+        self.spent.get()
+    }
+}
+
+fn opaque(span: Span) -> Hit {
+    Hit { row: None, span }
+}
 
 /// One `[[command]]` row of `data/destructive.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +146,16 @@ pub fn table() -> &'static [Entry] {
 
 /// Every simple command of `cmd` that a row of `table` names.
 pub fn hits(table: &[Entry], cmd: &str) -> Vec<Hit> {
-    hits_at(table, cmd, 0)
+    let budget = Budget::for_input(cmd.len());
+    let mut out = hits_at(table, cmd, 0, &budget);
+    if budget.spent() {
+        // The scan stopped early: nothing proves the rest harmless.
+        out.push(opaque(Span {
+            start: 0,
+            end: cmd.len(),
+        }));
+    }
+    out
 }
 
 /// The span of the first simple command in `cmd` that the destructive table names.
@@ -166,50 +225,70 @@ fn option_words(args: &[Tok]) -> Vec<&str> {
 
 const VALUE_OPTS: [&str; 4] = ["-e", "--exclude", "-s", "--source"];
 
-fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
+fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
     if depth > MAX_DEPTH {
         // Too deep to read: nothing proves it harmless.
-        return vec![Hit {
-            row: None,
-            span: Span {
-                start: 0,
-                end: cmd.len(),
-            },
-        }];
+        return vec![opaque(Span {
+            start: 0,
+            end: cmd.len(),
+        })];
+    }
+    // Two readings of the text. A spent budget is reported once, by `hits`.
+    if !b.spend(cmd.len().saturating_mul(2)) {
+        return Vec::new();
     }
     let mut out = Vec::new();
     for mode in [Mode::Bash, Mode::Pwsh] {
-        let seg = segments(cmd, mode);
+        let seg = segments(cmd, mode, b);
         for (k, s) in seg.segs.iter().enumerate() {
-            let words = normalize(&s.words);
-            segment_hits(table, &words, depth, false, &mut out);
-            for start in wrapper_suffixes(&s.words) {
-                // The raw slice: no copy per start, so a long segment stays linear.
-                segment_hits(table, &s.words[start..], depth, false, &mut out);
+            if b.spent() {
+                break;
             }
+            let mut producer: Cow<[Tok]> = Cow::Borrowed(&[]);
+            let mut eval_alone = false;
+            each_reading(&s.words, depth, b, |start, w| {
+                let words = &s.words[start..];
+                scan_walk(table, words, w, false, b, &mut out);
+                let cmd = command_words(words, w, b);
+                eval_alone |=
+                    cmd.len() == 1 && EVAL_NAMES.contains(&base_name(&cmd[0].value).as_str());
+                if start == 0 {
+                    producer = cmd;
+                }
+                false
+            });
             // `iex('…')`, `[scriptblock]::Create('…')`: the argument is the next segment.
-            if words.len() == 1
-                && EVAL_NAMES.contains(&base_name(&words[0].value).as_str())
+            if eval_alone
                 && let Some(next) = seg.segs.get(k + 1)
+                && b.spend(text_len(&next.words))
             {
-                let span = seg_span(&words);
-                for h in hits_at(table, &join(&next.words), depth + 1) {
+                let span = seg_span(&s.words);
+                for h in hits_at(table, &join(&next.words), depth + 1, b) {
                     out.push(Hit { row: h.row, span });
                 }
             }
+            // `… | bash`, `… | iex`: what the segment prints runs as code.
             if s.piped
                 && let Some(next) = seg.segs.get(k + 1)
-                && !words.is_empty()
-                && reads_stdin_as_code(&normalize(&next.words))
+                && reads_stdin_as_code(&next.words, depth, b)
             {
-                let span = seg_span(&words);
-                for h in hits_at(table, &piped_text(&words), depth + 1) {
-                    out.push(Hit { row: h.row, span });
+                feed(table, &producer, seg_span(&s.words), depth, b, &mut out);
+            }
+            // `bash <(…)`, `. <(…)`: the substitution's output is a file the command runs.
+            if s.procsub
+                && let Some(next) = seg.segs.get(k + 1)
+            {
+                let end =
+                    s.words.len() - s.words.iter().rev().take_while(|w| w.value == "<").count();
+                if runs_file_as_code(&s.words[..end], depth, b) {
+                    let w = walk(&next.words, depth, b);
+                    let producer = command_words(&next.words, &w, b);
+                    feed(table, &producer, seg_span(&s.words), depth, b, &mut out);
                 }
             }
         }
         for (span, body) in seg.embedded {
-            for h in hits_at(table, &body, depth + 1) {
+            for h in hits_at(table, &body, depth + 1, b) {
                 out.push(Hit { row: h.row, span });
             }
         }
@@ -218,6 +297,83 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
     out.sort_by_key(|h| (h.span.start, h.span.end, h.row));
     out.dedup();
     out
+}
+
+/// Scan what `producer` prints as the code an interpreter runs. Text that is not static (a file,
+/// a download, a variable) is unreadable.
+fn feed(
+    table: &[Entry],
+    producer: &[Tok],
+    span: Span,
+    depth: usize,
+    b: &Budget,
+    out: &mut Vec<Hit>,
+) {
+    match piped_text(producer, b) {
+        Some(text) => {
+            for h in hits_at(table, &text, depth + 1, b) {
+                out.push(Hit { row: h.row, span });
+            }
+        }
+        // A spent budget is reported once, by `hits`.
+        None if b.spent() => {}
+        None => out.push(opaque(span)),
+    }
+}
+
+/// Every reading of where a segment's command starts: the walk from its first word and, after a
+/// wrapper, a walk from each later word that is not an option (an option the wrapper table does
+/// not know may take a value: `sudo -X foo rm`). Walks run on the raw slice, with no copy per
+/// start. `f` gets the start index and its walk; true stops the readings and is returned.
+fn each_reading(
+    words: &[Tok],
+    depth: usize,
+    b: &Budget,
+    mut f: impl FnMut(usize, &Walk) -> bool,
+) -> bool {
+    let main = walk(words, depth, b);
+    if f(0, &main) {
+        return true;
+    }
+    let main_at = match main {
+        Walk::Cmd { at, .. } => Some(at),
+        _ => None,
+    };
+    for start in wrapper_suffixes(words, b) {
+        if Some(start) != main_at && f(start, &walk(&words[start..], depth, b)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The bytes of the words joined with blanks.
+fn text_len(words: &[Tok]) -> usize {
+    words.iter().map(|w| w.value.len() + 1).sum()
+}
+
+/// Scan the command a walk found: its words, an `env -S` body, or an unreadable command.
+fn scan_walk(
+    table: &[Entry],
+    words: &[Tok],
+    w: &Walk,
+    in_exec: bool,
+    b: &Budget,
+    out: &mut Vec<Hit>,
+) {
+    match w {
+        Walk::Cmd { at, glued, depth } => {
+            segment_hits(table, &view(words, *at, glued, b), *depth, in_exec, b, out);
+        }
+        Walk::Split { body, depth } => {
+            let span = seg_span(words);
+            for h in hits_at(table, body, *depth, b) {
+                out.push(Hit { row: h.row, span });
+            }
+        }
+        Walk::Opaque => out.push(opaque(seg_span(words))),
+        Walk::Bare { .. } => {}
+    }
 }
 
 fn seg_span(words: &[Tok]) -> Span {
@@ -235,8 +391,15 @@ fn join(words: &[Tok]) -> String {
         .join(" ")
 }
 
-fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, in_exec: bool, out: &mut Vec<Hit>) {
-    if words.is_empty() {
+fn segment_hits(
+    table: &[Entry],
+    words: &[Tok],
+    depth: usize,
+    in_exec: bool,
+    b: &Budget,
+    out: &mut Vec<Hit>,
+) {
+    if words.is_empty() || !b.spend(WORD + table.len()) {
         return;
     }
     let span = seg_span(words);
@@ -246,9 +409,9 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, in_exec: bool, out
         out.push(Hit { row: None, span });
         return;
     }
-    match nested_body(&name, words) {
+    match nested_body(&name, words, b) {
         Some(Nested::Body(body)) => {
-            for h in hits_at(table, &body, depth + 1) {
+            for h in hits_at(table, &body, depth + 1, b) {
                 out.push(Hit { row: h.row, span });
             }
             return;
@@ -259,25 +422,36 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, in_exec: bool, out
         }
         None => {}
     }
-    if !in_exec && name == "find" {
+    if !in_exec && name == "find" && b.spend(words.len() * WORD) {
         // Each clause runs its own command; a `find` inside a clause is not expanded again.
         for (k, w) in words.iter().enumerate() {
             if FIND_EXEC.contains(&w.value.as_str()) {
                 let rest = &words[k + 1..];
+                if !b.spend(rest.len() * WORD) {
+                    return;
+                }
                 let end = rest
                     .iter()
                     .position(|w| matches!(w.value.as_str(), ";" | "+" | "\\;"))
                     .unwrap_or(rest.len());
-                segment_hits(table, &normalize(&rest[..end]), depth, true, out);
+                let clause = &rest[..end];
+                each_reading(clause, depth, b, |start, w| {
+                    scan_walk(table, &clause[start..], w, true, b, out);
+                    false
+                });
             }
         }
     }
     for (row, entry) in table.iter().enumerate() {
         for name_words in &entry.names {
-            let Some(end) = match_name(name_words, &name, words) else {
+            let Some(end) = match_name(name_words, &name, words, b) else {
                 continue;
             };
             let args = &words[end..];
+            let checks = 2 + entry.requires_any.len() + entry.unless_any.len();
+            if !b.spend(args.len().saturating_mul(checks)) {
+                return;
+            }
             let git = name_words[0] == "git";
             let required = entry.requires_any.is_empty()
                 || entry
@@ -303,72 +477,24 @@ const FIND_EXEC: [&str; 4] = ["-exec", "-execdir", "-ok", "-okdir"];
 const PREFIX_WORDS: [&str; 10] = [
     "&", "!", ".", "then", "do", "else", "elif", "if", "while", "until",
 ];
-/// Commands that run the rest of their words as a command: (name, options that take a value,
-/// positional words before the command).
-const WRAPPERS: [(&str, &[&str], usize); 13] = [
-    (
-        "sudo",
-        &[
-            "-u",
-            "-g",
-            "-h",
-            "-p",
-            "-C",
-            "-D",
-            "-r",
-            "-t",
-            "-U",
-            "--user",
-            "--group",
-            "--host",
-            "--prompt",
-            "--chdir",
-            "--role",
-            "--type",
-            "--other-user",
-            "--close-from",
-            "-R",
-            "--chroot",
-            "-T",
-            "--command-timeout",
-        ],
-        0,
-    ),
-    ("doas", &["-u", "-C"], 0),
-    ("env", &["-u", "-C", "-S", "--unset", "--chdir"], 0),
-    ("timeout", &["-s", "-k", "--signal", "--kill-after"], 1),
-    ("nice", &["-n", "--adjustment"], 0),
-    ("ionice", &["-c", "-n", "-p"], 0),
-    ("time", &["-f", "-o", "--format", "--output"], 0),
-    (
-        "xargs",
-        &[
-            "-n",
-            "-I",
-            "-L",
-            "-P",
-            "-s",
-            "-d",
-            "-E",
-            "-a",
-            "--max-args",
-            "--max-procs",
-            "--delimiter",
-            "--arg-file",
-            "--replace",
-            "--max-lines",
-            "--eof",
-        ],
-        0,
-    ),
-    ("nohup", &[], 0),
-    ("command", &[], 0),
-    ("exec", &["-a"], 0),
-    (
-        "stdbuf",
-        &["-i", "-o", "-e", "--input", "--output", "--error"],
-        0,
-    ),
+/// Commands that run the rest of their words as a command, with their options that take a value.
+/// Every later word after a wrapper is also read as the command (`each_reading`), so a value
+/// option is listed only where the walk would otherwise reach another command: env's value before
+/// `-S`, and wsl with no command (it runs the default shell on the same stdin).
+const WRAPPERS: [(&str, &[&str]); 13] = [
+    ("sudo", &[]),
+    ("doas", &[]),
+    // `-S`/`--split-string` is read by `walk` (its value is the command).
+    ("env", &["-u", "-C", "-a", "--unset", "--chdir", "--argv0"]),
+    ("timeout", &[]),
+    ("nice", &[]),
+    ("ionice", &[]),
+    ("time", &[]),
+    ("xargs", &[]),
+    ("nohup", &[]),
+    ("command", &[]),
+    ("exec", &[]),
+    ("stdbuf", &[]),
     (
         "wsl",
         &[
@@ -379,7 +505,6 @@ const WRAPPERS: [(&str, &[&str], usize); 13] = [
             "--cd",
             "--shell-type",
         ],
-        0,
     ),
 ];
 /// Commands that run their argument text as code.
@@ -417,7 +542,16 @@ enum Flag {
 
 /// The body of `bash -c …`, `pwsh -Command …`, `cmd /c …`, `eval …`, `Invoke-Expression …`,
 /// `[scriptblock]::Create(…)` or `Start-Process`, if any.
-fn nested_body(name: &str, words: &[Tok]) -> Option<Nested> {
+fn nested_body(name: &str, words: &[Tok], b: &Budget) -> Option<Nested> {
+    let reads_words = EVAL_NAMES.contains(&name)
+        || BASH_SHELLS.contains(&name)
+        || matches!(
+            name,
+            "start-process" | "start" | "saps" | "cmd" | "pwsh" | "powershell"
+        );
+    if reads_words && !b.spend(text_len(words)) {
+        return None;
+    }
     match name {
         _ if EVAL_NAMES.contains(&name) => Some(Nested::Body(join(&words[1..]))),
         "start-process" | "start" | "saps" => start_process_body(words).map(Nested::Body),
@@ -507,32 +641,84 @@ fn start_process_body(words: &[Tok]) -> Option<String> {
     ))
 }
 
-/// The segment after a pipe runs its stdin as code: a shell with no command argument, or
-/// `pwsh -Command -`.
-fn reads_stdin_as_code(words: &[Tok]) -> bool {
-    let Some(first) = words.first() else {
-        return false;
-    };
-    let name = base_name(&first.value);
-    if !(BASH_SHELLS.contains(&name.as_str())
-        || matches!(name.as_str(), "pwsh" | "powershell" | "cmd"))
-    {
+/// Paths that name the process's own stdin.
+const STDIN_PATHS: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
+/// Whether a segment runs its stdin as code, in any reading of where its command starts: a shell
+/// with no command argument (or `pwsh -Command -`), `iex`/`Invoke-Expression`, `wsl` with no
+/// command, `source /dev/stdin`, `. /dev/stdin`. A command the walk cannot read counts too.
+fn reads_stdin_as_code(words: &[Tok], depth: usize, b: &Budget) -> bool {
+    each_reading(words, depth, b, |start, w| match w {
+        Walk::Cmd { at, glued, .. } => {
+            command_reads_stdin(&view(&words[start..], *at, glued, b), b)
+        }
+        // `wsl` alone starts the default shell on the same stdin.
+        Walk::Bare { wrapper } => *wrapper == Some("wsl"),
+        Walk::Split { .. } | Walk::Opaque => true,
+    })
+}
+
+/// Whether a segment runs a file argument as code (`bash <(…)`, `source <(…)`, `. <(…)`), in any
+/// reading of where its command starts.
+fn runs_file_as_code(words: &[Tok], depth: usize, b: &Budget) -> bool {
+    // `.` is a prefix word to the walk (PowerShell dot-sourcing): here it is the command.
+    if words.first().is_some_and(|w| w.value == "." && !w.quoted) {
+        return true;
+    }
+    each_reading(words, depth, b, |start, w| match w {
+        Walk::Cmd { at, glued, .. } => {
+            let words = view(&words[start..], *at, glued, b);
+            let name = base_name(&words[0].value);
+            name == "source" || (is_shell(&name) && nested_body(&name, &words, b).is_none())
+        }
+        Walk::Bare { .. } => false,
+        Walk::Split { .. } | Walk::Opaque => true,
+    })
+}
+
+fn is_shell(name: &str) -> bool {
+    BASH_SHELLS.contains(&name) || matches!(name, "pwsh" | "powershell" | "cmd")
+}
+
+/// Whether the command (its own words) runs its stdin as code.
+fn command_reads_stdin(words: &[Tok], b: &Budget) -> bool {
+    let first = words[0].value.as_str();
+    let name = base_name(first);
+    if matches!(name.as_str(), "iex" | "invoke-expression") || STDIN_PATHS.contains(&first) {
+        return true;
+    }
+    if name == "source" {
+        return words
+            .get(1)
+            .is_some_and(|w| w.value == "-" || STDIN_PATHS.contains(&w.value.as_str()));
+    }
+    if !is_shell(&name) {
         return false;
     }
-    match nested_body(&name, words) {
+    match nested_body(&name, words, b) {
         None => true,
-        Some(Nested::Body(b)) => b.trim() == "-",
+        Some(Nested::Body(body)) => body.trim() == "-",
         Some(Nested::Opaque) => false,
     }
 }
 
-/// The text a segment writes into a pipe: the words after `echo`/`printf`, or the whole segment.
-fn piped_text(words: &[Tok]) -> String {
-    if ECHO_NAMES.contains(&base_name(&words[0].value).as_str()) {
-        join(&words[1..])
+/// The text a segment writes into a pipe when it is static: the words after `echo`/`printf`, or
+/// a segment of string literals. `None` for anything else, or text the writer may still expand
+/// (`$`, a backtick, a backslash or printf `%` escape).
+fn piped_text(words: &[Tok], b: &Budget) -> Option<String> {
+    let first = words.first()?;
+    let text = if ECHO_NAMES.contains(&base_name(&first.value).as_str()) {
+        &words[1..]
+    } else if words.iter().all(|w| w.quoted) {
+        words
     } else {
-        join(words)
+        return None;
+    };
+    if !b.spend(text_len(text)) {
+        return None;
     }
+    let text = join(text);
+    (!text.contains(['$', '`', '\\', '%'])).then_some(text)
 }
 
 fn nested_flag(shell: &str, v: &str) -> Option<Flag> {
@@ -569,13 +755,16 @@ fn base_name(word: &str) -> String {
 }
 
 /// The index after the matched name in `words`, or `None`. git global options are skipped.
-fn match_name(name_words: &[String], base: &str, words: &[Tok]) -> Option<usize> {
+fn match_name(name_words: &[String], base: &str, words: &[Tok], b: &Budget) -> Option<usize> {
     if base != name_words[0] {
         return None;
     }
     let mut k = 1;
     if name_words[0] == "git" {
         while k < words.len() && words[k].value.starts_with('-') {
+            if !b.spend(WORD) {
+                return None;
+            }
             k += if GIT_VALUE_OPTS.contains(&words[k].value.as_str()) {
                 2
             } else {
@@ -592,12 +781,37 @@ fn match_name(name_words: &[String], base: &str, words: &[Tok]) -> Option<usize>
     Some(k)
 }
 
-/// The simple command without the words that only prefix it: wrappers and their options
-/// (`sudo -u root`, `timeout 5`, `wsl -e`), assignments, casts, leading redirects.
-fn normalize(words: &[Tok]) -> Vec<Tok> {
+/// Where a simple command's own command starts, once the words that only prefix it are past:
+/// wrappers and their options (`sudo -u root`, `timeout 5`, `wsl -e`), assignments, casts,
+/// leading redirects.
+enum Walk {
+    /// The command is `words[at..]`; `glued` replaces `words[at]` when the command starts inside
+    /// it (`$r=Remove-Item x`). `depth` counts the wrappers stripped.
+    Cmd {
+        at: usize,
+        glued: Option<Tok>,
+        depth: usize,
+    },
+    /// `env -S 'cmd args' rest…`: the command is this text, read as a nested command.
+    Split { body: String, depth: usize },
+    /// Only prefix words: no command (`wsl` alone runs the default shell). Also the walk's
+    /// answer once the budget is spent, which `hits` reports.
+    Bare { wrapper: Option<&'static str> },
+    /// More wrappers than `MAX_DEPTH`.
+    Opaque,
+}
+
+/// One pass over the word indices: no recursion and no copy of the words. Each wrapper costs one
+/// level of `depth`.
+fn walk(words: &[Tok], depth: usize, b: &Budget) -> Walk {
+    const SPENT: Walk = Walk::Bare { wrapper: None };
+    let mut depth = depth;
+    let mut wrapper = None;
     let mut k = 0;
-    let mut first: Option<Tok> = None;
     while k < words.len() {
+        if !b.spend(WORD) {
+            return SPENT;
+        }
         let w = &words[k];
         if w.quoted {
             break;
@@ -606,32 +820,38 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
         let lower = v.to_lowercase();
         if PREFIX_WORDS.contains(&lower.as_str()) || is_assignment(v) {
             k += 1;
-        } else if let Some((_, opts, positional)) =
-            WRAPPERS.iter().find(|(n, _, _)| *n == base_name(v))
-        {
+        } else if let Some(&(name, opts)) = WRAPPERS.iter().find(|(n, _)| *n == base_name(v)) {
+            depth += 1;
+            if depth > MAX_DEPTH {
+                return Walk::Opaque;
+            }
+            wrapper = Some(name);
             k += 1;
             // A quoted option is still an option (`--split-string='rm x'`, `'-u' root`).
             while k < words.len() && words[k].value.starts_with('-') {
+                if !b.spend(WORD) {
+                    return SPENT;
+                }
                 let o = words[k].value.as_str();
                 if o == "--" {
                     k += 1;
                     break;
                 }
-                if base_name(v) == "env"
-                    && let Some((body, used)) = split_string(o, words.get(k + 1))
+                if name == "env"
+                    && let Some((value, used)) = split_string(o, words.get(k + 1))
                 {
-                    // `env -S 'cmd args'`: the value is the command, read like any other.
-                    let span = words[k].span;
-                    let mut out: Vec<Tok> = body
-                        .split_whitespace()
-                        .map(|s| Tok {
-                            value: s.to_string(),
-                            quoted: false,
-                            span,
-                        })
-                        .collect();
-                    out.extend(words[(k + used).min(words.len())..].iter().cloned());
-                    return normalize(&out);
+                    // `env -S 'cmd args' rest`: env splits the value (`\_` is a blank) and runs
+                    // it with the rest appended.
+                    let rest = &words[(k + used).min(words.len())..];
+                    if !b.spend(value.len() + text_len(rest)) {
+                        return SPENT;
+                    }
+                    let mut body = value.replace("\\_", " ");
+                    for r in rest {
+                        body.push(' ');
+                        body.push_str(&r.value);
+                    }
+                    return Walk::Split { body, depth };
                 }
                 // `--opt=value` carries its value; a known option, or getopt's unambiguous
                 // abbreviation of a long one, takes the next word.
@@ -645,7 +865,6 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
                     1
                 };
             }
-            k += positional;
         } else if is_redirect(v) {
             // `2>/dev/null rm`; a bare `2>` takes the next word as its target.
             k += if v
@@ -670,9 +889,11 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
             } else {
                 let mut t = w.clone();
                 t.value = rest.to_string();
-                first = Some(t);
-                k += 1;
-                break;
+                return Walk::Cmd {
+                    at: k,
+                    glued: Some(t),
+                    depth,
+                };
             }
         } else if v.starts_with('[') && v.ends_with(']') && !v.contains("::") {
             k += 1;
@@ -680,9 +901,35 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
             break;
         }
     }
-    let mut out: Vec<Tok> = first.into_iter().collect();
-    out.extend(words[k.min(words.len())..].iter().cloned());
-    out
+    if k >= words.len() {
+        return Walk::Bare { wrapper };
+    }
+    Walk::Cmd {
+        at: k,
+        glued: None,
+        depth,
+    }
+}
+
+/// The words of a command a walk found (`words[at..]`, `glued` in front).
+fn view<'a>(words: &'a [Tok], at: usize, glued: &Option<Tok>, b: &Budget) -> Cow<'a, [Tok]> {
+    match glued {
+        None => Cow::Borrowed(&words[at..]),
+        Some(t) => {
+            b.spend((words.len() - at) * WORD);
+            let mut v = vec![t.clone()];
+            v.extend(words[at + 1..].iter().cloned());
+            Cow::Owned(v)
+        }
+    }
+}
+
+/// The command's words when the walk found plain words, else none.
+fn command_words<'a>(words: &'a [Tok], w: &Walk, b: &Budget) -> Cow<'a, [Tok]> {
+    match w {
+        Walk::Cmd { at, glued, .. } => view(words, *at, glued, b),
+        _ => Cow::Borrowed(&[]),
+    }
 }
 
 /// The body of `env -S`/`--split-string` (any getopt abbreviation, or `S` inside a short option
@@ -717,10 +964,13 @@ fn split_string(o: &str, next: Option<&Tok>) -> Option<(String, usize)> {
 
 /// After a wrapper anywhere in the segment, every later word that is not an option may start
 /// the command: an option the wrapper table does not know may take a value (`sudo -X foo rm`).
-fn wrapper_suffixes(words: &[Tok]) -> Vec<usize> {
+fn wrapper_suffixes(words: &[Tok], b: &Budget) -> Vec<usize> {
+    if !b.spend(words.len() * WORD) {
+        return Vec::new();
+    }
     let Some(w) = words
         .iter()
-        .position(|t| !t.quoted && WRAPPERS.iter().any(|(n, _, _)| *n == base_name(&t.value)))
+        .position(|t| !t.quoted && WRAPPERS.iter().any(|(n, _)| *n == base_name(&t.value)))
     else {
         return Vec::new();
     };
@@ -789,6 +1039,8 @@ struct Segment {
     words: Vec<Tok>,
     /// Ended by a pipe (`|`, `|&`), so its output is the next segment's stdin.
     piped: bool,
+    /// Ended by `<(` (bash): the next segment's output is a file this command reads.
+    procsub: bool,
 }
 
 struct Segments {
@@ -860,7 +1112,7 @@ struct Heredoc {
 /// Simple commands of `text` as words: split at `; | & ( ) { }` and newlines, quotes joined into
 /// their word, comments dropped, heredoc and here-string bodies kept out of the code. Lenient: an
 /// unclosed quote or comment runs to the end.
-fn segments(text: &str, mode: Mode) -> Segments {
+fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
     let n = text.len();
     let mut out = Segments {
         segs: Vec::new(),
@@ -890,22 +1142,43 @@ fn segments(text: &str, mode: Mode) -> Segments {
             words.push(t);
         }
     }
-    fn end_segment(out: &mut Segments, cur: &mut Option<Tok>, words: &mut Vec<Tok>, piped: bool) {
+    fn end_segment(
+        out: &mut Segments,
+        cur: &mut Option<Tok>,
+        words: &mut Vec<Tok>,
+        piped: bool,
+        procsub: bool,
+    ) {
         end_word(cur, words);
         if !words.is_empty() {
             out.segs.push(Segment {
                 words: std::mem::take(words),
                 piped,
+                procsub,
             });
         }
     }
-    // Whether the segment so far runs a shell, wrappers (sudo bash) included.
+    // Whether the segment so far feeds its stdin to code: a shell (sudo bash included) or any
+    // command that reads stdin as code.
     let segment_is_shell = |words: &[Tok], cur: &Option<Tok>| {
-        let mut all = words.to_vec();
-        all.extend(cur.iter().cloned());
-        normalize(&all).first().is_some_and(|w| {
-            let n = base_name(&w.value);
-            BASH_SHELLS.contains(&n.as_str()) || matches!(n.as_str(), "pwsh" | "powershell" | "cmd")
+        let all: Cow<[Tok]> = match cur {
+            None => Cow::Borrowed(words),
+            Some(c) => {
+                if !b.spend(words.len() * WORD) {
+                    return true;
+                }
+                let mut all = words.to_vec();
+                all.push(c.clone());
+                Cow::Owned(all)
+            }
+        };
+        each_reading(&all, 0, b, |start, w| match w {
+            Walk::Cmd { at, glued, .. } => {
+                let words = view(&all[start..], *at, glued, b);
+                is_shell(&base_name(&words[0].value)) || command_reads_stdin(&words, b)
+            }
+            Walk::Bare { wrapper } => *wrapper == Some("wsl"),
+            Walk::Split { .. } | Walk::Opaque => true,
         })
     };
 
@@ -930,7 +1203,9 @@ fn segments(text: &str, mode: Mode) -> Segments {
                     if h.strip_tabs {
                         line = line.trim_start_matches('\t');
                     }
-                    if line.trim_end_matches('\r') == h.delim {
+                    // A line ending in `\r` also ends the body: the earlier end leaves more
+                    // text to scan as code.
+                    if line.trim_end_matches('\r') == h.delim.trim_end_matches('\r') {
                         found = true;
                         body_end = j;
                         next = (line_end + 1).min(n);
@@ -951,7 +1226,7 @@ fn segments(text: &str, mode: Mode) -> Segments {
                 }
                 j = next.max(j);
             }
-            end_segment(&mut out, &mut cur, &mut words, false);
+            end_segment(&mut out, &mut cur, &mut words, false, false);
             i = j;
         } else if mode == Mode::Bash && text[i..].starts_with("<<<") {
             // A here-string: its word is the stdin of the command.
@@ -985,26 +1260,21 @@ fn segments(text: &str, mode: Mode) -> Segments {
             while j < n && matches!(char_at(text, j), ' ' | '\t') {
                 j += 1;
             }
-            let k = text[j..]
-                .find(|c: char| is_blank(mode, c) || is_separator(mode, c) || c == '<' || c == '>')
-                .map_or(n, |k| j + k);
-            let raw = &text[j..k];
-            let delim: String = raw
-                .chars()
-                .filter(|c| !matches!(c, '\'' | '"' | '\\'))
-                .collect();
-            if !delim.is_empty() {
-                heredocs.push(Heredoc {
-                    delim,
-                    strip_tabs,
-                    quoted: raw.len()
-                        != raw
-                            .chars()
-                            .filter(|c| !matches!(c, '\'' | '"' | '\\'))
-                            .count(),
-                });
+            // A delimiter the reader cannot resolve pushes no heredoc: the lines after it stay
+            // code.
+            match heredoc_word(text, j) {
+                Some((delim, quoted, end)) => {
+                    if quoted || !delim.is_empty() {
+                        heredocs.push(Heredoc {
+                            delim,
+                            strip_tabs,
+                            quoted,
+                        });
+                    }
+                    i = end;
+                }
+                None => i = j,
             }
-            i = k;
         } else if mode == Mode::Pwsh
             && cur.is_none()
             && (text[i..].starts_with("@'") || text[i..].starts_with("@\""))
@@ -1035,7 +1305,10 @@ fn segments(text: &str, mode: Mode) -> Segments {
             i += cl;
         } else if is_separator(mode, c) {
             let pipe = c == '|' && !text[i + 1..].starts_with('|') && !text[..i].ends_with('|');
-            end_segment(&mut out, &mut cur, &mut words, pipe);
+            let procsub = c == '('
+                && mode == Mode::Bash
+                && cur.as_ref().is_some_and(|t| t.value == "<" && !t.quoted);
+            end_segment(&mut out, &mut cur, &mut words, pipe, procsub);
             i += cl;
         } else if cur.is_none() && mode == Mode::Pwsh && text[i..].starts_with("<#") {
             i = text[i + 2..].find("#>").map_or(n, |k| i + 2 + k + 2);
@@ -1087,8 +1360,67 @@ fn segments(text: &str, mode: Mode) -> Segments {
             i += cl;
         }
     }
-    end_segment(&mut out, &mut cur, &mut words, false);
+    end_segment(&mut out, &mut cur, &mut words, false, false);
     out
+}
+
+/// The heredoc delimiter word at `j`, read as bash reads it: quotes removed, backslash escapes
+/// resolved, `\r` a plain character. Returns the word, whether any part of it was quoted, and
+/// the index after it; `None` when it cannot be read exactly (an unclosed quote, `$'…'` or
+/// `$"…"`, a newline inside it).
+fn heredoc_word(text: &str, j: usize) -> Option<(String, bool, usize)> {
+    let n = text.len();
+    let mut word = String::new();
+    let mut quoted = false;
+    let mut exact = true;
+    let mut k = j;
+    while k < n {
+        let c = char_at(text, k);
+        match c {
+            ' ' | '\t' | '\n' | ';' | '|' | '&' | '(' | ')' | '<' | '>' => break,
+            '\'' => {
+                quoted = true;
+                let e = k + 1 + text[k + 1..].find('\'')?;
+                word.push_str(&text[k + 1..e]);
+                k = e + 1;
+            }
+            '"' => {
+                quoted = true;
+                let mut e = k + 1;
+                loop {
+                    let d = text[e..].chars().next()?;
+                    if d == '"' {
+                        break;
+                    }
+                    let x = char_at(text, e + d.len_utf8());
+                    if d == '\\' && matches!(x, '$' | '`' | '"' | '\\' | '\n') {
+                        word.push(x);
+                        e += 2;
+                    } else {
+                        word.push(d);
+                        e += d.len_utf8();
+                    }
+                }
+                k = e + 1;
+            }
+            '\\' => {
+                quoted = true;
+                let x = text[k + 1..].chars().next()?;
+                word.push(x);
+                k += 1 + x.len_utf8();
+            }
+            '$' if matches!(char_at(text, k + 1), '\'' | '"') => {
+                exact = false;
+                word.push(c);
+                k += 1;
+            }
+            _ => {
+                word.push(c);
+                k += c.len_utf8();
+            }
+        }
+    }
+    (exact && !word.contains('\n')).then_some((word, quoted, k))
 }
 
 #[cfg(test)]
@@ -1264,8 +1596,93 @@ mod tests {
         "(Get-Item x).Delete()",
         "(Get-Item x).Delete($true)",
         "$d.Delete()",
+        // I-2: the env -S body is a nested command (quotes, `\_`, wrappers, nested -S)
+        "sudo -X foo env -S 'rm -rf x'",
+        "sudo -X foo env -iS 'rm -rf x'",
+        "sudo -X foo env -S 'git reset --hard'",
+        "sudo -X foo env -S 'X=1 rm -rf x'",
+        "sudo -c default env -S 'rm -rf x'",
+        "env -a foo -S 'rm -rf x'",
+        "env -S '\"rm\" -rf x'",
+        "env -S 'env -S \"rm -rf x\"'",
+        "env -S 'rm\\_-rf\\_x'",
+        "env -S 'sudo -X foo rm -rf x'",
+        // I-1: the heredoc delimiter is a bash word (`\r` is a plain character, quotes hold blanks)
+        "echo \u{2018}a; cat <<A\rB\nhello\nA\rB\nrm -rf x\nA\necho \u{2019}",
+        "echo \u{2018}a; cat <<'A B'\nhello\nA B\nrm -rf x\nA\necho '\n'\necho \u{2019}",
+        "echo \u{2018}a; cat <<A\\ B\nhello\nA B\nrm -rf x\nA\necho \u{2019}",
+        "echo \u{2018}a; cat <<\"A B\"\nhello\nA B\nrm -rf x\nA\necho \"\n\"\necho \u{2019}",
+        // bash takes `A` as the delimiter of `<<$'A'`; the reader does not resolve `$'…'`
+        "echo \u{2018}a; cat <<$'A'\nhello\nA\nrm -rf x\n$A\necho \u{2019}",
+        // I-3: forms whose reading has no other row
+        "sudo -u root env -S 'rm -rf x'",
+        "echo \u{2018}a; sudo -u root bash <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
+        "env -S'rm -rf x'",
+        "env -iS'rm -rf x'",
+        "Start-Process git 'clean','-fd'",
+        "echo 'rm -rf x' | sudo -u root bash",
+        "echo 'rm -rf x' | nice -n 5 bash",
+        "echo 'rm -rf x' | timeout 5 bash",
+        "@'\nRemove-Item x",
+        "$m = @\"\n$(Remove-Item x)\n\"@",
+        // I-4: text an interpreter reads from a pipe or a process substitution
+        "'Remove-Item x' | iex",
+        "'Remove-Item x' | Invoke-Expression",
+        "echo 'rm -rf x' | wsl",
+        "echo 'rm -rf x' | source /dev/stdin",
+        "echo 'rm -rf x' | . /dev/stdin",
+        "bash <(echo 'rm -rf x')",
+        "sh <(echo 'rm -rf x')",
+        "bash < <(echo 'rm -rf x')",
+        // the consumer behind a wrapper option the table does not know
+        "echo 'rm -rf x' | sudo -X foo bash",
+        "echo \u{2018}a; sudo -X foo bash <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
+        "source <(echo 'rm -rf x')",
+        ". <(echo 'rm -rf x')",
     ];
 
+    /// Commands the scan cannot read to the end (too deep, too much work, text it cannot see):
+    /// flagged as unreadable whatever they hold.
+    const OPAQUE: &[&str] = &[
+        "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Get-Date",
+        "env -S env -S env -S env -S env -S echo hi",
+        "sudo sudo sudo sudo sudo echo hi",
+        "cat script.sh | bash",
+        "Get-Content x.ps1 | iex",
+        "bash <(cat script.sh)",
+    ];
+
+    /// Every wrapper name: the shell after it reads the pipe.
+    const WRAPPER_NAMES: &[&str] = &[
+        "sudo", "doas", "env", "timeout", "nice", "ionice", "time", "xargs", "nohup", "command",
+        "exec", "stdbuf", "wsl",
+    ];
+
+    /// env options that take a value, as `env --help` lists them: the value is not the `-S`.
+    const ENV_VALUE_OPTIONS: &[&str] = &["-u", "--unset", "-C", "--chdir", "-a", "--argv0", "--un"];
+
+    /// wsl options that take a value, as `wsl --help` lists them: `wsl -d Ubuntu` alone runs the
+    /// default shell.
+    const WSL_VALUE_OPTIONS: &[&str] = &[
+        "-d",
+        "--distribution",
+        "-u",
+        "--user",
+        "--cd",
+        "--shell-type",
+        "--distrib",
+    ];
+
+    /// `Start-Process` parameters that take a value: the value is not the file to start.
+    const START_PROCESS_VALUE_PARAMS: &[&str] = &[
+        "-WorkingDirectory",
+        "-Verb",
+        "-WindowStyle",
+        "-RedirectStandardInput",
+        "-RedirectStandardOutput",
+        "-RedirectStandardError",
+        "-Credential",
+    ];
     const HARMLESS: &[&str] = &[
         "Get-Date",
         "ls -rf",
@@ -1311,6 +1728,79 @@ mod tests {
             .filter(|cmd| raw_destructive(cmd).is_none())
             .collect();
         assert!(missed.is_empty(), "missed: {missed:?}");
+    }
+
+    #[test]
+    fn unreadable_commands_are_flagged() {
+        let missed: Vec<&&str> = OPAQUE
+            .iter()
+            .filter(|cmd| !hits(table(), cmd).iter().any(|h| h.row.is_none()))
+            .collect();
+        assert!(missed.is_empty(), "not flagged as unreadable: {missed:?}");
+    }
+
+    #[test]
+    fn wrapper_option_values_are_not_the_command() {
+        let mut rows = Vec::new();
+        for wrapper in WRAPPER_NAMES {
+            rows.push(format!("echo 'rm -rf x' | {wrapper} bash"));
+        }
+        for opt in ENV_VALUE_OPTIONS {
+            rows.push(format!("env {opt} v -S 'rm -rf x'"));
+        }
+        for opt in WSL_VALUE_OPTIONS {
+            rows.push(format!("echo 'rm -rf x' | wsl {opt} v"));
+        }
+        for param in START_PROCESS_VALUE_PARAMS {
+            rows.push(format!("Start-Process {param} v git 'clean','-fd'"));
+        }
+        let missed: Vec<&String> = rows
+            .iter()
+            .filter(|cmd| raw_destructive(cmd).is_none())
+            .collect();
+        assert!(missed.is_empty(), "missed: {missed:?}");
+    }
+
+    #[test]
+    fn chained_env_split_strings_stay_bounded() {
+        // 64 KiB of `env -S` links: past the depth limit the tail is unreadable, harmless or not.
+        for tail in ["rm -rf x", "echo hi"] {
+            let cmd = format!("{}{tail}", "env -S ".repeat(64 * 1024 / 7));
+            let start = std::time::Instant::now();
+            assert!(raw_destructive(&cmd).is_some(), "{tail}");
+            assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
+        }
+    }
+
+    #[test]
+    fn nested_bodies_behind_wrappers_stay_bounded() {
+        // Every word after a wrapper is a reading, and each `eval`/`bash -c` reading nests a body.
+        for unit in ["sudo eval ", "sudo bash -c "] {
+            let cmd = format!("{}echo hi", unit.repeat(64 * 1024 / unit.len()));
+            let start = std::time::Instant::now();
+            assert!(raw_destructive(&cmd).is_some(), "{unit}");
+            assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
+        }
+    }
+
+    #[test]
+    fn a_spent_budget_hides_nothing() {
+        // The first segment spends the budget without nesting deeper than one body; the `rm`
+        // after it is never read, so the input as a whole is unreadable.
+        let cmd = format!("sudo x {}; rm -rf x", "bash -c 'echo hi' ".repeat(1000));
+        let hits = hits(table(), &cmd);
+        assert!(
+            hits.iter().all(|h| h.row.is_none()),
+            "the rm was read: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| h.span
+                == Span {
+                    start: 0,
+                    end: cmd.len()
+                }),
+            "{hits:?}"
+        );
     }
 
     #[test]
