@@ -41,6 +41,20 @@ fn invalid_utf8_fails_closed() {
     assert_ok(&run(CHECK, Some(b"Get-\xffDate"), &[]));
 }
 
+#[test]
+fn input_over_the_hard_cap_is_danger_without_scanning() {
+    // 16 MB of harmless text: too big to scan inside the deadline, so it is danger unread.
+    let big = vec![b'a'; 16 * 1024 * 1024];
+    let r = run(CHECK, Some(&big), &[]);
+    assert_eq!(r.code, 2, "{:?}", r.stderr);
+    assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+    assert!(
+        r.elapsed < std::time::Duration::from_secs(9),
+        "{:?}",
+        r.elapsed
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn argv_that_is_not_unicode_fails_closed() {
@@ -107,6 +121,46 @@ mod hooks {
     fn worker_that_cannot_start_fails_closed() {
         assert_failclosed_danger(&hook("spawn-fail", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
         assert_ok(&hook("spawn-fail", "Get-Date"));
+    }
+
+    #[test]
+    fn scan_that_misses_the_deadline_is_danger() {
+        // The rule panics and the raw-text scan is too slow: nothing shows the command harmless.
+        let r = hook("panic-scan-sleep", "Get-Date");
+        assert_eq!(r.code, 2, "{:?}", r.stdout);
+        assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
+    }
+
+    #[test]
+    fn stdin_held_open_ends_at_the_deadline() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_shellwise"))
+            .args(CHECK)
+            .env("SHELLWISE_TESTHOOK_DEADLINE_MS", "500")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"Get-Date; rm -rf x").unwrap();
+        stdin.flush().unwrap();
+        // stdin stays open while we wait; a hang is killed after 10 s and fails below.
+        while child.try_wait().unwrap().is_none() && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let elapsed = start.elapsed();
+        let _ = child.kill();
+        let out = child.wait_with_output().unwrap();
+        drop(stdin);
+        assert_eq!(out.status.code(), Some(2), "{out:?}");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["findings"][0]["rule"], "analysis-failed");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     }
 
     #[test]

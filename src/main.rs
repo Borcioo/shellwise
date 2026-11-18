@@ -1,10 +1,14 @@
 //! The `shellwise` command line.
 
+// The fail-closed verdict depends on catching panics.
+#[cfg(not(panic = "unwind"))]
+compile_error!("shellwise must be built with panic = \"unwind\"");
+
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Instant;
 
@@ -14,8 +18,10 @@ use shellwise::adapter::check_json;
 use shellwise::config::Config;
 use shellwise::ir::EnvView;
 use shellwise::level::{Verdict, exit_code};
+use shellwise::scan::raw_destructive;
 use shellwise::{
-    BashProfile, CheckInput, Deadline, MAX_INPUT_BYTES, Os, Shell, check, fail_closed,
+    BashProfile, CheckInput, Deadline, MAX_INPUT_BYTES, MAX_READ_BYTES, Os, Shell, check,
+    fail_closed_unread, scan_verdict,
 };
 
 /// Exit code for usage errors.
@@ -98,68 +104,125 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
     let cfg = Config::default();
     let deadline = test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &cfg));
 
-    let bytes = if args.command.is_empty() {
-        let mut buf = Vec::new();
-        if let Err(e) = io::stdin().read_to_end(&mut buf) {
-            eprintln!("shellwise: cannot read stdin: {e}");
-            return EXIT_IO;
+    let (command, problem) = if args.command.is_empty() {
+        match read_stdin(deadline) {
+            Input::Bytes(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => (s, None),
+                Err(e) => (
+                    String::from_utf8_lossy(e.as_bytes()).into_owned(),
+                    Some("invalid UTF-8"),
+                ),
+            },
+            Input::Unread(reason) => return finish(fail_closed_unread(reason), &args, reason),
+            Input::Error(e) => {
+                eprintln!("shellwise: cannot read stdin: {e}");
+                return EXIT_IO;
+            }
         }
-        buf
     } else {
         let joined = args.command.join(&OsString::from(" "));
         match joined.into_string() {
-            Ok(s) => s.into_bytes(),
-            Err(os) => {
-                // Not valid Unicode: the lossy text is still scanned, then fails closed below.
-                let lossy = os.to_string_lossy().into_owned();
-                return finish(fail_closed(&lossy, "invalid UTF-8"), &args, "invalid UTF-8");
-            }
+            Ok(s) => (s, None),
+            // Not valid Unicode: the lossy text is still scanned.
+            Err(os) => (os.to_string_lossy().into_owned(), Some("invalid UTF-8")),
         }
     };
-
-    let command = match String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            let lossy = String::from_utf8_lossy(e.as_bytes()).into_owned();
-            return finish(fail_closed(&lossy, "invalid UTF-8"), &args, "invalid UTF-8");
-        }
-    };
-    if command.len() > MAX_INPUT_BYTES {
-        let reason = "input over the size cap";
-        return finish(fail_closed(&command, reason), &args, reason);
+    if command.len() > MAX_READ_BYTES {
+        let reason = "input over the hard size cap";
+        return finish(fail_closed_unread(reason), &args, reason);
     }
-
-    let verdict = match analyse(
-        &command,
+    let problem =
+        problem.or((command.len() > MAX_INPUT_BYTES).then_some("input over the size cap"));
+    let (verdict, failed) = analyse(
+        command,
+        problem,
         args.shell.shell(),
         args.cwd.clone(),
         &cfg,
         deadline,
-    ) {
-        Ok(v) => v,
-        Err(reason) => {
-            return finish(fail_closed(&command, reason), &args, reason);
-        }
-    };
-    finish(verdict, &args, "")
+    );
+    finish(verdict, &args, failed)
 }
 
-/// Run `check` on a big-stack worker inside `catch_unwind`; wait only until the deadline.
+enum Input {
+    Bytes(Vec<u8>),
+    /// Too big or still open at the deadline: danger without scanning.
+    Unread(&'static str),
+    Error(io::Error),
+}
+
+/// Read stdin on a thread, at most `MAX_READ_BYTES + 1` bytes, waiting only until the deadline.
+fn read_stdin(deadline: Deadline) -> Input {
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::Builder::new().name("stdin".into()).spawn(move || {
+        let mut buf = Vec::new();
+        let r = io::stdin()
+            .lock()
+            .take(MAX_READ_BYTES as u64 + 1)
+            .read_to_end(&mut buf);
+        let _ = tx.send(r.map(|_| buf));
+    });
+    if reader.is_err() {
+        return Input::Unread("the stdin reader did not start");
+    }
+    match rx.recv_timeout(deadline.remaining()) {
+        // More than MAX_READ_BYTES is refused by the caller.
+        Ok(Ok(buf)) => Input::Bytes(buf),
+        Ok(Err(e)) => Input::Error(e),
+        Err(_) => Input::Unread("stdin still open at the deadline"),
+    }
+}
+
+/// Run `check` on a big-stack worker inside `catch_unwind` and the raw-text scan on a second
+/// worker, both under the deadline. When `check` cannot finish (or `problem` says it must not
+/// run), the scan decides: danger when it matches or did not finish, else ok. Returns the
+/// verdict and the reason the analysis failed ("" when it did not).
 fn analyse(
-    command: &str,
+    command: String,
+    problem: Option<&'static str>,
+    shell: Shell,
+    cwd: Option<PathBuf>,
+    cfg: &Config,
+    deadline: Deadline,
+) -> (Verdict, &'static str) {
+    let command = Arc::new(command);
+    let (scan_tx, scan_rx) = mpsc::channel();
+    let text = Arc::clone(&command);
+    let scan = thread::Builder::new().name("scan".into()).spawn(move || {
+        if testhook_is("panic-scan-sleep") {
+            thread::sleep(std::time::Duration::from_secs(60));
+        }
+        let _ = scan_tx.send(panic::catch_unwind(|| raw_destructive(&text)));
+    });
+
+    let reason = match problem {
+        Some(reason) => reason,
+        None => match run_checker(Arc::clone(&command), shell, cwd, cfg, deadline) {
+            Ok(verdict) => return (verdict, ""),
+            Err(reason) => reason,
+        },
+    };
+    let hit = match (scan, scan_rx.recv_timeout(deadline.remaining())) {
+        (Ok(_), Ok(Ok(hit))) => Some(hit),
+        _ => None,
+    };
+    (scan_verdict(hit, command.len(), reason), reason)
+}
+
+fn run_checker(
+    command: Arc<String>,
     shell: Shell,
     cwd: Option<PathBuf>,
     cfg: &Config,
     deadline: Deadline,
 ) -> Result<Verdict, &'static str> {
     let (tx, rx) = mpsc::channel();
-    let owned = command.to_string();
     let cfg = cfg.clone();
     let job = move || {
         let input = CheckInput {
             shell,
             os: Os::host(),
-            command: &owned,
+            command: &command,
             cwd,
             env: EnvView::new(),
         };

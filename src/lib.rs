@@ -18,6 +18,9 @@ use level::{Finding, Level, Span, Verdict};
 /// Commands longer than this (in bytes) are not analysed; they get the fail-closed verdict.
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 
+/// Input longer than this (in bytes) is not even scanned: it is `danger` unread.
+pub const MAX_READ_BYTES: usize = 1024 * 1024;
+
 /// The rule id of every fail-closed verdict.
 pub const ANALYSIS_FAILED: &str = "analysis-failed";
 
@@ -118,21 +121,35 @@ fn fail_closed_with(
     reason: &str,
     scan: impl FnOnce(&str) -> Option<Span> + std::panic::UnwindSafe,
 ) -> Verdict {
-    let hit = std::panic::catch_unwind(|| scan(command));
+    let hit = std::panic::catch_unwind(|| scan(command)).ok();
+    scan_verdict(hit, command.len(), reason)
+}
+
+/// The fail-closed verdict from a scan result: `None` when the scan did not finish (it panicked
+/// or ran out of time), which nothing proves harmless.
+pub fn scan_verdict(hit: Option<Option<Span>>, command_len: usize, reason: &str) -> Verdict {
     let span = match hit {
-        Ok(None) => return Verdict::new(Vec::new()),
-        Ok(Some(span)) => span,
-        // The scan itself failed: nothing proves the command harmless.
-        Err(_) => Span {
+        Some(None) => return Verdict::new(Vec::new()),
+        Some(Some(span)) => span,
+        None => Span {
             start: 0,
-            end: command.len(),
+            end: command_len,
         },
     };
+    danger(span, reason)
+}
+
+/// The verdict for input that was not read whole (over the hard cap, stdin still open).
+pub fn fail_closed_unread(reason: &str) -> Verdict {
+    danger(Span::default(), reason)
+}
+
+fn danger(span: Span, reason: &str) -> Verdict {
     Verdict::new(vec![Finding {
         rule: ANALYSIS_FAILED,
         level: Level::Danger,
         message: format!(
-            "the command could not be analysed ({reason}) and it holds a destructive command"
+            "the command could not be analysed ({reason}) and may destroy data: the raw text holds a destructive command or could not be read"
         ),
         fix: Some("split the command into simpler calls so each can be checked".to_string()),
         span,

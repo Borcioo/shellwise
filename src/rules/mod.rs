@@ -56,7 +56,7 @@ pub mod testhooks {
                         span: crate::level::Span::default(),
                     });
                 }
-                "panic" => panic!("testhook: panic inside a rule"),
+                "panic" | "panic-scan-sleep" => panic!("testhook: panic inside a rule"),
                 "sleep" => std::thread::sleep(std::time::Duration::from_secs(60)),
                 "recurse" => {
                     let depth = ctx.input.command.bytes().filter(|&b| b == b'(').count();
