@@ -69,8 +69,9 @@ fn input_over_the_hard_cap_is_danger_without_scanning() {
 
 #[test]
 fn chained_env_split_strings_get_a_verdict() {
-    // Each `env -S` link nests one more command. The invalid byte makes the raw scan decide; past
-    // its depth limit nothing proves the tail harmless, so both tails are danger, printed as JSON.
+    // Each `env -S` link nests one more command. The invalid byte forces the fail path, where the
+    // raw scan must still finish in time; the text is not a simple command, so both tails are
+    // danger, printed as JSON.
     for tail in ["rm -rf x", "echo hi"] {
         let mut cmd = "env -S ".repeat(9000).into_bytes();
         cmd.extend_from_slice(tail.as_bytes());

@@ -110,6 +110,9 @@ pub fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
     Verdict::new(findings)
 }
 
+/// The longest scan hit (in bytes) the fail-closed reason quotes.
+const MAX_QUOTED: usize = 80;
+
 /// The allow marker and its alias.
 const ALLOW_MARKERS: [&str; 2] = ["# shellwise: allow", "# baseline-guard: allow"];
 
@@ -142,10 +145,16 @@ pub fn scan_verdict(hit: Option<Option<Span>>, command: &str, reason: &str) -> V
     };
     let (span, message) = match hit.flatten() {
         Some(span) => match command.get(span.start..span.end) {
-            Some(found) => (
+            Some(found) if found.len() <= MAX_QUOTED && !found.chars().any(char::is_control) => (
                 span,
                 format!(
-                    "the command could not be analysed ({reason}) and holds a destructive command: `{found}`"
+                    "the command could not be analysed ({reason}); the raw scan flags `{found}` as destructive or unreadable"
+                ),
+            ),
+            Some(_) => (
+                span,
+                format!(
+                    "the command could not be analysed ({reason}); the raw scan flags part of it as destructive or unreadable"
                 ),
             ),
             None => (whole, not_simple(reason)),
@@ -256,6 +265,36 @@ mod tests {
         assert_eq!(v.findings[0].span, Span { start: 9, end: 17 });
         let msg = &v.findings[0].message;
         assert!(msg.contains("test") && msg.contains("`rm -rf x`"), "{msg}");
+    }
+
+    #[test]
+    fn fail_closed_quotes_only_a_short_one_line_hit() {
+        // A hit may be an unreadable region or the whole text (a spent budget): it is not quoted
+        // when long or multi-line, so the reason stays one short line.
+        let long = format!("{} #", "env -S ".repeat(100));
+        let all = |c: &str| {
+            Some(Span {
+                start: 0,
+                end: c.len(),
+            })
+        };
+        let v = fail_closed_with(&long, "test", all);
+        assert_danger(&v, &long);
+        assert_eq!(
+            v.findings[0].span,
+            Span {
+                start: 0,
+                end: long.len()
+            }
+        );
+        let msg = &v.findings[0].message;
+        assert!(msg.len() < 200 && !msg.contains("env -S env"), "{msg}");
+
+        let lines = "rm -rf x\nrm -rf y #";
+        let v = fail_closed_with(lines, "test", all);
+        assert_danger(&v, lines);
+        let msg = &v.findings[0].message;
+        assert!(!msg.contains('\n') && !msg.contains("rm -rf"), "{msg}");
     }
 
     #[test]
