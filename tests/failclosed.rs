@@ -50,7 +50,8 @@ fn invalid_utf8_fails_closed() {
     assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
 
     assert_failed(&run(CHECK, Some(b"Get-\xffDate"), &[]));
-    assert_ok(&run(CHECK, Some(b"echo \xff"), &[]));
+    // The lossy decode puts U+FFFD in the text, and a non-ASCII text is never harmless.
+    assert_failed(&run(CHECK, Some(b"echo \xff"), &[]));
 }
 
 #[test]

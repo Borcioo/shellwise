@@ -166,13 +166,14 @@ pub fn raw_destructive(cmd: &str) -> Option<Span> {
         .min_by_key(|s| (s.start, s.end))
 }
 
-/// The ASCII metacharacters of the harmless grammar. Every whitespace character other than the
-/// ASCII space (newline and CR included) and every control character count as metacharacters too.
+/// The ASCII metacharacters of the harmless grammar. Every control character (newline, CR and tab
+/// included) and every non-ASCII character count as metacharacters too: pwsh reads U+2013-U+2015
+/// as dashes and other non-ASCII characters as quotes.
 const METACHARACTERS: &str = ";&|<>()$`\\\"'{}[]*?~#";
 
 /// The read-only commands of the harmless grammar, as the words the text starts with. No word
-/// after them may start with `-`: an option can run a command or write a file (`rg --pre`,
-/// `git diff --output`).
+/// after them may start with `-` or `/` (a cmd or pwsh switch): an option can run a command or
+/// write a file (`rg --pre`, `git diff --output`).
 const READ_ONLY: &[&str] = &[
     "ls",
     "cat",
@@ -199,7 +200,7 @@ const VERSION_TOOLS: &[&str] = &["git", "cargo", "rustc", "node", "npm", "python
 pub fn harmless(text: &str) -> bool {
     if text
         .chars()
-        .any(|c| METACHARACTERS.contains(c) || (c != ' ' && (c.is_whitespace() || c.is_control())))
+        .any(|c| !c.is_ascii() || c.is_ascii_control() || METACHARACTERS.contains(c))
     {
         return false;
     }
@@ -214,7 +215,9 @@ pub fn harmless(text: &str) -> bool {
         let want: Vec<&str> = entry.split(' ').collect();
         words.len() >= want.len()
             && words.iter().zip(&want).all(|(w, e)| same(w, e))
-            && !words[want.len()..].iter().any(|w| w.starts_with('-'))
+            && !words[want.len()..]
+                .iter()
+                .any(|w| w.starts_with('-') || w.starts_with('/'))
     })
 }
 

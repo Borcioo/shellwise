@@ -416,8 +416,8 @@ mod tests {
     }
 
     /// The metacharacters of the harmless grammar, written out here (not read from the code) so a
-    /// character dropped from the code keeps its row. Whitespace other than the ASCII space and
-    /// control characters count as metacharacters too.
+    /// character dropped from the code keeps its row. Control and non-ASCII characters count as
+    /// metacharacters too.
     const METACHARACTERS: &[&str] = &[
         ";", "&", "|", "<", ">", "(", ")", "$", "`", "\\", "\"", "'", "{", "}", "[", "]", "*", "?",
         "~", "#", "\n", "\r", "\t", "\u{b}", "\u{c}", "\u{a0}", "\u{3000}", "\u{1b}", "\u{0}",
@@ -454,6 +454,12 @@ mod tests {
         "cargo --version x",
         "cargo build",
         "git --version --exec-path",
+        // pwsh reads U+2013/U+2014/U+2015 as dashes and a leading `/` as a switch; no non-ASCII.
+        "git diff \u{2013}output=f",
+        "git diff \u{2014}output=f",
+        "git log \u{2015}output f",
+        "ls /s",
+        "echo \u{ef}",
     ];
 
     #[test]
