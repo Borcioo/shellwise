@@ -80,13 +80,12 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
         .spawn(move || {
             // The first pass finds the tainted names; only when there are some does a second pass
             // lower the script again, marking each arithmetic context that reads one.
-            let first = Lower::new(profile, owned.len(), Taint::default());
+            let first = Lower::new(profile, owned.len(), None);
             let script = first.text(&owned, Origin::Exact(0), 0)?;
-            let taint = first.taint();
-            if taint.is_empty() {
-                return Ok(script);
+            match first.taint() {
+                None => Ok(script),
+                taint => Lower::new(profile, owned.len(), taint).text(&owned, Origin::Exact(0), 0),
             }
-            Lower::new(profile, owned.len(), taint).text(&owned, Origin::Exact(0), 0)
         });
     match worker {
         Err(_) => Err(error(whole, "the parser thread did not start", None)),
@@ -235,35 +234,51 @@ impl Cx {
     }
 }
 
-/// At most this many names are tainted through copies; past it every arithmetic context is opaque.
+/// At most this many names turn tainted through other names; past it every arithmetic context
+/// is opaque.
 const MAX_TAINT_STEPS: usize = 64;
 
-/// Commands whose arguments become the positional parameters, besides the script's functions.
-const SETS_POSITIONALS: &[&str] = &["set", "source", "."];
+/// Shell variables that always hold an integer.
+const INTEGER_VARIABLES: &[&str] = &[
+    "#", "?", "$", "RANDOM", "LINENO", "SECONDS", "BASHPID", "PPID", "UID", "EUID",
+];
 
-/// One value assigned to a name, as the taint rule reads it.
-struct Assigned {
-    name: String,
-    /// The value as `value_text` gives it.
-    text: String,
-    /// The variable each expansion in the value reads; `None` for a substitution or an expansion
-    /// with an operator. An append (`n+=…`) reads the name itself first.
-    expansions: Vec<Option<String>>,
+/// A value assigned to a name, as the taint rule reads it.
+enum Value {
+    /// Cannot hold code: an integer from `$((…))`, a substitution's output.
+    Clean,
+    /// Anything the allow-list does not name.
+    Tainted,
+    /// One expansion of a variable with nothing around it (`n=$x`): a value bash gets at run time
+    /// unless the script itself assigns `x`, then as clean as `x`.
+    Copy(String),
+    /// Arithmetic over these names (`n=5`, `n=x+1`), or the positional parameters (`n=$1`):
+    /// clean when they all are.
+    Arith {
+        names: Vec<String>,
+        positional: bool,
+    },
 }
 
-/// Names whose value runs a command when bash evaluates it as arithmetic.
+/// A command whose arguments become the positional parameters.
+struct Call {
+    /// The name as typed when it may be a function of the script; `None` for `set`, `source`,
+    /// `.` and a name not known statically.
+    function: Option<String>,
+    args: Vec<Value>,
+}
+
+/// Which names may hold text that runs a command when bash evaluates it as arithmetic.
 ///
-/// A name is tainted when a static value assigned to it holds `$(…)` or a backtick
-/// (`x='a[$(…)]'`, `b='$(…)]'`), when a value assigned to it names a tainted name (`y=x`, `y=$x`),
-/// or when the value joins several expansions (`n=$a$b`, `n+=$b`) of which one is not a name the
-/// script only ever sets to static text. The positional parameters are tainted when a call of a
-/// function or `set` passes such text or a tainted name. The order of the assignments does not
-/// matter. A single value bash gets at run time (`read`, `printf -v`, command output) is not
-/// tracked.
-#[derive(Default)]
+/// A name is clean only when every value the script assigns to it, anywhere, is an integer,
+/// arithmetic over integers and clean names, or one run-time expansion with nothing around it
+/// (`n=$(wc -l <f)`, `n=$1`). Every other name is tainted: a value with several pieces or other
+/// text, `+=`, a `read`/`mapfile`/`printf -v` target, a name the script never assigns. The
+/// integer shell variables are clean. The positional parameters are tainted when a call of a
+/// script function (its name as typed), `set`, `source`/`.` or a command whose name is not static
+/// passes a value that is not clean.
 struct Taint {
-    names: BTreeSet<String>,
-    /// `$1`, `$@` … may be tainted.
+    clean: BTreeSet<String>,
     positional: bool,
     /// Propagation went past `MAX_TAINT_STEPS`: every arithmetic context reads a tainted name.
     all: bool,
@@ -272,104 +287,135 @@ struct Taint {
 }
 
 impl Taint {
-    /// `all` is only set once names were tainted, so it needs no check here.
-    fn is_empty(&self) -> bool {
-        self.names.is_empty() && !self.positional
+    fn is_clean(&self, name: &str) -> bool {
+        INTEGER_VARIABLES.contains(&name) || self.clean.contains(name)
     }
 
     /// Whether arithmetic over `text` reads a tainted name.
     fn reads(&self, text: &str) -> bool {
-        self.all
-            || identifiers(text).any(|id| self.names.contains(id))
-            || (self.positional && reads_positional(text))
+        let (names, positional) = arith_refs(text);
+        self.all || names.iter().any(|n| !self.is_clean(n)) || (positional && self.positional)
     }
 
-    /// `calls`: each command's target and argument texts; `functions`: the names the script
-    /// defines as functions.
+    /// `assigned`: the names the script assigns.
+    fn value_clean(&self, v: &Value, assigned: &BTreeSet<&str>) -> bool {
+        match v {
+            Value::Clean => true,
+            Value::Tainted => false,
+            Value::Copy(n) => self.is_clean(n) || !assigned.contains(n.as_str()),
+            Value::Arith { names, positional } => {
+                names.iter().all(|n| self.is_clean(n)) && !(*positional && self.positional)
+            }
+        }
+    }
+
+    /// The largest set of clean names the rule allows, found round by round; each round judges
+    /// every value against the names still clean when it starts.
     fn compute(
-        assigned: &[Assigned],
-        calls: &[(String, Vec<String>)],
+        assigned: &[(String, Value)],
+        calls: &[Call],
         functions: &BTreeSet<String>,
         integers: BTreeSet<String>,
     ) -> Taint {
-        // Names that may hold a value bash gets at run time: never assigned here (the environment,
-        // `read`, positionals), or assigned a substitution, an expansion with an operator or such
-        // a name. Past the step bound every name assigned an expansion counts.
-        let known: BTreeSet<&str> = assigned.iter().map(|a| a.name.as_str()).collect();
-        let mut runtime: BTreeSet<&str> = BTreeSet::new();
-        for round in 0.. {
-            let before = runtime.len();
-            for a in assigned {
-                let reads_runtime = a.expansions.iter().any(|e| match e {
-                    None => true,
-                    Some(m) => {
-                        *m != a.name
-                            && (round > MAX_TAINT_STEPS
-                                || !known.contains(m.as_str())
-                                || runtime.contains(m.as_str()))
-                    }
-                });
-                if reads_runtime {
-                    runtime.insert(&a.name);
-                }
-            }
-            if runtime.len() == before {
-                break;
-            }
-        }
-        let is_runtime = |n: &str| !known.contains(n) || runtime.contains(n);
-        let joins_dynamic = |a: &Assigned| {
-            a.expansions.len() > 1
-                && a.expansions
-                    .iter()
-                    .any(|e| e.as_deref().is_none_or(is_runtime))
-        };
-        let callers: Vec<&Vec<String>> = calls
+        let names: BTreeSet<&str> = assigned.iter().map(|(n, _)| n.as_str()).collect();
+        let callers: Vec<&Call> = calls
             .iter()
-            .filter(|(target, _)| {
-                SETS_POSITIONALS.contains(&target.as_str()) || functions.contains(target)
-            })
-            .map(|(_, args)| args)
+            .filter(|c| c.function.as_ref().is_none_or(|f| functions.contains(f)))
             .collect();
         let mut t = Taint {
-            names: assigned
-                .iter()
-                .filter(|a| runs_code(&a.text) || joins_dynamic(a))
-                .map(|a| a.name.clone())
-                .collect(),
-            positional: callers.iter().any(|args| args.iter().any(|v| runs_code(v))),
+            clean: names.iter().map(|n| n.to_string()).collect(),
+            positional: false,
             all: false,
             integers,
         };
         let mut steps = 0;
-        loop {
-            let before = steps;
-            let mut step = |t: &mut Taint| {
-                steps += 1;
+        for round in 0.. {
+            let dirty: BTreeSet<&str> = assigned
+                .iter()
+                .filter(|(n, v)| t.clean.contains(n) && !t.value_clean(v, &names))
+                .map(|(n, _)| n.as_str())
+                .collect();
+            let positional = !t.positional
+                && callers
+                    .iter()
+                    .any(|c| c.args.iter().any(|v| !t.value_clean(v, &names)));
+            if dirty.is_empty() && !positional {
+                break;
+            }
+            // The first round judges values on their own; later ones follow other names.
+            if round > 0 {
+                steps += dirty.len() + usize::from(positional);
                 if steps > MAX_TAINT_STEPS {
                     t.all = true;
-                }
-                t.all
-            };
-            for a in assigned {
-                if !t.names.contains(&a.name) && t.reads(&a.text) {
-                    if step(&mut t) {
-                        return t;
-                    }
-                    t.names.insert(a.name.clone());
+                    break;
                 }
             }
-            if !t.positional && callers.iter().any(|args| args.iter().any(|v| t.reads(v))) {
-                if step(&mut t) {
-                    return t;
-                }
-                t.positional = true;
+            for n in dirty {
+                t.clean.remove(n);
             }
-            if steps == before {
-                return t;
+            t.positional |= positional;
+        }
+        t
+    }
+}
+
+/// A value as the taint rule reads it.
+fn classify(parts: &[WordPart]) -> Value {
+    match parts {
+        [] | [WordPart::Subst(_) | WordPart::Block(_)] => Value::Clean,
+        // `$((…))`, also with the substitutions inside it: an integer.
+        [WordPart::Var(v), rest @ ..]
+            if v.starts_with("((")
+                && rest
+                    .iter()
+                    .all(|p| matches!(p, WordPart::Subst(_) | WordPart::Block(_))) =>
+        {
+            Value::Clean
+        }
+        [WordPart::Var(v)] => {
+            if v == "@" || v == "*" || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())) {
+                Value::Arith {
+                    names: Vec::new(),
+                    positional: true,
+                }
+            } else if INTEGER_VARIABLES.contains(&v.as_str()) {
+                Value::Clean
+            } else if is_name(v) {
+                Value::Copy(v.clone())
+            } else {
+                Value::Tainted
             }
         }
+        _ => {
+            let mut text = String::new();
+            for p in parts {
+                match p {
+                    WordPart::Literal(s) => text.push_str(s),
+                    _ => return Value::Tainted,
+                }
+            }
+            literal_value(&text)
+        }
     }
+}
+
+/// Literal text as a value: arithmetic over integers and names, or tainted.
+fn literal_value(text: &str) -> Value {
+    let arithmetic = text.chars().all(|c| {
+        c.is_ascii_alphanumeric() || c.is_ascii_whitespace() || "_+-*/%<>=!&|^~?:,()#".contains(c)
+    });
+    if !arithmetic {
+        return Value::Tainted;
+    }
+    Value::Arith {
+        names: arith_refs(text).0.into_iter().map(String::from).collect(),
+        positional: false,
+    }
+}
+
+fn is_name(v: &str) -> bool {
+    v.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 struct Lower {
@@ -377,21 +423,25 @@ struct Lower {
     opts: ParserOptions,
     /// Bytes of nested text (inside substitutions) still allowed to be parsed again.
     reparse_budget: Cell<usize>,
-    /// The tainted names found by the first pass (empty in the first pass).
-    taint: Taint,
+    /// The taint the first pass found; `None` in the first pass, which only collects.
+    taint: Option<Taint>,
     /// An arithmetic context read a tainted name since the enclosing command started.
     tainted_read: Cell<bool>,
     /// Every value assigned to a name.
-    assigned: RefCell<Vec<Assigned>>,
-    /// Every simple command's target and argument texts.
-    calls: RefCell<Vec<(String, Vec<String>)>>,
-    /// The names of the functions the script defines.
+    assigned: RefCell<Vec<(String, Value)>>,
+    /// The commands that may set the positional parameters.
+    calls: RefCell<Vec<Call>>,
+    /// The names of the functions the script defines, as typed.
     functions: RefCell<BTreeSet<String>>,
     integers: RefCell<BTreeSet<String>>,
+    /// Every text bash evaluates as arithmetic.
+    arith_texts: RefCell<Vec<String>>,
+    /// A value went to a name that is not static (`read "$v"`): any name may be tainted.
+    unknown_target: Cell<bool>,
 }
 
 impl Lower {
-    fn new(profile: BashProfile, len: usize, taint: Taint) -> Lower {
+    fn new(profile: BashProfile, len: usize, taint: Option<Taint>) -> Lower {
         Lower {
             profile,
             opts: ParserOptions::default(),
@@ -402,53 +452,71 @@ impl Lower {
             calls: RefCell::default(),
             functions: RefCell::default(),
             integers: RefCell::default(),
+            arith_texts: RefCell::default(),
+            unknown_target: Cell::new(false),
         }
     }
 
-    /// The tainted names, from what this pass collected.
-    fn taint(self) -> Taint {
-        Taint::compute(
-            &self.assigned.into_inner(),
+    /// The taint from what this pass collected, when a second pass has anything to mark: an
+    /// arithmetic context that reads a tainted name, or a value assigned to an integer name.
+    fn taint(self) -> Option<Taint> {
+        let assigned = self.assigned.into_inner();
+        let mut taint = Taint::compute(
+            &assigned,
             &self.calls.into_inner(),
             &self.functions.into_inner(),
             self.integers.into_inner(),
-        )
+        );
+        taint.all |= self.unknown_target.get();
+        let needed = self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
+            || assigned.iter().any(|(n, _)| taint.integers.contains(n));
+        needed.then_some(taint)
     }
 
-    /// Bash evaluates `text` as arithmetic for the command being lowered.
+    /// Bash evaluates `text` as arithmetic for the command being lowered. The first pass records
+    /// it, and the names it assigns (`i++`, `n = 1`), whose values are integers.
     fn read_arith(&self, text: &str) {
-        if self.taint.reads(text) {
-            self.tainted_read.set(true);
-        }
-    }
-
-    /// Record a value assigned to `name`; `append` for `name+=value`.
-    fn assigned(&self, name: &str, value: &Word, append: bool) {
-        self.record(name, value_text(value), &value.parts, append);
-    }
-
-    /// Record `text` assigned to `name`, with the parts that hold its expansions.
-    fn record(&self, name: &str, text: String, parts: &[WordPart], append: bool) {
-        let mut expansions: Vec<Option<String>> = Vec::new();
-        if append {
-            expansions.push(Some(name.to_string()));
-        }
-        for p in parts {
-            match p {
-                WordPart::Var(v) => expansions.push(
-                    v.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || "_@*#?$!-".contains(c))
-                        .then(|| v.clone()),
-                ),
-                WordPart::Subst(_) | WordPart::Block(_) => expansions.push(None),
-                _ => {}
+        match &self.taint {
+            Some(t) => {
+                if t.reads(text) {
+                    self.tainted_read.set(true);
+                }
+            }
+            None => {
+                for n in arith_targets(text) {
+                    self.assigned
+                        .borrow_mut()
+                        .push((n.to_string(), Value::Clean));
+                }
+                self.arith_texts.borrow_mut().push(text.to_string());
             }
         }
-        self.assigned.borrow_mut().push(Assigned {
-            name: name.to_string(),
-            text,
-            expansions,
-        });
+    }
+
+    fn integers(&self) -> Option<&BTreeSet<String>> {
+        self.taint.as_ref().map(|t| &t.integers)
+    }
+
+    /// Record a value assigned to `name`; `append` for `name+=value`, which is never clean.
+    fn assigned(&self, name: &str, parts: &[WordPart], append: bool) {
+        let value = if append {
+            Value::Tainted
+        } else {
+            classify(parts)
+        };
+        self.assigned.borrow_mut().push((name.to_string(), value));
+    }
+
+    /// Record a name that gets a value at run time (`read n`); a name that is not static
+    /// may be any name.
+    fn runtime_target(&self, w: Option<&Word>) {
+        match w.and_then(|w| w.static_value(&EnvView::new())) {
+            Some(v) => {
+                let name = v.split('[').next().unwrap_or_default().to_string();
+                self.assigned.borrow_mut().push((name, Value::Tainted));
+            }
+            None => self.unknown_target.set(true),
+        }
     }
 
     /// Take `len` bytes of nested text from the budget.
@@ -743,7 +811,7 @@ impl Lower {
                 let mut words = Vec::new();
                 for w in f.values.iter().flatten() {
                     let w = self.ast_word(t, w, span, cx)?;
-                    self.assigned(&f.variable_name, &w, false);
+                    self.assigned(&f.variable_name, &w.parts, false);
                     words.push(w);
                 }
                 let mut out = expr_stmt(words);
@@ -904,11 +972,8 @@ impl Lower {
             _ => false,
         };
         let runs_dynamic_text = runs_text && cmd.args.iter().skip(first_arg).any(Word::is_dynamic);
-        // A function or `set` gets its positional parameters from the arguments.
-        if let Some(target) = &target {
-            let args = cmd.args.iter().skip(first_arg).map(value_text).collect();
-            self.calls.borrow_mut().push((target.clone(), args));
-        }
+        self.calls(&cmd, target.as_deref(), first_arg, has_glob);
+        self.runtime_targets(&cmd, target.as_deref(), first_arg);
         self.declarations(&cmd, target.as_deref(), first_arg);
         self.evaluated_operands(&mut cmd, target.as_deref(), first_arg, cx)?;
         // A name no rule can match is opaque: a variable, a glob, anything without a canonical name.
@@ -954,9 +1019,99 @@ impl Lower {
                 if integer {
                     self.read_arith(value);
                 }
-                // The operand's expansions all sit in the value: the name is literal.
-                self.record(name, value.to_string(), &w.parts, append);
+                // The value: the parts after the `=` in the first, literal part.
+                match w.parts.split_first() {
+                    Some((WordPart::Literal(first), rest)) if first.contains('=') => {
+                        let after = first.split_once('=').map_or("", |(_, a)| a);
+                        let mut parts = Vec::new();
+                        if !after.is_empty() {
+                            parts.push(WordPart::Literal(after.to_string()));
+                        }
+                        parts.extend(rest.iter().cloned());
+                        self.assigned(name, &parts, append);
+                    }
+                    // `declare "$n=…"`: the name is not static.
+                    _ => self.unknown_target.set(true),
+                }
             }
+        }
+    }
+
+    /// A call that may set the positional parameters: of a script function by its name as typed,
+    /// `set` (after its options), `source`/`.` (after the file), or a name that is not static.
+    fn calls(&self, cmd: &SimpleCommand, target: Option<&str>, first_arg: usize, has_glob: bool) {
+        let env = EnvView::new();
+        let (function, args): (Option<String>, &[Word]) = match target {
+            _ if cmd.name.is_dynamic() || has_glob => (None, &cmd.args),
+            Some("set") => {
+                let args = &cmd.args[first_arg.min(cmd.args.len())..];
+                let mut i = 0;
+                while let Some(v) = args.get(i).and_then(|w| w.static_value(&env)) {
+                    if v == "--" {
+                        i += 1;
+                        break;
+                    }
+                    if !(v.starts_with('-') || v.starts_with('+')) {
+                        break;
+                    }
+                    // `-o name`: the option takes the next word.
+                    i += if v == "-o" || v == "+o" { 2 } else { 1 };
+                }
+                (None, &args[i.min(args.len())..])
+            }
+            Some("source" | ".") => (None, &cmd.args[(first_arg + 1).min(cmd.args.len())..]),
+            _ => match cmd.name.static_value(&env) {
+                Some(name) if !cmd.name.parts.is_empty() => (Some(name), &cmd.args),
+                _ => return,
+            },
+        };
+        let args = args.iter().map(|w| classify(&w.parts)).collect();
+        self.calls.borrow_mut().push(Call { function, args });
+    }
+
+    /// Names `read`, `mapfile`/`readarray`, `printf -v` and `getopts` set at run time.
+    fn runtime_targets(&self, cmd: &SimpleCommand, target: Option<&str>, first_arg: usize) {
+        let env = EnvView::new();
+        let args = &cmd.args[first_arg.min(cmd.args.len())..];
+        let value = |i: usize| args.get(i).and_then(|w| w.static_value(&env));
+        // Options whose next word is their argument; `read -a NAME` names the target.
+        let with_argument = match target {
+            Some("read") => "adinNptu",
+            Some("mapfile" | "readarray") => "dnOsuCc",
+            Some("printf") => "v",
+            Some("getopts") => "",
+            _ => return,
+        };
+        let mut i = 0;
+        let mut operands = Vec::new();
+        while i < args.len() {
+            match value(i) {
+                Some(v) if v.len() > 1 && v.starts_with('-') && target != Some("getopts") => {
+                    let last = v.chars().last().unwrap_or_default();
+                    // `printf -vNAME`: the target is glued to the option.
+                    if target == Some("printf") && v.starts_with("-v") && v.len() > 2 {
+                        self.runtime_target(Some(&literal(&v[2..], cmd.span)));
+                    } else if with_argument.contains(last) {
+                        if (target == Some("read") && last == 'a') || target == Some("printf") {
+                            self.runtime_target(args.get(i + 1));
+                        }
+                        i += 1;
+                    }
+                }
+                _ if target == Some("printf") => break,
+                _ => operands.push(i),
+            }
+            i += 1;
+        }
+        match target {
+            Some("read") | Some("mapfile" | "readarray") => {
+                for i in operands {
+                    self.runtime_target(args.get(i));
+                }
+            }
+            // `getopts OPTSTRING NAME`
+            Some("getopts") => self.runtime_target(operands.get(1).and_then(|&i| args.get(i))),
+            _ => {}
         }
     }
 
@@ -1074,9 +1229,9 @@ impl Lower {
                     _ => Origin::Inexact(span),
                 };
                 let mut value = self.word_text(&w.value, origin, span, cx)?;
-                self.assigned(&name, &value, a.append);
+                self.assigned(&name, &value.parts, a.append);
                 // A value assigned to an integer name is arithmetic.
-                if self.taint.integers.contains(&name) {
+                if self.integers().is_some_and(|i| i.contains(&name)) {
                     self.read_arith(&value_text(&value));
                     self.subscript_substs(&mut value, cx)?;
                 }
@@ -1090,7 +1245,7 @@ impl Lower {
                         out.push((name.clone(), k));
                     }
                     let value = self.ast_word(t, value, span, cx)?;
-                    self.assigned(&name, &value, false);
+                    self.assigned(&name, &value.parts, a.append);
                     out.push((name.clone(), value));
                 }
             }
@@ -1579,21 +1734,119 @@ fn subscripts(text: &str) -> Vec<&str> {
     out
 }
 
-/// The names in arithmetic text (`a[x+$y]` → `a`, `x`, `y`).
-fn identifiers(text: &str) -> impl Iterator<Item = &str> {
-    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+/// The byte ranges of the names arithmetic text reads (`a[x+$y]` → `a`, `x`, `y`), and whether
+/// it expands a positional parameter (`$1`, `${10}`, `$@`, `$*`). Numbers (`16#ff`), quoted text
+/// and the inside of `$(…)` and backticks (run-time output) name nothing.
+fn arith_scan(text: &str) -> (Vec<(usize, usize)>, bool) {
+    let b = text.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let (mut names, mut positional, mut i) = (Vec::new(), false, 0usize);
+    while i < b.len() {
+        let c = b[i];
+        if c == b'$' {
+            let (next, after) = match b.get(i + 1) {
+                Some(b'{') => (b.get(i + 2), i + 2),
+                other => (other, i + 1),
+            };
+            match next {
+                Some(d) if d.is_ascii_digit() || matches!(d, b'@' | b'*') => positional = true,
+                // `$(…)`, not `$((…))`: skip the command.
+                Some(b'(') if b.get(after + 1) != Some(&b'(') && after == i + 1 => {
+                    let mut level = 0usize;
+                    i += 1;
+                    while i < b.len() {
+                        match b[i] {
+                            b'(' => level += 1,
+                            b')' => {
+                                level -= 1;
+                                if level == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        } else if c == b'`' || c == b'\'' {
+            i += 1;
+            while i < b.len() && b[i] != c {
+                i += 1;
+            }
+            i += 1;
+        } else if c.is_ascii_digit() {
+            while i < b.len() && (word(b[i]) || b[i] == b'#' || b[i] == b'@') {
+                i += 1;
+            }
+        } else if word(c) {
+            let start = i;
+            while i < b.len() && word(b[i]) {
+                i += 1;
+            }
+            names.push((start, i));
+        } else {
+            i += 1;
+        }
+    }
+    (names, positional)
 }
 
-/// Whether text expands a positional parameter (`$1`, `${10}`, `$@`, `$*`).
-fn reads_positional(text: &str) -> bool {
+/// The names arithmetic text reads, and whether it expands a positional parameter.
+fn arith_refs(text: &str) -> (Vec<&str>, bool) {
+    let (names, positional) = arith_scan(text);
+    (
+        names.iter().map(|&(s, e)| &text[s..e]).collect(),
+        positional,
+    )
+}
+
+/// The names arithmetic text assigns: `n = 1`, `n += 2`, `a[i] = 3`, `i++`, `--i`.
+fn arith_targets(text: &str) -> Vec<&str> {
     let b = text.as_bytes();
-    (0..b.len()).filter(|&i| b[i] == b'$').any(|i| {
-        let next = match b.get(i + 1) {
-            Some(b'{') => b.get(i + 2),
-            other => other,
-        };
-        next.is_some_and(|c| c.is_ascii_digit() || matches!(c, b'@' | b'*'))
-    })
+    let skip_space = |mut j: usize| {
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        j
+    };
+    let mut out = Vec::new();
+    for (s, e) in arith_scan(text).0 {
+        let mut j = e;
+        if b.get(j) == Some(&b'[') {
+            let mut level = 0usize;
+            while j < b.len() {
+                match b[j] {
+                    b'[' => level += 1,
+                    b']' => {
+                        level -= 1;
+                        if level == 0 {
+                            j += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+        }
+        let j = skip_space(j);
+        let rest = &b[j.min(b.len())..];
+        let assigns = rest.starts_with(b"++")
+            || rest.starts_with(b"--")
+            || rest.starts_with(b"<<=")
+            || rest.starts_with(b">>=")
+            || (rest.first() == Some(&b'=') && rest.get(1) != Some(&b'='))
+            || (rest.get(1) == Some(&b'=')
+                && rest.first().is_some_and(|c| b"+-*/%&^|".contains(c)));
+        let before = text[..s].trim_end();
+        if assigns || before.ends_with("++") || before.ends_with("--") {
+            out.push(&text[s..e]);
+        }
+    }
+    out
 }
 
 /// A word as the text bash evaluates: literals as written, each variable as `${name}`, each

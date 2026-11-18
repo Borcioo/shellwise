@@ -19,9 +19,9 @@ Without `-- COMMAND` the command is read from stdin. Exit codes: 0 ok/warn, 1 br
 
 ## Limits
 
-- Bash: a single value the shell gets at run time (`read`, `printf -v`, command output) is not
-  tracked when arithmetic later evaluates it, so a `$(…)` hidden in such a value's array subscript
-  is not seen (a value joined from several expansions is).
+- Bash: a name assigned exactly one run-time expansion and nothing else (`n=$(cmd)`, `n=$1`) counts
+  as clean when arithmetic evaluates it, so a `$(…)` that such a value carries in an array
+  subscript is not seen.
 
 ## Develop
 

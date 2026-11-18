@@ -463,7 +463,7 @@ fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
     for src in [
         "x='a[$(rm -rf y)]'; echo x",
         "y=1; (( y ))",
-        "(( x ))",
+        "x=1; (( x ))",
         "declare n; n='a[$(rm -rf y)]'",
         "y=1; echo \"${!y}\"",
     ] {
@@ -579,6 +579,18 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             "((",
         ),
         ("my_x='a[$(rm -rf y)]'; (( my_x ))".to_string(), "(("),
+        // One row per automated note on the earlier rule: static fragments, a function name as
+        // typed (case, a path), a self-reference, a literal around one run-time expansion.
+        (
+            "a='a[$'; b='(rm -rf y)]'; n=$a$b; (( n ))".to_string(),
+            "((",
+        ),
+        (format!("{x}RM() {{ (( $1 )); }}; RM \"$x\""), "(("),
+        (format!("{x}my/f() {{ (( $1 )); }}; my/f \"$x\""), "(("),
+        ("n='a[$'; n=$n'(rm -rf y)]'; (( n ))".to_string(), "(("),
+        ("read b < f; n=\"a[$b\"; (( n ))".to_string(), "(("),
+        // A name the script never assigns comes from the environment.
+        ("(( x ))".to_string(), "(("),
         // A function call or `set` carries a tainted argument into `$1`, `$@`.
         (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
@@ -634,13 +646,22 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             bad.push(format!("no opaque ((: {src}"));
         }
     }
-    // bash runs nothing here: a plain expansion, `unset`, static fragments, an argument of a
-    // command that is not a function.
+    // Clean: bash runs nothing here. No arithmetic, `unset`, an argument of a command that is not
+    // a function, and names whose every value is an integer, arithmetic over clean names or one
+    // run-time expansion.
     for src in [
         format!("{x}echo ${{x:-d}}"),
-        "a=1; b=2; n=$a$b; (( n ))".to_string(),
-        "b=2; n=1; n+=$b; (( n ))".to_string(),
         format!("{x}echo \"$x\"; (( $1 ))"),
+        "a=1; n=$a; (( n ))".to_string(),
+        "n=5; m=n+1; (( m ))".to_string(),
+        "n=$(wc -l < f); (( n ))".to_string(),
+        "i=0; (( i++ ))".to_string(),
+        "for ((i=0; i<3; i++)); do :; done".to_string(),
+        "for i in 1 2; do (( i )); done".to_string(),
+        "set -euo pipefail; (( $# ))".to_string(),
+        "f() { local n=$1; (( n > 0 )); }; f 3".to_string(),
+        "(( RANDOM % 2 ))".to_string(),
+        "n=$((1 + 2)); (( n ))".to_string(),
         format!("{x}unset 'a[x]'"),
         format!("{x}echo \"$x\""),
     ] {
@@ -652,12 +673,11 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
     assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
 }
 
-/// A chain of `n` copies, written last link first: `x<n>=x<n-1>; …; x0='a[$(…)]'`.
+/// A clean `z`, then a chain of `n` copies, written last link first:
+/// `z=1; x<n>=x<n-1>; …; x0='a[$(…)]'`.
 fn copy_chain(n: usize) -> String {
-    let mut s: String = (1..=n)
-        .rev()
-        .map(|i| format!("x{i}=x{}; ", i - 1))
-        .collect();
+    let mut s = "z=1; ".to_string();
+    s.extend((1..=n).rev().map(|i| format!("x{i}=x{}; ", i - 1)));
     s.push_str("x0='a[$(rm -rf y)]'; ");
     s
 }
@@ -1004,16 +1024,14 @@ fn long_flat_lists_parse() {
     assert!(src.len() > 60 * 1024, "{}", src.len());
     let s = ok(&src);
     assert!(commands(&s).last().unwrap().opaque, "copy chain");
-    // 64 KiB of copies of a value read at run time, last link first, then a join with it.
+    // The same with `$x` copies.
     let n = 64 * 1024 / 14;
-    let mut src: String = (1..=n)
-        .rev()
-        .map(|i| format!("x{i}=$x{}; ", i - 1))
-        .collect();
-    src.push_str(&format!("read x0 < f; a=1; n=$a$x{n}; (( n ))"));
+    let mut src = "z=1; ".to_string();
+    src.extend((1..=n).rev().map(|i| format!("x{i}=$x{}; ", i - 1)));
+    src.push_str("x0='a[$(rm -rf y)]'; (( z ))");
     assert!(src.len() > 60 * 1024, "{}", src.len());
     let s = ok(&src);
-    assert!(commands(&s).last().unwrap().opaque, "run-time copy chain");
+    assert!(commands(&s).last().unwrap().opaque, "$x copy chain");
 }
 
 // ---------- gap table ----------
