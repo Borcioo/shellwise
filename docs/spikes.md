@@ -280,3 +280,127 @@ Owner decisions:
 - PowerShell: fork the tree-sitter-powershell grammar and re-measure it with the same thresholds.
 - Dynamic targets: the shim moves into v1.
 - Bash: brush-parser is kept; the two heredoc-delimiter gap rows fail closed.
+
+## Shim loading
+
+Claude Code 2.1.326 (the desktop app's build), `claude -p` in a fresh config directory against the
+local stub of the Messages API, as in "PreToolUse contract". Probes ran synthetic commands only;
+the proof is the tool result text the stub received and marker or canary files the commands or the
+shim wrote, never an exit status. Positive control: a probe without any shim (the plain tool
+calls ran and created their file).
+
+### How the tools start a shell
+
+| | PowerShell tool | Bash tool |
+|---|---|---|
+| Process | a new `pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <launcher>` per call; the command text travels in an environment variable the launcher reads and clears | a new non-login `bash -c` per call (`$-` = `hmBc`), with the host's shell snapshot (about 120 functions) already defined |
+| State between calls | none (a global variable set in one call is empty in the next; new PID) | none (a function defined in one call is gone in the next) |
+| Profile | never runs | not a login shell; only the snapshot |
+
+### What can bring definitions in
+
+| Route | PowerShell tool | Bash tool |
+|---|---|---|
+| settings `env` (`PSModulePath`, `BASH_ENV`, a marker variable) | the variables arrive; the extra module folder is on `PSModulePath`; auto-load imports the module only for a name no loaded command has, so `Remove-Item` stays the cmdlet until the module is imported | `BASH_ENV` is sourced before the command: a shim `rm` function intercepted `rm` |
+| SessionStart hook writing `CLAUDE_ENV_FILE` | only a file of plain `export NAME=value` lines reaches PowerShell, and on Windows a value holding `/` or `\` is dropped; a file holding a function gives PowerShell nothing | the file is sourced before every Bash command: a function in it intercepted `rm` |
+| PreToolUse `updatedInput`, no `permissionDecision` | the rewritten command runs | the rewritten command runs |
+
+settings `env` needs an edit of the person's own settings (a plugin cannot ship it), and no route
+lets the PreToolUse hook see whether a given Bash call sourced the environment file.
+
+### `updatedInput`
+
+| Probe | Result |
+|---|---|
+| no decision, tool allowed | the rewritten command ran (its canary exists, the original's does not), both tools |
+| no decision, no allow rule | refused by the permission check of the **rewritten** command; nothing ran |
+| `allow` | the rewritten command ran |
+| `ask`, SDK host | the host's `can_use_tool` request carries the rewritten input |
+| second PreToolUse hook beside it (context only) | the rewrite still applied; the other hook's context arrived |
+| `additionalContext` in the same reply | reached the model |
+| what the model sees | its own original `tool_use`; the rewrite is not shown to it |
+
+Fine-grained allow rules (`Bash(echo:*)`, `PowerShell(Get-Date:*)`) on read-only commands: without a
+rewrite both ran. With any prefix the host's own command checks asked, which `-p` turns into a
+refusal: a dot-sourced file ("'.' evaluates arguments as shell code"), `Import-Module` ("loads,
+installs, or downloads a PowerShell module or script"), inline function definitions ("Contains
+brace with quote character", "Command uses splatting"). The same inline prefix ran in
+`bypassPermissions` and with a tool-level allow.
+
+### PowerShell resolution
+
+A function `Remove-Item` receives calls through the aliases `ri`, `rm`, `del`, `rd` and pipeline
+input; a function `git` receives `git` but not `git.exe`. A static method call cannot be wrapped,
+but replacing the receiver token keeps the call syntax: `[IO.Directory]::Delete($p, $true)` written
+as `$__sw_Directory.Delete($p, $true)`, where `$__sw_Directory` holds a `ScriptMethod` `Delete`,
+received both overloads and `[IO.File]::Delete` likewise (pwsh 7.7, temp folder deleted through it).
+
+### Which dynamic-target rows a shim can take
+
+First split, same row selection as "Destructive `ok` rows with a dynamic target" (460 rows): bare
+command names a function catches 299 (9.6 per day), `[IO.*]::Delete` with a variable path 161 (5.2
+per day). That split matched a destructive name only as a command's first word, so it could not see
+a wrapper in front of it; the recount below strips wrappers first.
+
+### What a wrapper must not assume (plan review probes, pwsh 7.7 and Git Bash)
+
+| Probe | Result | Consequence for the shim |
+|---|---|---|
+| `& '<missing exe>' …` inside a function after `cmd /c exit 0`, then `if ($LASTEXITCODE -ne 0)` | the statement ends, `$LASTEXITCODE` is still 0, the real command runs | reset `$LASTEXITCODE`, `try`/`catch`, require `$?` (re-probed: refuses under every `$ErrorActionPreference`) |
+| `Set-Location <dir>` from another folder | `$PWD` moves, `[Environment]::CurrentDirectory` does not | `[IO.*]::Delete` wrappers refuse a path that is not fully qualified |
+| folder with a visible and a hidden item, `<dir>\*` | `Convert-Path`/`Resolve-Path` list the visible one; `Remove-Item -Recurse -Force` deletes both | the proxy enumerates with `-Force` and the cmdlet's own filters |
+| `$PSBoundParameters` in `end` of an advanced function fed three items by `PSPath` | holds only the last item | the proxy buffers the input and replays it through the steppable pipeline |
+| `$o::Delete(…)` on an object with a `ScriptMethod` | error; `$o.Delete(…)` works | the substitution replaces `[T]::` with `$__sw_T.` |
+| a function `f`, `f checkout -- file.txt` | `$args` = `checkout`, `file.txt`: `--` is gone | no PowerShell `git` wrapper |
+| `Remove-Item` function, then inside `ForEach-Object -Parallel`, `% -Par`, `ForEach-Object -parallel:{ }`, `Start-ThreadJob` | resolves to the cmdlet | other runspaces keep the deny; parameter prefixes and the `:` form count |
+| bash `unset rm` (no `-f`) | removes the function | `unset` of a wrapped name keeps the deny |
+| `shopt -s expand_aliases; alias rm=…` then `rm() {…}` | syntax error, the script stops | shim starts with `unalias`, uses `function rm { }` (re-probed: defined and called) |
+| Git Bash: `function rm { refuse }`, then `RM -rf <dir>` | the binary ran, the folder was deleted | bash names match byte for byte; `RM`, `Rm`, `GIT`, `rm.exe` keep the deny |
+| Git Bash → native exe argv | `/tmp/x` and `/c/…` arrive converted to `C:/…`; POSIX form with `MSYS_NO_PATHCONV=1` | `shim-check` resolves both forms or refuses |
+| `ProxyCommand::Create((Get-Command Remove-Item))` | 2,874 characters, 108 lines | the rewrite size is measured against the hook-output limit |
+
+### Eligibility under the allow-list
+
+Recount on the same rows. Wrappers (`env`, `command`, `exec`, `nohup`, `time`, `sudo`, `Start-Process`,
+`timeout`, `nice`, `setsid`, `stdbuf`, `xargs`, `busybox`, `builtin`) are stripped before the
+destructive matcher runs, and a row with a stripped wrapper keeps its deny. A row stays eligible
+when every dynamic destructive command in it is a wrapped name as written (bash `rm`, `rmdir`, `git`
+byte for byte; PowerShell `Remove-Item` and its aliases in any case; not PowerShell `git`) or an
+allow-listed `[IO.*]::Delete` receiver, every enclosing PowerShell block has an allow-listed receiver
+(parameter prefixes of `Parallel`, `AsJob`, `ThrottleLimit` and splats excluded), and the text holds
+no change to a wrapped or `__sw` name (the design's full list) and no leading `using`/`param(`.
+
+Known-answer control: 25 synthetic rows, one or more per bucket (`nohup rm`, `timeout 5 rm`, `sudo -u x rm`, `RM`,
+`rm.exe`, `unset rm`, `xargs rm`, a static `rm`, `Measure-Command { }`, `% -Par { }`, `foreach -Parallel { }`,
+`-parallel:{ }`, `ForEach-Object @p { }`, `pwsh -Command { }`, PowerShell `git`, `New-Variable
+__sw_File`, `Start-Job { [IO.File]::Delete }`, `param(`, and eligible rows of each kind); the script
+stops unless every row lands in its expected bucket (it did, after the fixes the control and the plan
+review caught: a keyword pattern that read `ForEach-Object`, and then the `foreach` alias, as the
+`foreach` keyword; a `sudo` option value read as the command). Reader control: 834 PowerShell
+and 493 Bash destructive `ok` rows, as above.
+
+| | PowerShell | Bash | Total | Per calendar day |
+|---|---:|---:|---:|---:|
+| dynamic target | 333 | 129 | 462 | 14.9 |
+| eligible | 287 (153 with `[IO.*]::Delete`) | 126 | 413 | 13.3 |
+| keeps its deny | 46 (git 43, other runspace 2, `robocopy` 1) | 3 (`xargs` 1, `shred` 1, `find` 1) | 49 | 1.58 |
+| not matched by the segmentation (inside `cmd /c`, `bash -c`, `powershell -c` strings, `find -exec`) | 5 (4 look dynamic) | 20 (1 looks dynamic) | 25 | 0.81 |
+
+A dynamic target inside a nested script string keeps its deny, so the 5 dynamic-looking unmatched rows
+count as denies: the measured rate is 54 rows, **1.74 per day**. With all 25 denied it would be 2.39
+per day (an upper bound: a nested script with a static target is judged statically and allowed).
+
+Of the 76 `[IO.*]::Delete` rows whose path variable has a single literal assignment, 2 hold a
+relative path, which the shim refuses at run time.
+
+### Decision
+
+Both shells load the shim through `updatedInput`, only on a command whose only deny is an
+allow-listed `dynamic-target`; the definitions are part of the command that runs, so loading needs
+no proof beyond the rewrite. The `[IO.*]::Delete` receiver is substituted in the same rewrite.
+Cost: under fine-grained allow rules such a command asks (refused in `-p`) instead of being denied.
+
+### Not covered
+
+An interactive terminal session; the Monitor tool (arrives as a Bash event) with `updatedInput`;
+the sandbox mode, whose environment filters name `BASH_ENV` and `PSModulePath`.
