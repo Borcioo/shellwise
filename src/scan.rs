@@ -132,17 +132,79 @@ pub fn flag_matches(entry: &str, word: &str) -> bool {
     word == entry
 }
 
-fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
-    let mut out = Vec::new();
-    if depth > MAX_DEPTH {
-        return out;
+/// `--hard` also matches git's abbreviation `--har` (git accepts any unambiguous prefix).
+fn requires_matches(entry: &str, word: &str, git: bool) -> bool {
+    if flag_matches(entry, word) {
+        return true;
     }
-    for mode in [Mode::Bash, Mode::Pwsh] {
-        let (segs, embedded) = segments(cmd, mode);
-        for seg in segs {
-            segment_hits(table, strip_prefix(&seg), depth, &mut out);
+    if git && entry.len() > 2 && entry.starts_with("--") && word.starts_with("--") {
+        let name = word.split('=').next().unwrap_or(word);
+        return name.len() > 2 && entry.starts_with(name);
+    }
+    false
+}
+
+/// The words `unless_any` may look at: before `--`, without the values of options that take one
+/// (`git clean -e -n` excludes the pattern `-n`, it is not a dry run).
+fn option_words(args: &[Tok]) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < args.len() {
+        let v = args[k].value.as_str();
+        if v == "--" {
+            break;
         }
-        for (span, body) in embedded {
+        if VALUE_OPTS.contains(&v) {
+            k += 2;
+            continue;
+        }
+        out.push(v);
+        k += 1;
+    }
+    out
+}
+
+const VALUE_OPTS: [&str; 4] = ["-e", "--exclude", "-s", "--source"];
+
+fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
+    if depth > MAX_DEPTH {
+        // Too deep to read: nothing proves it harmless.
+        return vec![Hit {
+            row: None,
+            span: Span {
+                start: 0,
+                end: cmd.len(),
+            },
+        }];
+    }
+    let mut out = Vec::new();
+    for mode in [Mode::Bash, Mode::Pwsh] {
+        let seg = segments(cmd, mode);
+        for (k, s) in seg.segs.iter().enumerate() {
+            let words = normalize(&s.words);
+            segment_hits(table, &words, depth, false, &mut out);
+            // `iex('…')`, `[scriptblock]::Create('…')`: the argument is the next segment.
+            if words.len() == 1
+                && EVAL_NAMES.contains(&base_name(&words[0].value).as_str())
+                && let Some(next) = seg.segs.get(k + 1)
+            {
+                let span = seg_span(&words);
+                for h in hits_at(table, &join(&next.words), depth + 1) {
+                    out.push(Hit { row: h.row, span });
+                }
+            }
+            if s.piped
+                && let Some(next) = seg.segs.get(k + 1)
+                && !words.is_empty()
+                && reads_stdin_as_code(&normalize(&next.words))
+            {
+                let span = seg_span(&words);
+                for h in hits_at(table, &piped_text(&words), depth + 1) {
+                    out.push(Hit { row: h.row, span });
+                }
+            }
+        }
+        for (span, body) in seg.embedded {
             for h in hits_at(table, &body, depth + 1) {
                 out.push(Hit { row: h.row, span });
             }
@@ -154,13 +216,32 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
     out
 }
 
-fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, out: &mut Vec<Hit>) {
-    let Some(first) = words.first() else { return };
-    let span = Span {
-        start: first.span.start,
+fn seg_span(words: &[Tok]) -> Span {
+    Span {
+        start: words[0].span.start,
         end: words[words.len() - 1].span.end,
-    };
-    let name = base_name(&first.value);
+    }
+}
+
+fn join(words: &[Tok]) -> String {
+    words
+        .iter()
+        .map(|w| w.value.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, in_exec: bool, out: &mut Vec<Hit>) {
+    if words.is_empty() {
+        return;
+    }
+    let span = seg_span(words);
+    let name = base_name(&words[0].value);
+    // `(Get-Item x).Delete()`, `$d.Delete($true)`: a .NET delete on an object.
+    if name.ends_with(".delete") && (name.starts_with('.') || name.starts_with('$')) {
+        out.push(Hit { row: None, span });
+        return;
+    }
     match nested_body(&name, words) {
         Some(Nested::Body(body)) => {
             for h in hits_at(table, &body, depth + 1) {
@@ -174,7 +255,8 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, out: &mut Vec<Hit>
         }
         None => {}
     }
-    if name == "find" {
+    if !in_exec && name == "find" {
+        // Each clause runs its own command; a `find` inside a clause is not expanded again.
         for (k, w) in words.iter().enumerate() {
             if FIND_EXEC.contains(&w.value.as_str()) {
                 let rest = &words[k + 1..];
@@ -182,24 +264,28 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, out: &mut Vec<Hit>
                     .iter()
                     .position(|w| matches!(w.value.as_str(), ";" | "+" | "\\;"))
                     .unwrap_or(rest.len());
-                segment_hits(table, strip_prefix(&rest[..end]), depth, out);
+                segment_hits(table, &normalize(&rest[..end]), depth, true, out);
             }
         }
     }
     for (row, entry) in table.iter().enumerate() {
         for name_words in &entry.names {
-            let Some(end) = match_name(name_words, words) else {
+            let Some(end) = match_name(name_words, &name, words) else {
                 continue;
             };
             let args = &words[end..];
-            let any = |flags: &[String]| {
-                flags
+            let git = name_words[0] == "git";
+            let required = entry.requires_any.is_empty()
+                || entry
+                    .requires_any
                     .iter()
-                    .any(|f| args.iter().any(|a| flag_matches(f, &a.value)))
-            };
-            if (entry.requires_any.is_empty() || any(&entry.requires_any))
-                && !any(&entry.unless_any)
-            {
+                    .any(|f| args.iter().any(|a| requires_matches(f, &a.value, git)));
+            let opts = option_words(args);
+            let cleared = entry
+                .unless_any
+                .iter()
+                .any(|f| opts.iter().any(|a| flag_matches(f, a)));
+            if required && !cleared {
                 out.push(Hit {
                     row: Some(row),
                     span,
@@ -210,10 +296,57 @@ fn segment_hits(table: &[Entry], words: &[Tok], depth: usize, out: &mut Vec<Hit>
 }
 
 const FIND_EXEC: [&str; 4] = ["-exec", "-execdir", "-ok", "-okdir"];
-const PREFIX_WORDS: [&str; 16] = [
-    "sudo", "command", "exec", "nohup", "time", "xargs", "env", "&", "!", "then", "do", "else",
-    "elif", "if", "while", "until",
+const PREFIX_WORDS: [&str; 10] = [
+    "&", "!", ".", "then", "do", "else", "elif", "if", "while", "until",
 ];
+/// Commands that run the rest of their words as a command: (name, options that take a value,
+/// positional words before the command).
+const WRAPPERS: [(&str, &[&str], usize); 13] = [
+    (
+        "sudo",
+        &["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"],
+        0,
+    ),
+    ("doas", &["-u", "-C"], 0),
+    ("env", &["-u", "-C", "-S", "--unset", "--chdir"], 0),
+    ("timeout", &["-s", "-k", "--signal", "--kill-after"], 1),
+    ("nice", &["-n", "--adjustment"], 0),
+    ("ionice", &["-c", "-n", "-p"], 0),
+    ("time", &["-f", "-o", "--format", "--output"], 0),
+    (
+        "xargs",
+        &[
+            "-n",
+            "-I",
+            "-L",
+            "-P",
+            "-s",
+            "-d",
+            "-E",
+            "-a",
+            "--max-args",
+            "--max-procs",
+            "--delimiter",
+            "--arg-file",
+        ],
+        0,
+    ),
+    ("nohup", &[], 0),
+    ("command", &[], 0),
+    ("exec", &["-a"], 0),
+    ("stdbuf", &["-i", "-o", "-e"], 0),
+    ("wsl", &["-d", "--distribution", "-u", "--user", "--cd"], 0),
+];
+/// Commands that run their argument text as code.
+const EVAL_NAMES: [&str; 5] = [
+    "eval",
+    "invoke-expression",
+    "iex",
+    "[scriptblock]::create",
+    "[system.management.automation.scriptblock]::create",
+];
+const BASH_SHELLS: [&str; 5] = ["bash", "sh", "zsh", "dash", "ksh"];
+const ECHO_NAMES: [&str; 4] = ["echo", "printf", "write-output", "write-host"];
 const GIT_VALUE_OPTS: [&str; 7] = [
     "-c",
     "-C",
@@ -237,37 +370,128 @@ enum Flag {
     Encoded,
 }
 
-/// The body of `bash -c …`, `pwsh -Command …`, `cmd /c …` or `Invoke-Expression …`, if any.
+/// The body of `bash -c …`, `pwsh -Command …`, `cmd /c …`, `eval …`, `Invoke-Expression …`,
+/// `[scriptblock]::Create(…)` or `Start-Process`, if any.
 fn nested_body(name: &str, words: &[Tok]) -> Option<Nested> {
-    let join = |rest: &[Tok]| {
-        rest.iter()
-            .map(|w| w.value.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
     match name {
-        "invoke-expression" | "iex" => Some(Nested::Body(join(&words[1..]))),
-        "bash" | "sh" | "pwsh" | "powershell" | "cmd" => {
-            let (k, flag) = words[1..].iter().enumerate().find_map(|(k, w)| {
-                if w.quoted {
-                    return None;
+        _ if EVAL_NAMES.contains(&name) => Some(Nested::Body(join(&words[1..]))),
+        "start-process" | "start" | "saps" => start_process_body(words).map(Nested::Body),
+        "cmd" => {
+            for (k, w) in words.iter().enumerate().skip(1) {
+                let v = w.value.to_ascii_lowercase();
+                let glued = ["/c", "/k", "//c", "//k"]
+                    .iter()
+                    .find_map(|p| v.strip_prefix(p).map(|rest| (p.len(), rest.is_empty())));
+                if let Some((len, alone)) = glued {
+                    // `cmd /c"del x"` glues the body to the switch.
+                    let first = if alone {
+                        String::new()
+                    } else {
+                        w.value[len..].to_string()
+                    };
+                    let body = format!("{first} {}", join(&words[k + 1..]));
+                    // cmd switches may touch the name: `rd/s/q x`.
+                    return Some(Nested::Body(body.replace('/', " /")));
                 }
-                nested_flag(name, &w.value).map(|f| (k, f))
-            })?;
+            }
+            None
+        }
+        _ if BASH_SHELLS.contains(&name) || name == "pwsh" || name == "powershell" => {
+            let (k, flag) = words[1..]
+                .iter()
+                .enumerate()
+                .find_map(|(k, w)| nested_flag(name, &w.value).map(|f| (k + 1, f)))?;
             Some(match flag {
                 Flag::Encoded => Nested::Opaque,
-                Flag::Command => Nested::Body(join(&words[k + 2..])),
+                Flag::Command => {
+                    let rest = &words[k + 1..];
+                    let rest = if rest.first().is_some_and(|w| w.value == "--") {
+                        &rest[1..]
+                    } else {
+                        rest
+                    };
+                    Nested::Body(join(rest))
+                }
             })
         }
         _ => None,
     }
 }
 
+/// `Start-Process -FilePath git -ArgumentList 'clean','-fd'` as the command `git clean -fd`.
+fn start_process_body(words: &[Tok]) -> Option<String> {
+    const VALUE_PARAMS: [&str; 7] = [
+        "workingdirectory",
+        "verb",
+        "windowstyle",
+        "redirectstandardinput",
+        "redirectstandardoutput",
+        "redirectstandarderror",
+        "credential",
+    ];
+    let (mut file, mut args, mut positional) = (None, None, Vec::new());
+    let mut k = 1;
+    while k < words.len() {
+        let v = words[k].value.to_ascii_lowercase();
+        match v
+            .strip_prefix('-')
+            .filter(|p| !p.is_empty() && !words[k].quoted)
+        {
+            Some(p) if p.starts_with('f') && "filepath".starts_with(p) => {
+                file = words.get(k + 1);
+                k += 2;
+            }
+            Some(p) if p.len() >= 2 && "argumentlist".starts_with(p) => {
+                args = words.get(k + 1);
+                k += 2;
+            }
+            Some(p) if p.len() >= 2 && VALUE_PARAMS.iter().any(|n| n.starts_with(p)) => k += 2,
+            Some(_) => k += 1,
+            None => {
+                positional.push(&words[k]);
+                k += 1;
+            }
+        }
+    }
+    let file = file.or(positional.first().copied())?;
+    let args = args.or(positional.get(1).copied());
+    Some(format!(
+        "{} {}",
+        file.value,
+        args.map_or(String::new(), |a| a.value.replace(',', " "))
+    ))
+}
+
+/// The segment after a pipe runs its stdin as code: a shell with no command argument, or
+/// `pwsh -Command -`.
+fn reads_stdin_as_code(words: &[Tok]) -> bool {
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let name = base_name(&first.value);
+    if !(BASH_SHELLS.contains(&name.as_str())
+        || matches!(name.as_str(), "pwsh" | "powershell" | "cmd"))
+    {
+        return false;
+    }
+    match nested_body(&name, words) {
+        None => true,
+        Some(Nested::Body(b)) => b.trim() == "-",
+        Some(Nested::Opaque) => false,
+    }
+}
+
+/// The text a segment writes into a pipe: the words after `echo`/`printf`, or the whole segment.
+fn piped_text(words: &[Tok]) -> String {
+    if ECHO_NAMES.contains(&base_name(&words[0].value).as_str()) {
+        join(&words[1..])
+    } else {
+        join(words)
+    }
+}
+
 fn nested_flag(shell: &str, v: &str) -> Option<Flag> {
     let v = v.to_ascii_lowercase();
-    if matches!(v.as_str(), "/c" | "/k" | "//c" | "//k") {
-        return Some(Flag::Command);
-    }
     if matches!(shell, "pwsh" | "powershell") {
         // PowerShell accepts `-x`, `--x`, `/x` and dash-like characters before any unambiguous
         // prefix of a parameter name.
@@ -283,21 +507,25 @@ fn nested_flag(shell: &str, v: &str) -> Option<Flag> {
         }
         return None;
     }
-    // bash -c, -lc, -ec: a cluster of short options ending in c.
+    // bash -c, -lc, -cx: a cluster of short options holding c.
     let rest = v.strip_prefix('-').filter(|r| !r.is_empty())?;
-    (rest.bytes().all(|b| b.is_ascii_lowercase()) && rest.ends_with('c')).then_some(Flag::Command)
+    (rest.bytes().all(|b| b.is_ascii_lowercase()) && rest.contains('c')).then_some(Flag::Command)
 }
 
-/// The command name without a directory or `.exe`, lowercased.
+/// The command name without a directory or an executable extension, lowercased.
 fn base_name(word: &str) -> String {
     let lower = word.to_lowercase();
     let name = lower.rsplit(['\\', '/']).next().unwrap_or("");
-    name.strip_suffix(".exe").unwrap_or(name).to_string()
+    [".exe", ".cmd", ".bat", ".com"]
+        .iter()
+        .find_map(|ext| name.strip_suffix(ext))
+        .unwrap_or(name)
+        .to_string()
 }
 
 /// The index after the matched name in `words`, or `None`. git global options are skipped.
-fn match_name(name_words: &[String], words: &[Tok]) -> Option<usize> {
-    if base_name(&words[0].value) != name_words[0] {
+fn match_name(name_words: &[String], base: &str, words: &[Tok]) -> Option<usize> {
+    if base != name_words[0] {
         return None;
     }
     let mut k = 1;
@@ -319,31 +547,82 @@ fn match_name(name_words: &[String], words: &[Tok]) -> Option<usize> {
     Some(k)
 }
 
-/// Drop leading words that only prefix the real command: `sudo`, `env`, assignments, casts.
-fn strip_prefix(words: &[Tok]) -> &[Tok] {
+/// The simple command without the words that only prefix it: wrappers and their options
+/// (`sudo -u root`, `timeout 5`, `wsl -e`), assignments, casts, leading redirects.
+fn normalize(words: &[Tok]) -> Vec<Tok> {
     let mut k = 0;
+    let mut first: Option<Tok> = None;
     while k < words.len() {
         let w = &words[k];
         if w.quoted {
             break;
         }
         let v = w.value.as_str();
-        let after_xargs = k > 0 && v.starts_with('-') && words[k - 1].value == "xargs";
-        if PREFIX_WORDS.contains(&v.to_lowercase().as_str()) || is_assignment(v) || after_xargs {
+        let lower = v.to_lowercase();
+        if PREFIX_WORDS.contains(&lower.as_str()) || is_assignment(v) {
             k += 1;
+        } else if let Some((_, opts, positional)) =
+            WRAPPERS.iter().find(|(n, _, _)| *n == base_name(v))
+        {
+            k += 1;
+            while k < words.len() && words[k].value.starts_with('-') && !words[k].quoted {
+                let o = words[k].value.as_str();
+                if o == "--" {
+                    k += 1;
+                    break;
+                }
+                k += if opts.contains(&o) { 2 } else { 1 };
+            }
+            k += positional;
+        } else if is_redirect(v) {
+            // `2>/dev/null rm`; a bare `2>` takes the next word as its target.
+            k += if v
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim_start_matches(['<', '>', '&'])
+                .is_empty()
+            {
+                2
+            } else {
+                1
+            };
         } else if is_ps_var(v)
             && words
                 .get(k + 1)
                 .is_some_and(|n| n.value == "=" || n.value == "+=")
         {
             k += 2;
+        } else if let Some(rest) = ps_glued_assignment(v) {
+            // `$r=Remove-Item x`: the command starts inside the word.
+            if rest.is_empty() {
+                k += 1;
+            } else {
+                let mut t = w.clone();
+                t.value = rest.to_string();
+                first = Some(t);
+                k += 1;
+                break;
+            }
         } else if v.starts_with('[') && v.ends_with(']') && !v.contains("::") {
             k += 1;
         } else {
             break;
         }
     }
-    &words[k..]
+    let mut out: Vec<Tok> = first.into_iter().collect();
+    out.extend(words[k.min(words.len())..].iter().cloned());
+    out
+}
+
+/// `2>/dev/null`, `>out`, `2>&1`, `<in`
+fn is_redirect(v: &str) -> bool {
+    let rest = v.trim_start_matches(|c: char| c.is_ascii_digit());
+    rest.starts_with('>') || rest.starts_with('<') || rest.starts_with("&>")
+}
+
+/// The text after `=` in `$name=…`, if the word is such an assignment.
+fn ps_glued_assignment(v: &str) -> Option<&str> {
+    let (name, rest) = v.split_once('=')?;
+    is_ps_var(name).then_some(rest)
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -390,23 +669,94 @@ struct Tok {
     span: Span,
 }
 
-type Segments = (Vec<Vec<Tok>>, Vec<(Span, String)>);
+struct Segment {
+    words: Vec<Tok>,
+    /// Ended by a pipe (`|`, `|&`), so its output is the next segment's stdin.
+    piped: bool,
+}
 
-fn char_len_at(text: &str, i: usize) -> usize {
-    text[i..].chars().next().map_or(1, char::len_utf8)
+struct Segments {
+    segs: Vec<Segment>,
+    /// Text that may run as code (a substitution in `"…"`, an unclosed quote, a heredoc or
+    /// here-string a shell reads), with its span, for the caller to scan as a nested command.
+    embedded: Vec<(Span, String)>,
+}
+
+fn is_single_quote(mode: Mode, c: char) -> bool {
+    c == '\'' || (mode == Mode::Pwsh && matches!(c, '\u{2018}'..='\u{201b}'))
+}
+
+fn is_double_quote(mode: Mode, c: char) -> bool {
+    c == '"' || (mode == Mode::Pwsh && matches!(c, '\u{201c}'..='\u{201e}'))
+}
+
+fn is_blank(mode: Mode, c: char) -> bool {
+    match c {
+        ' ' | '\t' => true,
+        '\r' => mode == Mode::Bash,
+        '\u{a0}' | '\u{2000}'..='\u{200a}' | '\u{3000}' | '\u{c}' => mode == Mode::Pwsh,
+        _ => false,
+    }
+}
+
+fn is_separator(mode: Mode, c: char) -> bool {
+    match c {
+        '\n' | ';' | '|' | '&' | '(' | ')' | '{' | '}' => true,
+        '`' => mode == Mode::Bash,
+        '\r' => mode == Mode::Pwsh,
+        _ => false,
+    }
+}
+
+/// The byte index of the character closing a string that starts at `from`, or `text.len()` when
+/// unclosed; `escape` skips the character after it.
+fn close_quote(
+    text: &str,
+    from: usize,
+    close: impl Fn(char) -> bool,
+    escape: Option<char>,
+) -> usize {
+    let mut it = text[from..].char_indices();
+    while let Some((k, c)) = it.next() {
+        if Some(c) == escape {
+            if it.next().is_none() {
+                break;
+            }
+        } else if close(c) {
+            return from + k;
+        }
+    }
+    text.len()
+}
+
+fn char_at(text: &str, i: usize) -> char {
+    text[i..].chars().next().unwrap_or('\0')
+}
+
+/// A pending bash heredoc: its delimiter, `<<-` (strip leading tabs), and whether the delimiter
+/// was quoted (the body is then never expanded).
+struct Heredoc {
+    delim: String,
+    strip_tabs: bool,
+    quoted: bool,
 }
 
 /// Simple commands of `text` as words: split at `; | & ( ) { }` and newlines, quotes joined into
-/// their word, comments dropped. Lenient: an unclosed quote or comment runs to the end.
-/// Also returns quoted text that may run as code (a substitution in `"…"`, an unclosed quote),
-/// with its span, for the caller to scan as a nested command.
+/// their word, comments dropped, heredoc and here-string bodies kept out of the code. Lenient: an
+/// unclosed quote or comment runs to the end.
 fn segments(text: &str, mode: Mode) -> Segments {
-    let b = text.as_bytes();
     let n = text.len();
-    let mut out = Vec::new();
-    let mut embedded = Vec::new();
+    let mut out = Segments {
+        segs: Vec::new(),
+        embedded: Vec::new(),
+    };
     let mut words: Vec<Tok> = Vec::new();
     let mut cur: Option<Tok> = None;
+    let mut heredocs: Vec<Heredoc> = Vec::new();
+    let escape = match mode {
+        Mode::Bash => '\\',
+        Mode::Pwsh => '`',
+    };
     let mut i = 0;
 
     fn push(cur: &mut Option<Tok>, start: usize, end: usize, s: &str, quoted: bool) {
@@ -419,103 +769,205 @@ fn segments(text: &str, mode: Mode) -> Segments {
         t.quoted |= quoted;
         t.span.end = end;
     }
-    let end_word = |cur: &mut Option<Tok>, words: &mut Vec<Tok>| {
+    fn end_word(cur: &mut Option<Tok>, words: &mut Vec<Tok>) {
         if let Some(t) = cur.take() {
             words.push(t);
         }
+    }
+    fn end_segment(out: &mut Segments, cur: &mut Option<Tok>, words: &mut Vec<Tok>, piped: bool) {
+        end_word(cur, words);
+        if !words.is_empty() {
+            out.segs.push(Segment {
+                words: std::mem::take(words),
+                piped,
+            });
+        }
+    }
+    let segment_is_shell = |words: &[Tok], cur: &Option<Tok>| {
+        let first = words.first().or(cur.as_ref());
+        first.is_some_and(|w| {
+            let n = base_name(&w.value);
+            BASH_SHELLS.contains(&n.as_str()) || matches!(n.as_str(), "pwsh" | "powershell" | "cmd")
+        })
     };
 
-    // $ written as a plain character just before this one (\$'…' is not an ANSI-C quote).
+    // `$` written as a plain character just before this one (`\$'…'` is not an ANSI-C quote).
     let mut plain_dollar = false;
     while i < n {
-        let c = b[i];
+        let c = char_at(text, i);
+        let cl = c.len_utf8();
         let after_dollar = std::mem::take(&mut plain_dollar);
-        let escape = match mode {
-            Mode::Bash => b'\\',
-            Mode::Pwsh => b'`',
-        };
-        if matches!(c, b' ' | b'\t' | b'\r') {
-            end_word(&mut cur, &mut words);
-            i += 1;
-        } else if matches!(c, b'\n' | b';' | b'|' | b'&' | b'(' | b')' | b'{' | b'}')
-            || (c == b'`' && mode == Mode::Bash)
-        {
-            end_word(&mut cur, &mut words);
-            if !words.is_empty() {
-                out.push(std::mem::take(&mut words));
+        if c == '\n' && mode == Mode::Bash && !heredocs.is_empty() {
+            // The heredoc bodies start on the next line and end at their delimiter lines.
+            let shell = segment_is_shell(&words, &cur);
+            let mut j = i + 1;
+            for h in std::mem::take(&mut heredocs) {
+                let body_start = j;
+                let mut body_end = n;
+                let mut next = n;
+                while j < n {
+                    let line_end = text[j..].find('\n').map_or(n, |k| j + k);
+                    let mut line = &text[j..line_end];
+                    if h.strip_tabs {
+                        line = line.trim_start_matches('\t');
+                    }
+                    if line.trim_end_matches('\r') == h.delim {
+                        body_end = j;
+                        next = (line_end + 1).min(n);
+                        j = next;
+                        break;
+                    }
+                    j = (line_end + 1).min(n);
+                }
+                let body = &text[body_start..body_end.max(body_start)];
+                let expands = !h.quoted && (body.contains("$(") || body.contains('`'));
+                if shell || expands {
+                    let span = Span {
+                        start: body_start,
+                        end: body_end.max(body_start),
+                    };
+                    out.embedded.push((span, body.to_string()));
+                }
+                j = next.max(j);
             }
-            i += 1;
+            end_segment(&mut out, &mut cur, &mut words, false);
+            i = j;
+        } else if mode == Mode::Bash && text[i..].starts_with("<<<") {
+            // A here-string: its word is the stdin of the command.
+            let shell = segment_is_shell(&words, &cur);
+            let mut j = i + 3;
+            while j < n && matches!(char_at(text, j), ' ' | '\t') {
+                j += 1;
+            }
+            let q = char_at(text, j);
+            let (body, end) = if q == '\'' || q == '"' {
+                let k = close_quote(text, j + 1, |c| c == q, (q == '"').then_some('\\'));
+                (&text[(j + 1).min(n)..k], (k + 1).min(n))
+            } else {
+                let k = text[j..]
+                    .find(|c: char| is_blank(mode, c) || is_separator(mode, c))
+                    .map_or(n, |k| j + k);
+                (&text[j..k], k)
+            };
+            if shell {
+                out.embedded
+                    .push((Span { start: i, end }, body.to_string()));
+            }
+            i = end;
+        } else if mode == Mode::Bash && text[i..].starts_with("<<") {
+            // A heredoc: read its delimiter now, its body at the end of the line.
+            let mut j = i + 2;
+            let strip_tabs = text[j..].starts_with('-');
+            if strip_tabs {
+                j += 1;
+            }
+            while j < n && matches!(char_at(text, j), ' ' | '\t') {
+                j += 1;
+            }
+            let k = text[j..]
+                .find(|c: char| is_blank(mode, c) || is_separator(mode, c) || c == '<' || c == '>')
+                .map_or(n, |k| j + k);
+            let raw = &text[j..k];
+            let delim: String = raw
+                .chars()
+                .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+                .collect();
+            if !delim.is_empty() {
+                heredocs.push(Heredoc {
+                    delim,
+                    strip_tabs,
+                    quoted: raw.len()
+                        != raw
+                            .chars()
+                            .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+                            .count(),
+                });
+            }
+            i = k;
+        } else if mode == Mode::Pwsh
+            && cur.is_none()
+            && (text[i..].starts_with("@'") || text[i..].starts_with("@\""))
+            && text[i + 2..]
+                .trim_start_matches([' ', '\t', '\r'])
+                .starts_with('\n')
+        {
+            // A here-string: the body runs to a line that starts with the closing quote and `@`.
+            let q = char_at(text, i + 1);
+            let body_start = i + 2 + text[i + 2..].find('\n').map_or(0, |k| k + 1);
+            let close = format!("\n{q}@");
+            let (body, end, closed) = match text[body_start.saturating_sub(1)..].find(&close) {
+                Some(k) => {
+                    let at = body_start.saturating_sub(1) + k;
+                    (&text[body_start.min(at)..at], at + close.len(), true)
+                }
+                None => (&text[body_start.min(n)..], n, false),
+            };
+            let span = Span { start: i, end };
+            // Unclosed: scan the rest as code; `@"…"@` expands `$(…)`.
+            if !closed || (q == '"' && body.contains("$(")) {
+                out.embedded.push((span, body.to_string()));
+            }
+            push(&mut cur, i, end, body, true);
+            i = end;
+        } else if is_blank(mode, c) {
+            end_word(&mut cur, &mut words);
+            i += cl;
+        } else if is_separator(mode, c) {
+            let pipe = c == '|' && !text[i + 1..].starts_with('|') && !text[..i].ends_with('|');
+            end_segment(&mut out, &mut cur, &mut words, pipe);
+            i += cl;
         } else if cur.is_none() && mode == Mode::Pwsh && text[i..].starts_with("<#") {
             i = text[i + 2..].find("#>").map_or(n, |k| i + 2 + k + 2);
-        } else if c == b'#' && cur.is_none() {
+        } else if c == '#' && cur.is_none() {
             i = text[i..].find('\n').map_or(n, |k| i + k);
-        } else if c == b'\'' || c == b'"' {
+        } else if is_single_quote(mode, c) || is_double_quote(mode, c) {
+            let double = is_double_quote(mode, c);
             // bash `$'…'` takes backslash escapes; `"…"` takes the shell's escape character.
-            let ansi_c = c == b'\'' && mode == Mode::Bash && after_dollar;
-            let esc = if c == b'"' || ansi_c {
-                Some(escape)
+            let ansi_c = c == '\'' && mode == Mode::Bash && after_dollar;
+            let esc = (double || ansi_c).then_some(escape);
+            let j = if double {
+                close_quote(text, i + cl, |x| is_double_quote(mode, x), esc)
             } else {
-                None
+                close_quote(text, i + cl, |x| is_single_quote(mode, x), esc)
             };
-            let j = close_quote(text, i + 1, c, esc);
-            let body = &text[i + 1..j];
-            let span = Span {
-                start: i,
-                end: (j + 1).min(n),
+            let body = &text[i + cl..j];
+            let end = if j < n {
+                j + char_at(text, j).len_utf8()
+            } else {
+                n
             };
+            let span = Span { start: i, end };
             if j >= n || (ansi_c && body.contains("\\'")) {
                 // Unclosed, or an ANSI-C body whose `\'` another reading closes on: the shell
                 // may read the rest as code, so scan it as code too.
-                embedded.push((span, body.to_string()));
-            } else if c == b'"'
-                && (body.contains("$(") || (mode == Mode::Bash && body.contains('`')))
+                out.embedded.push((span, body.to_string()));
+            } else if double && (body.contains("$(") || (mode == Mode::Bash && body.contains('`')))
             {
                 // A substitution inside a double-quoted word runs: scan the whole body as code.
-                embedded.push((span, body.to_string()));
+                out.embedded.push((span, body.to_string()));
             }
-            push(&mut cur, i, span.end, body, true);
-            i = j + 1;
+            push(&mut cur, i, end, body, true);
+            i = end;
         } else if c == escape {
             if text[i + 1..].starts_with('\n') {
                 i += 2;
             } else if text[i + 1..].starts_with("\r\n") {
                 i += 3;
             } else if i + 1 < n {
-                let l = char_len_at(text, i + 1);
+                let l = char_at(text, i + 1).len_utf8();
                 push(&mut cur, i, i + 1 + l, &text[i + 1..i + 1 + l], false);
                 i += 1 + l;
             } else {
                 i += 1;
             }
         } else {
-            let l = char_len_at(text, i);
-            push(&mut cur, i, i + l, &text[i..i + l], false);
-            plain_dollar = c == b'$';
-            i += l;
+            push(&mut cur, i, i + cl, &text[i..i + cl], false);
+            plain_dollar = c == '$';
+            i += cl;
         }
     }
-    end_word(&mut cur, &mut words);
-    if !words.is_empty() {
-        out.push(words);
-    }
-    (out, embedded)
-}
-
-/// The index of the quote closing a string that starts at `from`, or `text.len()` when unclosed.
-fn close_quote(text: &str, from: usize, quote: u8, escape: Option<u8>) -> usize {
-    let b = text.as_bytes();
-    let n = text.len();
-    let mut j = from;
-    while j < n && b[j] != quote {
-        if Some(b[j]) == escape {
-            j += 1;
-            if j >= n {
-                break;
-            }
-        }
-        j += char_len_at(text, j);
-    }
-    j.min(n)
+    end_segment(&mut out, &mut cur, &mut words, false);
+    out
 }
 
 #[cfg(test)]
@@ -618,6 +1070,66 @@ mod tests {
         "pwsh \u{2013}c 'ri x'",
         // `\$'` is a literal dollar before a plain quote, not an ANSI-C string
         "echo \\$'a\\' <# ; rm -rf x ; echo '",
+        // I1: nesting at and past the depth limit
+        "pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
+        "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
+        // I3: heredoc bodies are literal and the command resumes after the delimiter line
+        "cat <<'EOF'\nit's done\nEOF\nrm -rf x\necho 'ok'",
+        "git commit -F - <<'EOF'\nDon't keep the cache\nEOF\nrm -rf build && echo 'done'",
+        "cat <<-EOF\n\tit's\n\tEOF\nrm -rf x\necho 'ok'",
+        "cat <<EOF\n$(rm -rf x)\nEOF",
+        "cat <<EOF\nit's $(rm -rf x)\nEOF\necho 'z'",
+        // I3: PowerShell here-strings, CR-only lines, Unicode blanks and quotes
+        "@'\na'\n'@; Remove-Item x; echo '\n'",
+        "@\"\na\"\n\"@; Remove-Item x; echo \"\n\"",
+        "echo hi\rRemove-Item x",
+        "Remove-Item\u{a0}x",
+        "echo\u{2003}hi;\u{3000}Remove-Item x",
+        "echo hi\u{c}; Remove-Item\u{c}x",
+        "echo 'a\u{2019}; Remove-Item x; echo \u{2018}b'",
+        "echo \"a\u{201d}; Remove-Item x; echo \u{201c}b\"",
+        // I4: wrappers, shells and forms
+        "eval 'rm -rf x'",
+        "eval \"rm -rf x\"",
+        "echo 'rm -rf x' | bash",
+        "bash <<< 'rm -rf x'",
+        "'Remove-Item x' | pwsh -Command -",
+        "wsl rm -rf x",
+        "wsl -e rm -rf x",
+        "wsl -d Ubuntu -u root -- rm -rf x",
+        "wsl bash -c 'rm -rf x'",
+        "zsh -c 'rm -rf x'",
+        "dash -c 'rm -rf x'",
+        "env -i rm -rf x",
+        "sudo -u root rm -rf x",
+        "timeout 5 rm -rf x",
+        "nice -n 5 rm -rf x",
+        "time -p rm -rf x",
+        "find . -name '*.o' | xargs -n 1 rm",
+        "Start-Process -FilePath git -ArgumentList 'clean','-fd'",
+        "Start-Process cmd -ArgumentList '/c','rd /s /q x'",
+        "2>/dev/null rm -rf x",
+        "bash \"-c\" \"rm -rf x\"",
+        "pwsh '-c' 'Remove-Item x'",
+        "bash -c -- 'rm -rf x'",
+        "bash -cx 'rm -rf x'",
+        "git.cmd reset --hard",
+        ". Remove-Item x",
+        "$r=Remove-Item x",
+        "& ([scriptblock]::Create('Remove-Item x'))",
+        // M1: abbreviated git long options
+        "git reset --har",
+        "git clean --forc -d",
+        "git clean -fd -e -n",
+        "git clean -fd -- -n",
+        // M5: cmd switches glued to the name or the quote
+        "cmd /c rd/s/q x",
+        "cmd /c\"del x\"",
+        // M8: Clear-Content alias and the .Delete() method form
+        "clc x",
+        "(Get-Item x).Delete()",
+        "(Get-Item x).Delete($true)",
+        "$d.Delete()",
     ];
 
     const HARMLESS: &[&str] = &[
@@ -643,6 +1155,14 @@ mod tests {
         "echo hi # ; rm -rf x",
         "bash -e script.sh",
         "echo \"$(Get-Date)\"",
+        // nesting below the limit stays harmless
+        "pwsh -c pwsh -c pwsh -c Get-Date",
+        // a here-string body is text (a heredoc body still over-matches in the pwsh reading)
+        "$m = @'\nRemove-Item x\n'@",
+        "echo 'rm -rf x' | grep rm",
+        "eval echo hi",
+        "Start-Process -FilePath notepad -ArgumentList 'a.txt'",
+        "git branch --delete topic",
     ];
 
     #[test]
@@ -652,9 +1172,19 @@ mod tests {
 
     #[test]
     fn every_destructive_spelling_is_caught() {
-        for cmd in DESTRUCTIVE {
-            assert!(raw_destructive(cmd).is_some(), "missed: {cmd}");
-        }
+        let missed: Vec<&&str> = DESTRUCTIVE
+            .iter()
+            .filter(|cmd| raw_destructive(cmd).is_none())
+            .collect();
+        assert!(missed.is_empty(), "missed: {missed:?}");
+    }
+
+    #[test]
+    fn find_exec_chains_stay_linear() {
+        let cmd = format!("find . {}-exec rm -rf x", "-exec find . ".repeat(22));
+        let start = std::time::Instant::now();
+        assert!(raw_destructive(&cmd).is_some());
+        assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
     }
 
     #[test]
@@ -676,9 +1206,11 @@ mod tests {
 
     #[test]
     fn harmless_commands_pass() {
-        for cmd in HARMLESS {
-            assert_eq!(raw_destructive(cmd), None, "flagged: {cmd}");
-        }
+        let flagged: Vec<&&str> = HARMLESS
+            .iter()
+            .filter(|cmd| raw_destructive(cmd).is_some())
+            .collect();
+        assert!(flagged.is_empty(), "flagged: {flagged:?}");
     }
 
     #[test]
