@@ -581,18 +581,26 @@ pub struct Location {
 }
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
-/// HardLink`, `ln -s`. `Some(None)`: a link at a place the hook cannot tell.
-fn created_link(c: &SimpleCommand) -> Option<Option<Word>> {
+/// HardLink`, `ln -s`, one entry per link. `None`: a link at a place the hook cannot tell.
+fn created_links(c: &SimpleCommand) -> Vec<Option<Word>> {
     match unwrap(c) {
-        Run::Cmd { name, args, .. } => link_made(&name, args),
-        Run::Nothing => None,
-        run => run.may_be(&LINK_COMMANDS).then_some(None),
+        Run::Cmd { name, args, .. } if matches!(name.as_str(), "new-item" | "ni") => {
+            new_item_links(args)
+        }
+        Run::Cmd { name, args, .. } => link_made(&name, args).into_iter().collect(),
+        Run::Nothing => Vec::new(),
+        run => run
+            .may_be(&LINK_COMMANDS)
+            .then_some(None)
+            .into_iter()
+            .collect(),
     }
 }
 
 const LINK_COMMANDS: [&str; 4] = ["mklink", "ln", "new-item", "ni"];
 
-/// `created_link` for the command `name` run with `args`.
+/// The link `mklink` or `ln` run with `args` makes. `Some(None)`: a link at a place the hook
+/// cannot tell.
 fn link_made(name: &str, args: &[Word]) -> Option<Option<Word>> {
     let lit_args: Vec<Option<String>> = args.iter().map(literal).collect();
     match name {
@@ -654,13 +662,12 @@ fn link_made(name: &str, args: &[Word]) -> Option<Option<Word>> {
                 None
             })
         }
-        "new-item" | "ni" => new_item_link(args),
         _ => None,
     }
 }
 
-/// `created_link` for `New-Item`, its parameters bound as PowerShell binds them.
-fn new_item_link(args: &[Word]) -> Option<Option<Word>> {
+/// `created_links` for `New-Item`, its parameters bound as PowerShell binds them.
+fn new_item_links(args: &[Word]) -> Vec<Option<Word>> {
     // The item type: `None` when not given, `Some(None)` when not static.
     let mut kind: Option<Option<String>> = None;
     let mut path: Option<Word> = None;
@@ -715,16 +722,39 @@ fn new_item_link(args: &[Word]) -> Option<Option<Word>> {
         }
     }
     if unbound {
-        return Some(None);
+        return vec![None];
     }
     match &kind {
         // A second `-ItemType` from a splat would be a binding error.
-        Some(Some(k)) if is_folder_or_file_type(k) => None,
-        _ if opaque || elsewhere => Some(None),
-        Some(_) => Some(path),
+        Some(Some(k)) if is_folder_or_file_type(k) => Vec::new(),
+        _ if opaque || elsewhere => vec![None],
+        Some(_) => match path {
+            Some(w) => path_list(&w),
+            None => vec![None],
+        },
         // No `-ItemType`: a file.
-        None => None,
+        None => Vec::new(),
     }
+}
+
+/// The paths a New-Item path word names: PowerShell reads an unquoted `a,b` as a list. A comma
+/// in any other shape (quoted, an empty element) is a path the hook cannot tell.
+fn path_list(w: &Word) -> Vec<Option<Word>> {
+    let Some(t) = literal(w).filter(|t| t.contains(',')) else {
+        return vec![Some(w.clone())];
+    };
+    if w.quote != crate::ir::Quote::None {
+        return vec![None];
+    }
+    t.split(',')
+        .map(|p| {
+            (!p.is_empty()).then(|| Word {
+                parts: vec![WordPart::Literal(p.to_string())],
+                span: w.span,
+                quote: w.quote,
+            })
+        })
+        .collect()
 }
 
 /// An `-ItemType` value (lowercased) that is provably `Directory` or `File`: the provider takes
@@ -828,7 +858,7 @@ impl Location {
         visit_stmt(stmt, &mut |n| match n {
             Node::Cmd(c) => {
                 remap |= remaps_drives(c);
-                links.extend(created_link(c));
+                links.extend(created_links(c));
             }
             Node::Method(m) => {
                 let method = m.method.to_ascii_lowercase();

@@ -1293,6 +1293,49 @@ fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
             format!("vague {}", show(&vague)),
         );
     }
+    // PowerShell reads an unquoted `a\j,t\k` as a list: every element is a link.
+    for list in [
+        lits(
+            "New-Item",
+            &["-ItemType", "Junction", r"a\j,t\k", "-Value", r"C:\x"],
+        ),
+        lits("New-Item", &["-ItemType", "Junction", "-Path", r"a\j,t\k"]),
+        lits("New-Item", &["-ItemType", "Junction", r"-Path:a\j,t\k"]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(list.clone(), seq), &env);
+        for gone in ["a", "t", r"C:\w\repo\t"] {
+            expect(
+                resolve(&lit(gone), &loc, &env),
+                &MAY_BE_CRITICAL,
+                format!("list {}: {gone}", show(&list)),
+            );
+        }
+        expect(
+            resolve(&lit("u"), &loc, &env),
+            &paths(&[r"C:\w\repo\u"]),
+            format!("list {}: unrelated", show(&list)),
+        );
+    }
+    // Any other comma shape (quoted, an empty element) is a link at a place the hook cannot
+    // tell.
+    let mut quoted = lit(r"a\j,t\k");
+    quoted.quote = Quote::Single;
+    for odd in [
+        cmd(
+            "New-Item",
+            vec![lit("-ItemType"), lit("Junction"), quoted.clone()],
+        ),
+        lits("New-Item", &["-ItemType", "Junction", r"a\j,"]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(odd.clone(), seq), &env);
+        expect(
+            resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
+            &MAY_BE_CRITICAL,
+            format!("comma {}", show(&odd)),
+        );
+    }
     // `-1` is a value, not a parameter: the link is `-1`.
     let mut loc = base.clone();
     let numeric = lits("New-Item", &["-1", "-ItemType", "Junction"]);
