@@ -677,6 +677,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ("z=1; read \"$v\" < f; (( z ))".to_string(), "(("),
         // The target may be an integer name: the read evaluates what it reads.
         ("read \"$v\" <<< 1".to_string(), "read"),
+        // A copy of a name the script never assigns, also into an integer name; a declaration
+        // whose target is not static.
+        ("n=$HOME_UNSET; (( n ))".to_string(), "(("),
+        ("declare -i n; n=$y; (( n ))".to_string(), "(("),
+        ("declare -i n; n=$y".to_string(), "<none>"),
+        ("declare -i \"$k=1\"; (( a ))".to_string(), "(("),
+        ("declare -i \"$k=1\"".to_string(), "declare"),
+        ("declare \"$k=1\"".to_string(), "declare"),
         // A function call or `set` carries a tainted argument into `$1`, `$@`.
         (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
@@ -750,7 +758,6 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "(( RANDOM + LINENO + SECONDS + BASHPID + PPID + UID + EUID ))".to_string(),
         "_x=1; n='(1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1)'; (( n ))".to_string(),
         "x=; (( x ))".to_string(),
-        "n=$HOME; (( n ))".to_string(),
         "set -o pipefail; (( $1 ))".to_string(),
         "declare 'n=5'; (( n ))".to_string(),
         "export 'n=5'; (( n ))".to_string(),

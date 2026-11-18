@@ -319,7 +319,7 @@ impl Taint {
         match v {
             Value::Clean => true,
             Value::Tainted => false,
-            Value::Copy(n) => self.is_clean(n) || !self.assigned.contains(n),
+            Value::Copy(n) => self.is_clean(n),
             Value::Arith { names, positional } => {
                 names.iter().all(|n| self.is_clean(n)) && !(*positional && self.positional)
             }
@@ -1069,7 +1069,7 @@ impl Lower {
                         self.assigned(name, &parts, append);
                     }
                     // `declare "$n=…"`: the name is not static.
-                    _ => self.unknown_target.set(true),
+                    _ => self.runtime_target(None),
                 }
             }
         }
