@@ -977,6 +977,10 @@ fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
             &["-LocalPath", "X:", "-RemotePath", r"\\srv\share"],
         ),
         lits("net1", &["use", "X:", r"\\srv\share"]),
+        lits("ndr", &["-Name", "X", "-Root", r"C:\Profiles\u"]),
+        lits("mount", &["-o", "bind", r"C:\Profiles\u", "/c/x"]),
+        // diskpart reads its script from stdin: `assign letter=X` is not in the words.
+        lits("diskpart", &["/s", "script.txt"]),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(mapping.clone(), Some(ChainOp::Seq)), &env);
@@ -995,9 +999,11 @@ fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
         );
         assert_eq!(resolve(&glob, &loc, &env), MAY_BE_CRITICAL);
     }
-    let mut loc = base.clone();
-    loc.after(&stmt(lits("net", &["view"]), Some(ChainOp::Seq)), &env);
-    assert_eq!(resolve(&x, &loc, &env), paths(&[r"X:\sub"]));
+    for net in ["net", "net1"] {
+        let mut loc = base.clone();
+        loc.after(&stmt(lits(net, &["view"]), Some(ChainOp::Seq)), &env);
+        assert_eq!(resolve(&x, &loc, &env), paths(&[r"X:\sub"]), "{net} view");
+    }
 }
 
 #[test]
@@ -1788,6 +1794,31 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
     let mut loc = base.clone();
     loc.after(&stmt(cmd("cd", vec![dot_var]), Some(ChainOp::And)), &env);
     assert_eq!(resolve(&lit("y"), &loc, &env), MAY_BE_CRITICAL);
+    // `cd .$TMP`: what follows the `.` decides whether bash searches CDPATH (`.t` is a
+    // relative name), so a `.` followed by anything counts as searched.
+    let posix = Shell::Bash(BashProfile::Posix);
+    let posix_env = env_view(
+        posix,
+        Os::Posix,
+        [
+            ("HOME".to_string(), "/h".to_string()),
+            ("TMP".to_string(), "t".to_string()),
+            ("CDPATH".to_string(), "/elsewhere".to_string()),
+        ],
+    );
+    let dot_tmp = word_at(
+        vec![
+            WordPart::Literal(".".to_string()),
+            WordPart::Var("TMP".to_string()),
+        ],
+        0,
+    );
+    let mut loc = Location::new(posix, Os::Posix, Some(Path::new("/w/repo")));
+    loc.after(
+        &stmt(cmd("cd", vec![dot_tmp]), Some(ChainOp::And)),
+        &posix_env,
+    );
+    assert_eq!(resolve(&lit("y"), &loc, &posix_env), MAY_BE_CRITICAL);
     // `$CDPATH` never resolves to the hook's own value.
     let w = var("CDPATH");
     let loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));
