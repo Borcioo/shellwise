@@ -244,7 +244,8 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
             if b.spent() {
                 break;
             }
-            let mut producer: Cow<[Tok]> = Cow::Borrowed(&[]);
+            // Every reading's command is what may print into a pipe.
+            let mut producers: Vec<Cow<[Tok]>> = Vec::new();
             let mut eval_alone = false;
             each_reading(&s.words, depth, b, |start, w| {
                 let words = &s.words[start..];
@@ -252,9 +253,7 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
                 let cmd = command_words(words, w, b);
                 eval_alone |=
                     cmd.len() == 1 && EVAL_NAMES.contains(&base_name(&cmd[0].value).as_str());
-                if start == 0 {
-                    producer = cmd;
-                }
+                producers.push(cmd);
                 false
             });
             // `iex('…')`, `[scriptblock]::Create('…')`: the argument is the next segment.
@@ -272,18 +271,20 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
                 && let Some(next) = seg.segs.get(k + 1)
                 && reads_stdin_as_code(&next.words, depth, b)
             {
-                feed(table, &producer, seg_span(&s.words), depth, b, &mut out);
+                feed(table, &producers, seg_span(&s.words), depth, b, &mut out);
             }
             // `bash <(…)`, `. <(…)`: the substitution's output is a file the command runs.
             if s.procsub
                 && let Some(next) = seg.segs.get(k + 1)
             {
-                let end =
-                    s.words.len() - s.words.iter().rev().take_while(|w| w.value == "<").count();
-                if runs_file_as_code(&s.words[..end], depth, b) {
-                    let w = walk(&next.words, depth, b);
-                    let producer = command_words(&next.words, &w, b);
-                    feed(table, &producer, seg_span(&s.words), depth, b, &mut out);
+                // The `<` before `(` reads as a redirect, so the command is found as usual.
+                if runs_file_as_code(&s.words, depth, b) {
+                    let mut producers: Vec<Cow<[Tok]>> = Vec::new();
+                    each_reading(&next.words, depth, b, |start, w| {
+                        producers.push(command_words(&next.words[start..], w, b));
+                        false
+                    });
+                    feed(table, &producers, seg_span(&s.words), depth, b, &mut out);
                 }
             }
         }
@@ -292,6 +293,7 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
                 out.push(Hit { row: h.row, span });
             }
         }
+        out.extend(seg.unreadable.into_iter().map(opaque));
     }
     // Both readings usually find the same command.
     out.sort_by_key(|h| (h.span.start, h.span.end, h.row));
@@ -299,25 +301,31 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
     out
 }
 
-/// Scan what `producer` prints as the code an interpreter runs. Text that is not static (a file,
-/// a download, a variable) is unreadable.
+/// Scan what the producer prints as the code an interpreter runs, in every reading of where its
+/// command starts. Text that is not static (a file, a download, a variable) in any reading makes
+/// the code unreadable.
 fn feed(
     table: &[Entry],
-    producer: &[Tok],
+    producers: &[Cow<[Tok]>],
     span: Span,
     depth: usize,
     b: &Budget,
     out: &mut Vec<Hit>,
 ) {
-    match piped_text(producer, b) {
-        Some(text) => {
-            for h in hits_at(table, &text, depth + 1, b) {
-                out.push(Hit { row: h.row, span });
+    for producer in producers {
+        match piped_text(producer, b) {
+            Some(text) => {
+                for h in hits_at(table, &text, depth + 1, b) {
+                    out.push(Hit { row: h.row, span });
+                }
+            }
+            // A spent budget is reported once, by `hits`.
+            None if b.spent() => return,
+            None => {
+                out.push(opaque(span));
+                return;
             }
         }
-        // A spent budget is reported once, by `hits`.
-        None if b.spent() => {}
-        None => out.push(opaque(span)),
     }
 }
 
@@ -690,7 +698,7 @@ fn command_reads_stdin(words: &[Tok], b: &Budget) -> bool {
     if name == "source" {
         return words
             .get(1)
-            .is_some_and(|w| w.value == "-" || STDIN_PATHS.contains(&w.value.as_str()));
+            .is_some_and(|w| STDIN_PATHS.contains(&w.value.as_str()));
     }
     if !is_shell(&name) {
         return false;
@@ -1048,6 +1056,8 @@ struct Segments {
     /// Text that may run as code (a substitution in `"…"`, an unclosed quote, a heredoc or
     /// here-string a shell reads), with its span, for the caller to scan as a nested command.
     embedded: Vec<(Span, String)>,
+    /// Text the reader cannot place (after a heredoc delimiter it cannot resolve).
+    unreadable: Vec<Span>,
 }
 
 fn is_single_quote(mode: Mode, c: char) -> bool {
@@ -1117,6 +1127,7 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
     let mut out = Segments {
         segs: Vec::new(),
         embedded: Vec::new(),
+        unreadable: Vec::new(),
     };
     let mut words: Vec<Tok> = Vec::new();
     let mut cur: Option<Tok> = None;
@@ -1203,9 +1214,8 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
                     if h.strip_tabs {
                         line = line.trim_start_matches('\t');
                     }
-                    // A line ending in `\r` also ends the body: the earlier end leaves more
-                    // text to scan as code.
-                    if line.trim_end_matches('\r') == h.delim.trim_end_matches('\r') {
+                    // Byte for byte, as bash compares: a `\r` belongs to the line or the word.
+                    if line == h.delim {
                         found = true;
                         body_end = j;
                         next = (line_end + 1).min(n);
@@ -1260,8 +1270,8 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
             while j < n && matches!(char_at(text, j), ' ' | '\t') {
                 j += 1;
             }
-            // A delimiter the reader cannot resolve pushes no heredoc: the lines after it stay
-            // code.
+            // After a delimiter the reader cannot resolve, nothing shows where the body ends:
+            // the rest of the input is unreadable (and still scanned as code).
             match heredoc_word(text, j) {
                 Some((delim, quoted, end)) => {
                     if quoted || !delim.is_empty() {
@@ -1273,7 +1283,10 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
                     }
                     i = end;
                 }
-                None => i = j,
+                None => {
+                    out.unreadable.push(Span { start: i, end: n });
+                    i = j;
+                }
             }
         } else if mode == Mode::Pwsh
             && cur.is_none()
@@ -1367,7 +1380,8 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
 /// The heredoc delimiter word at `j`, read as bash reads it: quotes removed, backslash escapes
 /// resolved, `\r` a plain character. Returns the word, whether any part of it was quoted, and
 /// the index after it; `None` when it cannot be read exactly (an unclosed quote, `$'…'` or
-/// `$"…"`, a newline inside it).
+/// `$"…"`). A word holding a newline never matches a line, so its body runs to the end and is
+/// scanned as code.
 fn heredoc_word(text: &str, j: usize) -> Option<(String, bool, usize)> {
     let n = text.len();
     let mut word = String::new();
@@ -1420,7 +1434,7 @@ fn heredoc_word(text: &str, j: usize) -> Option<(String, bool, usize)> {
             }
         }
     }
-    (exact && !word.contains('\n')).then_some((word, quoted, k))
+    exact.then_some((word, quoted, k))
 }
 
 #[cfg(test)]
@@ -1639,6 +1653,19 @@ mod tests {
         "echo \u{2018}a; sudo -X foo bash <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
         "source <(echo 'rm -rf x')",
         ". <(echo 'rm -rf x')",
+        // every consumer reads every command start, and an env -S consumer counts
+        "find . -exec sudo -u root rm -rf {} +",
+        "sudo -X foo iex('Remove-Item x')",
+        "echo \u{2018}a; wsl <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
+        "echo 'rm -rf x' | env -S'bash -x'",
+        "env -S'bash' <(echo 'rm -rf x')",
+        "echo \u{2018}a; env -S'bash' <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
+        // automated note 1: every reading of the producer is what may print the code
+        "sudo -u echo printf 'rm -rf x' | bash",
+        "bash <(sudo -u echo printf 'rm -rf x')",
+        // automated note 2: a delimiter with `\r` that no line matches byte for byte
+        "cat <<EOF\r\nEOF\nrm -rf x",
+        "cat <<EOF\nEOF\r\nrm -rf x",
     ];
 
     /// Commands the scan cannot read to the end (too deep, too much work, text it cannot see):
@@ -1650,6 +1677,14 @@ mod tests {
         "cat script.sh | bash",
         "Get-Content x.ps1 | iex",
         "bash <(cat script.sh)",
+        // printed text the writer still expands
+        "echo \"$X\" | bash",
+        "echo \"`x`\" | bash",
+        "printf 'r\\155 -rf x' | bash",
+        "printf 'rm%s-rf x' ' ' | bash",
+        // a heredoc delimiter the reader cannot resolve: the rest of the input is unread
+        "cat <<$'A'\nhello\nA\necho hi",
+        "cat <<'EOF\nhello\nEOF\necho hi",
     ];
 
     /// Every wrapper name: the shell after it reads the pipe.
@@ -1714,6 +1749,9 @@ mod tests {
         "eval echo hi",
         "Start-Process -FilePath notepad -ArgumentList 'a.txt'",
         "git branch --delete topic",
+        // bash compares delimiter lines byte for byte: a `\r` belongs to the word or the line
+        "echo \u{2018}a; cat <<EOF\r\nhello\nEOF\nrm -rf x\nEOF\r\necho \u{2019}",
+        "echo \u{2018}a; cat <<EOF\nhello\nEOF\r\nrm -rf x\nEOF\necho \u{2019}",
     ];
 
     #[test]
