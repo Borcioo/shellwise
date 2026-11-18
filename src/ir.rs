@@ -82,11 +82,20 @@ pub struct MethodCall {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Redirect {
-    /// The operator as written (`>`, `2>>`, `<`, `*>`).
-    pub op: String,
-    pub target: Word,
-    pub span: Span,
+pub enum Redirect {
+    File {
+        /// The operator as written (`>`, `2>>`, `<`, `*>`, `<<<`).
+        op: String,
+        target: Word,
+        span: Span,
+    },
+    /// A here-document. An expanding body (unquoted delimiter) holds its `$(…)` as `Subst`
+    /// parts; a quoted delimiter gives one literal part.
+    Heredoc {
+        body: Word,
+        expands: bool,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,6 +8,7 @@ pub mod config;
 pub mod fs;
 pub mod ir;
 pub mod level;
+pub mod parse;
 pub mod rules;
 pub mod scan;
 
