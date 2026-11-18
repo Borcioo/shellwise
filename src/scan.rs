@@ -1755,6 +1755,8 @@ mod tests {
         "eval echo hi",
         "Start-Process -FilePath notepad -ArgumentList 'a.txt'",
         "git branch --delete topic",
+        // a CRLF heredoc ends at its own delimiter line: its body is text
+        "echo \u{2018}a; cat <<EOF\r\nrm -rf x\r\nEOF\r\necho \u{2019}",
         // static text an interpreter reads is scanned, not taken as unreadable
         "'Get-Date' | iex",
         "echo hi | bash",
