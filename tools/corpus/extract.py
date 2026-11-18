@@ -75,6 +75,10 @@ SEPARATORS = set("\n;|&(){}")
 HEREDOC = re.compile(r"<<(?!<)(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z_][\w.-]*))")
 # `@'` or `@"` ending its line: a PowerShell here-string, closed by a quote and `@` at column 0.
 HERE_STRING = re.compile(r"@(['\"])[ \t]*\r?\n")
+# a here-string piped into a shell: `| pwsh -Command -`, `| bash`
+PIPED_SHELL = re.compile(r"[ \t]*\|[ \t]*([^\s|;&()]+)")
+# first word of a pseudo-segment carrying a script that a shell runs: HEREBODY + shell, then the script
+HEREBODY = "\0body:"
 
 
 def segments(text, shell):
@@ -96,16 +100,26 @@ def segments(text, shell):
             out.append(words)
         words = []
 
-    pending = []   # (delimiter, strip leading tabs) of the heredocs whose body starts after this line
+    pending = []   # (delimiter, strip leading tabs, shell that runs the body or None) of this line's heredocs
+
+    def runs_body():
+        """The shell a heredoc's body goes to: the command before `<<` is a shell, or ssh (a remote shell)."""
+        cmd = strip_prefix(words)
+        name = base_name(cmd[0][0]) if cmd else ""
+        return "bash" if name == "ssh" else NESTED.get(name)
 
     def skip_bodies(pos):
-        for delim, tabs in pending:
+        for delim, tabs, runner in pending:
+            body = []
             while pos < n:
                 nl = text.find("\n", pos)
                 line = text[pos:n if nl < 0 else nl].rstrip("\r")
                 pos = n if nl < 0 else nl + 1
                 if (line.lstrip("\t") if tabs else line) == delim:
                     break
+                body.append(line.lstrip("\t") if tabs else line)
+            if runner:
+                out.append([(HEREBODY + runner, True), ("\n".join(body), True)])
         pending.clear()
         return pos
 
@@ -120,7 +134,7 @@ def segments(text, shell):
         elif c == "<" and shell == "bash" and HEREDOC.match(text, i):
             m = HEREDOC.match(text, i)
             end_word()
-            pending.append((next(g for g in m.groups()[1:] if g is not None), bool(m.group(1))))
+            pending.append((next(g for g in m.groups()[1:] if g is not None), bool(m.group(1)), runs_body()))
             i = m.end()
         elif c == "@" and shell == "pwsh" and cur is None and HERE_STRING.match(text, i):
             m = HERE_STRING.match(text, i)
@@ -128,6 +142,9 @@ def segments(text, shell):
             cur = text[m.end():n if close < 0 else close]
             quoted = True
             i = n if close < 0 else close + 3
+            piped = PIPED_SHELL.match(text, i)
+            if piped and base_name(piped.group(1)) in NESTED:
+                out.append([(HEREBODY + NESTED[base_name(piped.group(1))], True), (cur, True)])
         elif c in SEPARATORS or (c == "`" and shell == "bash"):
             end_segment()
             i += 1
@@ -165,7 +182,7 @@ PREFIX_WORDS = {"sudo", "command", "exec", "nohup", "time", "xargs", "env", "&",
                 "elif", "if", "while", "until", "call"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 PS_VAR = re.compile(r"^(\[[\w.\[\]]+\])*\$[\w:]+$")
-NESTED = {"bash": "bash", "sh": "bash", "pwsh": "pwsh", "powershell": "pwsh", "cmd": "cmd"}
+NESTED = {"bash": "bash", "sh": "bash", "zsh": "bash", "pwsh": "pwsh", "powershell": "pwsh", "cmd": "cmd"}
 NESTED_FLAG = re.compile(r"^(-[a-z]*c|-command|-c|//?c|//?k)$", re.I)
 EXEC_FLAGS = {"-exec", "-execdir", "-ok", "-okdir"}
 GIT_VALUE_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
@@ -224,6 +241,9 @@ def expand(shell, words, depth):
     """(shell, words) of a simple command, prefixes stripped. A nested `bash -c`, `pwsh -Command` or `cmd /c`
     body is expanded with that shell, and so is the command each `-exec`/`-execdir`/`-ok`/`-okdir` clause of
     `find` runs (up to `;` or `+`; `{}` has already split the segment)."""
+    if words and words[0][0].startswith(HEREBODY):
+        yield from simple_commands(words[0][0][len(HEREBODY):], words[1][0], depth + 1)
+        return
     words = strip_prefix(words)
     if not words or depth > 4:
         return

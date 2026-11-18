@@ -106,6 +106,8 @@ def build_projects(root):
     # hook text in a result that is not an error is quoted text, not a deny
     main.call("t-quoted", "Bash", "echo quoted")
     main.result("t-quoted", HOOK_TEXT)
+    main.call("t-quoted2", "Bash", "echo quoted-plugin")
+    main.result("t-quoted2", "Permission to use Bash denied by plugin example-hook: quoted in output")
     main.call("t-fail", "Bash", "false")
     main.result("t-fail", [{"type": "text", "text": "Exit code 1\r\nboom " + "x" * 400}], is_error=True)
     main.call("t-old", "Bash", "echo old", days_ago=40)
@@ -171,6 +173,7 @@ class ExtractTests(unittest.TestCase):
             ("ls -la", "denied-hook", "alpha-guard"),
             ("pwd", "denied-hook", "example-hook"),
             ("echo quoted", "ok", None),
+            ("echo quoted-plugin", "ok", None),
             ("false", "failed", None),
             ("git reset --hard", "ok", None),
         ]
@@ -206,7 +209,7 @@ class ExtractTests(unittest.TestCase):
 
     def test_bad_lines_skipped(self):
         self.assertEqual(self.code, 0, self.stderr)
-        self.assertEqual(sum(len(v) for v in self.rows.values()), 12, sorted(self.rows))
+        self.assertEqual(sum(len(v) for v in self.rows.values()), 13, sorted(self.rows))
 
     def test_destructive_flag_in_rows(self):
         self.assertTrue(self.row("rm -rf x")["destructive"])
@@ -294,6 +297,19 @@ class DestructiveTests(unittest.TestCase):
             ("Bash", 'cat <<"EOF"\nrm -rf x\nEOF\n', False),
             ("Bash", "cat <<-EOF\n\trm -rf x\n\tEOF\n", False),
             ("Bash", "cat <<-EOF\n\tbody\n\tEOF\nrm x\n", True),
+            # a body a shell (or ssh) runs is scanned as that shell's script; a file's content is not
+            ("Bash", "bash <<'EOF'\nrm -rf x\nEOF\n", True),
+            ("Bash", "sudo sh <<EOF\nrm -rf x\nEOF\n", True),
+            ("Bash", "zsh <<EOF\nrm x\nEOF\n", True),
+            ("Bash", "ssh host <<EOF\nrm -rf x\nEOF\n", True),
+            ("Bash", "cmd <<EOF\ndel x\nEOF\n", True),
+            ("Bash", "bash <<'EOF'\necho hi\nEOF\n", False),
+            ("Bash", "cat > x.sh <<'EOF'\nrm -rf x\nEOF\n", False),
+            ("PowerShell", "@'\nRemove-Item x\n'@ | pwsh -Command -", True),
+            ("PowerShell", "@\"\nRemove-Item x\n\"@ | powershell -Command -", True),
+            ("PowerShell", "@'\nrm -rf x\n'@ | bash", True),
+            ("PowerShell", "@'\nrm -rf x\n'@ | sh", True),
+            ("PowerShell", "@'\nRemove-Item x\n'@ | Set-Content f", False),
             ("Bash", "cat <<EOF | rm x\nbody\nEOF\n", True),
             ("Bash", "cat <<EOF\nbody\nEOF\nrm x\n", True),
             # PowerShell here-strings: an apostrophe inside @'...'@ does not close it; only a marker at column 0 does
@@ -432,6 +448,18 @@ class BaselineTests(unittest.TestCase):
         self.assertIn("10 of 10", text)
         self.assertNotIn("echo ok", text)
         self.assertNotIn("r000", text)
+
+    def test_other_hooks_are_one_count_without_names(self):
+        rows = self.good_rows()
+        for name in ("plugin-alpha", "plugin-beta"):
+            rows.append(corpus_row(len(rows), "Bash", "echo " + name, "denied-hook", name))
+        code, output, out, report, known = self.baseline(rows)
+        self.assertEqual(code, 0, output)
+        with open(report, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("| other hook | 2 |", text)
+        self.assertIn("| baseline-guard | 10 |", text)
+        self.assertNotIn("plugin-alpha", text)
 
     def test_dynamic_target_count(self):
         code, output, out, report, known = self.baseline(self.good_rows())

@@ -192,7 +192,8 @@ def report(rows, base, stats_file, table, extract, first_guard, first_date, neut
         b = by_id[r["id"]]
         deny_by_label[(r["label"], "full")] += bool(b["full"])
         deny_by_label[(r["label"], "installed")] += bool(b["installed"])
-    hooks = collections.Counter(r["denied_by"] for r in rows if r["label"] == "denied-hook")
+    hooks = collections.Counter("baseline-guard" if r["denied_by"] == "baseline-guard" else "other hook"
+                                for r in rows if r["label"] == "denied-hook")
     sg = [r for r in rows if r["label"] == "denied-hook" and r["denied_by"] == "baseline-guard"]
     replayed = [r for r in sg if by_id[r["id"]]["full"] or by_id[r["id"]]["installed"]]
     causes = collections.Counter(shortfall_cause(extract, r, first_guard, first_date) for r in sg
