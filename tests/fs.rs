@@ -1356,9 +1356,13 @@ fn an_unknown_target_that_may_name_a_critical_folder_says_so() {
     let mut d = var("d");
     d.quote = Quote::Double;
     assert_eq!(resolve(&d, &bash_loc, &bash_env), Target::Dynamic(d.span));
-    // A relative target in a folder a variable chose: `cd $x; rm -rf ..`, `$PWD\x`.
+    // `cd $x; rm -rf ..`: the cd may fail, and then `..` is C:\w, above the repo root.
     let mut loc = base.clone();
     loc.after(&stmt(cmd("cd", vec![var("x")]), seq), &env);
+    assert_eq!(resolve(&lit(".."), &loc, &env), MAY_BE_CRITICAL);
+    // A relative target in a folder a variable chose: `cd $x && rm -rf ..`, `$PWD\x`.
+    let mut loc = base.clone();
+    loc.after(&stmt(cmd("cd", vec![var("x")]), Some(ChainOp::And)), &env);
     assert_eq!(resolve(&lit(".."), &loc, &env), DYNAMIC_LOCATION);
     let pwd = word_at(
         vec![
@@ -1542,15 +1546,25 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     };
     let unknown_after = |stmts: Vec<Stmt>| unknown_as(MAY_BE_CRITICAL, stmts);
     let seq = Some(ChainOp::Seq);
-    // A folder a variable chose is as dynamic as the variable.
-    unknown_as(DYNAMIC_LOCATION, vec![stmt(cmd("cd", vec![var("x")]), seq)]);
+    // A folder a variable chose is as dynamic as the variable (`cd $x && …`).
+    let and = Some(ChainOp::And);
+    unknown_as(DYNAMIC_LOCATION, vec![stmt(cmd("cd", vec![var("x")]), and)]);
     let mut opaque = lits("x", &[]);
     opaque.opaque = true;
-    unknown_as(DYNAMIC_LOCATION, vec![stmt(opaque, seq)]);
-    // Where both apply, the location may be critical.
+    unknown_as(DYNAMIC_LOCATION, vec![stmt(opaque.clone(), and)]);
+    // `cd $x; …`: the cd may fail and leave the known folder, whose targets may be critical.
+    unknown_after(vec![stmt(cmd("cd", vec![var("x")]), seq)]);
+    unknown_after(vec![stmt(opaque, seq)]);
+    // Where both apply, the location may be critical: `cd $x && cd sub* | cd a && …`.
     unknown_after(vec![
-        stmt(cmd("cd", vec![var("x")]), seq),
-        stmt(lits("cd", &["sub*"]), seq),
+        stmt(cmd("cd", vec![var("x")]), and),
+        Stmt::Pipeline(Pipeline {
+            elems: vec![
+                Elem::Cmd(lits("cd", &["sub*"])),
+                Elem::Cmd(lits("cd", &["a"])),
+            ],
+            chain: and,
+        }),
     ]);
     unknown_after(vec![stmt(lits("cd", &["-"]), seq)]);
     unknown_after(vec![stmt(lits("Set-Location", &[]), seq)]);
@@ -1706,6 +1720,13 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
         (lits("env", &["-S", r"ln -s C:\x t/j"]), false),
         (lits("env", &[r"--split-string=ln -s C:\x t/j"]), false),
         (lits("env", &["-S", "X"]), false),
+        // Start-Process: its arguments are read as words only.
+        (
+            lits("Start-Process", &["ln", "-ArgumentList", r"-s C:\x t/j"]),
+            false,
+        ),
+        (lits("saps", &[r"ln -s C:\x t/j"]), false),
+        (lits("start", &["ln", r"-s C:\x t/j"]), false),
     ] {
         let mut loc = base.clone();
         loc.after(&stmt(link.clone(), seq), &env);
@@ -1737,6 +1758,15 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
             show(&mapping),
         );
     }
+    // A Start-Process whose words name no link command makes none.
+    let mut loc = base.clone();
+    let notepad = lits("Start-Process", &["notepad", "-ArgumentList", "x.txt"]);
+    loc.after(&stmt(notepad.clone(), seq), &env);
+    expect(
+        resolve(&lit(r"D:\elsewhere\u"), &loc, &env),
+        &paths(&[r"D:\elsewhere\u"]),
+        show(&notepad),
+    );
     // `builtin export TEMP=…; rm -rf $TEMP`: the wrapped builtin assigns the name.
     let temp = var("TEMP");
     for assigner in [

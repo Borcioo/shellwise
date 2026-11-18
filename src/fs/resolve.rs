@@ -805,6 +805,9 @@ impl Location {
         match fail {
             Fail::Dynamic => UnknownKind::Dynamic,
             Fail::Unknown => UnknownKind::MayBeCritical,
+            // A known candidate is dropped with the unknown one (`cd $x; rm -rf ..` from the
+            // repo root), and it may be critical.
+            Fail::NoLocation if !self.dirs.known.is_empty() => UnknownKind::MayBeCritical,
             Fail::NoLocation => self.dirs.unknown.unwrap_or(UnknownKind::MayBeCritical),
         }
     }
@@ -1229,7 +1232,7 @@ fn literal(w: &Word) -> Option<String> {
 
 /// What a command runs once the wrappers in front of it are read (the delete guard's list plus
 /// `builtin`): `builtin`, `command` and `time` run it in this shell, `env`, `sudo`, `nohup` and
-/// `exec` start it as a program.
+/// `exec` start it as a program; `Start-Process` is never read, only its words.
 enum Run<'a> {
     Cmd {
         /// `command_name` of the command run.
@@ -1256,6 +1259,9 @@ enum Run<'a> {
 
 const WRAPPERS: [&str; 7] = ["builtin", "command", "time", "env", "sudo", "nohup", "exec"];
 
+/// `Start-Process` and its aliases, the delete guard's last wrapper.
+const START_PROCESS: [&str; 3] = ["start-process", "saps", "start"];
+
 /// `c` with its wrappers read.
 fn unwrap(c: &SimpleCommand) -> Run<'_> {
     let mut name = command_name(c);
@@ -1263,6 +1269,14 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
     let mut args: &[Word] = &c.args;
     let mut wrapped = false;
     let mut in_shell = true;
+    // `Start-Process ln -ArgumentList '…'`: a program with arguments the reader does not parse.
+    if START_PROCESS.contains(&name.as_str()) {
+        return Run::Unread {
+            rest: args,
+            in_shell: false,
+            any: false,
+        };
+    }
     while WRAPPERS.contains(&name.as_str()) {
         let wrapper = std::mem::take(&mut name);
         wrapped = true;
