@@ -170,8 +170,9 @@ pub fn raw_destructive(cmd: &str) -> Option<Span> {
 /// ASCII space (newline and CR included) and every control character count as metacharacters too.
 const METACHARACTERS: &str = ";&|<>()$`\\\"'{}[]*?~#";
 
-/// The read-only commands of the harmless grammar, as the words the text starts with. A `<tool>`
-/// entry matches any bare command name and only the exact word count.
+/// The read-only commands of the harmless grammar, as the words the text starts with. No word
+/// after them may start with `-`: an option can run a command or write a file (`rg --pre`,
+/// `git diff --output`).
 const READ_ONLY: &[&str] = &[
     "ls",
     "cat",
@@ -182,17 +183,19 @@ const READ_ONLY: &[&str] = &[
     "git diff",
     "git show",
     "grep",
-    "rg",
     "head",
     "tail",
     "wc",
     "which",
     "type",
-    "<tool> --version",
 ];
 
+/// The tools for which `<tool> --version`, with no other word, is harmless.
+const VERSION_TOOLS: &[&str] = &["git", "cargo", "rustc", "node", "npm", "python", "pwsh"];
+
 /// Whether a text whose analysis failed is still a harmless simple command: no metacharacter, and
-/// it starts with a read-only command from `READ_ONLY` (ASCII case-insensitive, whole words).
+/// either a `READ_ONLY` command followed by words that are not options, or a `VERSION_TOOLS` tool
+/// followed by `--version` alone (ASCII case-insensitive, whole words).
 pub fn harmless(text: &str) -> bool {
     if text
         .chars()
@@ -201,17 +204,17 @@ pub fn harmless(text: &str) -> bool {
         return false;
     }
     let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
+    let same = |w: &str, e: &str| w.eq_ignore_ascii_case(e);
+    if let [tool, flag] = words.as_slice() {
+        if same(flag, "--version") && VERSION_TOOLS.iter().any(|t| same(tool, t)) {
+            return true;
+        }
+    }
     READ_ONLY.iter().any(|entry| {
         let want: Vec<&str> = entry.split(' ').collect();
-        let same = |w: &str, e: &str| w.eq_ignore_ascii_case(e);
-        match want.split_first() {
-            Some((&"<tool>", rest)) => {
-                words.len() == want.len()
-                    && !words[0].contains('/')
-                    && words[1..].iter().zip(rest).all(|(w, e)| same(w, e))
-            }
-            _ => words.len() >= want.len() && words.iter().zip(&want).all(|(w, e)| same(w, e)),
-        }
+        words.len() >= want.len()
+            && words.iter().zip(&want).all(|(w, e)| same(w, e))
+            && !words[want.len()..].iter().any(|w| w.starts_with('-'))
     })
 }
 

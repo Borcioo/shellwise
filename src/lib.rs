@@ -367,29 +367,36 @@ mod tests {
         assert!(missed.is_empty(), "not danger: {missed:?}");
     }
 
-    /// One harmless row per entry of the read-only list, plus case and spacing variants.
+    /// One harmless row per entry of the read-only list and per `--version` tool, plus case and
+    /// spacing variants.
     const HARMLESS_ROWS: &[&str] = &[
         "git status",
-        "ls -la",
+        "ls src",
         "echo hi",
-        "cargo --version",
         "cat notes.txt",
         "pwd",
-        "git log --oneline -5",
-        "git diff --stat",
+        "git log main",
+        "git diff HEAD",
         "git show HEAD",
-        "grep -n todo src/lib.rs",
-        "rg todo",
-        "head -n 5 a.txt",
+        "grep todo src/lib.rs",
+        "head a.txt",
         "tail a.txt",
-        "wc -l a.txt",
+        "wc a.txt",
         "which git",
         "type ls",
+        "git --version",
+        "cargo --version",
+        "rustc --version",
+        "node --version",
+        "npm --version",
+        "python --version",
+        "pwsh --version",
         "  echo hi  ",
         "echo  hi",
-        "LS -la",
+        "LS src",
         "Git Status",
-        "echo rm -rf x",
+        "Cargo --VERSION",
+        "echo rm x",
     ];
 
     #[test]
@@ -425,6 +432,7 @@ mod tests {
         "echo ~",
         "ls *",
         "rm -rf x",
+        "rm x",
         "lsx",
         "git",
         "git -C x status",
@@ -433,6 +441,19 @@ mod tests {
         "./deploy --version",
         "deploy --version x",
         "--version",
+        // No option word after the command, and `--version` only alone after a listed tool.
+        "rg --pre rm x .",
+        "rg todo",
+        "git diff --output=f",
+        "git log --output f",
+        "git diff HEAD --output=f",
+        "ls -la",
+        "echo -e hi",
+        "echo hi -",
+        "foo --version",
+        "cargo --version x",
+        "cargo build",
+        "git --version --exec-path",
     ];
 
     #[test]
