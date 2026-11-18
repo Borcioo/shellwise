@@ -183,6 +183,9 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize) -> Vec<Hit> {
         for (k, s) in seg.segs.iter().enumerate() {
             let words = normalize(&s.words);
             segment_hits(table, &words, depth, false, &mut out);
+            for start in wrapper_suffixes(&s.words) {
+                segment_hits(table, &normalize(&s.words[start..]), depth, false, &mut out);
+            }
             // `iex('…')`, `[scriptblock]::Create('…')`: the argument is the next segment.
             if words.len() == 1
                 && EVAL_NAMES.contains(&base_name(&words[0].value).as_str())
@@ -304,7 +307,26 @@ const PREFIX_WORDS: [&str; 10] = [
 const WRAPPERS: [(&str, &[&str], usize); 13] = [
     (
         "sudo",
-        &["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U"],
+        &[
+            "-u",
+            "-g",
+            "-h",
+            "-p",
+            "-C",
+            "-D",
+            "-r",
+            "-t",
+            "-U",
+            "--user",
+            "--group",
+            "--host",
+            "--prompt",
+            "--chdir",
+            "--role",
+            "--type",
+            "--other-user",
+            "--close-from",
+        ],
         0,
     ),
     ("doas", &["-u", "-C"], 0),
@@ -328,14 +350,32 @@ const WRAPPERS: [(&str, &[&str], usize); 13] = [
             "--max-procs",
             "--delimiter",
             "--arg-file",
+            "--replace",
+            "--max-lines",
+            "--eof",
         ],
         0,
     ),
     ("nohup", &[], 0),
     ("command", &[], 0),
     ("exec", &["-a"], 0),
-    ("stdbuf", &["-i", "-o", "-e"], 0),
-    ("wsl", &["-d", "--distribution", "-u", "--user", "--cd"], 0),
+    (
+        "stdbuf",
+        &["-i", "-o", "-e", "--input", "--output", "--error"],
+        0,
+    ),
+    (
+        "wsl",
+        &[
+            "-d",
+            "--distribution",
+            "-u",
+            "--user",
+            "--cd",
+            "--shell-type",
+        ],
+        0,
+    ),
 ];
 /// Commands that run their argument text as code.
 const EVAL_NAMES: [&str; 5] = [
@@ -565,13 +605,40 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
             WRAPPERS.iter().find(|(n, _, _)| *n == base_name(v))
         {
             k += 1;
-            while k < words.len() && words[k].value.starts_with('-') && !words[k].quoted {
+            // A quoted option is still an option (`--split-string='rm x'`, `'-u' root`).
+            while k < words.len() && words[k].value.starts_with('-') {
                 let o = words[k].value.as_str();
                 if o == "--" {
                     k += 1;
                     break;
                 }
-                k += if opts.contains(&o) { 2 } else { 1 };
+                if base_name(v) == "env"
+                    && let Some(body) = split_string(o, words.get(k + 1))
+                {
+                    // `env -S 'cmd args'`: the value is the command.
+                    let span = words[k].span;
+                    let mut out: Vec<Tok> = body
+                        .split_whitespace()
+                        .map(|s| Tok {
+                            value: s.to_string(),
+                            quoted: false,
+                            span,
+                        })
+                        .collect();
+                    let skip = if o.contains('=') || o.len() > 2 && !o.starts_with("--") {
+                        1
+                    } else {
+                        2
+                    };
+                    out.extend(words[(k + skip).min(words.len())..].iter().cloned());
+                    return out;
+                }
+                // `--opt=value` carries its value; a known option takes the next word.
+                k += if !o.contains('=') && opts.contains(&o) {
+                    2
+                } else {
+                    1
+                };
             }
             k += positional;
         } else if is_redirect(v) {
@@ -611,6 +678,34 @@ fn normalize(words: &[Tok]) -> Vec<Tok> {
     let mut out: Vec<Tok> = first.into_iter().collect();
     out.extend(words[k.min(words.len())..].iter().cloned());
     out
+}
+
+/// The value of `env -S`/`--split-string`, glued or in the next word.
+fn split_string(o: &str, next: Option<&Tok>) -> Option<String> {
+    if o == "-S" || o == "--split-string" {
+        return next.map(|w| w.value.clone());
+    }
+    if let Some(v) = o.strip_prefix("--split-string=") {
+        return Some(v.to_string());
+    }
+    o.strip_prefix("-S")
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// After a wrapper, every later word that is not an option may start the command: an option the
+/// wrapper table does not know may take a value (`sudo -X foo rm`).
+fn wrapper_suffixes(words: &[Tok]) -> Vec<usize> {
+    let Some(w) = words
+        .iter()
+        .take(4)
+        .position(|t| !t.quoted && WRAPPERS.iter().any(|(n, _, _)| *n == base_name(&t.value)))
+    else {
+        return Vec::new();
+    };
+    (w + 1..words.len().min(w + 9))
+        .filter(|&k| !words[k].value.starts_with('-'))
+        .collect()
 }
 
 /// `2>/dev/null`, `>out`, `2>&1`, `<in`
@@ -783,9 +878,11 @@ fn segments(text: &str, mode: Mode) -> Segments {
             });
         }
     }
+    // Whether the segment so far runs a shell, wrappers (sudo bash) included.
     let segment_is_shell = |words: &[Tok], cur: &Option<Tok>| {
-        let first = words.first().or(cur.as_ref());
-        first.is_some_and(|w| {
+        let mut all = words.to_vec();
+        all.extend(cur.iter().cloned());
+        normalize(&all).first().is_some_and(|w| {
             let n = base_name(&w.value);
             BASH_SHELLS.contains(&n.as_str()) || matches!(n.as_str(), "pwsh" | "powershell" | "cmd")
         })
@@ -805,6 +902,7 @@ fn segments(text: &str, mode: Mode) -> Segments {
                 let body_start = j;
                 let mut body_end = n;
                 let mut next = n;
+                let mut found = false;
                 while j < n {
                     let line_end = text[j..].find('\n').map_or(n, |k| j + k);
                     let mut line = &text[j..line_end];
@@ -812,6 +910,7 @@ fn segments(text: &str, mode: Mode) -> Segments {
                         line = line.trim_start_matches('\t');
                     }
                     if line.trim_end_matches('\r') == h.delim {
+                        found = true;
                         body_end = j;
                         next = (line_end + 1).min(n);
                         j = next;
@@ -821,7 +920,8 @@ fn segments(text: &str, mode: Mode) -> Segments {
                 }
                 let body = &text[body_start..body_end.max(body_start)];
                 let expands = !h.quoted && (body.contains("$(") || body.contains('`'));
-                if shell || expands {
+                // No delimiter line: maybe not a heredoc at all (`1<<2`), so the rest is code.
+                if shell || expands || !found {
                     let span = Span {
                         start: body_start,
                         end: body_end.max(body_start),
@@ -1079,6 +1179,15 @@ mod tests {
         "cat <<-EOF\n\tit's\n\tEOF\nrm -rf x\necho 'ok'",
         "cat <<EOF\n$(rm -rf x)\nEOF",
         "cat <<EOF\nit's $(rm -rf x)\nEOF\necho 'z'",
+        // a pwsh-only quote hides the line from the pwsh reading; the bash reading must see it
+        "echo \u{2018}a; sudo bash <<'EOF'\nrm -rf x\nEOF\necho \u{2019}",
+        "echo \u{2018}a; echo $((1<<2))\nrm -rf x\necho \u{2019}",
+        // wrapper options: long names, glued values, a nested -S body, unknown options
+        "sudo --user root rm -rf x",
+        "timeout --signal KILL 5 rm -rf x",
+        "env -S 'rm -rf x'",
+        "env --split-string='rm -rf x'",
+        "sudo -X foo rm -rf x",
         // I3: PowerShell here-strings, CR-only lines, Unicode blanks and quotes
         "@'\na'\n'@; Remove-Item x; echo '\n'",
         "@\"\na\"\n\"@; Remove-Item x; echo \"\n\"",
