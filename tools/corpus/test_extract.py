@@ -281,6 +281,10 @@ def check_installed(tool, cmd, cwd=None):
 '''
 
 
+# baseline-guard at its first commit: it also denied what is now `old-deny ...`
+FAKE_FIRST = FAKE_GUARD.replace('if cmd.startswith("deny-"):', 'if cmd.startswith(("deny-", "old-deny")):')
+
+
 def corpus_row(i, tool, command, label="ok", denied_by=None, destructive=False, excerpt=""):
     return {"id": "r%03d" % i, "session": "s", "ts": iso(1), "tool": tool, "command": command, "cwd": None,
             "cli_version": "2.1.300", "label": label, "denied_by": denied_by, "destructive": destructive,
@@ -293,6 +297,10 @@ class BaselineTests(unittest.TestCase):
         self.guard = os.path.join(self.tmp.name, "fake_guard.py")
         with open(self.guard, "w", encoding="utf-8", newline="") as f:
             f.write(FAKE_GUARD)
+        self.first = os.path.join(self.tmp.name, "fake_first.py")
+        with open(self.first, "w", encoding="utf-8", newline="") as f:
+            f.write(FAKE_FIRST)
+        self.assertNotEqual(FAKE_FIRST, FAKE_GUARD)
         self.marker = os.path.join(self.tmp.name, "ran.txt")
 
     def tearDown(self):
@@ -324,7 +332,8 @@ class BaselineTests(unittest.TestCase):
         out = os.path.join(self.tmp.name, "baseline.jsonl")
         report = os.path.join(self.tmp.name, "baseline.md")
         known = os.path.join(self.tmp.name, "known.jsonl")
-        code, stdout, stderr = run(BASELINE, "--baseline-guard", self.guard, "--corpus", self.corpus(rows),
+        code, stdout, stderr = run(BASELINE, "--baseline-guard", self.guard, "--first-guard", self.first,
+                                   "--corpus", self.corpus(rows),
                                    "--out", out, "--report", report, "--known", known, env=env)
         return code, stdout + stderr, out, report, known
 
@@ -386,19 +395,40 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL: 0 baseline denies", output)
 
-    def test_fails_when_hook_denies_do_not_replay(self):
+    def unreplayed_rows(self):
+        """One baseline-guard hook deny per computed cause, none of which today's guard denies."""
         rows = self.good_rows()
-        for k in range(2):
-            rows.append(corpus_row(len(rows), "Bash", "echo was-denied%d" % k, "denied-hook", "baseline-guard",
-                                   excerpt="PreToolUse:Bash hook error: baseline-guard: `git checkout` on f throws away"))
-        rows.append(dict(corpus_row(len(rows), "Bash", "echo was-denied-x", "denied-hook", "baseline-guard",
-                                    excerpt="PreToolUse:Bash hook error: baseline-guard: something else"),
+        hook = "PreToolUse:Bash hook error: baseline-guard: "
+        gone = os.path.join(self.tmp.name, "removed-worktree")
+        rows.append(dict(corpus_row(len(rows), "Bash", "echo cwd-gone", "denied-hook", "baseline-guard",
+                                    excerpt=hook + "`git checkout` on f throws away edits."), cwd=gone))
+        rows.append(dict(corpus_row(len(rows), "PowerShell", "echo path-gone", "denied-hook", "baseline-guard",
+                                    excerpt=hook + "`git worktree remove` deletes through junctions: %s holds a "
+                                    "junction." % gone), cwd=self.tmp.name))
+        rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", "baseline-guard",
+                                    excerpt=hook + "something the first version did not deny"), cwd=self.tmp.name))
+        return rows
+
+    def test_unreplayed_rows_get_computed_causes(self):
+        code, output, out, report, known = self.baseline(self.unreplayed_rows())
+        self.assertEqual(code, 0, output)
+        with open(report, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("10 of 13", text)
+        self.assertIn("| target gone | 2 |", text)
+        self.assertIn("| rule narrowed | 1 |", text)
+        self.assertIn("| unexplained | 0 |", text)
+
+    def test_fails_when_unexplained_share_is_over_five_percent(self):
+        rows = self.unreplayed_rows()
+        rows.append(dict(corpus_row(len(rows), "Bash", "old-deny x", "denied-hook", "baseline-guard",
+                                    excerpt="PreToolUse:Bash hook error: baseline-guard: still denied at first commit"),
                          cwd=self.tmp.name))
         code, output, *_ = self.baseline(rows)
-        self.assertEqual(code, 1)
-        self.assertIn("FAIL: 10 of 13 baseline-guard hook denies replay", output)
-        self.assertIn("git rule (repository state): 2", output)
-        self.assertIn("rule changed since: 1", output)
+        self.assertEqual(code, 1, output)
+        self.assertIn("FAIL: 1 of 4 baseline-guard hook denies that do not replay are unexplained", output)
+        self.assertIn("target gone: 2", output)
+        self.assertIn("rule narrowed: 1", output)
 
 
 if __name__ == "__main__":

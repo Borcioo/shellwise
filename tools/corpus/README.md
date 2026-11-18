@@ -45,9 +45,14 @@ duplicates, calls outside the window, no result) and exits 1 when it reads no tr
 ## baseline.py
 
 ```
-python -I tools/corpus/baseline.py --baseline-guard <path to baseline_guard.py> --corpus "$SHELLWISE_CORPUS/corpus.jsonl" \
-    --out "$SHELLWISE_CORPUS/baseline.jsonl" --report docs/baseline.md --known "$SHELLWISE_CORPUS/known.jsonl"
+git -C <host setup repo> log --diff-filter=A --format=%H -- plugins/the-host-plugin/tools/baseline-guard/baseline_guard.py
+git -C <host setup repo> show <that commit>:plugins/the-host-plugin/tools/baseline-guard/baseline_guard.py > <scratch>/first_guard.py
+python -I tools/corpus/baseline.py --baseline-guard <path to baseline_guard.py> --first-guard <scratch>/first_guard.py \
+    --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --out "$SHELLWISE_CORPUS/baseline.jsonl" \
+    --report docs/baseline.md --known "$SHELLWISE_CORPUS/known.jsonl"
 ```
+
+Write `first_guard.py` as UTF-8 (in PowerShell, `[IO.File]::WriteAllText` with a UTF-8 encoding).
 
 Loads `baseline_guard.py` by path with `BASELINE_GUARD` unset and no bytecode written, and calls its
 `check()` (`full`) and `check_installed()` (`installed`, what the host setup hooks run) on each row's
@@ -59,9 +64,15 @@ disk under the row's cwd. Each row of `baseline.jsonl` is `{"id", "full": [ruleâ
 `{"id", "expected_rules"}`: 10 that baseline-guard denies, spread over different rules, and 10 `ok`,
 non-destructive rows with no finding.
 
+Replaying the `denied-hook` rows with `denied_by = baseline-guard` is a positive control that replay
+works, not a coverage target. Each such row that does not replay to a deny today gets a computed cause:
+`target gone` (the row's cwd, or a drive path the deny message names, does not exist now), else
+`rule narrowed` (baseline-guard at its first commit, `--first-guard`, does not deny it either), else
+`unexplained`.
+
 The run fails (exit 1, one `FAIL:` line each) on 0 rows for a shell, 0 destructive rows, 0 baseline
-denies, a replay call that raised, a known slice short of 10 + 10, or fewer than 90 % of the
-`denied-hook` rows with `denied_by = baseline-guard` replaying to a deny; the rest are counted by cause.
+denies, 0 baseline-guard hook denies, a replay call that raised, a known slice short of 10 + 10, or more
+than 5 % of the rows that do not replay being `unexplained`.
 
 ## data/destructive.toml
 

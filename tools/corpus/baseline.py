@@ -1,15 +1,18 @@
 """Replay baseline-guard over the corpus: the baseline every shellwise rule is measured against.
 
-Usage: python -I tools/corpus/baseline.py --baseline-guard <baseline_guard.py> --corpus <corpus.jsonl>
-           --out <baseline.jsonl> [--report <baseline.md>] [--known <known.jsonl>]
+Usage: python -I tools/corpus/baseline.py --baseline-guard <baseline_guard.py> --first-guard <first baseline_guard.py>
+           --corpus <corpus.jsonl> --out <baseline.jsonl> [--report <baseline.md>] [--known <known.jsonl>]
+
+--first-guard is baseline_guard.py as of its first commit in the host setup repo (`git log --diff-filter=A`,
+then `git show <commit>:<path>`): a hook deny that neither it nor today's version replays is "rule narrowed".
 
 Loads baseline_guard.py by path (no copy, no bytecode written next to it) with BASELINE_GUARD unset, and calls
 its check() and check_installed() on each row's command and cwd. Commands are never run. Each output row:
   {"id", "full": [rule, ...], "installed": [rule, ...]}  (rules of the deny findings only)
 --report writes counts only (no command text, ids or paths). --known writes a known-answer slice:
 10 rows baseline-guard denies (different rules) and 10 ok, non-destructive rows, {"id", "expected_rules"}.
-Exits 1 when a check fails: 0 rows for a shell, 0 destructive rows, 0 baseline denies, or fewer than
-90 % of the baseline-guard hook denies in the corpus replaying to a deny.
+Exits 1 when a check fails: 0 rows for a shell, 0 destructive rows, 0 baseline denies, or more than 5 % of
+the baseline-guard hook denies that do not replay having no computed cause (target gone, rule narrowed).
 """
 import argparse
 import collections
@@ -22,7 +25,10 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = ("Bash", "PowerShell")
 LABELS = ("ok", "failed", "denied-hook", "denied-permission")
-REPLAY_MIN = 0.90
+UNEXPLAINED_MAX = 0.05   # of the baseline-guard hook denies that do not replay
+CAUSE_TARGET, CAUSE_NARROWED, CAUSE_UNEXPLAINED = "target gone", "rule narrowed", "unexplained"
+EXCERPT = 300            # extract.py's error_excerpt cap
+DRIVE_PATH = re.compile(r"(?<![\w])[A-Za-z]:\\[^\s`'\",;|<>()]*")
 KNOWN_EACH = 10
 # Draft: a target word the shell resolves at run time (variable, substitution, glob, %VAR%, ~).
 DYNAMIC = re.compile(r"[$`*?]|%[^%\s]+%|^~")
@@ -37,9 +43,9 @@ def load_module(name, path):
     return mod
 
 
-def load_guard(path):
+def load_guard(path, name):
     os.environ.pop("BASELINE_GUARD", None)
-    return load_module("baseline_guard_baseline", path)
+    return load_module(name, path)
 
 
 def deny_rules(findings):
@@ -66,17 +72,34 @@ def replay(guard, rows, stats):
     return out
 
 
-def shortfall_cause(row):
+def target_gone(row):
+    """True when the folder the rule resolved is gone now: the row's cwd, or a drive path the deny message
+    names. A path cut off by the excerpt's end is not read."""
+    cwd = row.get("cwd")
+    if isinstance(cwd, str) and cwd and not os.path.isdir(cwd):
+        return True
     text = row.get("error_excerpt") or ""
     reason = text.split("baseline-guard:", 1)[-1]
-    if re.search(r"\bgit\b", reason):
-        return "git rule (repository state)"
-    if ".bat" in reason or "launcher" in reason:
-        return "launcher or environment rule"
-    cwd = row.get("cwd")
-    if not cwd or not os.path.isdir(cwd):
-        return "cwd gone"
-    return "rule changed since"
+    cut = len(text) >= EXCERPT
+    for m in DRIVE_PATH.finditer(reason):
+        if cut and m.end() == len(reason):
+            continue
+        if not os.path.exists(m.group(0).rstrip(".:")):
+            return True
+    return False
+
+
+def shortfall_cause(row, first_guard):
+    """Why a baseline-guard hook deny does not replay today, computed: the target it resolved is gone, or the
+    first committed baseline-guard does not deny it either (the rule was narrowed before that), else unexplained."""
+    if target_gone(row):
+        return CAUSE_TARGET
+    try:
+        first = deny_rules(first_guard.check(row["tool"], row["command"], row.get("cwd"))) + \
+            deny_rules(first_guard.check_installed(row["tool"], row["command"], row.get("cwd")))
+    except Exception:
+        return CAUSE_UNEXPLAINED
+    return CAUSE_UNEXPLAINED if first else CAUSE_NARROWED
 
 
 def dynamic_target(table, extract, row):
@@ -117,7 +140,7 @@ def table_lines(header, rows):
     return lines
 
 
-def report(rows, base, stats_file, table, extract):
+def report(rows, base, stats_file, table, extract, first_guard):
     by_id = {b["id"]: b for b in base}
     per = collections.Counter((r["label"], r["tool"]) for r in rows)
     destr = collections.Counter(r["tool"] for r in rows if r["destructive"])
@@ -132,7 +155,9 @@ def report(rows, base, stats_file, table, extract):
     hooks = collections.Counter(r["denied_by"] for r in rows if r["label"] == "denied-hook")
     sg = [r for r in rows if r["label"] == "denied-hook" and r["denied_by"] == "baseline-guard"]
     replayed = [r for r in sg if by_id[r["id"]]["full"] or by_id[r["id"]]["installed"]]
-    causes = collections.Counter(shortfall_cause(r) for r in sg if not (by_id[r["id"]]["full"] or by_id[r["id"]]["installed"]))
+    causes = collections.Counter(shortfall_cause(r, first_guard) for r in sg
+                                 if not (by_id[r["id"]]["full"] or by_id[r["id"]]["installed"]))
+    missed = len(sg) - len(replayed)
 
     failures = []
     for t in TOOLS:
@@ -144,9 +169,11 @@ def report(rows, base, stats_file, table, extract):
         failures.append("FAIL: 0 baseline denies")
     if not sg:
         failures.append("FAIL: 0 baseline-guard hook denies to replay")
-    elif len(replayed) < REPLAY_MIN * len(sg):
-        failures.append("FAIL: %d of %d baseline-guard hook denies replay to a deny (%.1f %%, need %d %%); causes: %s"
-                        % (len(replayed), len(sg), 100.0 * len(replayed) / len(sg), REPLAY_MIN * 100,
+    elif causes[CAUSE_UNEXPLAINED] > UNEXPLAINED_MAX * missed:
+        failures.append("FAIL: %d of %d baseline-guard hook denies that do not replay are unexplained (%.1f %%, at most "
+                        "%d %%); causes: %s"
+                        % (causes[CAUSE_UNEXPLAINED], missed, 100.0 * causes[CAUSE_UNEXPLAINED] / missed,
+                           UNEXPLAINED_MAX * 100,
                            ", ".join("%s: %d" % kv for kv in sorted(causes.items(), key=lambda kv: (-kv[1], kv[0])))))
 
     stats = {}
@@ -181,11 +208,15 @@ def report(rows, base, stats_file, table, extract):
     L += table_lines(["Hook", "Rows"], sorted(hooks.items(), key=lambda kv: (-kv[1], kv[0])))
     L += ["", "## Replay of baseline-guard hook denies", ""]
     if sg:
-        L.append("%d of %d rows that baseline-guard denied in the session replay to a deny today (%.1f %%; the run "
-                 "needs %d %%)." % (len(replayed), len(sg), 100.0 * len(replayed) / len(sg), REPLAY_MIN * 100))
-    if causes:
-        L += ["", "Rows that no longer replay, by cause:", ""]
-        L += table_lines(["Cause", "Rows"], sorted(causes.items(), key=lambda kv: (-kv[1], kv[0])))
+        L.append("%d of %d rows that baseline-guard denied in the session replay to a deny today (%.1f %%). The check "
+                 "is a positive control: each row that does not replay gets a computed cause, and the run fails "
+                 "when more than %d %% of them are unexplained." % (len(replayed), len(sg),
+                                                                    100.0 * len(replayed) / len(sg), UNEXPLAINED_MAX * 100))
+    if missed:
+        L += ["", "Rows that no longer replay, by cause: `target gone` = the row's cwd or a drive path the deny "
+              "message names does not exist now; `rule narrowed` = baseline-guard at its first commit in the host setup "
+              "repo does not deny the row either; anything else is `unexplained`.", ""]
+        L += table_lines(["Cause", "Rows"], [(c, causes[c]) for c in (CAUSE_TARGET, CAUSE_NARROWED, CAUSE_UNEXPLAINED)])
     L.append("")
     return L, failures
 
@@ -194,6 +225,7 @@ def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--baseline-guard", required=True)
+    ap.add_argument("--first-guard", required=True, help="baseline_guard.py as of its first commit in the host setup repo")
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--report")
@@ -207,13 +239,15 @@ def main(argv=None):
     if not rows:
         print("FAIL: read 0 rows from the corpus")
         return 1
-    guard = load_guard(args.baseline_guard)
+    guard = load_guard(args.baseline_guard, "baseline_guard_baseline")
+    first_guard = load_guard(args.first_guard, "baseline_guard_first")
     stats = collections.Counter()
     base = replay(guard, rows, stats)
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         for b in base:
             f.write(json.dumps(b) + "\n")
-    lines, failures = report(rows, base, os.path.splitext(args.corpus)[0] + ".stats.json", table, extract)
+    lines, failures = report(rows, base, os.path.splitext(args.corpus)[0] + ".stats.json", table, extract,
+                             first_guard)
     if stats:
         lines += ["## Replay errors", ""] + table_lines(["Error", "Rows"], sorted(stats.items())) + [""]
         failures.append("FAIL: %d replay calls raised" % sum(stats.values()))

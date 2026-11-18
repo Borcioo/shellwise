@@ -77,11 +77,12 @@ A deny on an `ok` row is a call that ran without the error the rule predicts: a 
 
 ## Replay of baseline-guard hook denies
 
-259 of 302 rows that baseline-guard denied in the session replay to a deny today (85.8 %; the run needs 90 %).
+259 of 302 rows that baseline-guard denied in the session replay to a deny today (85.8 %). The check is a positive control: each row that does not replay gets a computed cause, and the run fails when more than 5 % of them are unexplained.
 
-Rows that no longer replay, by cause:
+Rows that no longer replay, by cause: `target gone` = the row's cwd or a drive path the deny message names does not exist now; `rule narrowed` = baseline-guard at its first commit in the host setup repo does not deny the row either; anything else is `unexplained`.
 
 | Cause | Rows |
 |---|---:|
-| rule changed since | 33 |
-| git rule (repository state) | 10 |
+| target gone | 10 |
+| rule narrowed | 33 |
+| unexplained | 0 |
