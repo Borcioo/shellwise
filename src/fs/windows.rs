@@ -16,7 +16,11 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::FSCTL_GET_REPARSE_POINT;
 
 use super::resolve::canonical;
+use super::{FileId, LinkKind};
 use crate::Os;
+use windows_sys::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+};
 
 const TAG_MOUNT_POINT: u32 = 0xA000_0003;
 const TAG_SYMLINK: u32 = 0xA000_000C;
@@ -54,6 +58,35 @@ impl Drop for Handle {
 
 /// The target of a symbolic link, junction or mount point, read with `FSCTL_GET_REPARSE_POINT`.
 pub fn link_target(p: &Path) -> io::Result<Option<PathBuf>> {
+    match read_reparse(p)? {
+        Some(buf) => parse_reparse(&buf, p),
+        None => Ok(None),
+    }
+}
+
+/// The kind of the link at `p`.
+pub fn link_kind(p: &Path) -> io::Result<LinkKind> {
+    match read_reparse(p)? {
+        Some(buf) => kind_of(&buf),
+        None => Ok(LinkKind::Unknown),
+    }
+}
+
+/// A mount point whose target is a volume is a mount point; one whose target is a folder is a
+/// junction.
+pub(crate) fn kind_of(buf: &[u8]) -> io::Result<LinkKind> {
+    Ok(match u32_at(buf, 0)? {
+        TAG_MOUNT_POINT => match parse_reparse(buf, Path::new(r"C:\"))? {
+            Some(t) if t.to_string_lossy().starts_with(r"\\?\Volume{") => LinkKind::MountPoint,
+            _ => LinkKind::Junction,
+        },
+        TAG_SYMLINK => LinkKind::Symlink,
+        _ => LinkKind::Unknown,
+    })
+}
+
+/// The raw `REPARSE_DATA_BUFFER` of `p`; `None` when `p` is no reparse point.
+fn read_reparse(p: &Path) -> io::Result<Option<Vec<u8>>> {
     let name = wide(p);
     // SAFETY: `name` is NUL-terminated and outlives the call.
     let h = unsafe {
@@ -94,7 +127,7 @@ pub fn link_target(p: &Path) -> io::Result<Option<PathBuf>> {
         return Err(e);
     }
     buf.truncate(got as usize);
-    parse_reparse(&buf, p)
+    Ok(Some(buf))
 }
 
 fn u16_at(b: &[u8], at: usize) -> io::Result<u16> {
@@ -156,6 +189,37 @@ fn nt_to_win32(name: &str) -> String {
     } else {
         format!(r"\\?\{rest}")
     }
+}
+
+/// The volume serial and file ID of what `p` names after every link.
+pub fn file_id(p: &Path) -> io::Result<FileId> {
+    let name = wide(p);
+    // SAFETY: `name` is NUL-terminated and outlives the call.
+    let h = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let h = Handle(h);
+    // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is a valid value to be overwritten.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is writable for the call.
+    if unsafe { GetFileInformationByHandle(h.0, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(FileId {
+        volume: u64::from(info.dwVolumeSerialNumber),
+        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    })
 }
 
 /// `p` with every 8.3 short name expanded, by `GetLongPathNameW`.
@@ -233,5 +297,22 @@ mod tests {
         assert!(parse_reparse(&buffer(0xA000_001D, None, "x"), link).is_err());
         assert!(parse_reparse(&buffer(TAG_SYMLINK, Some(0), ""), link).is_err());
         assert!(parse_reparse(&[0x03, 0, 0, 0xA0], link).is_err());
+    }
+
+    #[test]
+    fn reparse_buffers_yield_their_link_kind() {
+        let volume = r"\??\Volume{0b1c2d3e-0000-4000-8000-000000000001}\";
+        let cases = [
+            (
+                buffer(TAG_MOUNT_POINT, None, r"\??\D:\data\"),
+                LinkKind::Junction,
+            ),
+            (buffer(TAG_MOUNT_POINT, None, volume), LinkKind::MountPoint),
+            (buffer(TAG_SYMLINK, Some(0), r"\??\C:\x"), LinkKind::Symlink),
+            (buffer(0xA000_001D, None, "x"), LinkKind::Unknown),
+        ];
+        for (buf, want) in cases {
+            assert_eq!(kind_of(&buf).unwrap(), want);
+        }
     }
 }

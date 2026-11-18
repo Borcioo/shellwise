@@ -215,6 +215,65 @@ pub fn critical_reason(
         .map(|(_, _, above)| *above)
 }
 
+/// `critical_reason`, then the same match by file identity for any spelling it misses: a
+/// junction or symlink on the way, a drive made by `subst` before the command, an 8.3 name.
+/// `p` is critical when it is the same file as home, the repo root or a protected path, or the
+/// same file as one of their ancestors. Runs on a worker bounded by `deadline`.
+pub fn critical_by_identity(
+    p: &Path,
+    cwd_repo: Option<&Path>,
+    home: Option<&Path>,
+    protected: &[PathBuf],
+    fs: &SharedFs,
+    deadline: &Deadline,
+) -> Result<Option<&'static str>, TimedOut> {
+    if let Some(r) = critical_reason(p, cwd_repo, home, protected) {
+        return Ok(Some(r));
+    }
+    let p = p.to_path_buf();
+    let mut named: Vec<(PathBuf, &'static str, &'static str)> = Vec::new();
+    if let Some(h) = home {
+        named.push((
+            h.to_path_buf(),
+            "home folder",
+            "ancestor of the home folder",
+        ));
+    }
+    if let Some(r) = cwd_repo {
+        named.push((r.to_path_buf(), "repo root", "ancestor of the repo root"));
+    }
+    for x in protected {
+        named.push((x.clone(), "protected path", "ancestor of a protected path"));
+    }
+    let fs = Arc::clone(fs);
+    let d = *deadline;
+    bounded(deadline, move || {
+        let Ok(Some(target)) = fs.file_id(&p) else {
+            return Ok(None);
+        };
+        let same = |q: &Path| matches!(fs.file_id(q), Ok(Some(id)) if id == target);
+        for (path, exact, _) in &named {
+            if d.expired() {
+                return Err(TimedOut);
+            }
+            if same(path) {
+                return Ok(Some(*exact));
+            }
+        }
+        for (path, _, above) in &named {
+            for a in path.ancestors().skip(1) {
+                if d.expired() {
+                    return Err(TimedOut);
+                }
+                if same(a) {
+                    return Ok(Some(*above));
+                }
+            }
+        }
+        Ok(None)
+    })?
+}
+
 /// The root of the repo holding `cwd`: the nearest folder with a `.git` folder or file.
 pub fn repo_root(
     cwd: &Path,
@@ -286,6 +345,107 @@ pub struct Location {
     prev: Option<ChainOp>,
     /// A drive letter may have been mapped elsewhere (`subst`, `New-PSDrive`, `net use`).
     remapped: bool,
+    /// Links an earlier statement creates: the walk cannot see them before the command runs.
+    new_links: Vec<String>,
+    /// An earlier statement creates a link at a place the hook cannot tell.
+    new_link_unknown: bool,
+}
+
+/// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
+/// HardLink`, `ln -s`. `Some(None)`: a link at a place the hook cannot tell.
+fn created_link(c: &SimpleCommand) -> Option<Option<&Word>> {
+    let lit_args: Vec<Option<String>> = c.args.iter().map(literal).collect();
+    match command_name(c).as_str() {
+        "mklink" => Some(
+            c.args
+                .iter()
+                .zip(&lit_args)
+                .find(|(_, t)| !t.as_deref().is_some_and(|t| t.starts_with('/')))
+                .map(|(w, _)| w),
+        ),
+        "ln" => {
+            let symbolic = lit_args.iter().flatten().any(|t| {
+                t == "--symbolic" || (t.starts_with('-') && !t.starts_with("--") && t.contains('s'))
+            });
+            if !symbolic {
+                return None;
+            }
+            let names: Vec<&Word> = c
+                .args
+                .iter()
+                .zip(&lit_args)
+                .filter(|(_, t)| !t.as_deref().is_some_and(|t| t.starts_with('-')))
+                .map(|(w, _)| w)
+                .collect();
+            Some(if names.len() >= 2 {
+                names.last().copied()
+            } else {
+                None
+            })
+        }
+        "new-item" | "ni" => {
+            // Parameters as (lowercased name, inline value, index of the argument).
+            let param = |i: usize| {
+                let t = lit_args[i].as_deref()?.to_ascii_lowercase();
+                if !t.starts_with('-') {
+                    return None;
+                }
+                Some(match t.split_once(':') {
+                    Some((n, v)) => (n.to_string(), Some(v.to_string())),
+                    None => (t, None),
+                })
+            };
+            let is =
+                |name: &str, full: &str, min: usize| name.len() >= min && full.starts_with(name);
+            let is_type = |n: &str| is(n, "-itemtype", 3) || n == "-type";
+            // The item type: `None` when not given, `Some(None)` when not static.
+            let mut kind: Option<Option<String>> = None;
+            for i in 0..c.args.len() {
+                if let Some((n, inline)) = param(i)
+                    && is_type(&n)
+                {
+                    let v = inline.or_else(|| lit_args.get(i + 1).cloned().flatten());
+                    kind = Some(v.map(|v| v.to_ascii_lowercase()));
+                }
+            }
+            match &kind {
+                Some(Some(k)) if is_link_type(k) => {}
+                Some(None) => {}
+                _ => return None,
+            }
+            // Where: `-Path x` or the first positional argument; anything else is not certain.
+            let mut path: Option<&Word> = None;
+            let mut i = 0;
+            while i < c.args.len() {
+                match param(i) {
+                    Some((n, inline)) => {
+                        let takes_value = inline.is_none();
+                        if is(&n, "-path", 2) && takes_value {
+                            path = c.args.get(i + 1);
+                        } else if !(is_type(&n)
+                            || is(&n, "-value", 2)
+                            || is(&n, "-target", 2)
+                            || is(&n, "-force", 2))
+                        {
+                            return Some(None);
+                        }
+                        let switch = is(&n, "-force", 2);
+                        i += if takes_value && !switch { 2 } else { 1 };
+                    }
+                    None => {
+                        path.get_or_insert(&c.args[i]);
+                        i += 1;
+                    }
+                }
+            }
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
+fn is_link_type(t: &str) -> bool {
+    matches!(t, "junction" | "symboliclink" | "hardlink")
 }
 
 /// `subst`, `New-PSDrive`, `net use`: after them a drive letter may name another folder.
@@ -320,6 +480,8 @@ impl Location {
             stack: Vec::new(),
             prev: None,
             remapped: false,
+            new_links: Vec::new(),
+            new_link_unknown: false,
         }
     }
 
@@ -351,12 +513,29 @@ impl Location {
     /// Advance past `stmt`.
     pub fn after(&mut self, stmt: &Stmt, env: &EnvView) {
         let mut remap = false;
-        visit_stmt(stmt, &mut |n| {
-            if let Node::Cmd(c) = n {
+        let mut links: Vec<Option<&Word>> = Vec::new();
+        visit_stmt(stmt, &mut |n| match n {
+            Node::Cmd(c) => {
                 remap |= remaps_drives(c);
+                links.extend(created_link(c));
             }
+            Node::Method(m) => {
+                let method = m.method.to_ascii_lowercase();
+                if method.starts_with("createsymboliclink") || method == "createjunction" {
+                    links.push(None);
+                }
+            }
+            Node::Loop(_) => {}
         });
         self.remapped |= remap;
+        for l in links {
+            let d = match l {
+                Some(w) => self.dir_from_word(w, env),
+                None => Dirs::unknown(),
+            };
+            self.new_link_unknown |= d.unknown;
+            self.new_links.extend(d.known);
+        }
         match stmt {
             Stmt::Pipeline(p) => self.after_pipeline(p, env),
             Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
@@ -826,8 +1005,9 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
 /// A key no shell variable can have: set when the hook's environment holds `CDPATH`.
 const CDPATH_SEEN: &str = "\0cdpath";
 
-/// Names the hook may resolve when the tool sees the same value (`XDG_*` besides).
-const PLAIN_NAMES: [&str; 5] = ["USERPROFILE", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA"];
+/// The names the hook-vs-tool spike showed both tools see with the hook's value; any other
+/// name stays dynamic until a spike row covers it.
+const PLAIN_NAMES: [&str; 3] = ["USERPROFILE", "TEMP", "TMP"];
 
 /// The variables a check may resolve, from the hook's own environment. On Windows `~` and
 /// `$HOME` come from `USERPROFILE`, never from the hook's `HOME` (which neither tool shares);
@@ -870,15 +1050,9 @@ pub fn env_view(shell: Shell, os: Os, vars: impl IntoIterator<Item = (String, St
             env.set(&env_name("HOME"), h);
         }
     }
-    let mut names: Vec<String> = PLAIN_NAMES.iter().map(|n| n.to_string()).collect();
-    names.extend(
-        vars.iter()
-            .filter(|(k, _)| k.to_ascii_uppercase().starts_with("XDG_"))
-            .map(|(k, _)| k.clone()),
-    );
-    for n in names {
-        if let Some(v) = lookup(&n) {
-            env.set(&env_name(&n), v);
+    for n in PLAIN_NAMES {
+        if let Some(v) = lookup(n) {
+            env.set(&env_name(n), v);
         }
     }
     // Only so a relative `cd` knows bash may search it; `$CDPATH` itself never resolves.
@@ -1265,13 +1439,15 @@ enum PlanErr {
     Unknown,
 }
 
-/// A path the hook cannot compare with the folders it protects: a mapped drive letter, or any
-/// UNC, volume or device path (a share may be this machine under any of its names).
+/// A path the hook cannot compare with the folders it protects: a mapped drive letter, any
+/// UNC, volume or device path (a share may be this machine under any of its names), or an
+/// NTFS stream form (`dir::$INDEX_ALLOCATION` is the folder itself).
 fn is_alias(p: &str, loc: &Location) -> bool {
     if loc.os != Os::Windows || p == "/" {
         return false;
     }
-    loc.remapped || Canon::parse(p, Os::Windows).prefix.starts_with("\\\\")
+    let c = Canon::parse(p, Os::Windows);
+    loc.remapped || c.prefix.starts_with("\\\\") || c.comps.iter().any(|x| x.contains(':'))
 }
 
 /// The resolved folders each bash `..` in `text` steps out of.
@@ -1367,7 +1543,11 @@ fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Resu
         prefix
     };
     let start = absolutize(&prefix, base, loc.shell, loc.os, env)?;
-    if (start == "/" && loc.os == Os::Windows) || is_alias(&start, loc) {
+    let stream = loc.os == Os::Windows
+        && comps[first..]
+            .iter()
+            .any(|c| c.iter().any(|s| s.text.contains(':')));
+    if (start == "/" && loc.os == Os::Windows) || is_alias(&start, loc) || stream {
         return Err(Fail::Unknown);
     }
     Ok(Plan {
@@ -1531,5 +1711,24 @@ pub fn target(
         }
         all
     };
+    if paths.iter().any(|p| loc.near_new_link(p)) {
+        return Target::UnknownLocation;
+    }
     Target::Paths(paths.into_iter().map(PathBuf::from).collect())
+}
+
+impl Location {
+    /// `p` holds a link an earlier statement creates, or lies beside one.
+    fn near_new_link(&self, p: &str) -> bool {
+        if self.new_link_unknown {
+            return true;
+        }
+        let key = path_key(p, self.os);
+        self.new_links.iter().any(|l| {
+            let lk = path_key(l, self.os);
+            let mut c = Canon::parse(l, self.os);
+            let parent = c.comps.pop().map(|_| path_key(&c.render(), self.os));
+            is_within(&lk, &key, self.os) || parent.is_some_and(|pk| is_within(&key, &pk, self.os))
+        })
+    }
 }

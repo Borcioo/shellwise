@@ -6,9 +6,24 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use super::LinkKind;
 use super::resolve::path_key;
 use super::{Fs, SharedFs, bounded};
 use crate::{Deadline, Os};
+
+/// A link the walk found, with its kind so each rule can decide which kinds it follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub path: PathBuf,
+    pub kind: LinkKind,
+}
+
+fn link(fs: &dyn Fs, p: &Path) -> Link {
+    Link {
+        path: p.to_path_buf(),
+        kind: fs.link_kind(p).unwrap_or(LinkKind::Unknown),
+    }
+}
 
 /// At most this many outside links are reported.
 const MAX_REPORTED: usize = 8;
@@ -19,7 +34,7 @@ pub enum WalkResult {
     Clean,
     /// Links whose target is outside the tree, unreadable, or on a volume with no drive path;
     /// also the root itself or one of its ancestors when that is a link.
-    Outside(Vec<PathBuf>),
+    Outside(Vec<Link>),
     /// A folder or entry the walk could not read.
     Unreadable(PathBuf),
     /// The deadline passed first.
@@ -47,7 +62,7 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
             return WalkResult::Timeout;
         }
         match fs.lstat(a) {
-            Ok(m) if m.is_symlink => return WalkResult::Outside(vec![a.to_path_buf()]),
+            Ok(m) if m.is_symlink => return WalkResult::Outside(vec![link(fs, a)]),
             Ok(_) => {}
             Err(e) if not_found(&e) => return WalkResult::Clean,
             Err(_) => return WalkResult::Unreadable(a.to_path_buf()),
@@ -59,14 +74,14 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
         Err(_) => return WalkResult::Unreadable(root.to_path_buf()),
     };
     if meta.is_symlink {
-        return WalkResult::Outside(vec![root.to_path_buf()]);
+        return WalkResult::Outside(vec![link(fs, root)]);
     }
     if !meta.is_dir {
         return WalkResult::Clean;
     }
     let inside = path_key(&root.to_string_lossy(), os);
     let mut found = Vec::new();
-    let done = |found: Vec<PathBuf>, otherwise: WalkResult| {
+    let done = |found: Vec<Link>, otherwise: WalkResult| {
         if found.is_empty() {
             otherwise
         } else {
@@ -95,7 +110,7 @@ fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
                     _ => false,
                 };
                 if !within {
-                    found.push(e);
+                    found.push(link(fs, &e));
                     if found.len() >= MAX_REPORTED {
                         return WalkResult::Outside(found);
                     }

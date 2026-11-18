@@ -33,6 +33,33 @@ pub trait Fs: Send + Sync {
     fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
         Ok(p.to_path_buf())
     }
+    /// What kind of link `p` is (called only on paths `lstat` reports as links).
+    fn link_kind(&self, _p: &Path) -> io::Result<LinkKind> {
+        Ok(LinkKind::Unknown)
+    }
+    /// The identity of the file `p` names after every link (volume serial and file ID on
+    /// Windows, device and inode elsewhere); `None` when the file system cannot tell.
+    fn file_id(&self, _p: &Path) -> io::Result<Option<FileId>> {
+        Ok(None)
+    }
+}
+
+/// One file's identity: two paths with equal ids name the same file or folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId {
+    pub volume: u64,
+    pub index: u64,
+}
+
+/// The kind of a link: rules differ on which ones a delete follows (`git worktree remove`
+/// empties junctions and mount points but unlinks a symbolic link).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    Junction,
+    MountPoint,
+    Symlink,
+    /// A link whose kind could not be read.
+    Unknown,
 }
 
 /// An `Fs` a worker thread can own.
@@ -105,5 +132,34 @@ impl Fs for RealFs {
     #[cfg(windows)]
     fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
         windows::long_path(p)
+    }
+
+    #[cfg(windows)]
+    fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
+        windows::link_kind(p)
+    }
+
+    #[cfg(windows)]
+    fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
+        windows::file_id(p).map(Some)
+    }
+
+    #[cfg(not(windows))]
+    fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(p)?;
+        Ok(Some(FileId {
+            volume: m.dev(),
+            index: m.ino(),
+        }))
+    }
+
+    #[cfg(not(windows))]
+    fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
+        Ok(if self.lstat(p)?.is_symlink {
+            LinkKind::Symlink
+        } else {
+            LinkKind::Unknown
+        })
     }
 }

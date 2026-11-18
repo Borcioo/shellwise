@@ -8,10 +8,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use shellwise::fs::resolve::{
-    Location, Target, critical_reason, env_view, mark_assigned, repo_root, target,
+    Location, Target, critical_by_identity, critical_reason, env_view, mark_assigned, repo_root,
+    target,
 };
-use shellwise::fs::walk::{WalkResult, outside_links};
-use shellwise::fs::{Fs, Meta, RealFs, SharedFs};
+use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
+use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
 use shellwise::ir::{
     ChainOp, Elem, EnvView, MethodCall, Pipeline, Quote, Script, SimpleCommand, Stmt, Word,
     WordPart,
@@ -109,7 +110,7 @@ fn sorted(t: Target) -> Target {
 enum Node {
     Dir,
     File,
-    Link(String),
+    Link(String, LinkKind),
     /// A link whose target cannot be read.
     BrokenLink,
     /// An entry `lstat` is refused on.
@@ -121,6 +122,7 @@ enum Node {
 struct FakeFs {
     nodes: BTreeMap<PathBuf, Node>,
     long: BTreeMap<PathBuf, PathBuf>,
+    ids: BTreeMap<PathBuf, u64>,
 }
 
 impl FakeFs {
@@ -142,7 +144,7 @@ impl FakeFs {
     }
 
     fn link(self, p: &str, t: &str) -> FakeFs {
-        self.add(p, Node::Link(t.to_string()))
+        self.add(p, Node::Link(t.to_string(), LinkKind::Junction))
     }
 
     fn shared(self) -> SharedFs {
@@ -158,7 +160,7 @@ impl Fs for FakeFs {
             Some(n) => Ok(Meta {
                 is_dir: matches!(n, Node::Dir),
                 is_file: matches!(n, Node::File),
-                is_symlink: matches!(n, Node::Link(_) | Node::BrokenLink),
+                is_symlink: matches!(n, Node::Link(..) | Node::BrokenLink),
             }),
         }
     }
@@ -178,7 +180,7 @@ impl Fs for FakeFs {
 
     fn link_target(&self, p: &Path) -> io::Result<Option<PathBuf>> {
         match self.nodes.get(p) {
-            Some(Node::Link(t)) => Ok(Some(PathBuf::from(t))),
+            Some(Node::Link(t, _)) => Ok(Some(PathBuf::from(t))),
             Some(Node::BrokenLink) => Err(io::Error::other("unreadable link kind")),
             Some(_) => Ok(None),
             None => Err(io::Error::from(io::ErrorKind::NotFound)),
@@ -187,6 +189,30 @@ impl Fs for FakeFs {
 
     fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
         Ok(self.long.get(p).cloned().unwrap_or_else(|| p.to_path_buf()))
+    }
+
+    fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
+        Ok(self.ids.get(p).map(|&index| FileId { volume: 1, index }))
+    }
+
+    fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
+        match self.nodes.get(p) {
+            Some(Node::Link(_, k)) => Ok(*k),
+            _ => Err(io::Error::other("no readable link")),
+        }
+    }
+}
+
+/// The kind a folder link made by `Tree::dir_link` has.
+#[cfg(windows)]
+const DIR_LINK: LinkKind = LinkKind::Junction;
+#[cfg(not(windows))]
+const DIR_LINK: LinkKind = LinkKind::Symlink;
+
+fn lk(p: impl Into<PathBuf>, kind: LinkKind) -> Link {
+    Link {
+        path: p.into(),
+        kind,
     }
 }
 
@@ -226,6 +252,11 @@ impl Fs for Hang {
     fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
         self.block("long_path");
         Ok(p.to_path_buf())
+    }
+
+    fn file_id(&self, _p: &Path) -> io::Result<Option<FileId>> {
+        self.block("file_id");
+        Ok(None)
     }
 }
 
@@ -272,7 +303,7 @@ impl Tree {
     }
 
     /// A folder link: a junction on Windows, a symlink elsewhere.
-    fn dir_link(&mut self, rel: &str, target: &Path) -> PathBuf {
+    fn dir_link(&mut self, rel: &str, target: &Path) -> Link {
         let p = self
             .root
             .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -289,11 +320,11 @@ impl Tree {
         #[cfg(not(windows))]
         std::os::unix::fs::symlink(target, &p).unwrap();
         self.links.push(p.clone());
-        p
+        lk(p, DIR_LINK)
     }
 
     /// A symbolic link to a folder.
-    fn sym_link(&mut self, rel: &str, target: &Path) -> PathBuf {
+    fn sym_link(&mut self, rel: &str, target: &Path) -> Link {
         let p = self
             .root
             .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -302,7 +333,7 @@ impl Tree {
         #[cfg(not(windows))]
         std::os::unix::fs::symlink(target, &p).unwrap();
         self.links.push(p.clone());
-        p
+        lk(p, LinkKind::Symlink)
     }
 
     /// A folder nobody may list.
@@ -381,6 +412,18 @@ fn walk_is_clean_when_every_link_points_inside_the_tree() {
 }
 
 #[test]
+fn walk_counts_a_link_into_a_sibling_with_a_longer_name_as_outside() {
+    let mut t = Tree::new();
+    t.mkdir("root");
+    let data = t.mkdir("root2/data");
+    let link = t.dir_link("root/j", &data);
+    assert_eq!(
+        outside_links(&t.root.join("root"), &real(), &far()),
+        WalkResult::Outside(vec![link])
+    );
+}
+
+#[test]
 fn walk_finds_a_symlink_whose_target_is_outside_the_tree() {
     let mut t = Tree::new();
     let outside = t.mkdir("outside");
@@ -396,9 +439,12 @@ fn walk_finds_a_symlink_whose_target_is_outside_the_tree() {
 fn walk_counts_a_volume_target_and_an_unreadable_target_as_outside() {
     let fs = FakeFs::default()
         .dir(&at("root/a"))
-        .link(
+        .add(
             &at("root/a/m"),
-            r"\\?\Volume{0b1c2d3e-0000-4000-8000-000000000001}\",
+            Node::Link(
+                r"\\?\Volume{0b1c2d3e-0000-4000-8000-000000000001}\".to_string(),
+                LinkKind::MountPoint,
+            ),
         )
         .file(&at("root/f"))
         .add(&at("root/b/broken"), Node::BrokenLink)
@@ -406,8 +452,8 @@ fn walk_counts_a_volume_target_and_an_unreadable_target_as_outside() {
     assert_eq!(
         outside_links(Path::new(&at("root")), &fs, &far()),
         WalkResult::Outside(vec![
-            PathBuf::from(at("root/a/m")),
-            PathBuf::from(at("root/b/broken"))
+            lk(at("root/a/m"), LinkKind::MountPoint),
+            lk(at("root/b/broken"), LinkKind::Unknown)
         ])
     );
 }
@@ -446,12 +492,12 @@ fn walk_checks_the_root_and_its_ancestors_for_a_link() {
     let deep = Path::new(&at("wt/j")).join("sub");
     assert_eq!(
         outside_links(&deep, &fs, &far()),
-        WalkResult::Outside(vec![PathBuf::from(at("wt/j"))])
+        WalkResult::Outside(vec![lk(at("wt/j"), LinkKind::Junction)])
     );
     // The root itself is a link.
     assert_eq!(
         outside_links(Path::new(&at("wt/k")), &fs, &far()),
-        WalkResult::Outside(vec![PathBuf::from(at("wt/k"))])
+        WalkResult::Outside(vec![lk(at("wt/k"), LinkKind::Junction)])
     );
     // A missing root has nothing to delete.
     assert_eq!(
@@ -471,8 +517,8 @@ fn walk_breadth_first_reports_the_link_nearest_the_root_first() {
     assert_eq!(
         outside_links(Path::new(&at("root")), &fs, &far()),
         WalkResult::Outside(vec![
-            PathBuf::from(at("root/a/near")),
-            PathBuf::from(at("root/z/b/c/deep"))
+            lk(at("root/a/near"), LinkKind::Junction),
+            lk(at("root/z/b/c/deep"), LinkKind::Junction)
         ])
     );
 }
@@ -550,6 +596,13 @@ fn windows_path_forms_resolve_as_the_shell_would() {
         ),
         (r"Temp:\x", paths(&[r"C:\Profiles\u\AppData\Local\Temp\x"])),
         (r"HKCU:\Software\x", Target::UnknownLocation),
+        // NTFS stream forms name the folder itself (`rd /s` deletes it).
+        (r"C:\w\repo::$INDEX_ALLOCATION", Target::UnknownLocation),
+        (r"C:\w\repo:$I30:$INDEX_ALLOCATION", Target::UnknownLocation),
+        (r"~::$INDEX_ALLOCATION", Target::UnknownLocation),
+        (r"sub\f:stream", Target::UnknownLocation),
+        (r"f::$DATA", Target::UnknownLocation),
+        (r"C:\w\*::$INDEX_ALLOCATION", Target::UnknownLocation),
         // Aliases of local folders the critical check could not recognise.
         (r"\\localhost\share\x", Target::UnknownLocation),
         (r"\\127.0.0.1\share\x", Target::UnknownLocation),
@@ -838,6 +891,129 @@ fn a_remapped_drive_letter_is_unknown_after_the_mapping() {
     let mut loc = base.clone();
     loc.after(&stmt(lits("net", &["view"]), Some(ChainOp::Seq)), &env);
     assert_eq!(resolve(&x, &loc, &env), paths(&[r"X:\sub"]));
+}
+
+#[test]
+fn a_link_an_earlier_statement_creates_makes_its_tree_unknown() {
+    let seq = Some(ChainOp::Seq);
+    let ps = Shell::Pwsh;
+    let bash = Shell::Bash(BashProfile::GitBash);
+    let rows: Vec<(&str, Shell, SimpleCommand)> = vec![
+        (
+            "mklink /J t\\j $HOME",
+            ps,
+            cmd("mklink", vec![lit("/J"), lit(r"t\j"), var("HOME")]),
+        ),
+        (
+            "cmd /c mklink /D",
+            ps,
+            cmd("MKLINK", vec![lit("/d"), lit(r"t\j"), lit(r"C:\x")]),
+        ),
+        (
+            "New-Item -ItemType Junction -Path t\\j",
+            ps,
+            lits(
+                "New-Item",
+                &["-ItemType", "Junction", "-Path", r"t\j", "-Target", r"C:\x"],
+            ),
+        ),
+        (
+            "ni t\\j -ItemType:SymbolicLink",
+            ps,
+            lits("ni", &[r"t\j", "-ItemType:SymbolicLink", "-Value", r"C:\x"]),
+        ),
+        (
+            "ln -s ~ t/j",
+            bash,
+            cmd(
+                "ln",
+                vec![lit("-sfn"), word_at(vec![WordPart::Tilde], 0), lit("t/j")],
+            ),
+        ),
+        (
+            "ln --symbolic",
+            bash,
+            lits("ln", &["--symbolic", r"C:\x", "t/j"]),
+        ),
+    ];
+    for (name, shell, link) in rows {
+        let (base, env) = win(shell);
+        let mut loc = base.clone();
+        assert_eq!(
+            resolve(&lit("t"), &loc, &env),
+            paths(&[r"C:\w\repo\t"]),
+            "{name}: before"
+        );
+        loc.after(&stmt(link, seq), &env);
+        for gone in ["t", r"t\j", r"t\other", "."] {
+            assert_eq!(
+                resolve(&lit(gone), &loc, &env),
+                Target::UnknownLocation,
+                "{name}: {gone}"
+            );
+        }
+        assert_eq!(
+            resolve(&lit("u"), &loc, &env),
+            paths(&[r"C:\w\repo\u"]),
+            "{name}: unrelated"
+        );
+    }
+    // Not a link: a plain folder, a hard link left out on purpose.
+    let (base, env) = win(ps);
+    for plain in [
+        lits("New-Item", &["-ItemType", "Directory", "-Path", r"t\j"]),
+        lits("ln", &[r"C:\x", "t/j"]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(plain.clone(), seq), &env);
+        assert_eq!(
+            resolve(&lit("t"), &loc, &env),
+            paths(&[r"C:\w\repo\t"]),
+            "{}",
+            plain.typed
+        );
+    }
+    // A link at a place the hook cannot tell: every later target is unknown.
+    for vague in [
+        lits(
+            "New-Item",
+            &["-ItemType", "Junction", "-Name", "j", "-Path", "t"],
+        ),
+        cmd(
+            "New-Item",
+            vec![lit("-ItemType"), lit("Junction"), var("p")],
+        ),
+        lits("ln", &["-s", r"C:\x"]),
+        cmd("mklink", vec![lit("/J"), var("x"), lit(r"C:\x")]),
+    ] {
+        let mut loc = base.clone();
+        loc.after(&stmt(vague.clone(), seq), &env);
+        // A folder outside the repo: only "a link somewhere unknown" makes it unknown.
+        assert_eq!(
+            resolve(&lit(r"C:\elsewhere\u"), &loc, &env),
+            Target::UnknownLocation,
+            "{}",
+            vague.typed
+        );
+    }
+    let mut loc = base.clone();
+    loc.after(
+        &method(
+            "IO.Directory",
+            "CreateSymbolicLink",
+            vec![lit(r"t\j"), lit(r"C:\x")],
+        ),
+        &env,
+    );
+    assert_eq!(
+        resolve(&lit(r"C:\elsewhere\u"), &loc, &env),
+        Target::UnknownLocation
+    );
+    // An item type the hook cannot read counts as a link.
+    let mut loc = base.clone();
+    let dyn_kind = cmd("New-Item", vec![lit("-ItemType"), var("k"), lit(r"t\j")]);
+    loc.after(&stmt(dyn_kind, seq), &env);
+    assert_eq!(resolve(&lit("t"), &loc, &env), Target::UnknownLocation);
 }
 
 // ---------------------------------------------------------------- location
@@ -1165,12 +1341,10 @@ fn env_view_takes_home_from_the_profile_on_windows() {
     assert_eq!(bash.get("USERPROFILE"), Some(r"C:\Profiles\u"));
     assert_eq!(bash.get("TEMP"), Some(r"C:\t"));
     assert_eq!(bash.get("TMP"), Some(r"C:\t"));
-    assert_eq!(bash.get("APPDATA"), Some(r"C:\Profiles\u\AppData\Roaming"));
-    assert_eq!(
-        bash.get("LOCALAPPDATA"),
-        Some(r"C:\Profiles\u\AppData\Local")
-    );
-    assert_eq!(bash.get("XDG_CONFIG_HOME"), Some(r"C:\x"));
+    // Only the names the hook-vs-tool spike showed equal resolve.
+    assert_eq!(bash.get("APPDATA"), None);
+    assert_eq!(bash.get("LOCALAPPDATA"), None);
+    assert_eq!(bash.get("XDG_CONFIG_HOME"), None);
     assert_eq!(bash.get("TMPDIR"), None);
     assert_eq!(bash.get("PATH"), None);
     assert_eq!(bash.get("temp"), None);
@@ -1205,7 +1379,7 @@ fn env_view_takes_home_from_the_profile_on_windows() {
     assert_eq!(posix.home(), Some("/h"));
     assert_eq!(posix.get("HOME"), Some("/h"));
     assert_eq!(posix.get("TMPDIR"), None);
-    assert_eq!(posix.get("XDG_DATA_HOME"), Some("/h/.d"));
+    assert_eq!(posix.get("XDG_DATA_HOME"), None);
 }
 
 fn method(type_name: &str, name: &str, args: Vec<Word>) -> Stmt {
@@ -1483,6 +1657,8 @@ fn critical_reason_names_each_protected_folder_on_windows() {
         (r"C:\Profiles\u\x", None),
         (r"C:\Profiles\uu", None),
         (r"C:\w\repo2", None),
+        // A sibling whose name the repo's name starts with.
+        (r"C:\w\rep", None),
         (r"C:\t\clone", None),
     ];
     for (p, want) in cases {
@@ -1518,6 +1694,72 @@ fn critical_reason_names_each_protected_folder_on_posix() {
 }
 
 // ---------------------------------------------------------------- repo root
+
+#[test]
+fn critical_match_by_identity_sees_through_junctions() {
+    let mut t = Tree::new();
+    t.mkdir("real/repo/src");
+    let j = t.dir_link("j", &t.root.join("real"));
+    let repo = j.path.join("repo");
+    let real_repo = t.root.join("real").join("repo");
+    // The spelling pass alone misses both.
+    assert_eq!(critical_reason(&real_repo, Some(&repo), None, &[]), None);
+    let r = |p: &Path| critical_by_identity(p, Some(&repo), None, &[], &real(), &far());
+    assert_eq!(r(&real_repo), Ok(Some("repo root")));
+    assert_eq!(
+        r(&t.root.join("real")),
+        Ok(Some("ancestor of the repo root"))
+    );
+    assert_eq!(r(&real_repo.join("src")), Ok(None));
+    assert_eq!(r(&t.root.join("nope")), Ok(None));
+}
+
+#[test]
+fn critical_match_by_identity_sees_through_drive_mappings_and_short_names() {
+    // Host-form paths, so `ancestors()` splits them on every OS; ids stand for what the file
+    // system reports for the same folder under two spellings.
+    let mut fake = FakeFs::default();
+    for (p, id) in [
+        (at("mapped/repo"), 7), // the repo through a drive mapped before the command
+        (at("w2/repo"), 7),
+        (at("mapped/sub"), 3), // the repo's parent through the mapping
+        (at("w2"), 3),
+        (at("PROFIL/u"), 9), // a custom 8.3 name without `~N`
+        (at("Profiles/u"), 9),
+        (at("other"), 11),
+    ] {
+        fake.ids.insert(PathBuf::from(p), id);
+    }
+    let fs = fake.shared();
+    let home = PathBuf::from(at("Profiles/u"));
+    let repo = PathBuf::from(at("w2/repo"));
+    let r = |p: &str| {
+        critical_by_identity(
+            Path::new(&at(p)),
+            Some(&repo),
+            Some(&home),
+            &[],
+            &fs,
+            &far(),
+        )
+    };
+    assert_eq!(r("mapped/repo"), Ok(Some("repo root")));
+    assert_eq!(r("PROFIL/u"), Ok(Some("home folder")));
+    assert_eq!(r("mapped/sub"), Ok(Some("ancestor of the repo root")));
+    assert_eq!(r("other"), Ok(None));
+    let hang: SharedFs = Arc::new(Hang("file_id"));
+    let start = Instant::now();
+    let got = critical_by_identity(
+        Path::new(&at("mapped/sub")),
+        Some(&repo),
+        None,
+        &[],
+        &hang,
+        &Deadline::new(start, 100),
+    );
+    assert!(got.is_err());
+    assert!(start.elapsed() < Duration::from_millis(150));
+}
 
 #[test]
 fn repo_root_finds_the_nearest_git_folder_or_file() {
