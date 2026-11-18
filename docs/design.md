@@ -175,11 +175,13 @@ The highest finding wins; all findings are listed. Exit 64+ is a usage or intern
 - A failed analysis (parse error, panic, internal error, input over the cap, invalid UTF-8,
   deadline) → `danger` (`analysis-failed`), unless the whole raw text matches the harmless grammar:
   no shell metacharacter (``; & | < > ( ) $ ` \ " ' { } [ ] * ? ~ #``, newline) and a first word
-  from a short read-only list (`ls`, `cat`, `echo`, `pwd`, `git status|log|diff|show`, `grep`,
-  `head`, `tail`, `wc`, `which`, `type`) with no later word starting with `-`, or a sole
-  `--version` after `git`, `cargo`, `rustc`, `node`, `npm`, `python` or `pwsh`. The raw-text scan only names
-  the destructive command in the reason; it never clears a command. The allow marker is matched in
-  the raw text on this path (the parse that fills `Script.comments` failed). Measured on the
+  from a short read-only list (`ls`, `echo`, `pwd`, `git status|log|diff|show`, `grep`, `head`,
+  `tail`, `wc`, `which`), every word compared exactly as written (case-sensitive: git sends a
+  mixed-case subcommand to alias lookup), ASCII only, with no later word starting with `-` or `/`,
+  or a sole `--version` after `git`, `cargo`, `rustc`, `node`, `npm`, `python` or `pwsh`. The
+  raw-text scan only names the destructive command in the reason; it never clears a command. The
+  allow marker has no effect on this path (without a parse a trailing `#` cannot be told from an
+  escaped or quoted one, and input past the cap could hide anything before it). Measured on the
   corpus: 2 of 22,346 bash rows (0.009 %) fall on this path without being shell syntax errors.
 
 ### Delete guard
