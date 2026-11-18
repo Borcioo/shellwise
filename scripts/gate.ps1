@@ -92,7 +92,7 @@ if ! command -v cargo >/dev/null 2>&1; then
   . "$HOME/.cargo/env"
   echo "gate: installed $(cargo --version)"
 fi
-if [ -z "$1" ] || [ ! -f "$1/Cargo.toml" ]; then echo "gate: no crate root in \$1 ('$1')"; exit 2; fi
+if [ -z "$1" ] || [ ! -f "$1/Cargo.toml" ]; then echo "gate: no crate root at $1"; exit 2; fi
 cd "$1"
 # One target dir per worktree: cargo reuses a sibling worktree's artifacts as fresh in a shared one.
 export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/$(basename "$PWD")/target"
