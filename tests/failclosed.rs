@@ -1,11 +1,17 @@
-//! Every path that cannot finish the analysis: `danger` when the raw text holds a destructive
-//! command, otherwise `ok`.
+//! Every path that cannot finish the analysis: `danger` unless the raw text is a harmless simple
+//! command; a destructive command the raw scan finds is named in the span.
 
 mod common;
 
 use common::{assert_failclosed_danger, assert_ok, run};
 
 const CHECK: &[&str] = &["check", "--shell", "pwsh", "--json"];
+
+/// Assert `danger` from `analysis-failed`, wherever the span is.
+fn assert_failed(r: &common::Run) {
+    assert_eq!(r.code, 2, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
+    assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+}
 
 #[test]
 fn input_over_the_size_cap_fails_closed() {
@@ -14,8 +20,13 @@ fn input_over_the_size_cap_fails_closed() {
     let r = run(CHECK, Some(cmd.as_bytes()), &[]);
     assert_failclosed_danger(&r, &cmd, "rm -rf x");
 
-    let mut harmless = "(".repeat(200 * 1024);
-    harmless.push_str("Get-Date");
+    // Nothing destructive in the raw text, but not a simple command either.
+    let mut nested = "(".repeat(200 * 1024);
+    nested.push_str("Get-Date");
+    assert_failed(&run(CHECK, Some(nested.as_bytes()), &[]));
+
+    let mut harmless = " ".repeat(200 * 1024);
+    harmless.push_str("echo hi");
     assert_ok(&run(CHECK, Some(harmless.as_bytes()), &[]));
 }
 
@@ -38,7 +49,8 @@ fn invalid_utf8_fails_closed() {
     assert_eq!(r.code, 2, "{:?}", r.stdout);
     assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
 
-    assert_ok(&run(CHECK, Some(b"Get-\xffDate"), &[]));
+    assert_failed(&run(CHECK, Some(b"Get-\xffDate"), &[]));
+    assert_ok(&run(CHECK, Some(b"echo \xff"), &[]));
 }
 
 #[test]
@@ -105,6 +117,9 @@ mod hooks {
     use std::time::Duration;
 
     const DESTRUCTIVE: &str = "Get-Date; rm -rf x";
+    /// Not destructive, but not a simple read-only command either.
+    const NOT_SIMPLE: &str = "Get-Date";
+    const HARMLESS: &str = "git status";
 
     fn hook(mode: &str, command: &str) -> common::Run {
         let mut args = CHECK.to_vec();
@@ -122,7 +137,8 @@ mod hooks {
     #[test]
     fn panic_in_a_rule_fails_closed() {
         assert_failclosed_danger(&hook("panic", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
-        assert_ok(&hook("panic", "Get-Date"));
+        assert_failed(&hook("panic", NOT_SIMPLE));
+        assert_ok(&hook("panic", HARMLESS));
     }
 
     #[test]
@@ -130,7 +146,10 @@ mod hooks {
         let r = hook("sleep", DESTRUCTIVE);
         assert_failclosed_danger(&r, DESTRUCTIVE, "rm -rf x");
         assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
-        let r = hook("sleep", "Get-Date");
+        let r = hook("sleep", NOT_SIMPLE);
+        assert_failed(&r);
+        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
+        let r = hook("sleep", HARMLESS);
         assert_ok(&r);
         assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
     }
@@ -138,22 +157,32 @@ mod hooks {
     #[test]
     fn worker_that_ends_without_a_result_fails_closed() {
         assert_failclosed_danger(&hook("dead-worker", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
-        assert_ok(&hook("dead-worker", "Get-Date"));
+        assert_failed(&hook("dead-worker", NOT_SIMPLE));
+        assert_ok(&hook("dead-worker", HARMLESS));
     }
 
     #[test]
     fn worker_that_cannot_start_fails_closed() {
         assert_failclosed_danger(&hook("spawn-fail", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
-        assert_ok(&hook("spawn-fail", "Get-Date"));
+        assert_failed(&hook("spawn-fail", NOT_SIMPLE));
+        assert_ok(&hook("spawn-fail", HARMLESS));
     }
 
     #[test]
-    fn scan_that_misses_the_deadline_is_danger() {
-        // The rule panics and the raw-text scan is too slow: nothing shows the command harmless.
-        let r = hook("panic-scan-sleep", "Get-Date");
-        assert_eq!(r.code, 2, "{:?}", r.stdout);
-        assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+    fn scan_that_misses_the_deadline_is_danger_unless_harmless() {
+        // The rule panics and the raw-text scan is too slow: only the harmless grammar clears it.
+        let r = hook("panic-scan-sleep", NOT_SIMPLE);
+        assert_failed(&r);
         assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
+        let r = hook("panic-scan-sleep", HARMLESS);
+        assert_ok(&r);
+        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
+    }
+
+    #[test]
+    fn allow_marker_lowers_a_failed_analysis_to_ok() {
+        let cmd = "Get-Date; rm -rf x # shellwise: allow";
+        assert_ok(&hook("panic", cmd));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The raw-text destructive scan used on every fail-closed path. It needs no parser: it splits the
 //! text into simple commands leniently, once in the bash and once in the PowerShell reading, and
-//! matches the names and flags of `data/destructive.toml` from every shell. Over-matching is the
-//! safe side here: the scan only runs when the real analysis could not finish.
+//! matches the names and flags of `data/destructive.toml` from every shell. On a fail-closed path
+//! it only names the destructive command in the reason; `harmless` alone clears a command there.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -164,6 +164,55 @@ pub fn raw_destructive(cmd: &str) -> Option<Span> {
         .into_iter()
         .map(|h| h.span)
         .min_by_key(|s| (s.start, s.end))
+}
+
+/// The ASCII metacharacters of the harmless grammar. Every whitespace character other than the
+/// ASCII space (newline and CR included) and every control character count as metacharacters too.
+const METACHARACTERS: &str = ";&|<>()$`\\\"'{}[]*?~#";
+
+/// The read-only commands of the harmless grammar, as the words the text starts with. A `<tool>`
+/// entry matches any bare command name and only the exact word count.
+const READ_ONLY: &[&str] = &[
+    "ls",
+    "cat",
+    "echo",
+    "pwd",
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "grep",
+    "rg",
+    "head",
+    "tail",
+    "wc",
+    "which",
+    "type",
+    "<tool> --version",
+];
+
+/// Whether a text whose analysis failed is still a harmless simple command: no metacharacter, and
+/// it starts with a read-only command from `READ_ONLY` (ASCII case-insensitive, whole words).
+pub fn harmless(text: &str) -> bool {
+    if text
+        .chars()
+        .any(|c| METACHARACTERS.contains(c) || (c != ' ' && (c.is_whitespace() || c.is_control())))
+    {
+        return false;
+    }
+    let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
+    READ_ONLY.iter().any(|entry| {
+        let want: Vec<&str> = entry.split(' ').collect();
+        let same = |w: &str, e: &str| w.eq_ignore_ascii_case(e);
+        match want.split_first() {
+            Some((&"<tool>", rest)) => {
+                words.len() == want.len()
+                    && !words[0].contains('/')
+                    && words[1..].iter().zip(rest).all(|(w, e)| same(w, e))
+            }
+            _ => words.len() >= want.len() && words.iter().zip(&want).all(|(w, e)| same(w, e)),
+        }
+    })
 }
 
 /// Whether a table flag entry matches one word, as the table header defines it.

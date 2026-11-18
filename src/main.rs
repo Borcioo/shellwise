@@ -175,8 +175,9 @@ fn read_stdin(deadline: Deadline) -> Input {
 
 /// Run `check` on a big-stack worker inside `catch_unwind` and the raw-text scan on a second
 /// worker, both under the deadline. When `check` cannot finish (or `problem` says it must not
-/// run), the scan decides: danger when it matches or did not finish, else ok. Returns the
-/// verdict and the reason the analysis failed ("" when it did not).
+/// run), the verdict is danger unless the text is a harmless simple command or ends in the allow
+/// marker; the scan only names the destructive command. Returns the verdict and the reason the
+/// analysis failed ("" when it did not).
 fn analyse(
     command: String,
     problem: Option<&'static str>,
@@ -209,7 +210,7 @@ fn analyse(
         (Ok(_), Ok(Ok(hit))) => Some(hit),
         _ => None,
     };
-    (scan_verdict(hit, command.len(), reason), reason)
+    (scan_verdict(hit, &command, reason), reason)
 }
 
 fn run_checker(
@@ -257,7 +258,9 @@ fn run_checker(
 /// Print the verdict and return the exit code. A fail-closed `ok` names its reason on stderr.
 fn finish(verdict: Verdict, args: &CheckArgs, failed: &str) -> i32 {
     if !failed.is_empty() && verdict.findings.is_empty() {
-        eprintln!("shellwise: analysis failed ({failed}); no destructive command in the raw text");
+        eprintln!(
+            "shellwise: analysis failed ({failed}); the text is a simple read-only command or ends in the allow marker"
+        );
     }
     let mut out = String::new();
     if args.json {

@@ -110,8 +110,12 @@ pub fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
     Verdict::new(findings)
 }
 
-/// The verdict when the analysis cannot finish: `danger` when the raw-text destructive scan
-/// matches (or cannot run), otherwise `ok`.
+/// The allow marker and its alias.
+const ALLOW_MARKERS: [&str; 2] = ["# shellwise: allow", "# baseline-guard: allow"];
+
+/// The verdict when the analysis cannot finish: `ok` when the raw text is a harmless simple
+/// command or ends in the allow marker, otherwise `danger`. The raw-text scan only names the
+/// destructive command it finds.
 pub fn fail_closed(command: &str, reason: &str) -> Verdict {
     fail_closed_with(command, reason, scan::raw_destructive)
 }
@@ -122,35 +126,64 @@ fn fail_closed_with(
     scan: impl FnOnce(&str) -> Option<Span> + std::panic::UnwindSafe,
 ) -> Verdict {
     let hit = std::panic::catch_unwind(|| scan(command)).ok();
-    scan_verdict(hit, command.len(), reason)
+    scan_verdict(hit, command, reason)
 }
 
-/// The fail-closed verdict from a scan result: `None` when the scan did not finish (it panicked
-/// or ran out of time), which nothing proves harmless.
-pub fn scan_verdict(hit: Option<Option<Span>>, command_len: usize, reason: &str) -> Verdict {
-    let span = match hit {
-        Some(None) => return Verdict::new(Vec::new()),
-        Some(Some(span)) => span,
-        None => Span {
-            start: 0,
-            end: command_len,
-        },
+/// The fail-closed verdict from a scan result (`None` when the scan did not finish). Only the
+/// harmless grammar or the allow marker clears the command; a scan hit sets the span and names
+/// the command, and otherwise the span is the whole text.
+pub fn scan_verdict(hit: Option<Option<Span>>, command: &str, reason: &str) -> Verdict {
+    if scan::harmless(command) || ends_in_allow_marker(command) {
+        return Verdict::new(Vec::new());
+    }
+    let whole = Span {
+        start: 0,
+        end: command.len(),
     };
-    danger(span, reason)
+    let (span, message) = match hit.flatten() {
+        Some(span) => match command.get(span.start..span.end) {
+            Some(found) => (
+                span,
+                format!(
+                    "the command could not be analysed ({reason}) and holds a destructive command: `{found}`"
+                ),
+            ),
+            None => (whole, not_simple(reason)),
+        },
+        None => (whole, not_simple(reason)),
+    };
+    danger(span, message)
+}
+
+fn not_simple(reason: &str) -> String {
+    format!(
+        "the command could not be analysed ({reason}) and is not a simple read-only command, so it may destroy data"
+    )
+}
+
+/// Whether the raw text ends in the allow marker as a comment: the `#` starts the text or follows
+/// a space, and only whitespace follows the marker. The parse that finds real comments failed.
+fn ends_in_allow_marker(command: &str) -> bool {
+    let text = command.trim_end();
+    ALLOW_MARKERS.iter().any(|marker| {
+        text.strip_suffix(marker)
+            .is_some_and(|before| before.is_empty() || before.ends_with(' '))
+    })
 }
 
 /// The verdict for input that was not read whole (over the hard cap, stdin still open).
 pub fn fail_closed_unread(reason: &str) -> Verdict {
-    danger(Span::default(), reason)
+    danger(
+        Span::default(),
+        format!("the command could not be read ({reason}), so it may destroy data"),
+    )
 }
 
-fn danger(span: Span, reason: &str) -> Verdict {
+fn danger(span: Span, message: String) -> Verdict {
     Verdict::new(vec![Finding {
         rule: ANALYSIS_FAILED,
         level: Level::Danger,
-        message: format!(
-            "the command could not be analysed ({reason}) and may destroy data: the raw text holds a destructive command or could not be read"
-        ),
+        message,
         fix: Some("split the command into simpler calls so each can be checked".to_string()),
         span,
     }])
@@ -190,27 +223,213 @@ mod tests {
         assert_eq!(d.remaining(), Duration::ZERO);
     }
 
+    /// Every row whose fail-closed verdict is not `danger` from `analysis-failed`, so a red run
+    /// lists all failing rows at once.
+    fn not_danger<'a>(rows: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+        rows.into_iter()
+            .filter(|cmd| {
+                let v = fail_closed(cmd, "test");
+                v.level != Level::Danger
+                    || v.findings.len() != 1
+                    || v.findings[0].rule != ANALYSIS_FAILED
+            })
+            .collect()
+    }
+
+    /// Every row whose fail-closed verdict is not the plain `ok`.
+    fn not_ok<'a>(rows: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+        rows.into_iter()
+            .filter(|cmd| fail_closed(cmd, "test") != Verdict::new(vec![]))
+            .collect()
+    }
+
+    fn assert_danger(v: &Verdict, cmd: &str) {
+        assert_eq!(v.level, Level::Danger, "{cmd:?} -> {v:?}");
+        assert_eq!(v.findings.len(), 1, "{cmd:?}");
+        assert_eq!(v.findings[0].rule, ANALYSIS_FAILED, "{cmd:?}");
+    }
+
     #[test]
-    fn fail_closed_is_danger_only_when_the_raw_text_is_destructive() {
+    fn fail_closed_names_the_destructive_command_the_scan_found() {
         let v = fail_closed("echo hi; rm -rf x", "test");
-        assert_eq!(v.level, Level::Danger);
-        assert_eq!(v.findings.len(), 1);
-        assert_eq!(v.findings[0].rule, ANALYSIS_FAILED);
+        assert_danger(&v, "echo hi; rm -rf x");
         assert_eq!(v.findings[0].span, Span { start: 9, end: 17 });
-        assert!(
-            v.findings[0].message.contains("test"),
-            "{}",
-            v.findings[0].message
-        );
+        let msg = &v.findings[0].message;
+        assert!(msg.contains("test") && msg.contains("`rm -rf x`"), "{msg}");
+    }
+
+    #[test]
+    fn fail_closed_is_danger_without_a_scan_hit() {
+        // Not harmless, and the scan finds nothing: still danger, spanning the whole text.
         let v = fail_closed("Get-Date", "test");
-        assert_eq!(v, Verdict::new(vec![]));
+        assert_danger(&v, "Get-Date");
+        assert_eq!(v.findings[0].span, Span { start: 0, end: 8 });
+        assert!(v.findings[0].message.contains("test"));
     }
 
     #[test]
     fn fail_closed_is_danger_when_the_scan_itself_panics() {
         let v = fail_closed_with("Get-Date", "test", |_| panic!("scan bug"));
-        assert_eq!(v.level, Level::Danger);
-        assert_eq!(v.findings[0].rule, ANALYSIS_FAILED);
+        assert_danger(&v, "Get-Date");
         assert_eq!(v.findings[0].span, Span { start: 0, end: 8 });
+    }
+
+    /// The shapes the re-review found the raw scan missing (N1-N6). U+2018/U+2019 hide a row
+    /// from the PowerShell reading, as in the review.
+    const MISSED_BY_THE_SCAN: &[&str] = &[
+        // N1 process substitution feeding more than one command
+        "bash <(echo hi; echo 'rm -rf x')",
+        "source <(echo hi; echo 'rm -rf x')",
+        "bash <(echo hi && echo 'rm -rf x')",
+        // N2 command substitution inside code
+        "bash -c \"$(echo 'rm -rf x')\"",
+        "eval \"$(echo rm -rf x)\"",
+        "eval $(echo rm -rf x)",
+        "bash <<< \"$(echo 'rm -rf x')\"",
+        "sh -c \"`echo rm -rf x`\"",
+        "echo \u{2018}a; bash <<EOF\n$(echo rm -rf x)\nEOF\necho \u{2019}",
+        "iex (Write-Output 'Remove-Item x')",
+        "iex $(Write-Output 'Remove-Item x')",
+        // N3 heredoc bodies bash ends or skips earlier
+        "echo \u{2018}a; echo $((1<<EOF))\nrm -rf x\nEOF\necho \u{2019}",
+        "echo \u{2018}a; ((y=1<<EOF))\nrm -rf x\nEOF\necho \u{2019}",
+        "echo \u{2018}a; x=$(cat <<EOF\nhi\nEOF)\nrm -rf x\nEOF\necho \u{2019}",
+        // N4 `$'...'` and `$"..."` command names
+        "$'rm' -rf x",
+        "$\"rm\" -rf x",
+        "$''rm -rf x",
+        // N5 stdin-as-code consumers
+        "(echo 'rm -rf x') | bash",
+        "{ echo 'rm -rf x'; } | bash",
+        "echo 'rm -rf x' | sudo -s",
+        "echo 'rm -rf x' | sudo -i",
+        "echo 'rm -rf x' | sudo -u root -s",
+        "echo 'rm -rf x' | doas -s",
+        "echo 'rm -rf x' | su",
+        "echo 'rm -rf x' | bash -c bash",
+        "echo 'rm -rf x' | sh -c 'exec sh'",
+        "echo 'rm -rf x' | eval \"$(cat)\"",
+        "echo 'rm -rf x' | xargs -I{} sh -c {}",
+        "echo 'rm -rf x' | busybox sh",
+        "'Remove-Item x' | ForEach-Object { iex $_ }",
+        "'Remove-Item x' | % { Invoke-Expression $_ }",
+        // N6 command-running prefixes and chained pwsh assignments
+        "setsid rm -rf x",
+        "chroot / rm -rf x",
+        "flock /tmp/l rm -rf x",
+        "runuser -u root -- rm -rf x",
+        "su -c 'rm -rf x'",
+        "$a=$b=Remove-Item x",
+    ];
+
+    #[test]
+    fn failed_analysis_of_a_shape_the_scan_misses_is_danger() {
+        let missed = not_danger(MISSED_BY_THE_SCAN.iter().copied());
+        assert!(missed.is_empty(), "not danger: {missed:?}");
+    }
+
+    /// One harmless row per entry of the read-only list, plus case and spacing variants.
+    const HARMLESS_ROWS: &[&str] = &[
+        "git status",
+        "ls -la",
+        "echo hi",
+        "cargo --version",
+        "cat notes.txt",
+        "pwd",
+        "git log --oneline -5",
+        "git diff --stat",
+        "git show HEAD",
+        "grep -n todo src/lib.rs",
+        "rg todo",
+        "head -n 5 a.txt",
+        "tail a.txt",
+        "wc -l a.txt",
+        "which git",
+        "type ls",
+        "  echo hi  ",
+        "echo  hi",
+        "LS -la",
+        "Git Status",
+        "echo rm -rf x",
+    ];
+
+    #[test]
+    fn failed_analysis_of_a_harmless_simple_command_is_ok() {
+        let wrong = not_ok(HARMLESS_ROWS.iter().copied());
+        assert!(wrong.is_empty(), "not ok: {wrong:?}");
+    }
+
+    #[test]
+    fn harmless_text_is_ok_whatever_the_scan_says() {
+        // The scan only names a command; it neither clears nor condemns a harmless text.
+        let hit = |_: &str| Some(Span { start: 0, end: 4 });
+        assert_eq!(fail_closed_with("echo hi", "t", hit), Verdict::new(vec![]));
+        let v = fail_closed_with("echo hi", "t", |_| panic!("scan bug"));
+        assert_eq!(v, Verdict::new(vec![]));
+        assert_danger(&fail_closed_with("Get-Date", "t", |_| None), "Get-Date");
+    }
+
+    /// The metacharacters of the harmless grammar, written out here (not read from the code) so a
+    /// character dropped from the code keeps its row. Whitespace other than the ASCII space and
+    /// control characters count as metacharacters too.
+    const METACHARACTERS: &[&str] = &[
+        ";", "&", "|", "<", ">", "(", ")", "$", "`", "\\", "\"", "'", "{", "}", "[", "]", "*", "?",
+        "~", "#", "\n", "\r", "\t", "\u{b}", "\u{c}", "\u{a0}", "\u{3000}", "\u{1b}", "\u{0}",
+    ];
+
+    /// Near misses of the harmless grammar: each stays danger.
+    const NEAR_MISSES: &[&str] = &[
+        "echo hi > x",
+        "ls; rm x",
+        "git status && rm -rf x",
+        "cat $f",
+        "echo ~",
+        "ls *",
+        "rm -rf x",
+        "lsx",
+        "git",
+        "git -C x status",
+        "git statusx",
+        "gitstatus",
+        "./deploy --version",
+        "deploy --version x",
+        "--version",
+    ];
+
+    #[test]
+    fn failed_analysis_of_a_near_miss_is_danger() {
+        let rows: Vec<String> = METACHARACTERS
+            .iter()
+            .map(|c| format!("echo a{c}b"))
+            .collect();
+        let wrong = not_danger(
+            NEAR_MISSES
+                .iter()
+                .copied()
+                .chain(rows.iter().map(|s| s.as_str())),
+        );
+        assert!(wrong.is_empty(), "not danger: {wrong:?}");
+    }
+
+    #[test]
+    fn allow_marker_as_a_trailing_comment_lowers_the_fail_path_to_ok() {
+        let wrong = not_ok([
+            "rm -rf x # shellwise: allow",
+            "rm -rf x # baseline-guard: allow",
+            "rm -rf x # shellwise: allow\n",
+            "# shellwise: allow",
+            "bash <(echo hi; echo 'rm -rf x') # shellwise: allow\r\n",
+        ]);
+        assert!(wrong.is_empty(), "not ok: {wrong:?}");
+        // Not a trailing comment: inside a string, glued to a word, or followed by more code.
+        let wrong = not_danger([
+            "echo '# shellwise: allow'; rm -rf x",
+            "rm -rf x# shellwise: allow",
+            "rm -rf x # shellwise: allow\nrm -rf y",
+            "bash -c 'rm -rf x # shellwise: allow'",
+            "rm -rf x # shellwise: allowed",
+            "rm -rf x # Shellwise: Allow",
+        ]);
+        assert!(wrong.is_empty(), "not danger: {wrong:?}");
     }
 }
