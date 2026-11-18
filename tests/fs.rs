@@ -668,7 +668,7 @@ fn walk_counts_a_listed_mount_point_inside_the_tree_on_the_same_device() {
 fn mountinfo_lists_every_mount_point_with_its_escapes_decoded() {
     let text = "22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n\
                 61 22 0:5 / /dev rw,nosuid - devtmpfs udev rw\n\
-                90 22 8:1 /home/u/src /w/my\\040data/bind rw - ext4 /dev/sda1 rw\n\
+                90 22 8:1 /srv/src /w/my\\040data/bind rw - ext4 /dev/sda1 rw\n\
                 91 22 0:44 / /w/tab\\011and\\134back rw - tmpfs none rw\n";
     assert_eq!(
         shellwise::fs::parse_mountinfo(text),
