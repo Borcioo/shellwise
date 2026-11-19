@@ -563,8 +563,8 @@ struct Pushed {
 /// Where the shell is while a command runs: tracks `cd`, `Set-Location`, `Push-Location`,
 /// `Pop-Location` (and `git -C` through `for_git`). Feed it every statement in order with
 /// `after`, after judging the statement's own commands; a nested statement's body starts from
-/// `inner`; a script-block word's body (`WordPart::Block`) from `inner_block`; a substitution
-/// starts from a clone.
+/// `inner`; a script-block word's body (`WordPart::Block`) from `inner_block`, given the body as
+/// it stands in the pipeline that holds the word; a substitution starts from a clone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Location {
     shell: Shell,
@@ -1094,11 +1094,16 @@ impl Location {
         loc
     }
 
-    /// The location the body of a script-block word (`WordPart::Block`) starts at, whenever it
-    /// runs (`% { … }`, a stored `$sb = { … }` run later): as a loop body, unknown when the
-    /// body moves, and it sees every remap and script run in the command.
-    pub fn inner_block(&self, body: &Script) -> Location {
-        let mut loc = if changes_location(body, self.shell, &self.defined) {
+    /// The location the body of a script-block word (`WordPart::Block`) starts at. `owner` is the
+    /// pipeline whose element holds the word, and `body` the block in it, not a clone. The body
+    /// starts from the current folders only when its owner runs it there (`block_runs_in_place`)
+    /// and, as a loop body, only when the body does not move; else unknown: a stored
+    /// `$sb = { … }` runs wherever it is run later, a job or a remote session elsewhere (Ruling
+    /// 57). It sees every remap and script run in the command.
+    pub fn inner_block(&self, body: &Script, owner: &Pipeline) -> Location {
+        let mut loc = if !self.block_runs_in_place(body, owner)
+            || changes_location(body, self.shell, &self.defined)
+        {
             self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
         } else {
             self.with_dirs(self.dirs.clone())
@@ -1106,6 +1111,46 @@ impl Location {
         loc.remapped |= self.remaps_anywhere;
         loc.runs_script |= self.script_runs_anywhere;
         loc
+    }
+
+    /// `body` is an argument of a command in `owner` that runs it at once, where the pipeline
+    /// stands (fix8\spike-inplace.log, pwsh 7.7 and 5.1): `ForEach-Object` (`-Process`,
+    /// `-Begin`, `-End`, `-RemainingScripts`), `Where-Object` (`-FilterScript`) or
+    /// `Invoke-Command` (`-ScriptBlock`, `-NoNewScope`), by name or shipped alias, the script
+    /// not defining it, every other argument a block or one of those parameters as written in
+    /// full; and nothing else in the pipeline may move (`Set-Location -PassThru | % { … }` runs
+    /// the block in the new folder).
+    fn block_runs_in_place(&self, body: &Script, owner: &Pipeline) -> bool {
+        let shell = self.shell;
+        let is_body = |w: &Word| match w.parts.as_slice() {
+            [WordPart::Block(b)] => std::ptr::eq(b.as_ref(), body),
+            _ => false,
+        };
+        let Some(c) = owner.elems.iter().find_map(|e| match e {
+            Elem::Cmd(c) if c.args.iter().any(is_body) => Some(c),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let raw = raw_name(c);
+        if literal(&c.name).is_none() || calls_defined(&raw, shell, &self.defined) {
+            return false;
+        }
+        let params: &[&str] = match table(shell).alias(&raw).unwrap_or(raw.as_str()) {
+            "foreach-object" => &["-process", "-begin", "-end", "-remainingscripts"],
+            "where-object" => &["-filterscript"],
+            "invoke-command" => &["-scriptblock", "-nonewscope"],
+            _ => return false,
+        };
+        let modeled = c.args.iter().all(|w| {
+            matches!(w.parts.as_slice(), [WordPart::Block(_)])
+                || literal(w).is_some_and(|t| params.contains(&t.to_ascii_lowercase().as_str()))
+        });
+        let moves = owner.elems.iter().any(|e| {
+            elem_nests_location_change(e, shell, &self.defined)
+                || matches!(e, Elem::Cmd(o) if is_location_command(o, shell, &self.defined))
+        });
+        modeled && !moves
     }
 
     /// The location `git` runs in, after its `-C` options.

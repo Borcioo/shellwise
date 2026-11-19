@@ -3744,6 +3744,33 @@ fn after_all(loc: &mut Location, s: &Script, env: &EnvView) {
     }
 }
 
+/// The pipeline statement `s` and the body of the first script-block part in it (a command's
+/// argument or assignment, or an expression), as Task 10 hands them to `inner_block`.
+fn block_of(s: &Stmt) -> (&Pipeline, &Script) {
+    let Stmt::Pipeline(p) = s else {
+        panic!("no pipeline: {s:?}")
+    };
+    let body = p
+        .elems
+        .iter()
+        .flat_map(|e| match e {
+            Elem::Cmd(c) => c
+                .args
+                .iter()
+                .chain(c.assigns.iter().map(|(_, w)| w))
+                .collect::<Vec<_>>(),
+            Elem::Expr(w) => vec![w],
+            Elem::Method(m) => m.args.iter().collect(),
+        })
+        .flat_map(|w| w.parts.iter())
+        .find_map(|part| match part {
+            WordPart::Block(b) => Some(b.as_ref()),
+            _ => None,
+        })
+        .expect("a script-block word");
+    (p, body)
+}
+
 #[test]
 fn cd_moves_the_location_and_a_cd_that_may_fail_keeps_the_old_one() {
     let (base, env) = win(Shell::Pwsh);
@@ -5505,44 +5532,34 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
             (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
         })
         .collect();
-    // A script-block word (`% { … }`, a stored `$sb = { … }` run later) starts from
-    // `inner_block`: it sees every remap and script run, and starts unknown when it moves.
+    // A script-block word run in place (`% { … }`, `& { … }`) starts from `inner_block`: it sees
+    // every remap and script run, and starts unknown when it moves.
     let block = |body: Vec<Stmt>| word_at(vec![WordPart::Block(Box::new(script(body)))], 0);
     let each = |body: Vec<Stmt>| st(cmd("ForEach-Object", vec![block(body)]));
-    let stored = |body: Vec<Stmt>| {
-        let mut c = assign("sb", "");
-        c.assigns = vec![("sb".to_string(), block(body))];
-        st(c)
-    };
-    let run_sb = || st(cmd("&", vec![var("sb")]));
-    /// Label, the whole command, the block's body, the delete's word, result.
-    type BlockRow<'a> = (&'a str, Vec<Stmt>, Vec<Stmt>, &'a str, Target);
+    /// Label, the whole command (the block is in its first statement), the delete's word, result.
+    type BlockRow<'a> = (&'a str, Vec<Stmt>, &'a str, Target);
     let block_rows: Vec<BlockRow> = vec![
         (
             "B1 % { Proj:\\x; New-PSDrive Proj }",
             vec![each(vec![ri(r"Proj:\x"), remap()])],
-            vec![ri(r"Proj:\x"), remap()],
             r"Proj:\x",
             MAY_BE_CRITICAL,
         ),
         (
             "% { Proj:\\x; .\\setup.ps1 }",
             vec![each(vec![ri(r"Proj:\x"), st(lits(r".\setup.ps1", &[]))])],
-            vec![ri(r"Proj:\x"), st(lits(r".\setup.ps1", &[]))],
             r"Proj:\x",
             MAY_BE_CRITICAL,
         ),
         (
-            "B4 $sb = { Proj:\\x }; New-PSDrive Proj; & $sb",
-            vec![stored(vec![ri(r"Proj:\x")]), remap(), run_sb()],
-            vec![ri(r"Proj:\x")],
+            "B4 & { Proj:\\x }; New-PSDrive Proj",
+            vec![st(cmd("&", vec![block(vec![ri(r"Proj:\x")])])), remap()],
             r"Proj:\x",
             MAY_BE_CRITICAL,
         ),
         (
             "% { cd ..; y }",
             vec![each(vec![st(lits("cd", &[".."]))])],
-            vec![st(lits("cd", &[".."]))],
             "y",
             MAY_BE_CRITICAL,
         ),
@@ -5550,26 +5567,240 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
         (
             "% { Proj:\\x; git status } (control)",
             vec![each(vec![ri(r"Proj:\x"), st(lits("git", &["status"]))])],
-            vec![ri(r"Proj:\x"), st(lits("git", &["status"]))],
             r"Proj:\x",
             unproven("Proj"),
         ),
         (
             "% { git status; y } (control)",
             vec![each(vec![st(lits("git", &["status"]))])],
-            vec![st(lits("git", &["status"]))],
             "y",
             paths(&[r"C:\w\repo\y"]),
         ),
     ];
-    for (label, whole, body, word, want) in block_rows {
+    for (label, whole, word, want) in block_rows {
         let mut loc = base.clone();
-        loc.read_script(&script(whole));
-        let inner = loc.inner_block(&script(body));
+        let whole = script(whole);
+        loc.read_script(&whole);
+        let (owner, body) = block_of(&whole.stmts[0]);
+        let inner = loc.inner_block(body, owner);
         let got = sorted(target(&lit(word), &inner, &env, by, &machine, &far()));
         if got != want {
             bad.push(format!("{label}: got {got:?}, want {want:?}"));
         }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
+fn a_script_block_starts_where_its_owner_runs_it_or_unknown() {
+    // Ruling 57 I2 (fix8\spike-inplace.log, pwsh 7.7 and 5.1): a block literal starts from the
+    // current folders only where an owner on the allow-list runs it at its own statement. A stored
+    // block, one any other command runs, and one in a pipeline that may move start unknown.
+    // cwd `C:\w\repo\sub`; `Remove-Item -Recurse .` in the block.
+    let ps = Shell::Pwsh;
+    let (_, env) = win(ps);
+    let sub = r"C:\w\repo\sub";
+    let seq = Some(ChainOp::Seq);
+    let block = |body: Vec<Stmt>| word_at(vec![WordPart::Block(Box::new(script(body)))], 0);
+    let rr = || block(vec![stmt(lits("Remove-Item", &["-Recurse", "."]), seq)]);
+    let cd_up = || block(vec![stmt(lits("cd", &[".."]), seq)]);
+    let one = |c: SimpleCommand| stmt(c, seq);
+    let pipe = |elems: Vec<Elem>| Stmt::Pipeline(Pipeline { elems, chain: seq });
+    let stored = || {
+        let mut c = assign("sb", "");
+        c.assigns = vec![("sb".to_string(), rr())];
+        one(c)
+    };
+    let up = || one(lits("cd", &[".."]));
+    let here = paths(&[sub]);
+    /// Label, the whole command, the statement holding the block, result.
+    type Row<'a> = (&'a str, Vec<Stmt>, usize, Target);
+    let mut rows: Vec<Row> = Vec::new();
+    // Run in place (spike F1–F6, F9, W1–W3, I1–I4): each owner and parameter.
+    for (label, c) in [
+        ("% { }", cmd("%", vec![rr()])),
+        ("ForEach-Object { }", cmd("ForEach-Object", vec![rr()])),
+        ("foreach { }", cmd("foreach", vec![rr()])),
+        ("% -Process { }", cmd("%", vec![lit("-Process"), rr()])),
+        ("% -PROCESS { }", cmd("%", vec![lit("-PROCESS"), rr()])),
+        ("% -Begin { }", cmd("%", vec![lit("-Begin"), rr()])),
+        ("% -End { }", cmd("%", vec![lit("-End"), rr()])),
+        (
+            "% { } -RemainingScripts { }",
+            cmd("%", vec![rr(), lit("-RemainingScripts"), block(vec![])]),
+        ),
+        ("? { }", cmd("?", vec![rr()])),
+        ("where { }", cmd("where", vec![rr()])),
+        (
+            "Where-Object -FilterScript { }",
+            cmd("Where-Object", vec![lit("-FilterScript"), rr()]),
+        ),
+        ("Invoke-Command { }", cmd("Invoke-Command", vec![rr()])),
+        ("icm { }", cmd("icm", vec![rr()])),
+        (
+            "Invoke-Command -ScriptBlock { }",
+            cmd("Invoke-Command", vec![lit("-ScriptBlock"), rr()]),
+        ),
+        (
+            "Invoke-Command { } -NoNewScope",
+            cmd("Invoke-Command", vec![rr(), lit("-NoNewScope")]),
+        ),
+    ] {
+        rows.push((label, vec![one(c)], 0, here.clone()));
+    }
+    let expr_invoke = word_at(
+        vec![
+            WordPart::Block(Box::new(script(vec![stmt(
+                lits("Remove-Item", &["-Recurse", "."]),
+                seq,
+            )]))),
+            WordPart::Literal(".Invoke()".to_string()),
+        ],
+        0,
+    );
+    let mut dyn_each = cmd("%", vec![rr()]);
+    dyn_each.name = var("f");
+    let unknown: Vec<(&str, Vec<Stmt>, usize)> = vec![
+        // `&` and `.` run a block in place (spike P1, P2), but a block operand is a script run
+        // (Ruling 40/41), which may define any name: every call in the body moves (controls).
+        ("& { } (control)", vec![one(cmd("&", vec![rr()]))], 0),
+        (". { } (control)", vec![one(cmd(".", vec![rr()]))], 0),
+        // Re-review 5 C3a, C3c–C3f: a stored block, whatever runs it later (spike S1–S5).
+        (
+            "C3a $sb = { }; cd ..; & $sb",
+            vec![stored(), up(), one(cmd("&", vec![var("sb")]))],
+            0,
+        ),
+        (
+            "C3c $sb = { }; cd ..; $sb.Invoke()",
+            vec![
+                stored(),
+                up(),
+                pipe(vec![Elem::Expr(word_at(
+                    vec![
+                        WordPart::Var("sb".to_string()),
+                        WordPart::Literal(".Invoke()".to_string()),
+                    ],
+                    0,
+                ))]),
+            ],
+            0,
+        ),
+        (
+            "C3d $sb = { }; cd ..; Invoke-Command $sb",
+            vec![stored(), up(), one(cmd("Invoke-Command", vec![var("sb")]))],
+            0,
+        ),
+        (
+            "C3e $sb = { }; cd ..; 1 | % $sb",
+            vec![stored(), up(), one(cmd("%", vec![var("sb")]))],
+            0,
+        ),
+        ("C3f $sb = { }; cd .. (never run)", vec![stored(), up()], 0),
+        // `{ }.Invoke()`: the IR names no owner for it.
+        ("{ }.Invoke()", vec![pipe(vec![Elem::Expr(expr_invoke)])], 0),
+        // An owner off the list (a job runs elsewhere: spike J1 on 5.1).
+        ("Start-Job { }", vec![one(cmd("Start-Job", vec![rr()]))], 0),
+        (
+            "Measure-Command { }",
+            vec![one(cmd("Measure-Command", vec![rr()]))],
+            0,
+        ),
+        // `&` runs its first word: here a command whose argument is the block.
+        (
+            "& Start-Job { }",
+            vec![one(cmd("&", vec![lit("Start-Job"), rr()]))],
+            0,
+        ),
+        // A parameter the hook does not model.
+        (
+            "% -Parallel { }",
+            vec![one(cmd("%", vec![lit("-Parallel"), rr()]))],
+            0,
+        ),
+        (
+            "icm -ComputerName x { }",
+            vec![one(cmd("icm", vec![lit("-ComputerName"), lit("x"), rr()]))],
+            0,
+        ),
+        (
+            "Invoke-Command { } -AsJob",
+            vec![one(cmd("Invoke-Command", vec![rr(), lit("-AsJob")]))],
+            0,
+        ),
+        // A name the hook cannot read.
+        ("$f { } (name not a literal)", vec![one(dyn_each)], 0),
+        // The owner is the script's own.
+        (
+            "function ForEach-Object {}; % { }",
+            vec![
+                Stmt::Func {
+                    name: "ForEach-Object".to_string(),
+                    body: script(vec![]),
+                },
+                one(cmd("%", vec![rr()])),
+            ],
+            1,
+        ),
+        // The pipeline moves while the block runs (spike P1, P2), in another element or in
+        // another block of the owner (`-Begin` runs first).
+        (
+            "Set-Location .. -PassThru | % { }",
+            vec![pipe(vec![
+                Elem::Cmd(lits("Set-Location", &["..", "-PassThru"])),
+                Elem::Cmd(cmd("%", vec![rr()])),
+            ])],
+            0,
+        ),
+        (
+            "% { } | % { cd .. }",
+            vec![pipe(vec![
+                Elem::Cmd(cmd("%", vec![rr()])),
+                Elem::Cmd(cmd("%", vec![cd_up()])),
+            ])],
+            0,
+        ),
+        (
+            "% -Process { } -Begin { cd .. }",
+            vec![one(cmd(
+                "%",
+                vec![lit("-Process"), rr(), lit("-Begin"), cd_up()],
+            ))],
+            0,
+        ),
+    ];
+    rows.extend(
+        unknown
+            .into_iter()
+            .map(|(label, whole, at)| (label, whole, at, MAY_BE_CRITICAL)),
+    );
+    let mut bad: Vec<String> = Vec::new();
+    for (label, whole, at, want) in rows {
+        let whole = script(whole);
+        let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
+        loc.read_script(&whole);
+        for s in &whole.stmts[..at] {
+            loc.after(s, &env);
+        }
+        let (owner, body) = block_of(&whole.stmts[at]);
+        let got = resolve(&lit("."), &loc.inner_block(body, owner), &env);
+        if got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    }
+    // A body that is not the owner's own word (a clone) is no block the owner runs.
+    let whole = script(vec![one(cmd("%", vec![rr()]))]);
+    let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
+    loc.read_script(&whole);
+    let (owner, body) = block_of(&whole.stmts[0]);
+    let got = resolve(&lit("."), &loc.inner_block(&body.clone(), owner), &env);
+    if got != MAY_BE_CRITICAL {
+        bad.push(format!("% {{ }} with a cloned body: got {got:?}"));
     }
     assert!(
         bad.is_empty(),
