@@ -2399,6 +2399,17 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         &MAY_BE_CRITICAL,
         "unread; build",
     );
+    // Ruling 38: a script run by `&` and a source by `.` may move the shell.
+    for (label, before) in [
+        ("& ./x.ps1", stmt(lits("&", &["./x.ps1"]), seq)),
+        (". Get-Date", stmt(lits(".", &["Get-Date"]), seq)),
+    ] {
+        expect(
+            judge(vec![before], ri("build")),
+            &MAY_BE_CRITICAL,
+            &format!("{label}; build"),
+        );
+    }
     // I3 + Ruling 35: a command definition, or a variable that may be the shim's.
     for text in [
         "Function:x",
