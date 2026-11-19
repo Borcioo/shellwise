@@ -1,0 +1,394 @@
+# The will-hang rule through analyse: commands that wait for input nobody can give in the hook's
+# tool, and a PowerShell function a built-in alias outranks. Every row goes through the real
+# parsers. Levels follow the landing rule: `read` is break (no corpus match was counted for it);
+# ssh, `claude -p` and the alias helper are warn (109, 70 and 6 `ok` corpus rows match their
+# draft shapes, over the 5-row limit for break).
+#
+# Rows whose id starts with `s3-` depend on spike S3 (does the tool wait on a prompt?). If S3
+# shows a fast failure for the candidate, delete its rows and its data/programs.toml row.
+#
+# Row shapes are synthetic; the program table (`data/programs.toml`) carries the facts.
+
+# --- Bash: read with nothing to read ---
+
+[[row]]
+id = "bash-read-bare"
+os = "any"
+shell = "bash"
+command = 'read x'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-prompt-option"
+os = "any"
+shell = "bash"
+command = 'read -r -p "Continue? " answer'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "gitbash-read-bare"
+os = "windows"
+shell = "gitbash"
+command = 'echo start; read x'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-first-in-a-pipeline"
+os = "any"
+shell = "bash"
+command = 'read x | cat'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-in-an-if-branch"
+os = "any"
+shell = "bash"
+command = 'if true; then read x; fi'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-timeout-option-is-ok"
+os = "any"
+shell = "bash"
+command = 'read -t 5 x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-fd-option-is-ok"
+os = "any"
+shell = "bash"
+command = 'read -u 3 x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-from-dev-null-is-ok"
+os = "any"
+shell = "bash"
+command = 'read x </dev/null'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-from-a-file-is-ok"
+os = "any"
+shell = "bash"
+command = 'read x < answers.txt'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-here-string-is-ok"
+os = "any"
+shell = "bash"
+command = 'read x <<< "yes"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-here-document-is-ok"
+os = "any"
+shell = "bash"
+command = "read x <<EOF\nyes\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-after-a-pipe-is-ok"
+os = "any"
+shell = "bash"
+command = 'echo yes | read x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-while-loop-is-ok"
+os = "any"
+shell = "bash"
+command = 'while read -r line; do echo "$line"; done < list'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-piped-while-loop-is-ok"
+os = "any"
+shell = "bash"
+command = 'printf "a\nb\n" | while read -r line; do echo "$line"; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-piped-group-is-ok"
+os = "any"
+shell = "bash"
+command = 'echo yes | { read x; echo "$x"; }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-with-a-dynamic-option-is-ok"
+os = "any"
+shell = "bash"
+command = 'read $opts x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "pwsh-read-is-not-a-program-there"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output read'
+level = "ok"
+rules = []
+
+# --- PowerShell: Read-Host (S3 for PowerShell has not run) ---
+
+[[row]]
+id = "s3-pwsh-read-host"
+os = "any"
+shell = "pwsh"
+command = 'Read-Host "Name"'
+level = "warn"
+rules = ["will-hang"]
+
+[[row]]
+id = "s3-pwsh-read-host-assigned"
+os = "any"
+shell = "pwsh"
+command = '$name = Read-Host -Prompt "Name"'
+level = "warn"
+rules = ["will-hang"]
+
+[[row]]
+id = "s3-pwsh-get-content-is-ok"
+os = "any"
+shell = "pwsh"
+command = '$name = Get-Content name.txt'
+level = "ok"
+rules = []
+
+# --- ssh without BatchMode (S3: ssh to an unroutable host failed fast, so a prompt is unproven) ---
+
+[[row]]
+id = "s3-bash-ssh-no-batchmode"
+os = "any"
+shell = "bash"
+command = "ssh web-host 'cd public_html && ls'"
+level = "warn"
+rules = ["will-hang"]
+
+[[row]]
+id = "s3-pwsh-ssh-no-batchmode"
+os = "any"
+shell = "pwsh"
+command = "ssh web-host 'wp cache flush'"
+level = "warn"
+rules = ["will-hang"]
+
+[[row]]
+id = "s3-pwsh-ssh-other-option-only"
+os = "any"
+shell = "pwsh"
+command = "ssh -o ConnectTimeout=5 web-host 'ls'"
+level = "warn"
+rules = ["will-hang"]
+
+[[row]]
+id = "s3-ssh-batchmode-is-ok"
+os = "any"
+shell = "pwsh"
+command = "ssh -o BatchMode=yes web-host 'ls'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "s3-ssh-batchmode-among-options-is-ok"
+os = "any"
+shell = "bash"
+command = "ssh -o ConnectTimeout=5 -o BatchMode=yes web-host 'ls'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "s3-ssh-batchmode-glued-is-ok"
+os = "any"
+shell = "bash"
+command = "ssh -oBatchMode=yes web-host 'ls'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "s3-ssh-batchmode-in-another-case-is-ok"
+os = "any"
+shell = "pwsh"
+command = "ssh -o batchmode=yes web-host 'ls'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "s3-ssh-dynamic-argument-is-ok"
+os = "any"
+shell = "bash"
+command = 'ssh $opts web-host ls'
+level = "ok"
+rules = []
+
+[[row]]
+id = "s3-ssh-add-is-another-program"
+os = "any"
+shell = "bash"
+command = 'ssh-add -l'
+level = "ok"
+rules = []
+
+# --- claude -p without a bound ---
+
+[[row]]
+id = "bash-claude-print-unbounded"
+os = "any"
+shell = "bash"
+command = 'claude -p "summarise the diff"'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
+id = "bash-claude-long-print-unbounded"
+os = "any"
+shell = "bash"
+command = 'claude --print "summarise the diff" --output-format json'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
+id = "bash-claude-print-in-a-pipeline-unbounded"
+os = "any"
+shell = "bash"
+command = 'echo "summarise" | claude -p'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
+id = "bash-claude-print-under-timeout-is-ok"
+os = "any"
+shell = "bash"
+command = 'timeout 120 claude -p "summarise the diff"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-claude-print-under-nice-is-unbounded"
+os = "any"
+shell = "bash"
+command = 'nice claude -p "summarise the diff"'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
+id = "bash-claude-without-print-is-ok"
+os = "any"
+shell = "bash"
+command = 'claude --version'
+level = "ok"
+rules = []
+
+[[row]]
+id = "pwsh-claude-print-is-not-checked"
+os = "any"
+shell = "pwsh"
+command = 'claude -p "summarise the diff"'
+level = "ok"
+rules = []
+
+# --- a PowerShell function named like a built-in alias ---
+
+[[row]]
+id = "pwsh-function-named-md"
+os = "any"
+shell = "pwsh"
+command = 'function md { New-Item -ItemType Directory -Path $args[0] }'
+level = "warn"
+rules = ["will-hang"]
+fix = 'rename the function md to a Verb-Noun name'
+
+[[row]]
+id = "pwsh-function-named-rd-in-a-script"
+os = "any"
+shell = "pwsh"
+command = "Write-Output start\nfunction rd { Write-Output $args[0] }"
+level = "warn"
+rules = ["will-hang"]
+fix = 'rename the function rd to a Verb-Noun name'
+
+[[row]]
+id = "pwsh-function-named-md-with-a-scope"
+os = "any"
+shell = "pwsh"
+command = 'function global:md { New-Item -ItemType Directory -Path $args[0] }'
+level = "warn"
+rules = ["will-hang"]
+fix = 'rename the function md to a Verb-Noun name'
+
+[[row]]
+id = "powershell5-function-named-md"
+os = "windows"
+shell = "powershell5"
+command = 'function md { New-Item -ItemType Directory -Path $args[0] }'
+level = "warn"
+rules = ["will-hang"]
+fix = 'rename the function md to a Verb-Noun name'
+
+[[row]]
+id = "pwsh-function-named-ls-on-windows"
+os = "windows"
+shell = "pwsh"
+command = 'function ls { Get-ChildItem -Force }'
+level = "warn"
+rules = ["will-hang"]
+fix = 'rename the function ls to a Verb-Noun name'
+
+[[row]]
+id = "pwsh-function-named-ls-on-posix-is-ok"
+os = "posix"
+shell = "pwsh"
+command = 'function ls { Get-ChildItem -Force }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "pwsh-function-with-a-verb-noun-name-is-ok"
+os = "any"
+shell = "pwsh"
+command = 'function New-Dir { New-Item -ItemType Directory -Path $args[0] }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "pwsh-function-named-like-a-cmdlet-is-ok"
+os = "any"
+shell = "pwsh"
+command = 'function Get-Date { "x" }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-function-named-md-is-ok"
+os = "any"
+shell = "bash"
+command = 'md() { mkdir "$1"; }'
+level = "ok"
+rules = []
