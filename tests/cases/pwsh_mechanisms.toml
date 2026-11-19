@@ -4832,3 +4832,30 @@ error = false
 cmds = [["Write-Output", "$?._x"]]
 comments = []
 methods = []
+
+[[row]]
+id = "bt-crlf-line-end-continues-command"
+mechanism = "a backtick CRLF line end then a space: the next line continues the command"
+command = "git log `\r\n -n 1"
+error = false
+cmds = [["git", "log", "-n", "1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-without-backtick"
+mechanism = "a word starting with `:` and no backtick: the `;` ends the command"
+command = "Remove-Item :x;ri C:\\x"
+error = false
+cmds = [["Remove-Item", ":x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-before-semicolon"
+mechanism = "a one-dash parameter ending in `:` before `;`: the parameter alone"
+command = "Write-Output -a:b:;ri"
+error = false
+cmds = [["Write-Output", "-a:b:"], ["ri"]]
+comments = []
+methods = []
