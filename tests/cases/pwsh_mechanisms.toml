@@ -3428,7 +3428,6 @@ methods = []
 [[row]]
 id = "glue-r-digit-backtick-line-end"
 mechanism = "a word starting with a digit and ending in a backtick before a line end: PowerShell escapes the line end"
-parser = "refuses"
 command = "Write-Output 1,2`\n"
 error = false
 cmds = [["Write-Output", "1,2`\n"]]
@@ -3587,5 +3586,59 @@ parser = "refuses"
 command = "Write-Output -a`b"
 error = false
 cmds = [["Write-Output", "-a`b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-digit-two-backticks-semicolon"
+mechanism = "a digit, then an escaped backtick: the word ends at `;` and the next command runs"
+command = "Write-Output 2``;ri C:\\x"
+error = false
+cmds = [["Write-Output", "2``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-star-two-backticks-pipe"
+mechanism = "`*`, then an escaped backtick: the word ends at `|` and the next command runs"
+command = "ls *``|ri C:\\x"
+error = false
+cmds = [["ls", "*``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-digit-three-backticks-semicolon"
+mechanism = "a digit, an escaped backtick, then a backtick that escapes `;`: one word"
+command = "Write-Output 2```;ri C:\\x"
+error = false
+cmds = [["Write-Output", "2```;ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-digit-four-backticks-semicolon"
+mechanism = "a digit, then two escaped backticks: the word ends at `;`"
+command = "Write-Output 2````;ri C:\\x"
+error = false
+cmds = [["Write-Output", "2````"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-digit-backtick-ampersand"
+mechanism = "a digit, then a backtick that escapes `&`: one argument"
+command = "Write-Output 2`&ri C:\\x"
+error = false
+cmds = [["Write-Output", "2`&ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-digit-two-backticks-paren-error"
+mechanism = "a digit, an escaped backtick, then `)`: a PowerShell parse error"
+command = "Write-Output 2``)ri C:\\x"
+error = true
+cmds = [["Write-Output", "2``"], ["ri", "C:\\x"]]
 comments = []
 methods = []

@@ -34,7 +34,8 @@ spike measured (`docs/spikes.md`).
 - `generic_token` (a bare word): it may hold `<` and `>` after its first character (`a>b` is one
   word); a leading digit or `*` is not followed by `>`, so `2>$null` is a redirection; its first
   character is not `,`, `<`, `>`, a digit, `*` or a typographic quote; quoted sections and
-  backtick escapes inside it belong to the word; a Unicode space (`\p{Zs}`) ends it.
+  backtick escapes inside it belong to the word, the one right after a leading digit or `*`
+  included (``2``;x`` ends at `;`); a Unicode space (`\p{Zs}`) ends it.
 - Redirection operators `1>` and `1>>`; a redirection target may be a bare word.
 - `command_name`: a name that starts with digits needs a letter after them (`(1..5)` and `1#` are
   not commands); it never starts with `>` or a stream redirection (`>git`, `2>&1x`); a backtick
