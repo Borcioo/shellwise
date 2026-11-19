@@ -1780,9 +1780,13 @@ fn looks_up_defined(c: &SimpleCommand, shell: Shell, defined: &[String]) -> bool
         if is_pwsh(shell) || name != "time" {
             return false;
         }
-        let rest = args
-            .iter()
-            .position(|w| !matches!(literal(w).as_deref(), Some("-p" | "--")));
+        // `time -p -- FOO=1 sudo x`: options and assignments come before the name.
+        let rest = args.iter().position(|w| match literal(w) {
+            Some(t) => {
+                !matches!(t.as_str(), "-p" | "--") && (t.starts_with('-') || !t.contains('='))
+            }
+            None => true,
+        });
         let Some(next) = rest.and_then(|i| literal(&args[i]).map(|t| (i, t))) else {
             return false;
         };
