@@ -196,6 +196,15 @@ impl Text<'_> {
             .span(self.byte(s.start.index), self.byte(s.end.index))
     }
 
+    /// Whether a redirect operator follows the word with no space (`{x}>f`); `None` when the
+    /// word's location does not hold its text.
+    fn touches_redirect(&self, w: &ast::Word) -> Option<bool> {
+        let loc = w.loc.as_ref()?;
+        let (start, end) = (self.byte(loc.start.index), self.byte(loc.end.index));
+        let held = self.src.get(start..end)? == w.value;
+        held.then(|| self.src[end..].starts_with(['<', '>']))
+    }
+
     fn whole(&self) -> Span {
         self.origin.span(0, self.src.len())
     }
@@ -691,6 +700,25 @@ impl Lower {
                 }
             }
             ops.push(last);
+            // The parser reads `coproc NAME [[ … ]]` as a command NAME followed by the test's
+            // words, and ends that command at a `||` or `&&` inside the test: the whole list
+            // fails closed. Bash takes NAME as the coprocess name.
+            if let Some(c) = pipelines.iter().find_map(|p| misread_coproc(p)) {
+                if let ast::Command::Simple(s) = c.body.as_ref()
+                    && let Some(name) = &s.word_or_name
+                {
+                    let w = self.ast_word(t, name, t.span(&c.loc), cx)?;
+                    self.runtime_target(Some(&w));
+                }
+                let mut cmd = synthetic("[[", t.span(&c.loc), cx);
+                cmd.opaque = true;
+                let stmt = Stmt::Pipeline(Pipeline {
+                    elems: vec![Elem::Cmd(cmd)],
+                    chain: Some(last),
+                });
+                out.push(vec![stmt], last);
+                continue;
+            }
             for (p, op) in pipelines.into_iter().zip(ops) {
                 out.push(self.pipeline(t, p, op, cx)?, op);
             }
@@ -971,17 +999,9 @@ impl Lower {
                 chain: None,
             })],
             C::Coprocess(c) => {
-                // `coproc NAME` writes NAME (bash expands the word). The parser reads
-                // `coproc NAME [[ … ]]` as a command NAME, which bash takes as the name.
-                let test_first = |s: &ast::SimpleCommand| {
-                    let w0 = s.suffix.as_ref().and_then(|x| x.0.first());
-                    matches!(w0, Some(ast::CommandPrefixOrSuffixItem::Word(w)) if w.value == "[[")
-                };
-                let name = c.name.as_ref().or(match c.body.as_ref() {
-                    ast::Command::Simple(s) if test_first(s) => s.word_or_name.as_ref(),
-                    _ => None,
-                });
-                if let Some(name) = name {
+                // `coproc NAME` writes NAME (bash expands the word). (`list` fails closed on
+                // `coproc NAME [[ … ]]`, which the parser misreads.)
+                if let Some(name) = &c.name {
                     let w = self.ast_word(t, name, span, cx)?;
                     self.runtime_target(Some(&w));
                 }
@@ -1030,18 +1050,47 @@ impl Lower {
                 I::ProcessSubstitution(_, sub) => cmd.args.push(self.process_subst(t, sub, cx)?),
             }
         }
-        let suffix: Vec<_> = s.suffix.iter().flat_map(|p| p.0.iter()).collect();
-        if let Some(name) = &s.word_or_name {
-            cmd.name = self.ast_word(t, name, span, cx)?;
-            cmd.typed = name.value.clone();
-            self.fd_name(&name.value, &mut cmd.name, suffix.first().copied(), cx)?;
+        // The command word and its suffix as one list. A `{NAME}` word that touches a redirect
+        // operator (`{x}>f`) belongs to that redirect: it leaves the list before the command
+        // name, the wrapper target and the operands are picked.
+        let head = s.word_or_name.clone().map(I::Word);
+        let all: Vec<&I> = head
+            .iter()
+            .chain(s.suffix.iter().flat_map(|p| p.0.iter()))
+            .collect();
+        let mut items = Vec::new();
+        let mut misread = false;
+        for (i, &item) in all.iter().enumerate() {
+            if let I::Word(w) = item
+                && let Some(I::IoRedirect(_)) = all.get(i + 1)
+                && let Some(name) = fd_target(&w.value)
+            {
+                match t.touches_redirect(w) {
+                    Some(true) => {
+                        self.descriptor_name(t, w, name, span, cx, &mut cmd.assigns)?;
+                        continue;
+                    }
+                    Some(false) => {}
+                    // The location does not hold the word: which word bash runs is not known.
+                    None => misread = true,
+                }
+            }
+            items.push((i, item));
         }
+        // Before the command word, an assignment is bash's, not an argument (`{x}>f a=1 cmd`).
+        let command_word = items
+            .iter()
+            .position(|(_, item)| matches!(item, I::Word(_) | I::ProcessSubstitution(..)));
         // The arguments the parser reads as `name=value` (an unquoted name and `=`) that bash
         // does not brace-expand.
         let mut assignment_args = Vec::new();
-        for (i, &item) in suffix.iter().enumerate() {
+        for (k, &(i, item)) in items.iter().enumerate() {
+            let is_name = command_word == Some(k);
             match item {
                 I::IoRedirect(r) => cmd.redirects.push(self.redirect(t, r, cx)?),
+                I::AssignmentWord(a, _) if command_word.is_none_or(|c| k < c) => {
+                    self.assignment(t, a, cx, &mut cmd.assigns)?
+                }
                 // `export x=$(…)`: an argument of the builtin that also assigns `x`.
                 I::AssignmentWord(a, w) => {
                     if !brace_expands(&w.value, &self.opts) {
@@ -1063,10 +1112,22 @@ impl Lower {
                 }
                 I::Word(w) => {
                     let mut word = self.ast_word(t, w, span, cx)?;
-                    self.fd_name(&w.value, &mut word, suffix.get(i + 1).copied(), cx)?;
-                    cmd.args.push(word);
+                    self.fd_name(&w.value, &mut word, all.get(i + 1).copied(), cx)?;
+                    if is_name {
+                        cmd.name = word;
+                        cmd.typed = w.value.clone();
+                    } else {
+                        cmd.args.push(word);
+                    }
                 }
-                I::ProcessSubstitution(_, sub) => cmd.args.push(self.process_subst(t, sub, cx)?),
+                I::ProcessSubstitution(_, sub) => {
+                    let word = self.process_subst(t, sub, cx)?;
+                    if is_name {
+                        cmd.name = word;
+                    } else {
+                        cmd.args.push(word);
+                    }
+                }
             }
         }
         let has_glob = cmd
@@ -1081,7 +1142,9 @@ impl Lower {
         };
         let (target, first_arg, wrapped) = unwrap_builtins(&cmd, self.profile);
         let named = !cmd.name.parts.is_empty();
-        if named && target.as_deref().is_none_or(|t| REBINDING.contains(&t)) {
+        // A wrapper with no command word (`exec >f`) runs nothing.
+        let runs_nothing = wrapped && first_arg > cmd.args.len();
+        if named && !runs_nothing && target.as_deref().is_none_or(|t| REBINDING.contains(&t)) {
             self.rebinds.set(true);
         }
         // A wrapper is the command word itself, so a wrapped builtin is never bare.
@@ -1105,8 +1168,12 @@ impl Lower {
         // A name no rule can match is opaque: a variable, a glob, anything without a canonical name.
         let unknown_name = named && cmd.canonical.is_none();
         let tainted_read = self.tainted_read.replace(outer);
-        cmd.opaque =
-            cmd.name.is_dynamic() || has_glob || runs_dynamic_text || unknown_name || tainted_read;
+        cmd.opaque = cmd.name.is_dynamic()
+            || has_glob
+            || runs_dynamic_text
+            || unknown_name
+            || tainted_read
+            || misread;
         Ok(cmd)
     }
 
@@ -1135,6 +1202,7 @@ impl Lower {
             // `getopts OPTSTRING NAME [ARG…]`: the arguments are only parsed.
             Some("getopts") => &words[..words.len().min(2)],
             Some("printf") => &words[..printf_option_words(words)],
+            Some("wait") => &words[..wait_option_words(words)],
             _ => return,
         };
         for (i, w) in words.iter().enumerate() {
@@ -1249,7 +1317,7 @@ impl Lower {
         self.calls.borrow_mut().push(Call { function, args });
     }
 
-    /// Names `read`, `mapfile`/`readarray`, `printf -v` and `getopts` set at run time.
+    /// Names `read`, `mapfile`/`readarray`, `printf -v`, `getopts` and `wait -p` set at run time.
     fn runtime_targets(&self, cmd: &SimpleCommand, target: Option<&str>, first_arg: usize) {
         let env = EnvView::new();
         let args = &cmd.args[first_arg.min(cmd.args.len())..];
@@ -1259,11 +1327,13 @@ impl Lower {
         let flags = match target {
             Some("read") => "ers",
             Some("mapfile" | "readarray") => "t",
+            Some("wait") => "fn",
             _ => "",
         };
         let with_argument = match target {
             Some("read") => "adinNptu",
             Some("mapfile" | "readarray") => "dnOsuCc",
+            Some("wait") => "p",
             Some("printf") => "v",
             Some("getopts") => "",
             _ => return,
@@ -1280,8 +1350,10 @@ impl Lower {
                     self.runtime_target(args.get(i + 1));
                     i += 1;
                 }
-                // A `read`/`mapfile` cluster, letter by letter as getopts reads it; a letter not
-                // listed may write a name the collector does not see.
+                // `wait --`: the words after it are operands.
+                Some(v) if target == Some("wait") && v == "--" => break,
+                // A `read`/`mapfile`/`wait` cluster, letter by letter as getopts reads it; a
+                // letter not listed may write a name the collector does not see.
                 Some(v) if v.len() > 1 && v.starts_with('-') && !flags.is_empty() => {
                     for (k, ch) in v[1..].char_indices() {
                         if with_argument.contains(ch) {
@@ -1292,7 +1364,9 @@ impl Lower {
                             } else {
                                 Some(literal(rest, cmd.span))
                             };
-                            if target == Some("read") && ch == 'a' {
+                            if (target == Some("read") && ch == 'a')
+                                || (target == Some("wait") && ch == 'p')
+                            {
                                 self.runtime_target(argument.as_ref());
                             }
                             break;
@@ -1367,6 +1441,17 @@ impl Lower {
                         Some("-v") => names.push(i + 1),
                         Some(v) if target == Some("printf") && v.starts_with("-v") => {
                             picked.push(i)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // `wait -p NAME`, `-pNAME`, `-np NAME`: bash assigns NAME.
+            Some("wait") => {
+                for i in first_arg..cmd.args.len() {
+                    match cmd.args[i].static_value(&env) {
+                        Some(v) if v.len() > 1 && v.starts_with('-') && v.contains('p') => {
+                            picked.push(if v.ends_with('p') { i + 1 } else { i })
                         }
                         _ => {}
                     }
@@ -1550,10 +1635,9 @@ impl Lower {
         Ok(())
     }
 
-    /// `{NAME}>f` stores the new descriptor's number in NAME and evaluates a subscript of it
-    /// (`{a[i]}>f`). The parser reads `{NAME}` as a word before the redirect, also when a space
-    /// parts them and bash reads a word (an over-report). The value is recorded as tainted:
-    /// `{x}>&-` writes nothing and keeps a value from the environment.
+    /// `{NAME} >f`: with a space bash reads `{NAME}` as a word, which the parser also reads before
+    /// a redirect. It stays a word, and its write is recorded as `descriptor_name` does (an
+    /// over-report).
     fn fd_name(
         &self,
         raw: &str,
@@ -1562,12 +1646,34 @@ impl Lower {
         cx: Cx,
     ) -> Result<(), ParseError> {
         if let Some(ast::CommandPrefixOrSuffixItem::IoRedirect(_)) = next
-            && let Some(inner) = raw.strip_prefix('{').and_then(|r| r.strip_suffix('}'))
-            && let Some(name) = inner.split('[').next()
-            && is_identifier(name)
+            && let Some(name) = fd_target(raw)
         {
             self.record(name, Value::Tainted);
             self.name_operand(w, cx)?;
+        }
+        Ok(())
+    }
+
+    /// `{NAME}>f` stores the new descriptor's number in NAME and evaluates a subscript of it
+    /// (`{a[i]}>f`). The value is recorded as tainted: `{x}>&-` writes nothing and keeps a value
+    /// from the environment. The commands in the subscript stay in the IR as an assignment.
+    fn descriptor_name(
+        &self,
+        t: &Text,
+        w: &ast::Word,
+        name: &str,
+        span: Span,
+        cx: Cx,
+        assigns: &mut Vec<(String, Word)>,
+    ) -> Result<(), ParseError> {
+        self.record(name, Value::Tainted);
+        let mut word = self.ast_word(t, w, span, cx)?;
+        self.name_operand(&mut word, cx)?;
+        let span = word.span;
+        let parts: Vec<WordPart> = commands_only(word).collect();
+        if !parts.is_empty() {
+            let quote = Quote::None;
+            assigns.push((name.to_string(), Word { parts, span, quote }));
         }
         Ok(())
     }
@@ -2193,6 +2299,46 @@ fn printf_option_words(words: &[Word]) -> usize {
         }
     }
     i.min(words.len())
+}
+
+/// How many leading words of `wait` may be an option or the `-p` target: up to the first operand
+/// (a pid or job), past `--`, or up to a word that is not literal text and may be an option.
+fn wait_option_words(words: &[Word]) -> usize {
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        match exact(w).as_deref() {
+            Some("--") => return i + 1,
+            // `-p NAME`, `-np NAME`: the option takes the next word.
+            Some(v) if v.len() > 1 && v.starts_with('-') => i += 1 + usize::from(v.ends_with('p')),
+            Some(_) => return i,
+            None => return i + 1,
+        }
+    }
+    i.min(words.len())
+}
+
+/// The NAME of a `{NAME}` or `{NAME[…]}` word, which before a redirect operator names the
+/// descriptor bash opens.
+fn fd_target(raw: &str) -> Option<&str> {
+    let inner = raw.strip_prefix('{')?.strip_suffix('}')?;
+    let name = inner.split('[').next()?;
+    is_identifier(name).then_some(name)
+}
+
+/// A `coproc` whose body the parser read as a command NAME with the words of a `[[ … ]]` test.
+fn misread_coproc(p: &ast::Pipeline) -> Option<&ast::CoprocessCommand> {
+    p.seq.iter().find_map(|c| match c {
+        ast::Command::Compound(ast::CompoundCommand::Coprocess(c), _) => match c.body.as_ref() {
+            ast::Command::Simple(s) => {
+                let w0 = s.suffix.as_ref().and_then(|x| x.0.first());
+                let test =
+                    matches!(w0, Some(ast::CommandPrefixOrSuffixItem::Word(w)) if w.value == "[[");
+                test.then_some(c)
+            }
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 /// Arithmetic text as the name scanner reads it, or `None` when it is not plain. The parser

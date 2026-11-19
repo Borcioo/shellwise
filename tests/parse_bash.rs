@@ -457,6 +457,24 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
             "declare -i n; declare -n r=n; r='a[$(rm -rf x)]'",
             &["declare", "declare", "<none>", "rm"],
         ),
+        // Before the command word, after a `{NAME}>f`, an assignment is bash's.
+        (
+            "declare -i n; {x}>f n='a[$(>y)]'",
+            &["declare", "<none>", "<none>"],
+        ),
+        // `wait -p NAME` assigns NAME.
+        (
+            "sleep 0 & wait -n -p 'a[$(>y)]'",
+            &["sleep", "wait", "<none>"],
+        ),
+        (
+            "sleep 0 & wait -n -p'a[$(>y)]'",
+            &["sleep", "wait", "<none>"],
+        ),
+        (
+            "declare -a a; sleep 0 & wait -n -p 'a[$(>y)]'",
+            &["declare", "sleep", "wait", "<none>"],
+        ),
     ];
     let no: &[(&str, &[&str])] = &[
         ("a=(1); let 'a[\"[\"]+$(rm -rf x)'", &["<none>", "let"]),
@@ -1253,6 +1271,74 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset {PATH,x}; (( $(date +%s) ))"#.into(), "(("),
         (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset P{A,}TH; (( $(date +%s) ))"#.into(), "(("),
         (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f(){ local {PATH,x}; (( $(date +%s) )); }; f"#.into(), "(("),
+        // A `{NAME}` word that touches a redirect operator is part of the redirect: the command
+        // bash runs is the next word, with its own wrapper target and operands.
+        (r#"y='>y'; {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; a=1 {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; >g {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>f {z}>g eval "$y""#.into(), "eval"),
+        (r#"y='>y'; command {x}>f eval "$y""#.into(), "command"),
+        (r#"y='>y'; builtin {x}>f eval "$y""#.into(), "builtin"),
+        (r#"y='>y'; ! {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; time {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; coproc {x}>f eval "$y"; wait"#.into(), "eval"),
+        (r#"y='>y'; {x}>f eval "$y" | cat"#.into(), "eval"),
+        (r#"y='>y'; f() { {x}>f eval "$y"; }; f"#.into(), "eval"),
+        (r#"y='>y'; {a[0]}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}<<<z eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}<>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>|f eval "$y""#.into(), "eval"),
+        ("y='>y'; {x}<<E eval \"$y\"\nE".into(), "eval"),
+        (r#"y='>y'; exec 3>f; {x}>&3 eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>f eval "$y" {z}>g"#.into(), "eval"),
+        (r#"y='>y'; if :; then {x}>f eval "$y"; fi"#.into(), "eval"),
+        (r#"y='>y'; {x}>f eval "$y" && :"#.into(), "eval"),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f read PATH <<< 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f printf -v PATH 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f export PATH=10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f declare PATH=10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; printf {x}>f -v PATH 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir a; echo 'echo "a[\$(>y)]"' > a/date; chmod +x a/date; getopts {x}>f a PATH -a; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; read {x}>f PATH <<< 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"declare -i n; {x}>f read n <<< 'a[$(>y)]'"#.into(), "read"),
+        (r#"declare -i n; read {x}>f n <<< 'a[$(>y)]'"#.into(), "read"),
+        (r#"declare -i n; {x}>f printf -v n %s 'a[$(>y)]'"#.into(), "printf"),
+        (r#"declare -i n; printf {x}>f -v n %s 'a[$(>y)]'"#.into(), "printf"),
+        (r#"declare -i n; {x}>f declare n='a[$(>y)]'"#.into(), "declare"),
+        (r#"y='>y'; {x}>f command eval "$y""#.into(), "command"),
+        (r#"y='>y'; {x}>f builtin eval "$y""#.into(), "builtin"),
+        (r#"y='>y'; {x}>f eval {z}>g "$y""#.into(), "eval"),
+        (r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; {x}>f hash -p "$PWD/d" date; (( $(date +%s) ))"#.into(), "(("),
+        (r#"f() { (( $1 )); }; {x}>f f 'a[$(>y)]'"#.into(), "(("),
+        (r#"y='>y'; {x}>f eval "$y"; {x}>f :"#.into(), "eval"),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f PATH=10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"y='>y'; : > f; {x}<f eval "$y""#.into(), "eval"),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; {x}>f unset PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"y='>y'; {x}>f a=1 eval "$y""#.into(), "eval"),
+        // A wrapper whose one word may split into a rebinding command.
+        (r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; c="hash -p $PWD/d date"; command $c; (( $(date +%s) ))"#.into(), "(("),
+        // A location that does not hold the word's text (a line continuation): which word bash
+        // runs is not known.
+        ("y='>y'; {x\\\n}>f eval \"$y\"".into(), "{x}"),
+        // `wait -p NAME` assigns NAME, in every option spelling.
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -p PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -p PATH "$p"; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -np PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -pPATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; command wait -n -p PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; sleep 0 & p=$!; mv d "$p"; wait -n -p 'BASH_CMDS[date]'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; v=PATH; wait -n -p "$v"; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; sleep 0 & wait -n -p EXECIGNORE; EXECIGNORE="*"; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; o=-p; wait -n $o PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; o=-pPATH; wait -n -p x $o; (( $(date +%s) ))"#.into(), "(("),
+        // The parser misreads `coproc NAME [[ … ]]` (and splits the test at `||`): fail closed.
+        (r#"x='a[$(>y)]'; coproc C [[ x -eq 1 ]]; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc PATH [[ x -eq 1 ]]; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc C [[ 1 -eq x ]]; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc C [[ x -eq 1 ]] && :; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc C [[ x == 1 || x -lt 2 ]]; wait"#.into(), "[["),
+        (r#"y='>y'; coproc C [[ 1 ]]; eval "$y"; wait"#.into(), "[["),
     ];
     // Every failing row is listed, not only the first.
     let mut bad = Vec::new();
@@ -1391,6 +1477,20 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc C { :; }; wait; (( $(date +%s) ))"#.into(),
         r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH echo [[ 1 ]]; wait; (( $(date +%s) ))"#.into(),
         r#"command_not_found() { echo 'a[$(>y)]'; }; EXECIGNOR='*date*'; (( $(date +%s) ))"#.into(),
+        // A descriptor name that runs nothing; with a space bash runs `{x}` as a word; `wait`
+        // into another name, or with a literal pid.
+        r#"y='>y'; {x}>f echo hi"#.into(),
+        r#"y='>y'; exec {x}>f"#.into(),
+        r#"y='>y'; echo {x}"#.into(),
+        r#"y='>y'; {x}>f exec bash -c"#.into(),
+        r#"y='>y'; {x} >f eval "$y""#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -p x; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n 1; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -- "$p"; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; o=-pPATH; wait -n 1 $o; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -f -n -p x; (( $(date +%s) ))"#.into(),
+        // Bash reads `{x}<(:)` as one word, the command name.
+        r#"y='>y'; {x}<(:) eval "$y""#.into(),
     ] {
         let s = ok(&src);
         if commands(&s).iter().any(|c| c.opaque) {
@@ -1815,4 +1915,38 @@ fn gap_table_rows_lower_to_the_commands_bash_runs() {
 fn command_shapes_render_arguments() {
     let s = ok("X=1 rm -rf \"$d\" $(git x)");
     assert_eq!(command_shape(commands(&s)[0]), "X=1 rm -rf $ $()");
+}
+
+/// A `{NAME}` word that touches a redirect operator is no word of the command: the command keeps
+/// its name and operands, an assignment before it is bash's, and the commands in a subscript stay.
+/// With a space bash runs `{NAME}`. The words of a misread `coproc NAME [[ … ]]` are no commands.
+#[test]
+fn descriptor_names_leave_the_word_list() {
+    let rows: &[(&str, &[&str])] = &[
+        ("{x}>f echo hi", &["echo hi"]),
+        ("exec {x}>f", &["exec"]),
+        ("echo {x}", &["echo {x}"]),
+        ("{x}>f exec bash -c", &["exec bash -c"]),
+        (r#"{x}>f exec bash -c "$y""#, &["exec bash -c $"]),
+        ("{x}>f a=1 echo hi", &["a=1 echo hi"]),
+        ("{x}>f PATH=10", &["PATH=10 <none>"]),
+        (": {a[$(rm -rf x)]}>f", &["a=$() :", "rm -rf x"]),
+        ("{x} >f eval", &["{x} eval"]),
+        ("{x}>f <(:) a", &["$() a", ":"]),
+        ("coproc C [[ x == 1 || x -lt 2 ]]; wait", &["[[", "wait"]),
+    ];
+    let bad: Vec<String> = rows
+        .iter()
+        .filter_map(|(src, want)| {
+            let got = parse(src, BashProfile::GitBash).map(|s| {
+                commands(&s)
+                    .into_iter()
+                    .map(command_shape)
+                    .collect::<Vec<_>>()
+            });
+            let pass = got.as_ref().is_ok_and(|g| g == want);
+            (!pass).then(|| format!("{src}: {got:?}"))
+        })
+        .collect();
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
 }
