@@ -79,7 +79,8 @@ spike measured (`docs/spikes.md`).
 - Scanner: the text of an expandable string or here-string is read by the external scanner
   (`_expandable_string_text`, `_expandable_here_string_text`), so a `#` inside a string is not a
   comment; a lone CR ends a statement.
-- Scanner, statement terminator: a backtick line end (LF, CR or CRLF) after a space or a tab is
-  skipped like a space, so a blank line after it still ends the statement
-  (``git status `<LF><LF>ri x`` is two commands, ``git log `<LF> -n 1`` stays one); glued to a
-  word it stays the word's (``git`<LF><LF>ri``: the name is ``git`<LF>``).
+- Scanner, statement terminator: a backtick line end (LF, CR or CRLF) after whitespace (a
+  character `iswspace` accepts, where the scan starts) is skipped like a space, so a blank line
+  after it still ends the statement (``git status `<LF><LF>ri x`` is two commands,
+  ``git log `<LF> -n 1`` stays one); glued to a word it stays the word's (``git`<LF><LF>ri``:
+  the name is ``git`<LF>``).
