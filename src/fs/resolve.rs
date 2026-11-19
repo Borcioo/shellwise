@@ -1922,15 +1922,20 @@ fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
                     let (n, v) = t.split_once('=')?;
                     Some((n.to_ascii_lowercase(), bash_alias_value(v)))
                 }
-                // `alias mk="ln -s $T"`: the name is read, the value is not.
-                None => match w.parts.first() {
-                    Some(WordPart::Literal(t)) => {
-                        let (n, _) = t.split_once('=')?;
-                        Some((n.to_ascii_lowercase(), None))
+                // `alias mk="ln -s $T"`: the name is read, the value is not; `alias $n=…`
+                // may name any alias.
+                None => Some(match w.parts.first() {
+                    Some(WordPart::Literal(t)) if t.contains('=') => {
+                        let (n, _) = t.split_once('=').unwrap_or_default();
+                        (n.to_ascii_lowercase(), None)
                     }
-                    _ => None,
-                },
+                    _ => ("*".to_string(), None),
+                }),
             }));
+            return out;
+        }
+        "import-alias" | "ipal" => {
+            out.push(("*".to_string(), None));
             return out;
         }
         "set-alias" | "sal" | "new-alias" | "nal" => &["Name", "Value"],
@@ -1950,6 +1955,12 @@ fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
             }
             PwshArg::Positional(w) => {
                 positional.push(literal(w));
+                i += 1;
+            }
+            // A variable is a positional value the hook cannot read; only a splat may carry
+            // parameters.
+            PwshArg::Opaque if literal(&args[i]).is_none() => {
+                positional.push(None);
                 i += 1;
             }
             PwshArg::Opaque | PwshArg::Unbound => {
@@ -1973,14 +1984,22 @@ fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
             .and_then(|(_, v)| v.clone())
     };
     let alias = match slots[0] {
-        "Name" => get("Name").map(|n| n.to_ascii_lowercase()),
+        // `Set-Alias $n …`, `Set-Alias @p`: the name may be any.
+        "Name" => get("Name").map(|n| n.to_ascii_lowercase()).or_else(|| {
+            (unread || bound.iter().any(|(n, _)| *n == "Name")).then(|| "*".to_string())
+        }),
         _ => match get("Path")
             .or_else(|| get("LiteralPath"))
-            .and_then(|p| alias_item(&p))
+            .and_then(|p| alias_item(&p).map(|a| (p.contains(','), a)))
         {
+            // `Set-Item Alias:a,Alias:b`: a list the hook does not split.
+            Some((true, _)) => Some("*".to_string()),
             // `New-Item -Name mk -Path Alias:`.
-            Some(root) if root == "*" => get("Name").map(|n| n.to_ascii_lowercase()).or(Some(root)),
-            other => other,
+            Some((false, root)) if root == "*" => {
+                get("Name").map(|n| n.to_ascii_lowercase()).or(Some(root))
+            }
+            Some((false, a)) => Some(a),
+            None => None,
         },
     };
     let value = get("Value").filter(|_| !unread).map(|v| vec![v]);
@@ -2030,16 +2049,23 @@ fn alias_runs(c: &SimpleCommand, aliases: &[Alias]) -> Vec<SimpleCommand> {
     let mut out: Vec<SimpleCommand> = Vec::new();
     let mut work: Vec<(SimpleCommand, Vec<&str>)> = vec![(c.clone(), Vec::new())];
     while let Some((cur, seen)) = work.pop() {
-        let Some((p, name, values)) = looked_up_alias(&cur, aliases, &seen) else {
+        let Some((p, values)) = looked_up_alias(&cur, aliases, &seen) else {
             continue;
         };
-        for (_, value) in values {
+        for (name, value) in values {
+            let name = name.as_str();
             if out.len() >= ALIAS_RUNS {
                 out.extend(unread_runs(c, 0, name));
                 return out;
             }
+            // An alias of any name and any value: a program, as Ruling 40 reads other unread
+            // code in this shell as a fact on the target.
             let Some(v) = value else {
-                out.extend(unread_runs(&cur, p, name));
+                let [in_shell, program] = unread_runs(&cur, p, name);
+                if name != "*" {
+                    out.push(in_shell);
+                }
+                out.push(program);
                 continue;
             };
             let word = |t: &str| Word {
@@ -2104,17 +2130,29 @@ fn unread_runs(c: &SimpleCommand, p: usize, name: &str) -> [SimpleCommand; 2] {
 /// of `&` or `.`, the word after `time` past its options and assignments) that names an alias in
 /// `aliases`, as `calls_defined` matches a name: as written, a shipped alias's target (`gci`
 /// runs an alias `Get-ChildItem`) or the `Get-` name pwsh retries (`mk` runs `Get-Mk`;
-/// fix10\spike\lookup.log). Its position, the alias's name and its entries; `None` when no
-/// word names one, or the one it names is in `seen`.
+/// fix10\spike\lookup.log). Its position and the entries it may run: the named alias's, and
+/// those of an alias whose name the hook cannot read (`*`, which may be any name but the
+/// operators `&`, `.` and the `time` word), each unless its name is in `seen`; `None` when there
+/// are none.
 fn looked_up_alias<'t>(
     c: &SimpleCommand,
     aliases: &'t [Alias],
     seen: &[&str],
-) -> Option<(usize, &'t str, &'t [Alias])> {
+) -> Option<(usize, Vec<&'t Alias>)> {
+    let entries = |n: &str| -> &'t [Alias] {
+        let start = aliases.partition_point(|(a, _)| a.as_str() < n);
+        let end = aliases.partition_point(|(a, _)| a.as_str() <= n);
+        &aliases[start..end]
+    };
     let mut name = raw_name(c);
     let mut typed = Some(c.typed.to_ascii_lowercase());
     let mut p = 0;
     loop {
+        let any = if matches!(name.as_str(), "&" | "." | "time") || seen.contains(&"*") {
+            &[]
+        } else {
+            entries("*")
+        };
         let candidates = std::iter::once(name.clone())
             .chain(typed.take())
             .flat_map(|n| {
@@ -2126,13 +2164,17 @@ fn looked_up_alias<'t>(
                     .chain([retry])
             })
             .collect::<Vec<String>>();
-        for n in &candidates {
-            let start = aliases.partition_point(|(a, _)| a < n);
-            let end = aliases.partition_point(|(a, _)| a <= n);
-            if start < end {
-                let found: &'t str = &aliases[start].0;
-                return (!seen.contains(&found)).then_some((p, found, &aliases[start..end]));
-            }
+        let named = candidates
+            .iter()
+            .map(|n| entries(n))
+            .find(|e| !e.is_empty());
+        if named.is_some() || !any.is_empty() {
+            let named = named
+                .unwrap_or(&[])
+                .iter()
+                .filter(|(n, _)| !seen.contains(&n.as_str()));
+            let hits: Vec<&'t Alias> = named.chain(any).collect();
+            return (!hits.is_empty()).then_some((p, hits));
         }
         let rest = &c.args[p..];
         let next = match name.as_str() {

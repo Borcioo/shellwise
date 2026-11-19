@@ -7647,6 +7647,95 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             rmrf("/c/w/repo/t/j/x"),
             mbc.clone(),
         ),
+        // ---- an alias name the hook cannot read may be any name: every call is read through it.
+        (
+            "UN1 pwsh Set-Alias $n New-Item; mk …",
+            ps,
+            vec![
+                with("Set-Alias", vec![var("n"), lit("New-Item")]),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN2 Git Bash alias $n='ln -s /c/x'; mk t/j",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    vec![Word {
+                        parts: vec![
+                            WordPart::Var("n".to_string()),
+                            WordPart::Literal("=ln -s /c/x".to_string()),
+                        ],
+                        span: Span::default(),
+                        quote: Quote::None,
+                    }],
+                ),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "UN3 pwsh Set-Item Alias:mk,Alias:x New-Item; mk … (a list)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Alias:mk,Alias:x", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN4 pwsh Import-Alias a.csv; mk …",
+            ps,
+            vec![
+                st(lits("Import-Alias", &["a.csv"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN5 pwsh ipal a.csv; mk …",
+            ps,
+            vec![st(lits("ipal", &["a.csv"])), st(lits("mk", &link_at))],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN6 pwsh Set-Alias $n New-Item; Set-Alias mk Get-Date; mk … (a named alias too)",
+            ps,
+            vec![
+                with("Set-Alias", vec![var("n"), lit("New-Item")]),
+                st(lits("Set-Alias", &["mk", "Get-Date"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN7 pwsh Set-Alias @p; mk … (a splat)",
+            ps,
+            vec![st(lits("Set-Alias", &["@p"])), st(lits("mk", &link_at))],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN0 pwsh New-Item $d -ItemType Directory; mk … (a path not read names no alias, control)",
+            ps,
+            vec![
+                with(
+                    "New-Item",
+                    vec![var("d"), lit("-ItemType"), lit("Directory")],
+                ),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            in_link.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
