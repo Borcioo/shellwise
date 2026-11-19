@@ -1842,19 +1842,25 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         "module-qualified",
         "nested New-PSDrive",
     ];
-    let unread = [
-        "module-qualified",
+    // Ruling 40: a script run before the delete counts as a remap in sight; any other part not
+    // read as written is a fact on the target (`unread_before`), before or after the delete.
+    let scripts = [
         "psm1",
         "bare ps1",
         "dot-source",
         "script call",
+        "Invoke-Expression",
+        "iex",
+        "Import-Module",
+        "ipmo",
+    ];
+    let unread = [
+        "module-qualified",
         "Drive method",
         "SessionState method",
         "slash path",
         "expression",
         "Start-Process",
-        "Invoke-Expression",
-        "iex",
         "opaque",
         "function",
         "Set-Item Function:",
@@ -1865,17 +1871,17 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         "nmo",
         "Import-PSSession",
         "ipsn",
-        "Import-Module",
-        "ipmo",
     ];
     for (label, s) in redefiners {
-        let before = if remaps.contains(&label) || unread.contains(&label) {
+        let before = if remaps.contains(&label) || scripts.contains(&label) {
             MAY_BE_CRITICAL
+        } else if unread.contains(&label) {
+            unproven_unread("Env")
         } else {
             unproven("Env")
         };
-        let after = if unread.contains(&label) {
-            MAY_BE_CRITICAL
+        let after = if unread.contains(&label) || scripts.contains(&label) {
+            unproven_unread("Env")
         } else {
             unproven("Env")
         };
@@ -2082,30 +2088,42 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     ] {
         expect(judge(before, ri(text)), &MAY_BE_CRITICAL, label);
     }
-    // I1: a drive the command visibly remaps, or may remap (an unread command).
-    for (label, remap) in [
+    // I1: a drive the command visibly remaps keeps MayBeCritical; Ruling 40: after an unread
+    // command the drive is unproven, with the fact on the target.
+    for (label, remap, proj, env_foo) in [
         (
             "New-PSDrive",
             stmt(lits("New-PSDrive", &["Proj", "FileSystem", r"C:\x"]), seq),
+            MAY_BE_CRITICAL,
+            MAY_BE_CRITICAL,
         ),
         (
             "ndr",
             stmt(lits("ndr", &["Proj", "-PSProvider", "FileSystem"]), seq),
+            MAY_BE_CRITICAL,
+            MAY_BE_CRITICAL,
         ),
         (
             "unread",
             stmt(lits("Start-Process", &["pwsh", "-ArgumentList", "x"]), seq),
+            unproven_unread("Proj"),
+            unproven_unread("Env"),
         ),
-        ("opaque", stmt(opaque.clone(), seq)),
+        (
+            "opaque",
+            stmt(opaque.clone(), seq),
+            unproven_unread("Proj"),
+            unproven_unread("Env"),
+        ),
     ] {
         expect(
             judge(vec![remap.clone(), git()], ri(r"Proj:\y")),
-            &MAY_BE_CRITICAL,
+            &proj,
             &format!("{label}; git; Proj:\\y"),
         );
         expect(
             judge(vec![remap, git()], ri("Env:FOO")),
-            &MAY_BE_CRITICAL,
+            &env_foo,
             &format!("{label}; git; Env:FOO"),
         );
     }
@@ -2227,7 +2245,11 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         .into_iter()
         .map(|d| {
             (
-                "defines g; g",
+                if d.contains(&"New-PSDrive") {
+                    "defines g as New-PSDrive; g"
+                } else {
+                    "defines g; g"
+                },
                 vec![
                     stmt(lits(d[0], &d[1..]), seq),
                     stmt(
@@ -2240,11 +2262,31 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     )
     .collect::<Vec<_>>()
     {
+        // Ruling 40/41: a remap in sight (an alias or a function body naming a remap command)
+        // and a script run keep MayBeCritical; any other part not read as written leaves the
+        // drive unproven, with the fact on the target.
+        let unread = [
+            "opaque",
+            "$c ...",
+            "icm $sb",
+            "& Set-Alias Remove-Item",
+            "C:x",
+            "a:b",
+            "function Get-Thing; & Get-Thing",
+            "Set-Alias G x; g",
+            "Set-Alias $n x",
+            "defines g; g",
+        ];
+        let want = if unread.contains(&label) {
+            unproven_unread("Proj")
+        } else {
+            MAY_BE_CRITICAL
+        };
         let mut with_git = before.clone();
         with_git.push(git());
         expect(
             judge(with_git.clone(), ri(r"Proj:\y")),
-            &MAY_BE_CRITICAL,
+            &want,
             &format!("{label}; git; Proj:\\y"),
         );
         expect(
@@ -2509,11 +2551,12 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             &MAY_BE_CRITICAL,
             &format!("{label}; Z:\\u"),
         );
-        // Ruling 37: a method call may make the drive unseen; `git` is read as written.
-        let want = if label == "git" {
-            unproven("Proj")
-        } else {
-            MAY_BE_CRITICAL
+        // `git` is read as written; `Drive.New` is a remap in sight (I5); any other method call
+        // is unread code, a fact on the target (Ruling 40).
+        let want = match label {
+            "git" => unproven("Proj"),
+            "Drive.New" => MAY_BE_CRITICAL,
+            _ => unproven_unread("Proj"),
         };
         expect(
             judge(vec![before.clone()], ri(r"Proj:\u")),
@@ -2582,6 +2625,560 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     );
     expect(got, &Target::Timeout, "drive query never returns");
     assert!(start.elapsed() < Duration::from_secs(5), "bounded");
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+/// A named-drive delete in a command where some part is not read as written.
+fn unproven_unread(drive: &str) -> Target {
+    Target::DriveUnproven {
+        drive: drive.to_string(),
+        unread_before: true,
+    }
+}
+
+/// Ruling 40/41: unread code is a fact on the target (`unread_before`), a remap or a script run in
+/// sight keeps MayBeCritical, and a letter path keeps its level when its drive exists.
+#[test]
+fn unread_code_is_a_fact_and_a_script_run_counts_as_a_remap_in_sight() {
+    let seq = Some(ChainOp::Seq);
+    // Drives C: and D: exist on this machine, Q: and X: do not.
+    let machine = FakeFs::default()
+        .dir(r"C:\Profiles\u")
+        .dir(r"C:\w\repo\build")
+        .dir(r"D:\elsewhere")
+        .shared();
+    let mut bad: Vec<String> = Vec::new();
+    // `<before>; <delete>; <after>`, the whole command read first; `word` is the delete's last
+    // argument.
+    let judge = |before: Vec<Stmt>, delete: SimpleCommand, after: Vec<Stmt>, shell: Shell| {
+        let (base, env) = win(shell);
+        let by = delete_by(&delete, shell, Os::Windows);
+        let word = delete.args.last().expect("a target").clone();
+        let mut all = before.clone();
+        all.push(stmt(delete, seq));
+        all.extend(after);
+        let mut loc = base.clone();
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &env);
+        sorted(target(&word, &loc, &env, by, &machine, &far()))
+    };
+    let ri = |text: &str| lits("Remove-Item", &[text]);
+    let rr = |text: &str| lits("Remove-Item", &["-Recurse", text]);
+    let st = |c: SimpleCommand| stmt(c, seq);
+    let git = || st(lits("git", &["status"]));
+    let iex = || st(cmd("iex", vec![var("x")]));
+    let amp_f = || st(cmd("&", vec![var("f")]));
+    let exists = || method("IO.File", "Exists", vec![lit("x")]);
+    let block = |stmts: Vec<Stmt>| word_at(vec![WordPart::Block(Box::new(script(stmts)))], 0);
+    let piped = |head: SimpleCommand, tail: SimpleCommand| {
+        Stmt::Pipeline(Pipeline {
+            elems: vec![Elem::Cmd(head), Elem::Cmd(tail)],
+            chain: seq,
+        })
+    };
+    let mixed = |head: &str, name: &str| {
+        let mut w = word_at(
+            vec![
+                WordPart::Literal(head.to_string()),
+                WordPart::Var(name.to_string()),
+            ],
+            0,
+        );
+        w.quote = Quote::Double;
+        w
+    };
+    let mut opaque = lits("x", &[]);
+    opaque.opaque = true;
+    let pwsh = Shell::Pwsh;
+    let proj = r"Proj:\y";
+    let rows: Vec<(&str, Vec<Stmt>, SimpleCommand, Vec<Stmt>, Shell, Target)> = vec![
+        // Plan rows 1-11 with the amendments.
+        (
+            "iex; Proj",
+            vec![iex()],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "New-PSDrive; Proj",
+            vec![st(lits("New-PSDrive", &["Proj", "FileSystem", r"C:\x"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "& $f; existing letter",
+            vec![amp_f()],
+            rr(r"C:\w\repo\build"),
+            vec![],
+            pwsh,
+            paths(&[r"C:\w\repo\build"]),
+        ),
+        (
+            "& $f; missing letter",
+            vec![amp_f()],
+            rr(r"Q:\x"),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "& $f; relative",
+            vec![amp_f()],
+            rr("build"),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Set-Content Function:x; Proj",
+            vec![st(lits("Set-Content", &["Function:x", "rm x"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "ForEach-Object $sb; Proj",
+            vec![st(cmd("ForEach-Object", vec![var("sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "gci | ForEach-Object { Get-Date }; Proj",
+            vec![piped(
+                lits("Get-ChildItem", &[]),
+                cmd(
+                    "ForEach-Object",
+                    vec![block(vec![st(lits("Get-Date", &[]))])],
+                ),
+            )],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        (
+            "gci | ForEach-Object { iex $x }; Proj",
+            vec![piped(
+                lits("Get-ChildItem", &[]),
+                cmd("ForEach-Object", vec![block(vec![iex()])]),
+            )],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "git; Proj",
+            vec![git()],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        (
+            ". x; Env:FOO",
+            vec![st(lits(".", &["x"]))],
+            ri("Env:FOO"),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        // M3: unread code anywhere in the command, after the delete too.
+        (
+            "Proj; [IO.File]::Exists",
+            vec![],
+            ri(proj),
+            vec![exists()],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        // The unread kinds: a method call, an expression, an opaque name, Start-Process, a
+        // cmdlet the shell does not ship.
+        (
+            "[IO.File]::Exists; Proj",
+            vec![exists()],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "expression; Proj",
+            vec![Stmt::Pipeline(Pipeline {
+                elems: vec![Elem::Expr(lit("$ExecutionContext.SessionState"))],
+                chain: seq,
+            })],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "opaque; Proj",
+            vec![st(opaque.clone())],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "Start-Process; Proj",
+            vec![st(lits("Start-Process", &["x"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "Get-Thing; Proj",
+            vec![st(lits("Get-Thing", &["x"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "docker-compose; Proj",
+            vec![st(lits("docker-compose", &["up"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        // I2: a block from a variable, in every spelling of the block parameter.
+        (
+            "foreach $sb; Proj",
+            vec![st(cmd("foreach", vec![var("sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "% $sb; Proj",
+            vec![st(cmd("%", vec![var("sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "ForEach-Object -Pr $sb; Proj",
+            vec![st(cmd("ForEach-Object", vec![lit("-Pr"), var("sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "ForEach-Object -Process:$sb; Proj",
+            vec![st(cmd("ForEach-Object", vec![mixed("-Process:", "sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "Where-Object $sb; Proj",
+            vec![st(cmd("Where-Object", vec![var("sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "? $sb; Proj",
+            vec![st(cmd("?", vec![var("sb")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "icm -ScriptBlock $sb; Proj",
+            vec![st(cmd(
+                "Invoke-Command",
+                vec![lit("-ScriptBlock"), var("sb")],
+            ))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "5.1 ForEach-Object $sb; Proj",
+            vec![st(cmd("ForEach-Object", vec![var("sb")]))],
+            ri(proj),
+            vec![],
+            Shell::Powershell5,
+            unproven_unread("Proj"),
+        ),
+        // Literal controls: literal words and literal blocks are read.
+        (
+            "ForEach-Object -Process { Get-Date }; Proj",
+            vec![st(cmd(
+                "ForEach-Object",
+                vec![lit("-Process"), block(vec![st(lits("Get-Date", &[]))])],
+            ))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        (
+            "Where-Object Name -eq x; Proj",
+            vec![st(lits("Where-Object", &["Name", "-eq", "x"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        (
+            "Sort-Object -Property $p; Proj (stated limit)",
+            vec![st(cmd("Sort-Object", vec![lit("-Property"), var("p")]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        // D6: `&` of a plain token reads as the bare command.
+        (
+            "& git status; Proj",
+            vec![st(lits("&", &["git", "status"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        // I4: one rule for every in-shell script run, and Start-Process keeps its links.
+        (
+            "& $f; Proj",
+            vec![amp_f()],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Start-Process; existing letter",
+            vec![st(lits("Start-Process", &["x"]))],
+            rr(r"C:\w\repo\build"),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "iex; existing letter",
+            vec![iex()],
+            rr(r"C:\w\repo\build"),
+            vec![],
+            pwsh,
+            paths(&[r"C:\w\repo\build"]),
+        ),
+        (
+            "iex; New-PSDrive; Proj",
+            vec![
+                iex(),
+                st(lits("New-PSDrive", &["Proj", "FileSystem", r"C:\x"])),
+            ],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        // I5: a remap in sight that names no remap command.
+        (
+            "Drive.New; existing letter",
+            vec![method(
+                "ExecutionContext.SessionState.Drive",
+                "New",
+                vec![lit("x")],
+            )],
+            rr(r"C:\w\repo\build"),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Set-Alias mk New-PSDrive; mk; Proj",
+            vec![
+                st(lits("Set-Alias", &["mk", "New-PSDrive"])),
+                st(lits("mk", &["Proj", "FileSystem", r"C:\Profiles\u"])),
+            ],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        // I10: a script the command loads.
+        (
+            ". .\\setup.ps1; Proj",
+            vec![st(lits(".", &[r".\setup.ps1"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Import-Module .\\m.psm1; Proj",
+            vec![st(lits("Import-Module", &[r".\m.psm1"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "setup.ps1; Proj",
+            vec![st(lits("setup.ps1", &[]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        // M4: a location on an unproven drive stays MayBeCritical.
+        (
+            "[IO.File]::Exists; cd Proj:\\; -Recurse .",
+            vec![exists(), st(lits("cd", &[r"Proj:\"]))],
+            rr("."),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+        // I8: a command given a `Function:`/`Alias:` path may define a command there.
+        (
+            "Copy-Item Function:a Function:b; Proj",
+            vec![st(lits("Copy-Item", &["Function:a", "Function:b"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "Set-Content \"Function:$n\"; Proj",
+            vec![st(cmd(
+                "Set-Content",
+                vec![mixed("Function:", "n"), lit("x")],
+            ))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven_unread("Proj"),
+        ),
+        (
+            "Set-Content x.txt; Proj (control)",
+            vec![st(lits("Set-Content", &["x.txt", "y"]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        // D2: readers and the delete family name a command path without defining one.
+        (
+            "Remove-Item Function:f",
+            vec![],
+            ri("Function:f"),
+            vec![],
+            pwsh,
+            Target::SessionCommand,
+        ),
+        (
+            "Get-ChildItem Function:; Function:f",
+            vec![st(lits("Get-ChildItem", &["Function:"]))],
+            ri("Function:f"),
+            vec![],
+            pwsh,
+            Target::SessionCommand,
+        ),
+        (
+            "gci Function:; Function:f",
+            vec![st(lits("gci", &["Function:"]))],
+            ri("Function:f"),
+            vec![],
+            pwsh,
+            Target::SessionCommand,
+        ),
+        (
+            "Test-Path Alias:x; Function:f",
+            vec![st(lits("Test-Path", &["Alias:x"]))],
+            ri("Function:f"),
+            vec![],
+            pwsh,
+            Target::SessionCommand,
+        ),
+        (
+            "ri Function:g; Function:f",
+            vec![st(lits("ri", &["Function:g"]))],
+            ri("Function:f"),
+            vec![],
+            pwsh,
+            Target::SessionCommand,
+        ),
+        (
+            "Set-Content Function:g; Function:f",
+            vec![st(lits("Set-Content", &["Function:g", "x"]))],
+            ri("Function:f"),
+            vec![],
+            pwsh,
+            MAY_BE_CRITICAL,
+        ),
+    ];
+    // I8: one row per spelling of a command path.
+    let spellings = [
+        "Function:x",
+        "function::x",
+        r"Function:\x",
+        "Function:/x",
+        r"Microsoft.PowerShell.Core\Function::x",
+        "Alias:x",
+        "-Path:Function:x",
+    ];
+    let spelled = spellings.iter().map(|s| {
+        (
+            *s,
+            vec![st(lits("Set-Content", &[s, "x"]))],
+            ri(proj),
+            Vec::new(),
+            pwsh,
+            unproven_unread("Proj"),
+        )
+    });
+    for (label, before, delete, after, shell, want) in rows.into_iter().chain(spelled) {
+        let got = judge(before, delete, after, shell);
+        if got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    }
+    // Git Bash keeps every unread command a possible remap (Ruling 34 is pwsh-only).
+    let bash = Shell::Bash(BashProfile::GitBash);
+    let mut dyn_name = cmd("", vec![lit("X:"), lit("/c/Profiles/u")]);
+    dyn_name.name = var("c");
+    dyn_name.typed = "$c".to_string();
+    dyn_name.canonical = None;
+    dyn_name.opaque = true;
+    for (label, before) in [
+        ("Git Bash $c X: …; rm -rf X:/u", st(dyn_name)),
+        (
+            "Git Bash env -S subst; rm -rf X:/u",
+            st(lits("env", &["-S", "subst X: /c/Profiles/u"])),
+        ),
+    ] {
+        let got = judge(vec![before], lits("rm", &["-rf", "X:/u"]), vec![], bash);
+        if got != MAY_BE_CRITICAL {
+            bad.push(format!("{label}: got {got:?}, want {MAY_BE_CRITICAL:?}"));
+        }
+    }
     assert!(
         bad.is_empty(),
         "{} rows failed:\n{}",
