@@ -7,6 +7,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::Deadline;
 
+mod cmdlet_table;
 pub mod resolve;
 pub mod walk;
 #[cfg(windows)]

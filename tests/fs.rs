@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use shellwise::fs::resolve::{
     DeleteBy, Location, ParamMatch, Target, UnknownKind, critical_by_identity, critical_reason,
-    delete_by, env_view, mark_assigned, pwsh_param, repo_root, target,
+    delete_by, env_view, mark_assigned, pwsh_param, repo_root, shipped_command, target,
 };
 use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
 use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
@@ -1638,8 +1638,8 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             stmt(lits("command", &["Get-ChildItem"]), seq),
         ),
     ] {
-        // Ruling 33: not proven, but no remap in sight; Ruling 36: unless a part is not read
-        // as written.
+        // Ruling 33: not proven, but no remap in sight; Ruling 40: a part not read as written is
+        // a fact on the target.
         let unread = [
             "function: assignment",
             "Invoke-Command $sb",
@@ -1648,7 +1648,7 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             "path-qualified Get-",
         ];
         let want = if unread.contains(&label) {
-            MAY_BE_CRITICAL
+            unproven_unread("Env")
         } else {
             unproven("Env")
         };
@@ -2696,7 +2696,9 @@ fn unread_code_is_a_fact_and_a_script_run_counts_as_a_remap_in_sight() {
     opaque.opaque = true;
     let pwsh = Shell::Pwsh;
     let proj = r"Proj:\y";
-    let rows: Vec<(&str, Vec<Stmt>, SimpleCommand, Vec<Stmt>, Shell, Target)> = vec![
+    /// Label, statements before the delete, the delete, statements after it, shell, result.
+    type Row<'a> = (&'a str, Vec<Stmt>, SimpleCommand, Vec<Stmt>, Shell, Target);
+    let rows: Vec<Row> = vec![
         // Plan rows 1-11 with the amendments.
         (
             "iex; Proj",
@@ -3221,6 +3223,67 @@ fn real_fs_reports_whether_a_drive_exists() {
     }
     #[cfg(not(windows))]
     assert!(!RealFs.drive_exists('C').expect("readable"));
+}
+
+/// The oracle for the generated cmdlet table: each shell's `-NoProfile` answer to
+/// `(Get-Command <name>).Parameters.Values | Where-Object ParameterType -in [scriptblock],
+/// [scriptblock[]]` (the ScriptBlock-typed parameters, after `|`), and `Get-Alias` for an alias
+/// (after `=>`).
+const CMDLET_ORACLE: &str = "\
+Pwsh ForEach-Object|Begin,End,Parallel,Process,RemainingScripts
+Pwsh Where-Object|FilterScript
+Pwsh Start-Job|InitializationScript,ScriptBlock
+Pwsh Invoke-Expression|
+Pwsh Sort-Object|
+Pwsh Set-Content|
+Pwsh %=>ForEach-Object
+Pwsh ?=>Where-Object
+Pwsh iex=>Invoke-Expression
+Powershell5 ForEach-Object|Begin,End,Process,RemainingScripts
+Powershell5 Where-Object|FilterScript
+Powershell5 Start-Job|InitializationScript,ScriptBlock
+Powershell5 Invoke-Expression|
+Powershell5 Sort-Object|
+Powershell5 Set-Content|
+Powershell5 %=>ForEach-Object
+Powershell5 ?=>Where-Object
+Powershell5 iex=>Invoke-Expression
+";
+
+#[test]
+fn the_cmdlet_table_matches_get_command() {
+    let mut bad = Vec::new();
+    let mut rows = 0;
+    for line in CMDLET_ORACLE.lines() {
+        let (shell, rest) = line.split_once(' ').expect("shell and row");
+        let shell = match shell {
+            "Pwsh" => Shell::Pwsh,
+            _ => Shell::Powershell5,
+        };
+        let (name, want) = match rest.split_once("=>") {
+            // An alias answers as the command it names.
+            Some((alias, target)) => (alias, shipped_command(shell, target)),
+            None => {
+                let (name, blocks) = rest.split_once('|').expect("name|params");
+                (name, Some(!blocks.is_empty()))
+            }
+        };
+        rows += 1;
+        let got = shipped_command(shell, name);
+        if got != want || got.is_none() {
+            bad.push(format!("{line}: got {got:?}, want {want:?}"));
+        }
+    }
+    // A cmdlet neither shell ships, and a native program.
+    for name in ["Get-Thing", "git"] {
+        for shell in [Shell::Pwsh, Shell::Powershell5] {
+            if shipped_command(shell, name).is_some() {
+                bad.push(format!("{name} {shell:?}: shipped"));
+            }
+        }
+    }
+    assert_eq!(rows, 18, "oracle rows read");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
 #[test]
