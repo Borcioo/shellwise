@@ -842,6 +842,8 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ),
         // By rule: `$-` is text.
         (format!("{x}(( $- ))"), "(("),
+        // By rule (bash runs nothing here): an expansion the word parser leaves as text.
+        (format!("{x}(( ${{!}} ))"), "(("),
         // Expansions other than a plain name: indirect, subscripted, with an operator.
         (format!("{x}k=$(echo x); (( ${{!k}} ))"), "(("),
         (format!("{x}a=(1); (( ${{a[x]}} + 1 ))"), "(("),
