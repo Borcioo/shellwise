@@ -640,6 +640,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             "unset RANDOM; RANDOM='a[$(rm -rf y)]'; (( RANDOM ))".to_string(),
             "((",
         ),
+        (
+            "unset RANDOM; RANDOM='a[$(rm -rf y)]'; n=$RANDOM; (( n ))".to_string(),
+            "((",
+        ),
         // Text the shell keeps from the script itself, and the default targets of `read` and
         // `mapfile`; the obsolete `$[…]`.
         (": 'a[$(rm -rf y)]'; n=$_; (( n ))".to_string(), "(("),
@@ -651,6 +655,29 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ("n=$BASH_COMMAND; (( n ))".to_string(), "(("),
         ("n=$BASH_ARGV; (( n ))".to_string(), "(("),
         ("n=$BASH_EXECUTION_STRING; (( n ))".to_string(), "(("),
+        // The shell overwrites these with text also when the script assigns them an integer,
+        // read directly or through a copy.
+        ("_=0; : 'a[$(rm -rf y)]'; (( _ ))".to_string(), "(("),
+        ("_=0; : 'a[$(rm -rf y)]'; n=$_; (( n ))".to_string(), "(("),
+        (
+            "BASH_REMATCH=0; [[ 'a[$(rm -rf y)]' =~ .* ]]; (( BASH_REMATCH ))".to_string(),
+            "((",
+        ),
+        (
+            "BASH_REMATCH=0; [[ 'a[$(rm -rf y)]' =~ .* ]]; n=$BASH_REMATCH; (( n ))".to_string(),
+            "((",
+        ),
+        (
+            "OPTARG=0; set -- -x 'a[$(rm -rf y)]'; getopts x: o; (( OPTARG ))".to_string(),
+            "((",
+        ),
+        // By rule, as above.
+        ("BASH_COMMAND=0; n=$BASH_COMMAND; (( n ))".to_string(), "(("),
+        ("BASH_ARGV=0; n=$BASH_ARGV; (( n ))".to_string(), "(("),
+        (
+            "BASH_EXECUTION_STRING=0; n=$BASH_EXECUTION_STRING; (( n ))".to_string(),
+            "((",
+        ),
         ("REPLY=0; read < f; (( REPLY ))".to_string(), "(("),
         ("MAPFILE=0; mapfile < f; (( MAPFILE ))".to_string(), "(("),
         (format!("{x}echo $[x]"), "echo"),

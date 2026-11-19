@@ -248,14 +248,16 @@ const INTEGER_VARIABLES: &[&str] = &[
 /// assigned to one is arithmetic.
 const SHELL_INTEGERS: &[&str] = &["HISTCMD", "OPTIND", "RANDOM", "SRANDOM"];
 
-/// Variables the shell sets to text from the script itself: the last argument, a regex match,
-/// the command being run, the arguments, the `-c` text.
+/// Variables the shell sets to text from the script itself, also after the script assigns them:
+/// the last argument, a regex match, the command being run, the arguments, the `-c` text, a
+/// `getopts` option argument. Never clean.
 const SHELL_TEXT_VARIABLES: &[&str] = &[
     "_",
     "BASH_COMMAND",
     "BASH_REMATCH",
     "BASH_ARGV",
     "BASH_EXECUTION_STRING",
+    "OPTARG",
 ];
 
 /// A value assigned to a name, as the taint rule reads it.
@@ -305,8 +307,9 @@ struct Taint {
 
 impl Taint {
     fn is_clean(&self, name: &str) -> bool {
-        self.clean.contains(name)
-            || (INTEGER_VARIABLES.contains(&name) && !self.assigned.contains(name))
+        !SHELL_TEXT_VARIABLES.contains(&name)
+            && (self.clean.contains(name)
+                || (INTEGER_VARIABLES.contains(&name) && !self.assigned.contains(name)))
     }
 
     /// Whether arithmetic over `text` reads a tainted name.
@@ -391,23 +394,16 @@ fn classify(parts: &[WordPart]) -> Value {
         {
             Value::Clean
         }
+        // A positional parameter, or a copy: an expansion with an operator (`x:-1`, `#s`) is
+        // no name the clean set holds, so it is tainted.
         [WordPart::Var(v)] => {
-            if SHELL_TEXT_VARIABLES.contains(&v.as_str()) {
-                Value::Tainted
-            } else if v == "@"
-                || v == "*"
-                || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-            {
+            if v == "@" || v == "*" || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())) {
                 Value::Arith {
                     names: Vec::new(),
                     positional: true,
                 }
-            } else if INTEGER_VARIABLES.contains(&v.as_str()) {
-                Value::Clean
-            } else if is_name(v) {
-                Value::Copy(v.clone())
             } else {
-                Value::Tainted
+                Value::Copy(v.clone())
             }
         }
         _ => {
@@ -435,11 +431,6 @@ fn literal_value(text: &str) -> Value {
         names: arith_refs(text).0.into_iter().map(String::from).collect(),
         positional: false,
     }
-}
-
-fn is_name(v: &str) -> bool {
-    v.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-        && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 struct Lower {
