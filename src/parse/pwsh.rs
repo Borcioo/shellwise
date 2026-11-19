@@ -391,7 +391,11 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             }
             "command_name" => {
                 let t = &src[n.start_byte()..n.end_byte()];
-                t.starts_with(|c: char| c.is_ascii_digit()) && t.ends_with('.')
+                (t.starts_with(|c: char| c.is_ascii_digit()) && t.ends_with('.'))
+                    // `.2#x`, `.2.x`: PowerShell reads the number `.2`, then a comment or a member.
+                    || t.strip_prefix('.').is_some_and(|r| {
+                        r.starts_with(|c: char| c.is_ascii_digit()) && r.contains(['#', '.'])
+                    })
             }
             // `& $x.Name` is a member access for PowerShell too.
             "path_command_name" => kids(n).windows(2).any(|w| {

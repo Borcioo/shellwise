@@ -3979,3 +3979,32 @@ error = false
 cmds = [["x\"y\"[0]"], ["ri", "C:\\x"]]
 comments = []
 methods = []
+
+[[row]]
+id = "name-r-dot-number-comment"
+mechanism = "a line starting with `.2#>>` holds no command for PowerShell (a number, then a comment)"
+parser = "refuses"
+command = "Write-Output\n .2#>>\n'x'"
+error = false
+cmds = [["Write-Output"]]
+comments = ["#>>"]
+methods = []
+
+[[row]]
+id = "name-r-dot-number-member"
+mechanism = "`.2.x` is a member access on the number `.2` for PowerShell, not a command"
+parser = "refuses"
+command = ".2.x"
+error = false
+cmds = []
+comments = []
+methods = []
+
+[[row]]
+id = "name-dot-digit-word"
+mechanism = "`.2x` is not a number, so PowerShell reads a command name"
+command = ".2x"
+error = false
+cmds = [[".2x"]]
+comments = []
+methods = []
