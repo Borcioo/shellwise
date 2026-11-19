@@ -384,6 +384,11 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                             && t.ends_with(':')
                             && src[n.end_byte()..].starts_with(char::is_whitespace)
                     })
+                    // `a,]b`: a `]` starting a word is a token of its own for PowerShell.
+                    || (n.kind() == "generic_token" && {
+                        let t = &src[n.start_byte()..n.end_byte()];
+                        t.len() > 1 && t.starts_with(']')
+                    })
             }
             "command_name" => {
                 let t = &src[n.start_byte()..n.end_byte()];
@@ -1966,10 +1971,6 @@ impl<'a> Lower<'a> {
                         && starts_parameter(self.text(*n))
                         && parameter_text_unproven(self.text(*n)) =>
                 {
-                    return Err(self.unmodelled(*n));
-                }
-                // `]b`: a `]` starting a word is a token of its own for PowerShell.
-                "generic_token" if i == 0 && self.text(*n).starts_with(']') => {
                     return Err(self.unmodelled(*n));
                 }
                 "generic_token" => {

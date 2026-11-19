@@ -3902,3 +3902,71 @@ error = false
 cmds = [["Write-Output", "-a=:x"]]
 comments = []
 methods = []
+
+[[row]]
+id = "list-r-gap-bracket-word"
+mechanism = "a list item after spaces starting with `]`: PowerShell ends the item at `]`"
+parser = "refuses"
+command = "Write-Output 'a',  ]b"
+error = false
+cmds = [["Write-Output", "'a',  ]", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "list-r-bracket-word-middle"
+mechanism = "a list item starting with `]` in the middle of a list"
+parser = "refuses"
+command = "Write-Output a,]b,c"
+error = false
+cmds = [["Write-Output", "a,]", "b,c"]]
+comments = []
+methods = []
+
+[[row]]
+id = "list-r-variable-gap-bracket-word"
+mechanism = "after a variable item and a space, `]b` is two tokens for PowerShell"
+parser = "refuses"
+command = "Write-Output $x, ]b"
+error = false
+cmds = [["Write-Output", "$x, ]", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "list-bracket-alone"
+mechanism = "a lone `]` as the last list item"
+command = "Write-Output a,]"
+error = false
+cmds = [["Write-Output", "a,]"]]
+comments = []
+methods = []
+
+[[row]]
+id = "list-gap-bracket-alone-gap"
+mechanism = "a lone `]` after spaces, then a separate word"
+command = "Write-Output a,  ]  b"
+error = false
+cmds = [["Write-Output", "a,  ]", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "arg-r-bracket-word"
+mechanism = "an argument starting with `]`"
+parser = "refuses"
+command = "Write-Output ]b"
+error = false
+cmds = [["Write-Output", "]", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "tail-r-bracket-word"
+mechanism = "a word starting with `]` glued after a quote"
+parser = "refuses"
+command = "Write-Output 'a']b"
+error = false
+cmds = [["Write-Output", "'a'", "]", "b"]]
+comments = []
+methods = []
