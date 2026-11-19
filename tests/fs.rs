@@ -4921,6 +4921,14 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             MAY_BE_CRITICAL,
         ),
         (
+            "WT4 Git Bash sudo() { cd ..; }; time -- sudo x",
+            gb,
+            repo,
+            gb_call(func("sudo", cd_up()), lits("time", &["--", "sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
             "WT3 Git Bash sudo() { cd ..; }; time time sudo x",
             gb,
             repo,
