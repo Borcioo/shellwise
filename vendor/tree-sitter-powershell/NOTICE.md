@@ -33,9 +33,10 @@ spike measured (`docs/spikes.md`).
   escapes the next character inside it, a line end included (`` git`<LF> status ``); Unicode
   spaces and typographic quotes end it.
 - `stop_parsing`: `--%` is the token only before a space, a tab or the line end (`--%x` is not).
+  Its text ends at a `|` outside double quotes (`--% x | git status` runs `git`).
 - New rule `glued_string_argument`: a closing quote ends an argument, so a bare word or a `(`
   glued after a string starts the next argument (`"a \"b\""`, `"x \"(a|b)\""`, `'a'x`).
-- `command_parameter`: a `%` may follow the first letter (`-M50%`); a Unicode space ends an
+- `command_parameter`: a backtick escapes the next character, a line end included; a `%` may follow the first letter (`-M50%`); a Unicode space ends an
   attached value (`--name=a`).
 - `generic_token` never starts with `#` (a comment starts there); `command_argument_sep`: a
   Unicode space separates arguments.

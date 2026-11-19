@@ -442,7 +442,7 @@ panic), H = 0 matching the harmless grammar, R = 86 that `ParseInput` also rejec
 (F − H − R) / N = 26 / 28,516 = 0.091 %, budget 0.1 %. Over the `ok` rows alone: 20 / 25,004 =
 0.080 %.
 
-Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (62) hold
+Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (65) hold
 `ParseInput`'s answer; `tests/pwsh_rows.rs` checks the parser against them and
 `tests/pwsh_oracle.rs` (feature `oracle`) checks them against the real `ParseInput`.
 
@@ -460,10 +460,11 @@ Mechanisms the fuzz found and the fork now reads as PowerShell does (each a mech
 name starting with `>` or a stream redirection; a backtick before a line end inside a name; `--%`
 glued to text; `?.` member access; `$$` before `(` and an odd `$` run before `(`; a one-dash
 `-name=$` before `(`; a word or `(` glued after a closing quote (a new argument); a Unicode space
-after `--%`, inside a parameter value and between arguments; `#` at the start of a word.
+after `--%`, inside a parameter value and between arguments; `#` at the start of a word; a
+backtick before a line end inside a parameter; a `|` ending the `--%` text.
 Mechanisms the parser refuses (fails closed) where PowerShell reads one word: a bare dash glued to
 a word (`git-`, `-5-`); text glued to a redirection target; a `>` glued to a word; a comment glued
 to a word; a `$(` glued to the command name; `$env::X` in an argument; a stream redirection or a
-word glued after a quoted redirection target. Of the 2,000 mutants, the parser refuses 335 that
-PowerShell accepts and accepts 17 that PowerShell rejects (PowerShell runs nothing of a script it
+word glued after a quoted redirection target. Of the 2,000 mutants, the parser refuses 301 that
+PowerShell accepts and accepts 19 that PowerShell rejects (PowerShell runs nothing of a script it
 cannot parse; the parser judges the commands).

@@ -341,8 +341,9 @@ export default grammar({
         token(
           choice(
             // `-Name`, `-Name1`, `--long-flag`, `-A5`
-            // `-M50%` (git diff): a `%` belongs to the parameter
-            /-+[a-zA-Z_?\-`][a-zA-Z0-9_?\-`%]*/,
+            // `-M50%` (git diff): a `%` belongs to the parameter; a backtick escapes the next
+            // character, a line end included (`--name`<LF>=a` is one word)
+            /-+([a-zA-Z_?\-]|`[\s\S])([a-zA-Z0-9_?\-%]|`[\s\S])*/,
             // `--format=%H`, `--pretty=format:"%B"`: a native option with an attached value
             /--?[a-zA-Z_][a-zA-Z0-9_\-]*=([^\s\p{Zs}"'`;|&(){}]|"[^"\r\n]*"|'[^'\r\n]*')*/,
           ),
@@ -824,8 +825,10 @@ export default grammar({
       ),
 
     // Stop parsing is a token that end the parsing of command line
-    // `--%` stops parsing only before a space or the line end (`--%x` is not the token).
-    stop_parsing: ($) => /--%([ \t][^\r\n]*)?/,
+    // `--%` stops parsing only before a space or the line end (`--%x` is not the token). The
+    // verbatim text ends at the line end or at a `|` outside double quotes: the pipe still
+    // starts the next command (`--% x | git status`).
+    stop_parsing: ($) => /--%([ \t]([^"\|\r\n]|"[^"\r\n]*")*)?/,
 
     // Generic token is hard to manage
     // So a definition is that a generic token must have to begin by one or more space char

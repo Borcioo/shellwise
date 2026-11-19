@@ -990,6 +990,13 @@ impl<'a> Lower<'a> {
                     }
                 }
                 "redirections" => {
+                    // `2>$null<#x#>`: a comment glued to the target is word text.
+                    let (before, rest) = self.src.split_at(k.end_byte());
+                    if (rest.starts_with('#') || rest.starts_with("<#"))
+                        && before.ends_with(|c: char| !c.is_whitespace())
+                    {
+                        return Err(self.unmodelled(k));
+                    }
                     for r in named_kids(k) {
                         let r = self.redirection(r, cx)?;
                         let t = redirect_target(&r);

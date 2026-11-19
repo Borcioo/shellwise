@@ -190,7 +190,7 @@ fn rows_hold_powershells_answer_and_the_parser_gives_it() {
         }
     }
     eprintln!("oracle rows {}", answers.len());
-    assert!(answers.len() >= 91, "ran {} rows", answers.len());
+    assert!(answers.len() >= 94, "ran {} rows", answers.len());
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 

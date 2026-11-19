@@ -570,3 +570,30 @@ error = false
 cmds = [["node", "-name=$", "($m.p)", "x.js"]]
 comments = []
 methods = []
+
+[[row]]
+id = "review-stop-parsing-pipe"
+mechanism = "review: a pipe ends the --% text"
+command = "Write-Output --% x | git status"
+error = false
+cmds = [["Write-Output", "--%", "x "], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "review-stop-parsing-quoted-pipe"
+mechanism = "review: a pipe ends the --% text"
+command = "Write-Output --% \"a|b\" | git status"
+error = false
+cmds = [["Write-Output", "--%", "\"a|b\" "], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "review-stop-parsing-or"
+mechanism = "review: a pipe ends the --% text"
+command = "Write-Output --% x || git status"
+error = false
+cmds = [["Write-Output", "--%", "x "], ["git", "status"]]
+comments = []
+methods = []

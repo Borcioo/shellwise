@@ -71,5 +71,5 @@ fn gap_rows_read_as_powershell_reads_them() {
 
 #[test]
 fn mechanism_rows_read_as_powershell_reads_them() {
-    check("pwsh_mechanisms.toml", 62);
+    check("pwsh_mechanisms.toml", 65);
 }
