@@ -8440,6 +8440,27 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ("U1g pwsh cd Alias:; Copy-Item ni mk; cd repo; mk", ps, vec![def("cd", &["Alias:"]), def("Copy-Item", &["ni", "mk"]), back(), mk()], del(), mbc.clone()),
             ("U1h pwsh Set-Alias b New-Item; cd Alias:; Rename-Item b mk; cd repo; mk", ps, vec![b_ni(), def("cd", &["Alias:"]), def("Rename-Item", &["b", "mk"]), back(), mk()], del(), mbc.clone()),
             ("U1i pwsh cd C:\\w; New-Item mk -Value New-Item; cd repo; mk (control: a file)", ps, vec![def("cd", &[r"C:\w"]), def("New-Item", &["mk", "-Value", "New-Item"]), back(), mk()], del(), in_link.clone()),
+            // Re-review 9 F2: one row per Copy-Item, Rename-Item and Set-Content table row
+            // (rr9 probe-rows9.rs rr9_tables): a value takes the next word, a switch does not.
+            ("TC1 pwsh Copy-Item -Path Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-Path", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("TC2 pwsh Copy-Item -Filter x Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-Filter", "x", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("TC3 pwsh Copy-Item -Include x Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-Include", "x", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("TC4 pwsh Copy-Item -Exclude x Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-Exclude", "x", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("TC5 pwsh Copy-Item -Credential x Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-Credential", "x", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("TC6 pwsh Copy-Item -Container Alias:ni Alias:zz; mk (control: only zz)", ps, vec![def("Copy-Item", &["-Container", "Alias:ni", "Alias:zz"]), mk()], del(), in_link.clone()),
+            ("TC7 pwsh Copy-Item -Force Alias:ni Alias:zz; mk (control: only zz)", ps, vec![def("Copy-Item", &["-Force", "Alias:ni", "Alias:zz"]), mk()], del(), in_link.clone()),
+            ("TC8 pwsh Copy-Item -Recurse Alias:ni Alias:zz; mk (control: only zz)", ps, vec![def("Copy-Item", &["-Recurse", "Alias:ni", "Alias:zz"]), mk()], del(), in_link.clone()),
+            ("TC9 pwsh Copy-Item -PassThru Alias:ni Alias:zz; mk (control: only zz)", ps, vec![def("Copy-Item", &["-PassThru", "Alias:ni", "Alias:zz"]), mk()], del(), in_link.clone()),
+            ("TR1 pwsh Set-Alias b New-Item; Rename-Item -Path Alias:b mk; mk", ps, vec![b_ni(), def("Rename-Item", &["-Path", "Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("TR2 pwsh Set-Alias b New-Item; Rename-Item -Force Alias:b mk; mk", ps, vec![b_ni(), def("Rename-Item", &["-Force", "Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("TR3 pwsh Set-Alias b New-Item; Rename-Item -PassThru Alias:b mk; mk", ps, vec![b_ni(), def("Rename-Item", &["-PassThru", "Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("TR4 pwsh Set-Alias b New-Item; Rename-Item -Credential c Alias:b mk; mk", ps, vec![b_ni(), def("Rename-Item", &["-Credential", "c", "Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("TS1 pwsh Set-Content -PassThru Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["-PassThru", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("TS2 pwsh Set-Content -Path Alias:zz New-Item; mk (control: only zz)", ps, vec![def("Set-Content", &["-Path", "Alias:zz", "New-Item"]), mk()], del(), in_link.clone()),
+            ("TS3 pwsh Set-Content -Filter x Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["-Filter", "x", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("TS4 pwsh Set-Content -Include x Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["-Include", "x", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("TS5 pwsh Set-Content -Exclude x Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["-Exclude", "x", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("TS6 pwsh Set-Content -Credential x Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["-Credential", "x", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
         ]);
     }
     let mut bad: Vec<String> = Vec::new();
