@@ -382,10 +382,17 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                         !t.starts_with("--") && t.ends_with(':')
                     })
                     // `-a=b@(1)`, `a:b:(1)`: a one-dash parameter ending in `@`, or a word ending
-                    // in `:`, glued to `(`: PowerShell splits it elsewhere (a one-dash parameter
-                    // ending in `:` is refused above). Read from the source: `next_sibling` walks
-                    // the parent's children and makes deep nesting quadratic.
-                    || (src[n.end_byte()..].starts_with('(') && {
+                    // in `:`, glued to a group (`(`, `@`, `{`, or a `$` that starts no variable
+                    // name): PowerShell splits it elsewhere (a one-dash parameter ending in `:` is
+                    // refused above). Read from the source: `next_sibling` walks the parent's
+                    // children and makes deep nesting quadratic.
+                    || ({
+                        let g = &src[n.end_byte()..];
+                        g.starts_with(['(', '@', '{'])
+                            || g.strip_prefix('$').is_some_and(|v| {
+                                !v.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '{'))
+                            })
+                    } && {
                         let t = &src[n.start_byte()..n.end_byte()];
                         (n.kind() == "command_parameter" && !t.starts_with("--") && t.ends_with('@'))
                             || (n.kind() == "generic_token" && t.ends_with(':'))
