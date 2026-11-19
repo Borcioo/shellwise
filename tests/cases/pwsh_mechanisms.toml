@@ -4886,3 +4886,63 @@ error = false
 cmds = [["Write-Output", "--a=b@", "(1)"]]
 comments = []
 methods = []
+
+[[row]]
+id = "stop-parsing-r-tail-quote-backtick"
+mechanism = "after a quote, a `--%` spelled with quotes, backticks or typographic dashes: what PowerShell stops parsing at is not modelled; quotes, then a backtick"
+parser = "refuses"
+command = "Write-Output \"a\"-''`-%; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "-''`-%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-parsing-r-tail-quote-backtick-percent"
+mechanism = "after a quote, a `--%` spelled with quotes, backticks or typographic dashes: what PowerShell stops parsing at is not modelled; quotes, then a backtick before `%`"
+parser = "refuses"
+command = "Write-Output 'a'-''-`%; git status"
+error = false
+cmds = [["Write-Output", "'a'", "-''-`%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-parsing-r-tail-backtick-quote"
+mechanism = "after a quote, a `--%` spelled with quotes, backticks or typographic dashes: what PowerShell stops parsing at is not modelled; a backtick, then quotes"
+parser = "refuses"
+command = "Write-Output \"a\"-`-''%; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "-`-''%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-parsing-r-tail-en-dash"
+mechanism = "after a quote, a `--%` spelled with quotes, backticks or typographic dashes: what PowerShell stops parsing at is not modelled; an en dash as the second dash"
+parser = "refuses"
+command = "Write-Output \"a\"-\U00002013%; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "-\U00002013%"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-parsing-r-tail-em-dash-quotes"
+mechanism = "after a quote, a `--%` spelled with quotes, backticks or typographic dashes: what PowerShell stops parsing at is not modelled; an em dash after quotes"
+parser = "refuses"
+command = "Write-Output 'a'-''\U00002014%; git status"
+error = false
+cmds = [["Write-Output", "'a'", "-''\U00002014%"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-parsing-r-tail-bar-backtick"
+mechanism = "after a quote, a `--%` spelled with quotes, backticks or typographic dashes: what PowerShell stops parsing at is not modelled; a horizontal bar, then a backtick"
+parser = "refuses"
+command = "Write-Output 'a'-\U00002015`%; git status"
+error = false
+cmds = [["Write-Output", "'a'", "-\U00002015`%"], ["git", "status"]]
+comments = []
+methods = []

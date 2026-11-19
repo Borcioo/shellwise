@@ -1856,14 +1856,9 @@ impl<'a> Lower<'a> {
             if in_tail {
                 // `''2>$null`: a stream redirection glued after a string.
                 let t = self.text(ch).as_bytes();
-                // `"a"--%x`, `"a"--''%`: what PowerShell stops parsing at is not modelled after
-                // a quote, whatever quotes spell the `--%` (a backtick in it is refused where the
-                // dash word is lowered).
-                let bare: String = String::from_utf8_lossy(t)
-                    .chars()
-                    .filter(|c| !(is_single_quote(*c) || is_double_quote(*c)))
-                    .collect();
-                if bare.starts_with("--%") {
+                // `"a"--%x`, `"a"--''%`, ``"a"-''`-%``: what PowerShell stops parsing at is not
+                // modelled after a quote, whatever quotes, backticks or dashes spell the `--%`.
+                if spells_stop_parsing(&String::from_utf8_lossy(t)) {
                     return Err(self.unmodelled(ch));
                 }
                 // `'a'?[0]`, `"a"?.Length`: an index or a member of the string for PowerShell.
@@ -1993,7 +1988,7 @@ impl<'a> Lower<'a> {
                     items.push(Item::Part(WordPart::Literal(self.text(*n).to_string())));
                 }
                 // ``"a"--`%``: an escaped `--%` still stops parsing for PowerShell.
-                "generic_token" if self.text(*n).replace('`', "").starts_with("--%") => {
+                "generic_token" if spells_stop_parsing(self.text(*n)) => {
                     return Err(self.unmodelled(*n));
                 }
                 // `''-a.b`: a word glued after a quote that starts with a dash is a parameter
@@ -2671,6 +2666,16 @@ fn is_number_literal(t: &str) -> bool {
         r,
         "" | "l" | "u" | "ul" | "us" | "uy" | "y" | "s" | "n" | "d"
     )
+}
+
+/// Word text that may spell `--%`: with its quotes and backticks removed and every dash read as
+/// `-`, it starts with `--%`. Fails closed: it refuses spellings PowerShell reads as text too.
+fn spells_stop_parsing(t: &str) -> bool {
+    t.chars()
+        .filter(|c| !(*c == '`' || is_single_quote(*c) || is_double_quote(*c)))
+        .map(|c| if is_dash(c) { '-' } else { c })
+        .collect::<String>()
+        .starts_with("--%")
 }
 
 /// `:x`;ri`: after `:` and a letter or `_` PowerShell keeps a backtick as a plain character.
