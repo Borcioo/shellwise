@@ -4946,3 +4946,52 @@ error = false
 cmds = [["Write-Output", "'a'", "-\U00002015`%"], ["git", "status"]]
 comments = []
 methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-quoted-paren"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `)` in a quoted index (a PowerShell error)"
+command = "node --name=$($p['a)b'])"
+error = true
+cmds = [["node", "--name=$($p['a)b'])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-quoted-semicolon"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `;` in a quoted index"
+parser = "refuses"
+command = "node --name=$($p['a;b'])"
+error = false
+cmds = [["node", "--name=$($p['a;b'])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-quoted-bracket"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `[` in a quoted index"
+parser = "refuses"
+command = "node --name=$($p['a[b'])"
+error = false
+cmds = [["node", "--name=$($p['a[b'])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-quoted-brace"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `}` in a quoted index"
+parser = "refuses"
+command = "node --name=$($p['a}b'])"
+error = false
+cmds = [["node", "--name=$($p['a}b'])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-quoted-backtick"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a backtick in a quoted index"
+parser = "refuses"
+command = "node --name=$($p['a`b'])"
+error = false
+cmds = [["node", "--name=$($p['a`b'])"]]
+comments = []
+methods = []

@@ -2705,8 +2705,7 @@ fn simple_variable_body(b: &str) -> bool {
             let Some(k) = m.find(']') else {
                 return false;
             };
-            // A nested `[` leaves a `]` the loop refuses; `)` and `}` need their opener.
-            if m[..k].contains(['(', '{', '\r', '\n', '#']) {
+            if m[..k].contains(['[', '(', ')', '{', '}', '\r', '\n', ';', '#', '`']) {
                 return false;
             }
             r = &m[k + 1..];
