@@ -1096,14 +1096,12 @@ impl Location {
 
     /// The location the body of a script-block word (`WordPart::Block`) starts at. `owner` is the
     /// pipeline whose element holds the word, and `body` the block in it, not a clone. The body
-    /// starts from the current folders only when its owner runs it there (`block_runs_in_place`)
-    /// and, as a loop body, only when the body does not move; else unknown: a stored
+    /// starts from the current folders only when its owner runs it there and nothing in the
+    /// pipeline, the body included, may move (`block_runs_in_place`); else unknown: a stored
     /// `$sb = { … }` runs wherever it is run later, a job or a remote session elsewhere (Ruling
     /// 57). It sees every remap and script run in the command.
     pub fn inner_block(&self, body: &Script, owner: &Pipeline) -> Location {
-        let mut loc = if !self.block_runs_in_place(body, owner)
-            || changes_location(body, self.shell, &self.defined)
-        {
+        let mut loc = if !self.block_runs_in_place(body, owner) {
             self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
         } else {
             self.with_dirs(self.dirs.clone())
