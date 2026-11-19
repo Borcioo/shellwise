@@ -2295,6 +2295,23 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             &format!("{label}; git; Function:x"),
         );
     }
+    // Each alias-definer spelling on its own, with a value that names no remap command: the
+    // name it defines is a call the hook cannot read.
+    for d in [
+        vec!["sal", "g", "x"],
+        vec!["New-Alias", "g", "x"],
+        vec!["nal", "g", "x"],
+        vec!["Set-Alias", "-Scope", "Global", "g", "x"],
+    ] {
+        expect(
+            judge(
+                vec![stmt(lits(d[0], &d[1..]), seq), stmt(lits("g", &[]), seq)],
+                ri("Function:y"),
+            ),
+            &MAY_BE_CRITICAL,
+            &format!("{}; g; Function:y", d.join(" ")),
+        );
+    }
     expect(
         judge(vec![git()], ri(r"Proj:\y")),
         &unproven("Proj"),
@@ -4058,6 +4075,46 @@ fn a_command_the_hook_cannot_read_as_plain_arguments_may_be_any_command() {
             format!("{label}: posix /elsewhere/u"),
         );
     }
+    // A bash command run in this shell with an unread name (`command $x -s ~ <link>`) may remap
+    // a drive and may make a link: one row needs the remap alone, one the link alone, one either.
+    let in_shell = |link: &str| {
+        let tilde = word_at(vec![WordPart::Tilde], 0);
+        stmt(
+            cmd("command", vec![var("x"), lit("-s"), tilde, lit(link)]),
+            seq,
+        )
+    };
+    let git_bash = Shell::Bash(BashProfile::GitBash);
+    let (gb_base, gb_env) = win(git_bash);
+    let mut loc = gb_base.clone();
+    loc.after(&in_shell("t/j"), &gb_env);
+    // A glob that matches nothing leaves no path for a link to reach.
+    let nothing = word_at(
+        vec![
+            WordPart::Literal("/c/w/repo/nomatch".to_string()),
+            WordPart::Glob("*".to_string()),
+        ],
+        0,
+    );
+    expect(
+        resolve(&nothing, &loc, &gb_env),
+        &MAY_BE_CRITICAL,
+        "Git Bash command $x -s ~ t/j; /c/w/repo/nomatch* (the remap)".to_string(),
+    );
+    let mut loc = posix_base.clone();
+    loc.after(&in_shell("/w/repo/t/j"), &posix_env);
+    expect(
+        resolve(&lit("/w/repo/t"), &loc, &posix_env),
+        &MAY_BE_CRITICAL,
+        "posix command $x -s ~ /w/repo/t/j; /w/repo/t (the link)".to_string(),
+    );
+    let mut loc = gb_base.clone();
+    loc.after(&in_shell("/c/w/repo/t/j"), &gb_env);
+    expect(
+        resolve(&lit("/c/w/repo/t"), &loc, &gb_env),
+        &MAY_BE_CRITICAL,
+        "Git Bash command $x -s ~ /c/w/repo/t/j; /c/w/repo/t (either)".to_string(),
+    );
     assert!(
         bad.is_empty(),
         "{} rows failed:\n{}",
