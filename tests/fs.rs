@@ -7628,21 +7628,21 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             proj(true),
         ),
         (
-            "LU11 Git Bash alias mk=\"ln -s $T\"; mk t/j (a word that is not one literal)",
+            "LU11 Git Bash alias MK=\"ln -s $T\"; MK t/j (a word that is not one literal)",
             gb,
             vec![
                 with(
                     "alias",
                     vec![Word {
                         parts: vec![
-                            WordPart::Literal("mk=ln -s ".to_string()),
+                            WordPart::Literal("MK=ln -s ".to_string()),
                             WordPart::Var("T".to_string()),
                         ],
                         span: Span::default(),
                         quote: Quote::Double,
                     }],
                 ),
-                st(lits("mk", &["/c/w/repo/t/j"])),
+                st(lits("MK", &["/c/w/repo/t/j"])),
             ],
             rmrf("/c/w/repo/t/j/x"),
             mbc.clone(),
