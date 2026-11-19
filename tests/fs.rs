@@ -4813,6 +4813,174 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             paths(&[sub]),
         ),
     ]);
+    // Ruling 62 (re-review 6 I-new): a wrapper word the script defines runs that definition
+    // (rr6\spike-calls.log), also through `&`, on the `Start-Process` and `command -v` paths,
+    // and, in bash, after `time` (fix9\spike-time.log). Each real target is `C:\w\repo`.
+    let p5 = Shell::Powershell5;
+    let cd_up = || vec![stmt(lits("cd", &[".."]), None)];
+    let gb_sub = || stmt(lits("cd", &["/c/w/repo/sub"]), and);
+    let gb_call = |def: Stmt, call: SimpleCommand| vec![def, gb_sub(), stmt(call, and)];
+    rows.extend([
+        (
+            "W1 pwsh function sudo; sudo x",
+            ps,
+            repo,
+            then_call(func("sudo", sl_up()), lits("sudo", &["x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "W2 pwsh function time; time x",
+            ps,
+            repo,
+            then_call(func("time", sl_up()), lits("time", &["x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "W3 pwsh Set-Alias env Set-Location; env ..",
+            ps,
+            repo,
+            then_call(
+                def(lits("Set-Alias", &["env", "Set-Location"])),
+                lits("env", &[".."]),
+            ),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "W4 pwsh function command; command x",
+            ps,
+            repo,
+            then_call(func("command", sl_up()), lits("command", &["x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "W5 5.1 function sudo; sudo x",
+            p5,
+            repo,
+            then_call(func("sudo", sl_up()), lits("sudo", &["x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "W6 pwsh function sudo; & sudo x",
+            ps,
+            repo,
+            then_call(func("sudo", sl_up()), lits("&", &["sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "W7 pwsh function start; start x (the Start-Process path)",
+            ps,
+            repo,
+            then_call(func("start", sl_up()), lits("start", &["x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "WB1 Git Bash command() { cd ..; }; command x",
+            gb,
+            repo,
+            gb_call(func("command", cd_up()), lits("command", &["x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "WB2 Git Bash command() { cd ..; }; command -v x (the describe path)",
+            gb,
+            repo,
+            gb_call(func("command", cd_up()), lits("command", &["-v", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "A1 Git Bash alias sudo='cd ..'; sudo",
+            gb,
+            repo,
+            gb_call(def(lits("alias", &["sudo=cd .."])), lits("sudo", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "WT1 Git Bash sudo() { cd ..; }; time sudo x",
+            gb,
+            repo,
+            gb_call(func("sudo", cd_up()), lits("time", &["sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "WT2 Git Bash sudo() { cd ..; }; time -p sudo x",
+            gb,
+            repo,
+            gb_call(func("sudo", cd_up()), lits("time", &["-p", "sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "WT3 Git Bash sudo() { cd ..; }; time time sudo x",
+            gb,
+            repo,
+            gb_call(func("sudo", cd_up()), lits("time", &["time", "sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: a defined plain name (WC); a wrapper nothing defines (WD); `command` and
+        // `env` in bash, which skip a function (WE, WF; spike T6, T11); pwsh, which has no `time`
+        // keyword (WG; fix9\spike-pwsh-time.log); M1 (re-review 6): the `Get-` retry is pwsh's,
+        // so a bash `up` stays (spike T12).
+        (
+            "WC function g; g (control)",
+            ps,
+            repo,
+            then_call(func("g", sl_up()), lits("g", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "WD sudo x, nothing defined (control)",
+            ps,
+            repo,
+            vec![cd_sub(), stmt(lits("sudo", &["x"]), and)],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "WE Git Bash sudo() { cd ..; }; command sudo x (control)",
+            gb,
+            repo,
+            gb_call(func("sudo", cd_up()), lits("command", &["sudo", "x"])),
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "WF Git Bash sudo() { cd ..; }; env sudo x (control)",
+            gb,
+            repo,
+            gb_call(func("sudo", cd_up()), lits("env", &["sudo", "x"])),
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "WG pwsh function sudo; time sudo x (control: pwsh has no `time`)",
+            ps,
+            repo,
+            then_call(func("sudo", sl_up()), lits("time", &["sudo", "x"])),
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "M1 Git Bash alias Get-Up='cd ..'; up (control)",
+            gb,
+            repo,
+            gb_call(def(lits("alias", &["Get-Up=cd .."])), lits("up", &[])),
+            ".",
+            paths(&[sub]),
+        ),
+    ]);
     let mut bad: Vec<String> = rows
         .into_iter()
         .filter_map(|(label, shell, cwd, before, word, want)| {
@@ -4870,6 +5038,15 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
                 one("Up", and),
             ],
         ),
+        // Ruling 62: a wrapper word as the alias, inside a nested body.
+        (
+            "WX alias sudo='cd ..' <LF> { sudo; }",
+            "/w/repo/sub",
+            vec![
+                stmt(lits("alias", &["sudo=cd .."]), seq),
+                Stmt::Block(script(vec![one("sudo", seq)])),
+            ],
+        ),
     ];
     for (label, cwd, before) in alias_rows {
         let mut all = before.clone();
@@ -4910,6 +5087,17 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
     if got != MAY_BE_CRITICAL {
         bad.push(format!("foreach {{ f }} from inner: got {got:?}"));
     }
+    // Ruling 62: the same for a wrapper word the script defines (`foreach { sudo x }`).
+    let lp = Stmt::Loop {
+        body: script(vec![stmt(lits("sudo", &["x"]), seq)]),
+        span: Span::default(),
+    };
+    let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
+    loc.read_script(&script(vec![func("sudo", vec![]), lp.clone()]));
+    let got = resolve(&lit("."), &loc.inner(&lp), &env);
+    if got != MAY_BE_CRITICAL {
+        bad.push(format!("WL foreach {{ sudo x }} from inner: got {got:?}"));
+    }
     // A scope prefix names the same function for the unread rule: `function global:f; f` does
     // not read `f` as written.
     let mut loc = Location::new(ps, Os::Windows, Some(Path::new(repo)));
@@ -4938,6 +5126,35 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
         loc.read_script(&script(vec![
             func(def_name, vec![]),
             one(call, seq),
+            stmt(lits("Remove-Item", &[r"Proj:\x"]), seq),
+        ]));
+        let got = target(&lit(r"Proj:\x"), &loc, &env, by, &real(), &far());
+        if got != unproven_unread("Proj") {
+            bad.push(format!("{label}: got {got:?}"));
+        }
+    }
+    // Ruling 62: the unread rule reads a wrapper word the script defines as that definition.
+    for (label, def_name, call) in [
+        (
+            "WR1 function sudo; sudo x; ri Proj:\\x",
+            "sudo",
+            lits("sudo", &["x"]),
+        ),
+        (
+            "WR2 function command; command -v x; ri Proj:\\x",
+            "command",
+            lits("command", &["-v", "x"]),
+        ),
+        (
+            "WR3 function sudo; & sudo x; ri Proj:\\x",
+            "sudo",
+            lits("&", &["sudo", "x"]),
+        ),
+    ] {
+        let mut loc = Location::new(ps, Os::Windows, Some(Path::new(repo)));
+        loc.read_script(&script(vec![
+            func(def_name, vec![]),
+            stmt(call, seq),
             stmt(lits("Remove-Item", &[r"Proj:\x"]), seq),
         ]));
         let got = target(&lit(r"Proj:\x"), &loc, &env, by, &real(), &far());

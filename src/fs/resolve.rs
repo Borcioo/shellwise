@@ -1192,6 +1192,9 @@ impl Location {
             return Some(Dirs::unknown(UnknownKind::Dynamic));
         }
         let unknown = Some(Dirs::unknown(UnknownKind::MayBeCritical));
+        if looks_up_defined(c, self.shell, &self.defined) {
+            return unknown;
+        }
         let run = unwrap(c);
         let (name, args) = match run {
             Run::Nothing => return None,
@@ -1711,7 +1714,7 @@ fn pwsh_move(c: &SimpleCommand, raw: &str, shell: Shell) -> PwshMove {
 }
 
 fn is_location_command(c: &SimpleCommand, shell: Shell, defined: &[String]) -> bool {
-    if c.opaque {
+    if c.opaque || looks_up_defined(c, shell, defined) {
         return true;
     }
     match unwrap(c) {
@@ -1756,6 +1759,36 @@ fn calls_defined(raw: &str, shell: Shell, defined: &[String]) -> bool {
             || (runs_sl && d == "set-location")
             || retry.as_deref() == Some(d.as_str())
     })
+}
+
+/// Ruling 62: a name the shell looks up for `c` before `unwrap` reads past it is one the script
+/// defines (`calls_defined`). Those names are the name as written, the literal operand of `&`
+/// (`& sudo x`), and in bash each word after `time` (`time -p sudo x` runs a function `sudo`;
+/// fix9\spike-time.log). A wrapper word is such a name too: `function sudo { … }; sudo x` runs
+/// the function, not the wrapper.
+fn looks_up_defined(c: &SimpleCommand, shell: Shell, defined: &[String]) -> bool {
+    let mut name = raw_name(c);
+    let mut args: &[Word] = &c.args;
+    if let Some(t) = args.first().and_then(literal).filter(|_| name == "&") {
+        name = t.to_ascii_lowercase();
+        args = &args[1..];
+    }
+    loop {
+        if calls_defined(&name, shell, defined) {
+            return true;
+        }
+        if is_pwsh(shell) || name != "time" {
+            return false;
+        }
+        let rest = args
+            .iter()
+            .position(|w| !matches!(literal(w).as_deref(), Some("-p" | "--")));
+        let Some(next) = rest.and_then(|i| literal(&args[i]).map(|t| (i, t))) else {
+            return false;
+        };
+        name = next.1.to_ascii_lowercase();
+        args = &args[next.0 + 1..];
+    }
 }
 
 /// The command names `s` defines anywhere, lowercased, without a scope prefix (Ruling 49):
@@ -1940,7 +1973,7 @@ fn all_read(s: &Script, shell: Shell) -> bool {
 /// parameter only when every argument is a literal or a literal block (`all_read` visits its
 /// body). `Invoke-Expression` never.
 fn read_as_written(c: &SimpleCommand, defined: &[String], shell: Shell) -> bool {
-    if c.opaque || literal(&c.name).is_none() {
+    if c.opaque || literal(&c.name).is_none() || looks_up_defined(c, shell, defined) {
         return false;
     }
     let (name, raw, args) = match unwrap(c) {
