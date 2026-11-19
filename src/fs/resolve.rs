@@ -777,14 +777,6 @@ fn remaps_drives(c: &SimpleCommand) -> bool {
         Run::Nothing => return false,
         run => return run.may_be(&REMAP_COMMANDS),
     };
-    // `& New-PSDrive …`: the call operator runs the name it is given; any name, unread.
-    let (name, args) = match (name.as_str(), args.split_first()) {
-        ("&" | ".", Some((first, rest))) => match literal(first) {
-            Some(n) => (base_name(&n.to_ascii_lowercase()), rest),
-            None => return true,
-        },
-        _ => (name, args),
-    };
     match name.as_str() {
         "net" | "net1" => args
             .first()
@@ -1024,7 +1016,12 @@ impl Location {
                 args,
                 wrapped,
                 in_shell,
+                sourced,
             } => {
+                // `. x`: a source, which may move the shell.
+                if sourced {
+                    return unknown;
+                }
                 if !LOCATION_COMMANDS.contains(&name.as_str()) {
                     return None;
                 }
@@ -1301,6 +1298,8 @@ enum Run<'a> {
         wrapped: bool,
         /// Every wrapper in front runs it in this shell.
         in_shell: bool,
+        /// Run by `.`, in this scope: as a `source` it may change anything in the shell.
+        sourced: bool,
     },
     /// `command -v X`: describes X and runs nothing.
     Nothing,
@@ -1322,6 +1321,22 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
     let mut args: &[Word] = &c.args;
     let mut wrapped = false;
     let mut in_shell = true;
+    // `& name …`, `. name …` run the name they are given, `.` in this scope (Ruling 38). A
+    // name that is not a literal plain token may be any command.
+    let sourced = name == "." && raw == ".";
+    if raw == "&" || sourced {
+        let Some(first) = args.first() else {
+            return Run::Nothing;
+        };
+        match literal(first) {
+            Some(t) if plain_command(&t.to_ascii_lowercase()) => {
+                raw = t.to_ascii_lowercase();
+                name = base_name(&raw);
+                args = &args[1..];
+            }
+            _ => return Run::Unread { in_shell },
+        }
+    }
     // `Start-Process ln -ArgumentList '…'`: a program with arguments the reader does not parse.
     if START_PROCESS.contains(&name.as_str()) {
         return Run::Unread { in_shell: false };
@@ -1387,7 +1402,19 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
         args,
         wrapped,
         in_shell,
+        sourced,
     }
+}
+
+/// `raw` (lowercased, as written) is a plain command token, `[a-z0-9_.-]+`, and no script:
+/// no drive, folder or `:` in it, no `.ps1` or `.psm1` (Ruling 38).
+fn plain_command(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        && !raw.ends_with(".ps1")
+        && !raw.ends_with(".psm1")
 }
 
 impl Run<'_> {
@@ -1559,22 +1586,6 @@ fn all_read(s: &Script) -> bool {
     ok
 }
 
-/// `name` (lowercased) is a plain cmdlet name, `Verb-Noun`: no path, no `.ps1`, `.psm1` or
-/// other extension, so no script file runs under it.
-fn cmdlet_name(name: &str) -> bool {
-    name.split_once('-').is_some_and(|(verb, noun)| {
-        !verb.is_empty()
-            && !noun.is_empty()
-            && verb.chars().all(|c| c.is_ascii_alphabetic())
-            && noun.chars().all(|c| c.is_ascii_alphanumeric())
-    })
-}
-
-/// `name` as written may run a script file: a path (`.\x`, `C:\x\run`) or a `.ps1`/`.psm1`.
-fn may_run_script(raw: &str) -> bool {
-    raw.contains(['\\', '/']) || raw.ends_with(".ps1") || raw.ends_with(".psm1")
-}
-
 fn read_as_written(c: &SimpleCommand, defined: &[String]) -> bool {
     if c.opaque || literal(&c.name).is_none() {
         return false;
@@ -1586,21 +1597,19 @@ fn read_as_written(c: &SimpleCommand, defined: &[String]) -> bool {
         Run::Nothing => return true,
         Run::Unread { .. } => return false,
     };
-    if may_run_script(&raw) {
+    // An assignment alone runs no command (`defined_by` reads `$function:x = …`).
+    if raw.is_empty() && name.is_empty() {
+        return args.is_empty();
+    }
+    if !plain_command(&raw) {
         return false;
     }
-    let called = |n: &str| !defined.iter().any(|d| d == n);
     match name.as_str() {
         "invoke-expression" | "iex" => false,
         "invoke-command" | "icm" => args.iter().all(|w| {
             literal(w).is_some() || w.parts.iter().all(|p| matches!(p, WordPart::Block(_)))
         }),
-        "&" | "." => args
-            .first()
-            .and_then(literal)
-            .map(|o| o.to_ascii_lowercase())
-            .is_some_and(|o| cmdlet_name(&o) && called(&o)),
-        n => called(n),
+        n => !defined.iter().any(|d| d == n),
     }
 }
 
@@ -1897,6 +1906,8 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     // The command run, after wrappers (`builtin export X=…`); the names below are read from
     // every argument, the wrapper's included, which can only mark more of them.
     let name = match unwrap(c) {
+        // `. x` is a source whatever it runs.
+        Run::Cmd { sourced: true, .. } => ".".to_string(),
         Run::Cmd { name, .. } => name,
         Run::Nothing => String::new(),
         Run::Unread { in_shell, .. } => {
