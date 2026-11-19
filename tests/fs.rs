@@ -2927,7 +2927,41 @@ fn unread_code_is_a_fact_and_a_script_run_counts_as_a_remap_in_sight() {
             Shell::Powershell5,
             unproven_unread("Proj"),
         ),
-        // Literal controls: literal words and literal blocks are read.
+        // Each shell reads its own table: 5.1 ships no `Get-Error`.
+        (
+            "Get-Error; Proj",
+            vec![st(lits("Get-Error", &[]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
+        (
+            "5.1 Get-Error; Proj",
+            vec![st(lits("Get-Error", &[]))],
+            ri(proj),
+            vec![],
+            Shell::Powershell5,
+            unproven_unread("Proj"),
+        ),
+        // 5.1 follows the pwsh rules for remaps and links.
+        (
+            "5.1 & $f; existing letter",
+            vec![amp_f()],
+            rr(r"C:\w\repo\build"),
+            vec![],
+            Shell::Powershell5,
+            paths(&[r"C:\w\repo\build"]),
+        ),
+        // Literal controls: literal words and literal blocks are read, through an alias too.
+        (
+            "% { Get-Date }; Proj",
+            vec![st(cmd("%", vec![block(vec![st(lits("Get-Date", &[]))])]))],
+            ri(proj),
+            vec![],
+            pwsh,
+            unproven("Proj"),
+        ),
         (
             "ForEach-Object -Process { Get-Date }; Proj",
             vec![st(cmd(
