@@ -715,6 +715,8 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         // A function call or `set` carries a tainted argument into `$1`, `$@`.
         (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
+        (format!("{x}set -- \"$x\"; (( ${{1}} ))"), "(("),
+        (format!("{x}let \"n=$x\""), "let"),
         (
             format!("{x}f() {{ declare -i n; n=\"$@\"; }}; f \"$x\""),
             "<none>",
