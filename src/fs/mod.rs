@@ -53,6 +53,15 @@ pub trait Fs: Send + Sync {
     fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
         Ok(None)
     }
+    /// The Windows drive `letter` (`C`) exists now: its root can be read. A drive a command
+    /// makes later does not.
+    fn drive_exists(&self, letter: char) -> io::Result<bool> {
+        match self.lstat(Path::new(&format!("{}:\\", letter.to_ascii_uppercase()))) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// The mount points in the text of a `/proc/self/mountinfo` file (field 5, octal escapes such

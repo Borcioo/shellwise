@@ -239,6 +239,15 @@ impl Fs for FakeFs {
         }
     }
 
+    /// A drive exists when the tree holds a path on it.
+    fn drive_exists(&self, letter: char) -> io::Result<bool> {
+        let want = format!("{}:", letter.to_ascii_uppercase());
+        Ok(self
+            .nodes
+            .keys()
+            .any(|k| k.to_string_lossy().to_ascii_uppercase().starts_with(&want)))
+    }
+
     fn device(&self, p: &Path) -> io::Result<Option<u64>> {
         match self.nodes.get(p) {
             None => Err(io::Error::from(io::ErrorKind::NotFound)),
@@ -1469,7 +1478,6 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         "Env:FOO*",
         "Env:",
         "Variable:x",
-        r"variable:\x*",
         r"Cert:\CurrentUser\My\x",
         r"HKCU:\Software\x",
         r"hklm:\SOFTWARE\x",
@@ -1595,9 +1603,10 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             stmt(lits("command", &["Get-ChildItem"]), seq),
         ),
     ] {
+        // Ruling 33: not proven, but no remap in sight.
         expect(
             judge(vec![other], ri("Env:FOO"), Vec::new()),
-            &MAY_BE_CRITICAL,
+            &unproven("Env"),
             format!("not harmless {label}"),
         );
     }
@@ -1609,18 +1618,20 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             format!("list {text}"),
         );
     }
-    // A drive name PowerShell does not build in may be a profile's file-system drive. Removing
-    // an alias or a function may make the delete another command.
-    for text in [
-        r"Proj:\x",
-        r"Environment:\x",
-        r"HKCC:\x",
-        "Function:f",
-        "Alias:a",
+    // A drive name PowerShell does not build in may be a profile's file-system drive (Ruling
+    // 33). Removing an alias or a function may make the delete another command, and with
+    // `-Include __sw*` a `Variable:` wildcard may remove the shim's variables (Ruling 35).
+    for (text, want) in [
+        (r"Proj:\x", unproven("Proj")),
+        (r"Environment:\x", unproven("Environment")),
+        (r"HKCC:\x", unproven("HKCC")),
+        ("Function:f", Target::SessionCommand),
+        ("Alias:a", Target::SessionCommand),
+        (r"variable:\x*", Target::SessionCommand),
     ] {
         expect(
             judge(Vec::new(), ri(text), Vec::new()),
-            &MAY_BE_CRITICAL,
+            &want,
             text.to_string(),
         );
     }
@@ -1863,6 +1874,305 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         bad.len(),
         bad.join("\n")
     );
+}
+
+fn unproven(drive: &str) -> Target {
+    Target::DriveUnproven {
+        drive: drive.to_string(),
+    }
+}
+
+#[test]
+fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
+    let seq = Some(ChainOp::Seq);
+    let (base, env) = win(Shell::Pwsh);
+    // The machine the hook runs on: drives C: and D: exist, Z: does not.
+    let machine = FakeFs::default()
+        .dir(r"C:\Profiles\u")
+        .dir(r"D:\elsewhere")
+        .shared();
+    let mut bad: Vec<String> = Vec::new();
+    let mut expect = |got: Target, want: &Target, label: &str| {
+        if &got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    };
+    // `<before>; <delete>`, the whole command read first; `word` is the delete's first argument.
+    let judge_on = |before: Vec<Stmt>, delete: SimpleCommand, shell: Shell, fs: &SharedFs| {
+        let (base, env) = win(shell);
+        let by = delete_by(&delete, shell, Os::Windows);
+        let word = delete.args[0].clone();
+        let mut all = before.clone();
+        all.push(stmt(delete, seq));
+        let mut loc = base.clone();
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &env);
+        sorted(target(&word, &loc, &env, by, fs, &far()))
+    };
+    let judge =
+        |before: Vec<Stmt>, delete: SimpleCommand| judge_on(before, delete, Shell::Pwsh, &machine);
+    let ri = |text: &str| lits("Remove-Item", &[text]);
+    let git = || stmt(lits("git", &["status"]), seq);
+    let mut opaque = lits("x", &[]);
+    opaque.opaque = true;
+
+    // Ruling 33: a plain named-drive path in a command not proven harmless.
+    expect(
+        judge(vec![git()], ri("Env:FOO")),
+        &unproven("Env"),
+        "git; Env:FOO",
+    );
+    expect(
+        judge(vec![], ri("Env:FOO")),
+        &Target::NotAFile,
+        "Env:FOO alone",
+    );
+    expect(
+        judge(vec![], ri(r"Proj:\x")),
+        &unproven("Proj"),
+        r"Proj:\x alone",
+    );
+    expect(
+        judge(vec![git()], ri(r"Proj:\*")),
+        &unproven("Proj"),
+        r"git; Proj:\*",
+    );
+    expect(
+        judge(vec![], ri("Variable:foo")),
+        &Target::NotAFile,
+        "Variable:foo alone",
+    );
+    expect(
+        judge(vec![git()], ri("Variable:foo")),
+        &unproven("Variable"),
+        "git; Variable:foo",
+    );
+    // Ruling 35 pin: a literal name with `-Include __sw*` names only itself.
+    expect(
+        judge(
+            vec![],
+            lits("Remove-Item", &["Variable:foo", "-Include", "__sw*"]),
+        ),
+        &Target::NotAFile,
+        "Variable:foo -Include __sw*",
+    );
+    // Two words after a non-harmless part: each on its own.
+    for (w, other) in [("Env:A", "Env:B"), ("Env:B", "Env:A")] {
+        expect(
+            judge(vec![git()], lits("Remove-Item", &[w, other])),
+            &unproven("Env"),
+            &format!("git; two words, {w}"),
+        );
+    }
+    // C1/I5: one word holding `,`, `;` or `:` after the drive keeps MayBeCritical.
+    for (label, before, text) in [
+        ("one word Env:A,Env:B alone", vec![], "Env:A,Env:B"),
+        ("git; one word Env:A,Env:B", vec![git()], "Env:A,Env:B"),
+        (
+            "git; one word Env:FOO,<home>",
+            vec![git()],
+            r"Env:FOO,C:\Profiles\u",
+        ),
+        ("one word Proj:\\x,<home>", vec![], r"Proj:\x,C:\Profiles\u"),
+        ("git; Proj:x;y", vec![git()], "Proj:x;y"),
+        ("git; Proj:a:b", vec![git()], "Proj:a:b"),
+        ("Function:x,<home>", vec![], r"Function:x,C:\Profiles\u"),
+        ("git; Proj:..\\x", vec![git()], r"Proj:..\x"),
+    ] {
+        expect(judge(before, ri(text)), &MAY_BE_CRITICAL, label);
+    }
+    // I1: a drive the command visibly remaps, or may remap (an unread command).
+    for (label, remap) in [
+        (
+            "New-PSDrive",
+            stmt(lits("New-PSDrive", &["Proj", "FileSystem", r"C:\x"]), seq),
+        ),
+        (
+            "ndr",
+            stmt(lits("ndr", &["Proj", "-PSProvider", "FileSystem"]), seq),
+        ),
+        ("unread", stmt(opaque.clone(), seq)),
+    ] {
+        expect(
+            judge(vec![remap.clone(), git()], ri(r"Proj:\y")),
+            &MAY_BE_CRITICAL,
+            &format!("{label}; git; Proj:\\y"),
+        );
+        expect(
+            judge(vec![remap, git()], ri("Env:FOO")),
+            &MAY_BE_CRITICAL,
+            &format!("{label}; git; Env:FOO"),
+        );
+    }
+    // I2: every other unknown form, reader and shell stays MayBeCritical.
+    for (label, delete) in [
+        ("UNC", ri(r"\\srv\share\x")),
+        ("C:x", ri("C:x")),
+        ("stream", ri("x::$INDEX_ALLOCATION")),
+        ("Proj:x*", ri("Proj:x*")),
+        ("rm.exe Proj:\\x", lits("rm.exe", &[r"Proj:\x"])),
+        ("rm.exe Function:x", lits("rm.exe", &["Function:x"])),
+    ] {
+        expect(
+            judge(vec![git()], delete),
+            &MAY_BE_CRITICAL,
+            &format!("git; {label}"),
+        );
+    }
+    expect(
+        judge_on(
+            vec![git()],
+            lits("rm", &["Proj:x"]),
+            Shell::Bash(BashProfile::GitBash),
+            &machine,
+        ),
+        &MAY_BE_CRITICAL,
+        "Git Bash rm -rf Proj:x",
+    );
+    let mut net_loc = base.clone();
+    net_loc.read_script(&script(vec![git()]));
+    expect(
+        sorted(target(
+            &lit(r"Proj:\x"),
+            &net_loc,
+            &env,
+            NATIVE,
+            &machine,
+            &far(),
+        )),
+        &MAY_BE_CRITICAL,
+        "[IO.Directory]::Delete('Proj:\\x')",
+    );
+    for text in [
+        r"FileSystem::C:\Profiles\u",
+        r"Microsoft.PowerShell.Core\FileSystem::C:\Profiles\u",
+    ] {
+        expect(
+            judge(vec![git()], ri(text)),
+            &paths(&[r"C:\Profiles\u"]),
+            &format!("git; {text}"),
+        );
+    }
+    // Pins: a relative delete after `cd $x;` and after an unread command.
+    expect(
+        judge(vec![stmt(cmd("cd", vec![var("x")]), seq)], ri("build")),
+        &MAY_BE_CRITICAL,
+        "cd $x; build",
+    );
+    expect(
+        judge(vec![stmt(opaque, seq)], ri("build")),
+        &MAY_BE_CRITICAL,
+        "unread; build",
+    );
+    // I3 + Ruling 35: a command definition, or a variable that may be the shim's.
+    for text in [
+        "Function:x",
+        r"Function:\x",
+        "Function:/x",
+        r"function:\__SW_T",
+        "Function::x",
+        r"Microsoft.PowerShell.Core\Function::x",
+        "Alias:x",
+        r"ALIAS:\x",
+        "Alias::x",
+        r"microsoft.powershell.core\alias::x",
+        "Variable:__sw_File",
+        r"VARIABLE:\__SW_FILE",
+        "Variable:/__sw_File",
+        "Variable::__sw_File",
+        r"Microsoft.PowerShell.Core\Variable::__sw_File",
+        "Variable:__s*",
+        "Variable:__sw_?ile",
+        "Variable:[_]_sw_File",
+        // `-Include __sw*` widens any wildcard and the root (step0-varfilter.log).
+        "Variable:fo*",
+        r"Variable:\_*",
+        r"Variable:\",
+        r"Variable:\*",
+        "Variable:",
+    ] {
+        expect(judge(vec![], ri(text)), &Target::SessionCommand, text);
+        expect(
+            judge(vec![git()], ri(text)),
+            &Target::SessionCommand,
+            &format!("git; {text}"),
+        );
+    }
+    // Ruling 34: a letter drive that does not exist when the hook runs, in a command not proven
+    // harmless; I8's drive-making method forms.
+    let drive_new = || method("ExecutionContext.SessionState.Drive", "New", vec![lit("x")]);
+    let invoke = || {
+        method(
+            "ExecutionContext.InvokeCommand",
+            "InvokeScript",
+            vec![lit(r"New-PSDrive Z FileSystem C:\Profiles -Scope Global")],
+        )
+    };
+    for (label, before) in [
+        ("git", git()),
+        ("Drive.New", drive_new()),
+        ("InvokeScript", invoke()),
+    ] {
+        expect(
+            judge(vec![before.clone()], ri(r"Z:\u")),
+            &MAY_BE_CRITICAL,
+            &format!("{label}; Z:\\u"),
+        );
+        expect(
+            judge(vec![before], ri(r"Proj:\u")),
+            &unproven("Proj"),
+            &format!("{label}; Proj:\\u"),
+        );
+    }
+    expect(
+        judge(vec![git(), stmt(lits("cd", &[r"Z:\u"]), seq)], ri("x")),
+        &MAY_BE_CRITICAL,
+        "git; cd Z:\\u; x",
+    );
+    expect(
+        judge(vec![], ri(r"Z:\u")),
+        &paths(&[r"Z:\u"]),
+        "missing drive, harmless",
+    );
+    expect(
+        judge(vec![git()], ri(r"D:\elsewhere")),
+        &paths(&[r"D:\elsewhere"]),
+        "git; existing drive",
+    );
+    let hang: SharedFs = Arc::new(Hang("lstat"));
+    let mut hang_loc = base.clone();
+    hang_loc.read_script(&script(vec![git()]));
+    let by = delete_by(&ri(r"Z:\u"), Shell::Pwsh, Os::Windows);
+    let start = Instant::now();
+    let got = target(
+        &lit(r"Z:\u"),
+        &hang_loc,
+        &env,
+        by,
+        &hang,
+        &Deadline::new(start, 300),
+    );
+    expect(got, &Target::Timeout, "drive query never returns");
+    assert!(start.elapsed() < Duration::from_secs(5), "bounded");
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+/// The real drive query: the system drive exists; on POSIX no letter drive does.
+#[test]
+fn real_fs_reports_whether_a_drive_exists() {
+    #[cfg(windows)]
+    {
+        let sys = std::env::var("SystemDrive").expect("SystemDrive is set");
+        let letter = sys.chars().next().expect("a letter");
+        assert!(RealFs.drive_exists(letter).expect("readable"), "{sys}");
+    }
+    #[cfg(not(windows))]
+    assert!(!RealFs.drive_exists('C').expect("readable"));
 }
 
 #[test]

@@ -1851,6 +1851,15 @@ pub enum Target {
     /// deleted by `DeleteBy::Provider` in a command `Location::read_script` found only harmless
     /// commands in: no file target, so the delete rule leaves it to other rules.
     NotAFile,
+    /// A plain path on a named PowerShell drive (`Env:FOO`, `Proj:\x`) that the command does not
+    /// visibly remap, deleted by `DeleteBy::Provider` in a command not proven harmless: the hook
+    /// cannot prove the drive is no file system, but the provider decides at run time. `drive`
+    /// is the name as written.
+    DriveUnproven { drive: String },
+    /// A path on `Function:` or `Alias:`, or a `Variable:` path that may name a `__sw*`
+    /// variable, deleted by `DeleteBy::Provider`: it can remove a command definition, the
+    /// shim's own included.
+    SessionCommand,
     /// The deadline passed while expanding the word.
     Timeout,
 }
