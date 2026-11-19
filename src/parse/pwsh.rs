@@ -508,6 +508,7 @@ const GLUE: &[(&str, &str, Lead, &str)] = &[
     ("command_name", "line_continuation", Lead::Other, "fuzz-backtick-line-end-in-name"),
     ("command_name", "\"", Lead::Double, "glue-quote-name"),
     ("\"", "command_name", Lead::Other, "glue-quote-name"),
+    ("\"", "command_name", Lead::Bracket, "glue-quote-name-bracket"),
     ("command_parameter", "command_argument_sep", Lead::Other, "glue-colon-variable"),
     ("command_argument_sep", "variable", Lead::Dollar, "glue-colon-variable"),
     ("command_argument_sep", "verbatim_string_characters", Lead::Single, "glue-colon-squote"),

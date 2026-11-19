@@ -3970,3 +3970,12 @@ error = false
 cmds = [["Write-Output", "'a'", "]", "b"]]
 comments = []
 methods = []
+
+[[row]]
+id = "glue-quote-name-bracket"
+mechanism = "a command name holding a quoted part glued before `[`: one name for PowerShell"
+command = "x\"y\"[0]; ri C:\\x"
+error = false
+cmds = [["x\"y\"[0]"], ["ri", "C:\\x"]]
+comments = []
+methods = []
