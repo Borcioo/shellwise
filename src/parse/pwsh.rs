@@ -1787,7 +1787,20 @@ impl<'a> Lower<'a> {
                                     && !prev.starts_with(b"--")
                                     && !prev.contains(&b':')
                                     && !holds_quote(&String::from_utf8_lossy(prev)))
-                                && matches!(ch.kind(), "parenthesized_expression" | "argument_list"))
+                                && matches!(ch.kind(), "parenthesized_expression" | "argument_list")
+                                && {
+                                    // `--name=$(ri C:\x)`: PowerShell reads a statement list
+                                    // there; only a variable body is modelled.
+                                    let body = self.text(ch);
+                                    if !body
+                                        .strip_prefix('(')
+                                        .and_then(|b| b.strip_suffix(')'))
+                                        .is_some_and(simple_variable_body)
+                                    {
+                                        return Err(self.unmodelled(ch));
+                                    }
+                                    true
+                                })
                             // `''b$(x)c`: after a quote, text glued to a `$(…)` stays in its word.
                             || (in_tail
                                 && ch.kind() == "generic_token"
@@ -2605,6 +2618,39 @@ fn opens_subexpression(t: &[u8]) -> bool {
 /// (``a``$`` ends in an escaped backtick and a plain `$`).
 fn escaped_at(t: &[u8], at: usize) -> bool {
     t[..at].iter().rev().take_while(|c| **c == b'`').count() % 2 == 1
+}
+
+/// `$p[0]`, `$m.p`: a variable with member names and indexes only, on one line.
+fn simple_variable_body(b: &str) -> bool {
+    let Some(r) = b.strip_prefix('$') else {
+        return false;
+    };
+    let name = |s: &str| {
+        s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(s.len())
+    };
+    let mut r = &r[name(r)..];
+    while !r.is_empty() {
+        if let Some(m) = r.strip_prefix('.') {
+            let k = name(m);
+            if k == 0 {
+                return false;
+            }
+            r = &m[k..];
+        } else if let Some(m) = r.strip_prefix('[') {
+            let Some(k) = m.find(']') else {
+                return false;
+            };
+            // A nested `[` leaves a `]` the loop refuses; `)` and `}` need their opener.
+            if m[..k].contains(['(', '{', '\r', '\n', '#']) {
+                return false;
+            }
+            r = &m[k + 1..];
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// Text holding a single or a double quote of either class.

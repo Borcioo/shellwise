@@ -3323,19 +3323,19 @@ methods = []
 
 [[row]]
 id = "glue-tail-subexpr-text"
-mechanism = "after a quote, text glued to a `$(\U00002026)` stays in its word (`b$(x)c$(y)d` is one argument)"
-command = "Write-Output ''b$(x)c$(y)d"
+mechanism = "after a quote, text glued to a `$(\U00002026)` stays in its word (`b$($x)c$($y)d` is one argument)"
+command = "Write-Output ''b$($x)c$($y)d"
 error = false
-cmds = [["Write-Output", "''", "b$(x)c$(y)d"], ["x"], ["y"]]
+cmds = [["Write-Output", "''", "b$($x)c$($y)d"]]
 comments = []
 methods = []
 
 [[row]]
 id = "glue-tail-subexpr-text-dquote"
 mechanism = "after a double quote, text glued to a `$(\U00002026)` stays in its word"
-command = "Write-Output \"a\"b$(x)c"
+command = "Write-Output \"a\"b$($x)c"
 error = false
-cmds = [["Write-Output", "\"a\"", "b$(x)c"], ["x"]]
+cmds = [["Write-Output", "\"a\"", "b$($x)c"]]
 comments = []
 methods = []
 
@@ -3380,9 +3380,9 @@ methods = []
 [[row]]
 id = "glue-tail-dash-not-parameter"
 mechanism = "a word glued after a quote that starts `-#` is no parameter: `$$$(\U00002026)` joins it"
-command = "Write-Output ''-#-name=$$$(1) x"
+command = "Write-Output ''-#-name=$$$($x) x"
 error = false
-cmds = [["Write-Output", "''", "-#-name=$$$(1)", "x"]]
+cmds = [["Write-Output", "''", "-#-name=$$$($x)", "x"]]
 comments = []
 methods = []
 
@@ -3446,18 +3446,18 @@ methods = []
 [[row]]
 id = "glue-one-dash-colon-subexpr"
 mechanism = "a one-dash parameter with a `:` takes the glued `$(\U00002026)` as its value"
-command = "Write-Output -name=:$(x)"
+command = "Write-Output -name=:$($x)"
 error = false
-cmds = [["Write-Output", "-name=:$(x)"], ["x"]]
+cmds = [["Write-Output", "-name=:$($x)"]]
 comments = []
 methods = []
 
 [[row]]
 id = "glue-tail-one-dash-colon-subexpr"
 mechanism = "the same for a parameter glued after a quote"
-command = "Write-Output 'x'-name=:$(x)"
+command = "Write-Output 'x'-name=:$($x)"
 error = false
-cmds = [["Write-Output", "'x'", "-name=:$(x)"], ["x"]]
+cmds = [["Write-Output", "'x'", "-name=:$($x)"]]
 comments = []
 methods = []
 
@@ -3700,9 +3700,9 @@ methods = []
 [[row]]
 id = "tail-two-backticks-subexpression"
 mechanism = "after a quote, an escaped backtick leaves the `$` unescaped: `$(\U00002026)` stays in the word"
-command = "Write-Output ''a``$(ri C:\\x)"
+command = "Write-Output ''a``$($x)"
 error = false
-cmds = [["Write-Output", "''", "a``$(ri C:\\x)"], ["ri", "C:\\x"]]
+cmds = [["Write-Output", "''", "a``$($x)"]]
 comments = []
 methods = []
 
@@ -3727,45 +3727,45 @@ methods = []
 [[row]]
 id = "param-one-dash-quoted-value-subexpression"
 mechanism = "a quote in a one-dash value makes it a word for PowerShell: `$(\U00002026)` stays in it"
-command = "node -name=''$(ri C:\\x)"
+command = "node -name=''$($x)"
 error = false
-cmds = [["node", "-name=''$(ri C:\\x)"], ["ri", "C:\\x"]]
+cmds = [["node", "-name=''$($x)"]]
 comments = []
 methods = []
 
 [[row]]
 id = "param-one-dash-quoted-space-value-subexpression"
 mechanism = "a quoted value with a space, then `$(\U00002026)`: one word"
-command = "node -name='a b'$(ri C:\\x)"
+command = "node -name='a b'$($x)"
 error = false
-cmds = [["node", "-name='a b'$(ri C:\\x)"], ["ri", "C:\\x"]]
+cmds = [["node", "-name='a b'$($x)"]]
 comments = []
 methods = []
 
 [[row]]
 id = "param-one-dash-double-quoted-value-subexpression"
 mechanism = "a double-quoted value in a one-dash parameter, then `$(\U00002026)`: one word"
-command = "node -name=\"\"$(ri C:\\x)"
+command = "node -name=\"\"$($x)"
 error = false
-cmds = [["node", "-name=\"\"$(ri C:\\x)"], ["ri", "C:\\x"]]
+cmds = [["node", "-name=\"\"$($x)"]]
 comments = []
 methods = []
 
 [[row]]
 id = "tail-dash-word-quoted-value-subexpression"
 mechanism = "a dash word after a quote holding a quote: `$(\U00002026)` stays in it"
-command = "Write-Output 'a'-_x=''$(x)"
+command = "Write-Output 'a'-_x=''$($x)"
 error = false
-cmds = [["Write-Output", "'a'", "-_x=''$(x)"], ["x"]]
+cmds = [["Write-Output", "'a'", "-_x=''$($x)"]]
 comments = []
 methods = []
 
 [[row]]
 id = "tail-dash-word-double-quoted-value-subexpression"
 mechanism = "a dash word after a quote holding a double quote: `$(\U00002026)` stays in it"
-command = "Write-Output 'a'-_x=\"\"$(x)"
+command = "Write-Output 'a'-_x=\"\"$($x)"
 error = false
-cmds = [["Write-Output", "'a'", "-_x=\"\"$(x)"], ["x"]]
+cmds = [["Write-Output", "'a'", "-_x=\"\"$($x)"]]
 comments = []
 methods = []
 
@@ -4106,5 +4106,183 @@ mechanism = "a backtick line end glued to a command name at the end of the input
 command = "git>b`\n"
 error = false
 cmds = [["git>b`\n"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-command"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a command inside is refused"
+parser = "refuses"
+command = "node --name=$(ri C:\\x)"
+error = false
+cmds = [["node", "--name=$(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-line-end"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a line end inside is refused"
+parser = "refuses"
+command = "node --name=$(ri\n C:\\x)"
+error = false
+cmds = [["node", "--name=$(ri\n C:\\x)"], ["ri"], ["C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-cr"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a CR inside, after a quote"
+parser = "refuses"
+command = "node -name=\"\"$(ri\r C:\\x)"
+error = false
+cmds = [["node", "-name=\"\"$(ri\r C:\\x)"], ["ri"], ["C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-redirect-line-end"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a redirect then a line end, after a quote"
+parser = "refuses"
+command = "Write-Output ''a``$(ri2>\n C:\\ x)"
+error = false
+cmds = [["Write-Output", "''", "a``$(ri2>\n C:\\ x)"], ["ri2>"], ["C:\\", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-exit"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a statement keyword inside"
+parser = "refuses"
+command = "node --name=$(exit)"
+error = false
+cmds = [["node", "--name=$(exit)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-loop-label"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a loop label inside"
+parser = "refuses"
+command = "node --name=$(:l while (0) {})"
+error = false
+cmds = [["node", "--name=$(:l while (0) {})"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-comment-exit"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a comment then a keyword"
+parser = "refuses"
+command = "node --name=$(<#c#> exit)"
+error = false
+cmds = [["node", "--name=$(<#c#> exit)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-number"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a number is no variable"
+parser = "refuses"
+command = "node --name=$(1) a"
+error = false
+cmds = [["node", "--name=$(1)", "a"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-paren"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `(` in an index"
+parser = "refuses"
+command = "node --name=$($p[(ri C:\\x)])"
+error = false
+cmds = [["node", "--name=$($p[(ri C:\\x)])"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-brace"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `{` in an index"
+parser = "refuses"
+command = "node --name=$($p[{ri C:\\x}])"
+error = false
+cmds = [["node", "--name=$($p[{ri C:\\x}])"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-bracket"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a `[` in an index"
+parser = "refuses"
+command = "node --name=$($p[$q[0]])"
+error = false
+cmds = [["node", "--name=$($p[$q[0]])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-lf"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a line end in an index"
+parser = "refuses"
+command = "node --name=$($p[0\n])"
+error = false
+cmds = [["node", "--name=$($p[0\n])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-cr"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a CR in an index"
+parser = "refuses"
+command = "node --name=$($p[0\r])"
+error = false
+cmds = [["node", "--name=$($p[0\r])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-index-comment"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a comment in an index"
+parser = "refuses"
+command = "node --name=$($p[<#x#>0])"
+error = false
+cmds = [["node", "--name=$($p[<#x#>0])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-subexpr-variable"
+mechanism = "a variable alone in a glued `$(\U00002026)` stays in the word"
+command = "node --name=$($x) a"
+error = false
+cmds = [["node", "--name=$($x)", "a"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-range"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a range is no member"
+parser = "refuses"
+command = "node --name=$($m..5) a"
+error = false
+cmds = [["node", "--name=$($m..5)", "a"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-subexpr-variable-operator"
+mechanism = "a `$(\U00002026)` glued after a word ending in `$`: only a variable with members or indexes on one line is modelled; a variable then an operator and a command"
+parser = "refuses"
+command = "node --name=$($x -and (ri C:\\x)) a"
+error = false
+cmds = [["node", "--name=$($x -and (ri C:\\x))", "a"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-subexpr-digit-variable"
+mechanism = "a variable named by digits in a glued `$(\U00002026)` stays in the word"
+command = "node --name=$($1) a"
+error = false
+cmds = [["node", "--name=$($1)", "a"]]
 comments = []
 methods = []
