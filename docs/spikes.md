@@ -447,18 +447,22 @@ panic), H = 0 matching the harmless grammar, R = 86 that `ParseInput` also rejec
 (F − H − R) / N = 27 / 28,516 = 0.095 %, budget 0.1 %. Over the `ok` rows alone: 20 / 25,004 =
 0.080 %.
 
-Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (122) hold
+Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (370) hold
 `ParseInput`'s answer; `tests/pwsh_rows.rs` checks the parser against them and
 `tests/pwsh_oracle.rs` (feature `oracle`) checks them against the real `ParseInput`.
 
-Differential fuzz (`tests/pwsh_oracle.rs`, seed `0x5EED0005`): 2,000 mutants of those rows
-(insertions of comment, quote, escape, whitespace and operator text at token boundaries, deletions
-and doublings). The parser must never read a mutant PowerShell accepts differently, except these
-listed mechanisms, which only split or join argument text or concern the oracle itself:
+Glued pieces: two pieces of one command element or redirection with nothing between them (or only
+a backtick line end, or a comment) are accepted only when their kinds and the right piece's first
+character are in the glue table in `src/parse/pwsh.rs`; each entry cites the row that shows
+`ParseInput`'s reading, and any other glued pair fails closed.
 
-- A comma, a comment and a line end continue a comma list: the next line's first word joins it.
-- A backtick after a leading digit escapes the line end (`1`<LF>`).
-- A backtick and a line end glued after a variable stay in the argument's text.
+Differential fuzz (`tests/pwsh_oracle.rs`, 10 seeds, 20,000 mutants of the 348 rows pinned as
+seeds): insertions of comment, quote, escape, whitespace and operator text at token boundaries,
+deletions and doublings. The parser must never read a mutant PowerShell accepts differently,
+except these listed mechanisms, which only split or join argument text or concern the oracle
+itself. Each is held by an argument the two readings disagree on, and a pinned input shows it:
+
+- A member glued to `$?` is not a member access in argument mode (`$?.ForEach{1}`).
 - `ParseInput` lists a comment inside a word's `$(…)` only among that word's nested tokens, so
   the reference shows no comment where the parser records one. The fuzz recognises this by its
   shape (everything else agrees and each extra comment sits in a `$(` glued to its word).
@@ -479,6 +483,6 @@ word glued after a quoted redirection target; a trailing `&` in `--%` text; a ba
 one-dash parameter; text glued after a leading `$(…)`; a `$` inside a bare command name; `--%`
 glued after a closing quote; an escaped `--%`; a comment glued to a command's last redirection
 target; a `.ForEach` block after a space or line end; a comment glued to the command name; a
-redirection target starting with `;` (`ls 2>$null<;ri x` runs `ri`). Of the 2,003 mutants, the
-parser refuses 377 that PowerShell accepts and accepts 17 that PowerShell rejects (PowerShell runs nothing of a
-script it cannot parse; the parser judges the commands).
+redirection target starting with `;` (`ls 2>$null<;ri x` runs `ri`). Of the 20,000 mutants, the
+parser refuses 6,904 that PowerShell accepts and accepts 144 that PowerShell rejects (PowerShell
+runs nothing of a script it cannot parse; the parser judges the commands).
