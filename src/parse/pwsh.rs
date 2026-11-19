@@ -326,7 +326,6 @@ fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
                 // `--%` text: `verbatim_end` checks where it ends, typographic quotes included.
                 "comment"
                 | "stop_parsing"
-                | "verbatim_command_argument"
                 | "verbatim_string_characters"
                 | "expandable_string_literal"
                 | "verbatim_here_string_characters"
@@ -1876,10 +1875,6 @@ impl<'a> Lower<'a> {
             start: first.start_byte(),
             end: last.end_byte(),
         };
-        // `.$m`, `.$(x)`, `.'x'`: PowerShell passes the `.` as its own argument.
-        if dot_opens_expression(&self.src[whole.start..whole.end]) {
-            return Err(self.unmodelled(first));
-        }
         // ``a'b'`⏎``, ``-S"x"`⏎``: a backtick line end glued to a word that ends in a quote is
         // word text for PowerShell (after a whole string it continues the line).
         let text = &self.src[whole.start..whole.end];
