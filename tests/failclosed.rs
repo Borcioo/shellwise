@@ -160,11 +160,11 @@ mod hooks {
 
     #[test]
     fn an_analysis_that_finishes_runs_no_raw_scan() {
-        // `scan-abort` kills the process as soon as the raw scan starts.
+        // `scan-abort` ends the process with exit code 99 as soon as the raw scan starts.
         assert_ok(&hook("scan-abort", PLAIN));
         // On the failure path the scan runs.
         let r = hook("scan-abort,panic", PLAIN);
-        assert_ne!(r.code, 0, "{r:?}", r = r.stdout);
+        assert_eq!(r.code, 99, "{}", r.stdout);
     }
 
     #[test]

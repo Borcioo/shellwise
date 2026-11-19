@@ -239,7 +239,7 @@ fn bounded_scan(command: Arc<String>, deadline: &Deadline) -> Option<Option<Span
                 thread::sleep(Duration::from_secs(60));
             }
             if testhook_is("scan-abort") {
-                std::process::abort();
+                std::process::exit(99);
             }
             let _ = tx.send(panic::catch_unwind(|| scan::destructive_row(&command)));
         });
