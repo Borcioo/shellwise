@@ -1054,6 +1054,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"x='a[$(>y)]'; a[$(echo x)]=1"#.into(), "<none>"),
         (r#"touch 'a[$(>y)]'; (( $(wc -l 'a[$(>y)]') ))"#.into(), "(("),
         (r#"echo 'a[$(>y)]' > f; (( $(cat - < f) ))"#.into(), "(("),
+        (
+            r#"touch 'a[$(>y)]'; : > f; (( $(wc -l < f 'a[$(>y)]') ))"#.into(),
+            "((",
+        ),
         (r#"x='a[$(>y)]'; [[ $(date +%s; echo x) -eq 1 ]]"#.into(), "[["),
         // By rule (bash runs nothing here): a listed command quoted, with another redirect, or in
         // a pipeline.
@@ -1207,6 +1211,8 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"x='a[$(>y)]'; (( $(date +%s) - 1 ))"#.into(),
         r#"x='a[$(>y)]'; (( $( date +%s ) + 0 ))"#.into(),
         "x='a[$(>y)]'; (( $(date\t+%s) ))".into(),
+        "x='a[$(>y)]'; s=abc; echo ${s:$(date\t+%s)}".into(),
+        "x='a[$(>y)]'; echo $(( $(date\t+%s) ))".into(),
         r#"x='a[$(>y)]'; (( `date +%s` ))"#.into(),
         r#"x='a[$(>y)]'; (( $(id -u) ))"#.into(),
         r#"x='a[$(>y)]'; (( $(date +%s%N) ))"#.into(),

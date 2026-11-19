@@ -1045,7 +1045,8 @@ impl Lower {
         if named && target.as_deref().is_none_or(|t| REBINDING.contains(&t)) {
             self.rebinds.set(true);
         }
-        let bare = !wrapped && target.as_deref() == Some(cmd.typed.as_str());
+        // A wrapper is the command word itself, so a wrapped builtin is never bare.
+        let bare = target.as_deref() == Some(cmd.typed.as_str());
         let assignments: &[usize] = if bare { &assignment_args } else { &[] };
         self.name_writer_words(&cmd, target.as_deref(), first_arg, assignments);
         let runs_text = match target.as_deref() {
