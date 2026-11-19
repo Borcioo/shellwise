@@ -983,6 +983,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"o=-v; n=0; command printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
         (r#"o=-v; n=0; builtin printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
         (r#"n=0; printf {-v,n} %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; m=0; printf -v m $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; m=0; printf -vm $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        // By rule (bash refuses it): `-v` with no name.
+        ("printf -v".into(), "printf"),
         // A declaration word that is not literal text: split, glued to a literal or a `+`, quoted,
         // a brace expansion.
         (r#"x=1; o='x=a[$(>y)]'; export $o; (( x ))"#.into(), "(("),
@@ -1049,6 +1053,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"x='a[$(>y)]'; a=([$(echo x)]=1)"#.into(), "<none>"),
         (r#"x='a[$(>y)]'; a[$(echo x)]=1"#.into(), "<none>"),
         (r#"touch 'a[$(>y)]'; (( $(wc -l 'a[$(>y)]') ))"#.into(), "(("),
+        (r#"echo 'a[$(>y)]' > f; (( $(cat - < f) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; [[ $(date +%s; echo x) -eq 1 ]]"#.into(), "[["),
+        // By rule (bash runs nothing here): a listed command quoted, with another redirect, or in
+        // a pipeline.
+        (r#"x='a[$(>y)]'; [[ $('date' +%s) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; [[ $(wc -l >f) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; [[ $(date +%s >f) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; [[ $(date +%s | cat) -eq 1 ]]"#.into(), "[["),
         // The list holds only while the script cannot rebind a listed name: a function, a PATH
         // write, `hash`, a sourced file, an alias; by rule `enable`.
         (r#"date() { echo 'a[$(>y)]'; }; (( $(date +%s) ))"#.into(), "(("),
@@ -1194,6 +1206,7 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         // The digits-only list: spaces and a backtick body, `wc -l` from a literal path.
         r#"x='a[$(>y)]'; (( $(date +%s) - 1 ))"#.into(),
         r#"x='a[$(>y)]'; (( $( date +%s ) + 0 ))"#.into(),
+        "x='a[$(>y)]'; (( $(date\t+%s) ))".into(),
         r#"x='a[$(>y)]'; (( `date +%s` ))"#.into(),
         r#"x='a[$(>y)]'; (( $(id -u) ))"#.into(),
         r#"x='a[$(>y)]'; (( $(date +%s%N) ))"#.into(),
