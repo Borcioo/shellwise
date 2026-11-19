@@ -95,7 +95,8 @@ fi
 if [ -z "$1" ] || [ ! -f "$1/Cargo.toml" ]; then echo "gate: no crate root at $1"; exit 2; fi
 cd "$1"
 # One target dir per worktree: in a shared one cargo reuses the build of a sibling worktree as fresh.
-export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/$(basename "$PWD")/target"
+tree=$(basename "$PWD")
+export CARGO_TARGET_DIR="$HOME/.cache/shellwise-gate/$tree/target"
 cargo --version
 cargo test --features testhooks
 '@ -replace "`r`n", "`n"
@@ -103,7 +104,7 @@ cargo test --features testhooks
 $wslShell = (wsl.exe -d $Distro -- sh -c 'getent passwd "$(id -un)" | cut -d: -f7' | Out-String).Trim()
 if (-not $wslShell) { Stop-Gate 'test-wsl (no login shell from getent)' $null }
 Write-Host "LEG test-wsl shell $wslShell"
-$total += Assert-TestLeg (Invoke-Leg 'test-wsl' { wsl.exe -d $Distro -- $wslShell -lic $wslScript gate $wslRoot })
+$total += Assert-TestLeg (Invoke-Leg 'test-wsl' { wsl.exe -d $Distro --exec $wslShell -lic $wslScript gate $wslRoot })
 
 Assert-Leg (Invoke-Leg 'deny' { cargo deny check })
 
