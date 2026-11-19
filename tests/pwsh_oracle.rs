@@ -31,6 +31,359 @@ const SEEDS: [u64; 10] = [
 ];
 const MUTANTS: usize = 2_000;
 
+/// The rows the gate's fuzz mutates, pinned at fix round 3's start: rows added later are not
+/// seeds, so a new row cannot change the mutants. Order matters: seeds are picked by index.
+const SEED_ROWS: &[&str] = &[
+    "glued-value",
+    "glued-index",
+    "glued-type",
+    "glued-subexpr",
+    "glued-array",
+    "glued-paren",
+    "glued-assign-eq",
+    "glued-assign-comma",
+    "glued-string",
+    "glued-block-comment",
+    "word-block-comment",
+    "word-block-comment-quote",
+    "nbsp-sep",
+    "ff-sep",
+    "ideographic-sep",
+    "nbsp-comment",
+    "cr-herestring",
+    "stop-parsing",
+    "assign-nospace",
+    "assign-member",
+    "assign-index",
+    "assign-multi",
+    "assign-typed-space",
+    "assign-braced",
+    "typographic-quote",
+    "call-git-path",
+    "cd-dotdot",
+    "cd-backslash",
+    "dotnet-delete",
+    "var-glued-path",
+    "env-glued-path",
+    "comma-glued-vars",
+    "multiplier",
+    "multiplier-upper",
+    "at-word",
+    "param-glued-quote",
+    "param-glued-dquote",
+    "null-coalescing",
+    "null-coalescing-assign",
+    "null-conditional-member",
+    "ternary",
+    "switch-one-line",
+    "escaped-quotes",
+    "hash-after-escape",
+    "early-error-delete",
+    "foreach-method",
+    "negative-number",
+    "glued-redirect",
+    "merge-redirect",
+    "all-redirect",
+    "lone-redirect",
+    "redirect-char-in-word",
+    "paren-range",
+    "paren-range-var",
+    "member-call",
+    "member-after-herestring",
+    "subexpr-glued-end",
+    "subexpr-in-param",
+    "braced-colon",
+    "split-operator",
+    "date-call",
+    "comment-trailing",
+    "comment-own-line",
+    "comment-after-pipe",
+    "comment-in-block",
+    "comment-after-semicolon",
+    "comment-block-multiline",
+    "comment-hash-in-strings",
+    "comment-in-param-block",
+    "fuzz-bare-dash-glued-to-name",
+    "fuzz-stop-parsing-glued",
+    "fuzz-stop-parsing-after-quote",
+    "fuzz-backtick-line-end-in-name",
+    "fuzz-redirect-first",
+    "fuzz-glued-comment-param",
+    "fuzz-glued-comment-redirect",
+    "fuzz-comment-after-quote",
+    "fuzz-dollar-dollar-subexpr",
+    "fuzz-subexpr-glued-to-name",
+    "fuzz-bare-dash-glued-to-word",
+    "fuzz-glued-comment-inside",
+    "fuzz-odd-dollar-run-subexpr",
+    "fuzz-stop-parsing-nbsp",
+    "fuzz-redirect-glued-to-param",
+    "fuzz-param-value-unicode-space",
+    "fuzz-redirect-target-glued-word",
+    "fuzz-hash-starts-comment",
+    "fuzz-unicode-space-between-args",
+    "fuzz-static-member-on-variable",
+    "fuzz-redirect-after-string",
+    "fuzz-one-dash-param-subexpr",
+    "review-stop-parsing-pipe",
+    "review-stop-parsing-quoted-pipe",
+    "review-stop-parsing-or",
+    "fix1-verbatim-and",
+    "fix1-verbatim-and-glued",
+    "fix1-verbatim-and-quoted",
+    "fix1-verbatim-and-after-quote",
+    "fix1-verbatim-and-tab",
+    "fix1-verbatim-and-triple",
+    "fix1-verbatim-and-backtick",
+    "fix1-verbatim-pipe-backtick",
+    "fix1-verbatim-lf",
+    "fix1-verbatim-cr",
+    "fix1-verbatim-crlf",
+    "fix1-verbatim-unclosed-quote",
+    "fix1-verbatim-unclosed-quote-lf",
+    "fix1-verbatim-keeps-semicolon",
+    "fix1-verbatim-keeps-amp",
+    "fix1-verbatim-keeps-amp-amp-spaced",
+    "fix1-verbatim-keeps-gt",
+    "fix1-verbatim-keeps-merge",
+    "fix1-verbatim-keeps-hash",
+    "fix1-verbatim-trailing-amp",
+    "fix1-verbatim-trailing-amp-lf",
+    "fix1-param-one-dash-backtick-lf",
+    "fix1-param-one-dash-backtick-recurse",
+    "fix1-param-two-dash-backtick-lf",
+    "fix1-param-two-dash-backtick-equals",
+    "fix1-escaped-comma-ends-word",
+    "fix1-escaped-comma-ab",
+    "fix1-param-value-subexpr-two-dash",
+    "fix1-param-value-subexpr-one-dash",
+    "fix1-param-value-var",
+    "fix1-param-value-bare-var",
+    "fix1-param-value-single",
+    "fix1-param-value-plain",
+    "fix1-param-value-backtick-quote",
+    "fix1-stmt-redirect-glued-comment",
+    "fix1-expr-redirect-glued-comment",
+    "fix1-expr-redirect-subst",
+    "fix1-glued-stop-parsing",
+    "fix1-subexpr-glued-text",
+    "fix1-subexpr-glued-text-x",
+    "fix1-instance-call-paren",
+    "fix1-instance-call-var",
+    "fix1-static-call-assigned",
+    "fix1-instance-call-argument",
+    "fix1-instance-call-second-statement",
+    "fix1-instance-call-on-static",
+    "fix1-verbatim-typographic-quotes",
+    "fix1-stop-parsing-after-quote",
+    "fix1-instance-call-foreach-block",
+    "fix1-name-subexpr-constant",
+    "fix1-escaped-stop-parsing",
+    "fix1-foreach-block-after-line-end",
+    "fix1-stop-parsing-after-double-quote",
+    "fix1-command-redirect-glued-comment",
+    "fix1-instance-call-assigned",
+    "fix1-semicolon-after-redirect",
+    "fix1-comment-glued-to-name",
+    "fix2-r1-en-dash-param-backtick-lf",
+    "fix2-r1-em-dash-param-backtick-lf",
+    "fix2-r1-bar-dash-param-backtick-lf",
+    "fix2-r1-en-dash-param-backtick-semicolon",
+    "fix2-r1-en-dash-param-value-lf",
+    "fix2-r1-param-value-rdq",
+    "fix2-r1-param-value-ldq",
+    "fix2-r1-param-value-bdq",
+    "fix2-r1-param-value-rsq",
+    "fix2-r1-param-value-lsq",
+    "fix2-r1-param-value-bsq",
+    "fix2-r1-param-value-revsq",
+    "fix2-r1-one-dash-param-value-rdq",
+    "fix2-r1-param-value-rdq-pipe",
+    "fix2-r1-nel-splits",
+    "fix2-r1-line-separator-splits",
+    "fix2-r1-paragraph-separator-splits",
+    "fix2-r1-line-separator-after-name",
+    "fix2-r1-dash-param-in-subexpr",
+    "fix2-r1-en-dash-in-single",
+    "fix2-r1-em-dash-in-double",
+    "fix2-r1-bar-in-single",
+    "fix2-r1-lsq-in-double",
+    "fix2-r1-rsq-in-double",
+    "fix2-r1-bsq-revsq-in-double",
+    "fix2-r1-ldq-rdq-in-single",
+    "fix2-r1-bdq-in-single",
+    "fix2-r1-line-separator-in-single",
+    "fix2-r1-nel-in-double",
+    "fix2-r1-in-comment",
+    "fix2-r1-in-block-comment",
+    "fix2-r1-in-here-string",
+    "fix2-r1-in-expandable-here-string",
+    "fix2-r1-doubled-rdq-in-double",
+    "fix2-r1-doubled-rsq-in-single",
+    "fix2-r1-closing-quote-then-word",
+    "fix2-r1-word-section-lsq-rsq",
+    "fix2-r1-word-section-bsq-revsq",
+    "fix2-r1-word-section-ldq-rdq",
+    "fix2-r1-word-section-bdq",
+    "fix2-r1-word-section-hides-no-separator",
+    "fix2-r1-mid-word-en-dash",
+    "fix2-r1-mid-word-em-dash",
+    "fix2-r1-mid-word-bar",
+    "fix2-r1-in-subexpr",
+    "fix2-r1-here-string-typographic-delimiters",
+    "fix2-r1-verbatim-here-string-typographic-delimiters",
+    "fix2-r1-word-start-dash-after-comma",
+    "fix2-r1-line-separator-in-word-section",
+    "fix2-r2-lt-after-target-lf",
+    "fix2-r2-gt-after-target-lf",
+    "fix2-r2-append-after-target-lf",
+    "fix2-r2-star-after-target-lf",
+    "fix2-r2-lt-blank-line",
+    "fix2-r2-lt-comment-line",
+    "fix2-r2-lt-block-comment",
+    "fix2-r2-lt-crlf",
+    "fix2-r2-lt-cr",
+    "fix2-r2-lt-tab-lf",
+    "fix2-r2-gt-lf",
+    "fix2-r2-stream-lf",
+    "fix2-r2-star-lf",
+    "fix2-r2-append-lf",
+    "fix2-r2-after-string-lf",
+    "fix2-r2-after-paren-lf",
+    "fix2-r2-after-merge-lf",
+    "fix2-r2-statement-redirect-lf",
+    "fix2-r2e-space-then-lf",
+    "fix2-r2e-statement-space-then-lf",
+    "fix2-r2-target-same-line",
+    "fix2-r2-merge-then-lf",
+    "fix2-r3-quoted-member",
+    "fix2-r3-double-quoted-member",
+    "fix2-r3-expandable-member",
+    "fix2-r3-typographic-quoted-member",
+    "fix2-r3-variable-member",
+    "fix2-r3-braced-variable-member",
+    "fix2-r3-paren-member",
+    "fix2-r3-subexpr-member",
+    "fix2-r3-array-member",
+    "fix2-r3-index-then-quoted-member",
+    "fix2-r3-chain-then-quoted-member",
+    "fix2-r3-paren-receiver-quoted-member",
+    "fix2-r3-paren-receiver-variable-member",
+    "fix2-r3-env-quoted-member",
+    "fix2-r3-null-conditional",
+    "fix2-r3-null-conditional-variable-member",
+    "fix2-r3-null-conditional-chain",
+    "fix2-r3-null-conditional-index",
+    "fix2-r3-env-null-conditional",
+    "fix2-r3-member-then-null-conditional",
+    "fix2-r3-braced-null-conditional",
+    "fix2-r3-block-call",
+    "fix2-r3-block-call-paren-receiver",
+    "fix2-r3-block-call-paren-null-conditional",
+    "fix2-r3-block-call-quoted-foreach",
+    "fix2-r3-block-call-null-conditional-foreach",
+    "fix2-r3-block-call-chain",
+    "fix2-r3-block-call-variable-member",
+    "fix2-r3-block-call-quoted-member",
+    "fix2-r3-block-call-null-conditional",
+    "fix2-r3-in-list-quoted-member",
+    "fix2-r3-in-list-null-conditional",
+    "fix2-r3-after-colon-quoted-member",
+    "fix2-r3-after-colon-null-conditional",
+    "fix2-r3-after-colon-block-call",
+    "fix2-r3-simple-member-call",
+    "fix2-r3-foreach-block",
+    "fix2-r3-glued-paren-after-word",
+    "fix2-r3-property-null-conditional",
+    "fix2-param-value-trailing-comma-space",
+    "fix2-param-value-trailing-comma-unicode-space",
+    "fix2-param-value-trailing-comma-parameter",
+    "fix2-r2-glued-redirect-comment",
+    "fix2-r2-glued-redirect-gt",
+    "fix2-r2-glued-redirect-semicolon",
+    "fix2-r2-comment-before-target",
+    "fix2-null-conditional-member-glued-comment",
+    "fix2-null-conditional-index",
+    "fix2-comma-backtick-line-end",
+    "fix2-comma-block-comment",
+    "fix2-dot-variable-word",
+    "fix2-dot-subexpr-word",
+    "fix2-dot-variable-glued-word",
+    "fix2-dot-path-variable-word",
+    "fix2-dot-single-quote-word",
+    "fix2-dot-double-quote-word",
+    "fix2-dot-single-quote-word-comment",
+    "fix2-dot-typographic-single-quote-word",
+    "fix2-dot-typographic-double-quote-word",
+    "fix2-question-mark-after-variable",
+    "fix2-question-marks-member-glued-comment",
+    "fix2-question-mark-after-braced-variable",
+    "fix2-question-mark-variable-kept",
+    "fix2-comment-inside-name-redirect",
+    "fix2-comment-inside-name-text",
+    "fix2-i1-dot-typographic-name",
+    "fix2-i1-dot-typographic-double-name",
+    "fix2-i1-dot-ascii-quote-name",
+    "fix2-i1-comment-in-static-call",
+    "fix2-i1-number-member-statement",
+    "fix2-i1-number-quoted-member-in-block",
+    "fix2-i1-number-variable-member-in-block",
+    "fix2-i1-question-mark-member-variable",
+    "fix2-i1-dot-in-one-dash-value",
+    "fix2-i1-dot-at-two-dash-value-start",
+    "fix2-i1-dot-after-comma-in-value",
+    "fix2-i1-dot-in-two-dash-value-kept",
+    "fix2-i1-dot-list-element",
+    "fix2-i1-index-after-string",
+    "fix2-i1-member-after-string",
+    "fix2-i1-index-after-here-string",
+    "fix2-i1-question-word-after-string-kept",
+    "fix2-i1-braced-variable-in-value",
+    "fix2-i1-braced-variable-after-dollars",
+    "fix2-i1-comment-in-member-target",
+    "fix2-i2-number-dot-call",
+    "fix2-i2-number-dot-call-plain",
+    "fix2-i2-number-name-kept",
+    "fix2-i2-member-line-end",
+    "fix2-i2-member-lf",
+    "fix2-i2-member-space-before-dot-kept",
+    "fix2-i2-variable-dots-name",
+    "fix2-i2-variable-dots-name-call",
+    "fix2-i2-variable-path-name-kept",
+    "fix2-i2-redirect-glued-to-name",
+    "fix2-i2-redirect-glued-to-name-plain-kept",
+    "fix2-i2-redirect-glued-to-variable-kept",
+    "fix2-i2-redirect-after-quoted-name-kept",
+    "fix2-i2-stop-parsing-escaped-after-quote",
+    "fix2-i2-stop-parsing-escaped",
+    "fix2-i2-stop-parsing-escaped-dash",
+    "fix2-i2-stop-parsing-escaped-redirect",
+    "fix2-i2-quote-dash-nbsp",
+    "fix2-i2-quote-dash-param",
+    "fix2-i2-quote-two-dash-param",
+    "fix2-i2-one-dash-dot-end",
+    "fix2-i2-one-dash-dot-name",
+    "fix2-i2-one-dash-dot-plain",
+    "fix2-i2-one-dash-dot-colon",
+    "fix2-i2-one-dash-dot-space",
+    "fix2-i2-one-dash-dot-dollars",
+    "fix2-i2-one-dash-dot-question",
+    "fix2-i2-one-dash-dot-quote-lf",
+    "fix2-i2-colon-value-dot-kept",
+    "fix2-i2-nel-before-comment",
+    "fix2-i2-nel-before-string",
+    "fix2-i2-nel-before-here-string",
+    "fix2-i2-nel-in-comment",
+    "fix2-i2-backtick-lf-after-glued-quote",
+    "fix2-i2-backtick-lf-after-word-quote-kept",
+    "fix2-i2-backtick-lf-after-quote-kept",
+    "fix2-i2-comment-after-glued-backtick-lf-kept",
+    "fix2-i2-comment-after-redirect-backtick-lf",
+    "fix2-i2-comment-after-spaced-backtick-lf-kept",
+    "fix2-i2-comment-in-two-dash-param",
+    "fix2-i2-comment-in-one-dash-param",
+];
+
 /// Commands whose arguments the delete guard resolves: a disagreement in one of their
 /// statements must be a refusal, never a listed shape.
 const GUARDED: &[&str] = &[
@@ -381,19 +734,41 @@ fn guarded(s: &pwsh::Seen) -> bool {
     })
 }
 
-/// Shapes of class-B disagreements the parser may keep, each by a text the mutant holds and its
-/// mechanism in `docs/spikes.md` ("PowerShell grammar fork"). None is in a guarded statement. A
-/// change to the seeds, the generator or the seed rows makes new mutants: refuse or list each.
-const LISTED: &[(&str, &str)] = &[
-    (
-        "1`\n",
-        "a backtick after a leading digit escapes the line end",
-    ),
-    (
-        "$?.",
-        "a member glued to `$?` is not a member access in argument mode",
-    ),
-];
+/// Shapes of class-B disagreements the parser may keep: a text that an argument the two readings
+/// disagree on holds, a pinned input that must show the disagreement, and its mechanism in
+/// `docs/spikes.md` ("PowerShell grammar fork"). None is in a guarded statement. A change to the
+/// seeds, the generator or the seed rows makes new mutants: refuse each.
+const LISTED: &[(&str, &str, &str)] = &[(
+    "$?.",
+    "Write-Output $?.ForEach{1}",
+    "a member glued to `$?` is not a member access in argument mode",
+)];
+
+/// The arguments one reading has where the other has none or another: for each statement, the
+/// elements at positions where the two differ, from both readings.
+fn differing_elements<'s>(seen: &'s pwsh::Seen, want: &'s pwsh::Seen) -> Vec<&'s str> {
+    let mut out = Vec::new();
+    for i in 0..seen.cmds.len().max(want.cmds.len()) {
+        let (a, b) = (seen.cmds.get(i), want.cmds.get(i));
+        let n = a.map_or(0, Vec::len).max(b.map_or(0, Vec::len));
+        for j in 0..n {
+            let (x, y) = (a.and_then(|c| c.get(j)), b.and_then(|c| c.get(j)));
+            if x != y {
+                out.extend(x.map(String::as_str));
+                out.extend(y.map(String::as_str));
+            }
+        }
+    }
+    out
+}
+
+/// The `LISTED` shape a class-B disagreement belongs to: one held by an argument that differs.
+fn listed_shape(seen: &pwsh::Seen, want: &pwsh::Seen) -> Option<usize> {
+    let differ = differing_elements(seen, want);
+    LISTED
+        .iter()
+        .position(|(l, _, _)| differ.iter().any(|e| e.contains(l)))
+}
 
 #[test]
 fn disagreements_are_classed_by_what_powershell_runs() {
@@ -423,16 +798,131 @@ fn disagreements_are_classed_by_what_powershell_runs() {
 
 #[test]
 fn seeded_mutants_never_read_differently_from_powershell() {
-    let mut seeds = rows("pwsh_gaps.toml");
-    seeds.extend(rows("pwsh_mechanisms.toml"));
+    let mut all = rows("pwsh_gaps.toml");
+    all.extend(rows("pwsh_mechanisms.toml"));
+    let seeds: Vec<&Row> = SEED_ROWS
+        .iter()
+        .map(|id| {
+            all.iter()
+                .find(|r| r.id == *id)
+                .unwrap_or_else(|| panic!("pinned seed row {id} is missing"))
+        })
+        .collect();
+    let f = fuzz("fuzz", &SEEDS, &seeds, mutate);
+    eprintln!("{}", f.summary);
+    assert_eq!(f.mutants, MUTANTS * SEEDS.len());
+    assert!(f.bad.is_empty(), "{}", f.bad.join("\n"));
+    // Each listed shape still shows on its pinned input, as that shape.
+    let inputs: Vec<Input> = LISTED
+        .iter()
+        .enumerate()
+        .map(|(i, (_, pinned, _))| Input {
+            id: format!("listed-{i}"),
+            command: pinned,
+        })
+        .collect();
+    let answers = ask_powershell("listed", &inputs);
+    let mut stale = Vec::new();
+    for (i, ((shape, pinned, _), a)) in LISTED.iter().zip(&answers).enumerate() {
+        let shows = !a.error
+            && disagreement(pinned, a).is_some()
+            && pwsh::parse(pinned, Shell::Pwsh, Os::Windows).is_ok_and(|s| {
+                let seen = pwsh::seen(pinned, &s);
+                let want = a.seen();
+                class(&seen, &want) == Class::B
+                    && !guarded(&seen)
+                    && !guarded(&want)
+                    && listed_shape(&seen, &want) == Some(i)
+            });
+        if !shows {
+            stale.push(*shape);
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "listed shapes their pinned input no longer shows: {stale:?}"
+    );
+}
+
+/// The acceptance run: seeds the fix rounds never iterated against, over every current row, once
+/// with the gate's cuts and once also cutting at `-` and `.` (`cargo test --features oracle
+/// --release --test pwsh_oracle held_out -- --ignored`). A run spends its seeds.
+#[test]
+#[ignore = "held-out acceptance run, once per round"]
+fn held_out_mutants_never_read_differently_from_powershell() {
+    let mut all = rows("pwsh_gaps.toml");
+    all.extend(rows("pwsh_mechanisms.toml"));
+    let every: Vec<&Row> = all.iter().collect();
+    let plain = fuzz("held_out", &HELD_OUT_SEEDS, &every, mutate);
+    let fine = fuzz("held_out_fine", &HELD_OUT_SEEDS, &every, mutate_fine);
+    eprintln!("held-out, gate cuts: {}", plain.summary);
+    eprintln!("held-out, also at - and .: {}", fine.summary);
+    let mut bad = plain.bad;
+    bad.extend(fine.bad.into_iter().map(|b| format!("fine: {b}")));
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Seeds for the held-out run only: never used by the gate or by a fix round's iterations.
+const HELD_OUT_SEEDS: [u64; 10] = [
+    7349, 18121, 22501, 31337, 40961, 52711, 60013, 71993, 83311, 99991,
+];
+
+/// `boundaries`, also cutting inside a word at each `-` and `.` (before and after it).
+fn boundaries_fine(s: &str) -> Vec<usize> {
+    let mut at = boundaries(s);
+    for (i, c) in s.char_indices() {
+        if c == '-' || c == '.' {
+            at.push(i);
+            at.push(i + 1);
+        }
+    }
+    at.sort_unstable();
+    at.dedup();
+    at
+}
+
+/// `mutate` over `boundaries_fine`.
+fn mutate_fine(src: &str, rng: &mut Rng) -> String {
+    let at = boundaries_fine(src);
+    let i = at[rng.below(at.len())];
+    match rng.below(4) {
+        0 if i < src.len() => {
+            let n = src[i..].chars().next().map_or(0, char::len_utf8);
+            format!("{}{}", &src[..i], &src[i + n..])
+        }
+        1 if i < src.len() => {
+            let n = src[i..].chars().next().map_or(0, char::len_utf8);
+            format!("{}{}{}", &src[..i + n], &src[i..i + n], &src[i + n..])
+        }
+        _ => {
+            let ins = INSERTS[rng.below(INSERTS.len())];
+            format!("{}{ins}{}", &src[..i], &src[i..])
+        }
+    }
+}
+
+/// What one fuzz run found.
+struct Fuzz {
+    mutants: usize,
+    bad: Vec<String>,
+    summary: String,
+}
+
+/// Mutants of `seeds` (picked by each RNG seed, `MUTANTS` per seed) against PowerShell, classed.
+fn fuzz(
+    tag: &str,
+    rng_seeds: &[u64],
+    seeds: &[&Row],
+    mutator: fn(&str, &mut Rng) -> String,
+) -> Fuzz {
     let mut mutants: Vec<(String, String)> = Vec::new();
-    for seed in SEEDS {
+    for &seed in rng_seeds {
         let mut rng = Rng(seed);
         mutants.extend((0..MUTANTS).map(|n| {
-            let base = &seeds[rng.below(seeds.len())];
-            let mut text = mutate(&base.command, &mut rng);
+            let base = seeds[rng.below(seeds.len())];
+            let mut text = mutator(&base.command, &mut rng);
             if rng.below(3) == 0 {
-                text = mutate(&text, &mut rng);
+                text = mutator(&text, &mut rng);
             }
             (format!("{}~{seed:x}~{n}", base.id), text)
         }));
@@ -444,7 +934,7 @@ fn seeded_mutants_never_read_differently_from_powershell() {
             command: c,
         })
         .collect();
-    let answers = ask_powershell("fuzz", &inputs);
+    let answers = ask_powershell(tag, &inputs);
     let mut bad = Vec::new();
     let mut used = vec![0usize; LISTED.len()];
     let (mut refused, mut accepted, mut a_count, mut b_count) = (0usize, 0usize, 0usize, 0usize);
@@ -478,29 +968,24 @@ fn seeded_mutants_never_read_differently_from_powershell() {
             }
             Class::B => {
                 b_count += 1;
-                match LISTED.iter().position(|(l, _)| src.contains(l)) {
+                match listed_shape(&seen, &want) {
                     Some(i) => used[i] += 1,
                     None => bad.push(format!("B unlisted {id} {src:?}: {d}")),
                 }
             }
         }
     }
-    eprintln!(
-        "fuzz seeds {}: {} mutants; class A {a_count}, class B {b_count} (listed {:?}); \
+    let summary = format!(
+        "fuzz seeds {}: {} mutants; class A {a_count}, class B {b_count} (listed {used:?}); \
          {} failing; {refused} refused that PowerShell accepts; {accepted} accepted that \
          PowerShell rejects",
-        SEEDS.len(),
+        rng_seeds.len(),
         answers.len(),
-        used,
         bad.len()
     );
-    assert_eq!(answers.len(), MUTANTS * SEEDS.len());
-    assert!(bad.is_empty(), "{}", bad.join("\n"));
-    let stale: Vec<_> = LISTED
-        .iter()
-        .zip(&used)
-        .filter(|(_, n)| **n == 0)
-        .map(|(l, _)| l)
-        .collect();
-    assert!(stale.is_empty(), "listed shapes no mutant shows: {stale:?}");
+    Fuzz {
+        mutants: answers.len(),
+        bad,
+        summary,
+    }
 }
