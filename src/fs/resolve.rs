@@ -1696,13 +1696,12 @@ fn changes_location(s: &Script, shell: Shell, defined: &[String]) -> bool {
 }
 
 /// A call of `raw` (as written, lowercased) runs a command the script defines (`defined`, where
-/// `*` stands for any name): the name itself or, in pwsh, the name under a scope prefix
-/// (`global:f`), the command a shipped alias names, the Set-Location the shipped `cd..`, `cd\` and
-/// `cd~` run (fix7\spike-shadow.log), and the `Get-` name pwsh retries a name it cannot find with
-/// (`up` runs `Get-Up`; fix8\spike-routes.log). A name past ASCII is left to `pwsh_move`.
+/// `*` stands for any name): the name itself or, in pwsh, the command a shipped alias names, the
+/// Set-Location the shipped `cd..`, `cd\` and `cd~` run (fix7\spike-shadow.log), and the `Get-`
+/// name pwsh retries a name it cannot find with (`up` runs `Get-Up`; fix8\spike-routes.log). A
+/// scope-qualified name (`global:f`) and a name past ASCII are unknown in `pwsh_move`.
 fn calls_defined(raw: &str, shell: Shell, defined: &[String]) -> bool {
     let pwsh = is_pwsh(shell);
-    let raw = if pwsh { strip_scope(raw) } else { raw };
     let target = pwsh.then(|| table(shell).alias(raw)).flatten();
     let runs_sl = pwsh && matches!(raw, "cd.." | "cd\\" | "cd~");
     let retry = pwsh.then(|| format!("get-{raw}"));
