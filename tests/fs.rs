@@ -2737,6 +2737,8 @@ fn pwsh_on_posix_reads_a_drive_path_as_powershell_does() {
             ri("a/b:c"),
             paths(&["/w/repo/a/b:c"]),
         ),
+        // pwsh reads `:x` as a relative item (fix6\probe: ItemNotFound, not DriveNotFound).
+        ("git; :x", ps, vec![git()], ri(":x"), paths(&["/w/repo/:x"])),
         (
             "bash rm -rf Proj:/x",
             Shell::Bash(BashProfile::Posix),
@@ -3764,6 +3766,32 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
             vec![one(r".\up.v2", seq)],
             ".",
             MAY_BE_CRITICAL,
+        ),
+        // A script run with no folder in its name.
+        (
+            "setup.ps1; .",
+            ps,
+            sub,
+            vec![one("setup.ps1", seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Import-Module m; .",
+            ps,
+            sub,
+            vec![stmt(lits("Import-Module", &["m"]), seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // A wrapper runs a program, which cannot move this shell.
+        (
+            r"sudo .\up.ps1; .",
+            ps,
+            sub,
+            vec![stmt(lits("sudo", &[r".\up.ps1"]), seq)],
+            ".",
+            paths(&[sub]),
         ),
         // A Verb-Noun name pwsh does not ship may load a module that runs anything.
         (
