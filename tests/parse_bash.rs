@@ -1211,6 +1211,7 @@ fn nested(kind: &str, n: usize) -> String {
     let (pre, post) = match kind {
         k if k.starts_with("test_") => ("[[ ", " ]]"),
         k if k.starts_with("let_") => ("let 'a[", "]'"),
+        "masked_arith" => ("(( ", " ))"),
         _ => ("", ""),
     };
     let (open, mid, close) = match kind {
@@ -1243,6 +1244,8 @@ fn nested(kind: &str, n: usize) -> String {
         "offset" => ("echo ${s:0:", "1", "}"),
         "let_bracket" => ("a[", "$(rm x)", "]"),
         "let_quoted" => ("\"]\"", "$(rm x)", ""),
+        // Nested `$((` that a bracket count misses, read by the arithmetic scan.
+        "masked_arith" => ("$((]] + ", "1", "))"),
         _ => unreachable!(),
     };
     format!("{pre}{}{mid}{}{post}", open.repeat(n), close.repeat(n))
@@ -1256,7 +1259,8 @@ const BUDGET: &str = "nested text too large to parse in time";
 /// sizes 64 KiB per level; a release build (16 KiB per level) parses it and lowering decides.
 const STACK_CAP: &str = "nesting too deep to parse safely";
 const PARSES: &str = "parses";
-const NESTED_KINDS: [(&str, &str); 26] = [
+const NESTED_KINDS: [(&str, &str); 27] = [
+    ("masked_arith", BUDGET),
     ("subst", BRACKETS),
     ("paren", BRACKETS),
     ("brace", BRACKETS),
