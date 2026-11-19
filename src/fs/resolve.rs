@@ -1597,7 +1597,8 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
         wrapped = true;
         // `/usr/bin/command` is a program, not the builtin.
         in_shell &= raw == wrapper && matches!(wrapper.as_str(), "builtin" | "command" | "time");
-        // Skip the wrapper's options (and `env`'s and `sudo`'s `NAME=value` words).
+        // Skip the wrapper's options (and the `NAME=value` words of `env`, `sudo` and `time`,
+        // which bash reads as assignments to the command after them).
         loop {
             let Some(first) = args.first() else {
                 return Run::Nothing;
@@ -1607,7 +1608,7 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
                 args = &args[1..];
                 break;
             }
-            let assigns = matches!(wrapper.as_str(), "env" | "sudo");
+            let assigns = matches!(wrapper.as_str(), "env" | "sudo" | "time");
             if assigns && !t.starts_with('-') && t.contains('=') {
                 args = &args[1..];
                 continue;
@@ -1901,54 +1902,91 @@ fn script_aliases(s: &Script) -> Vec<Alias> {
     }
 }
 
-/// The aliases command `c` defines (pwsh `Set-Alias`/`New-Alias`, `Set-Item`/`New-Item` on
-/// `Alias:`, bound as PowerShell binds them, and `$alias:n = v`; bash `alias n='v …'`), whatever
-/// the dialect: a definition the shell does not run only adds a reading. A name the hook cannot
-/// read is `defined_names`' `*`.
+/// The aliases command `c` defines, whatever the dialect: a definition the shell does not run
+/// only adds a reading. pwsh: `$alias:n = v`, and each cmdlet the command word may be
+/// (`cmdlet_readings`) as `cmdlet_alias_defs` reads it, an alias of any name and value where it
+/// cannot. bash: `alias n='v …'`. A name the hook cannot read is `defined_names`' `*`.
 fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
     let mut out: Vec<Alias> = c
         .assigns
         .iter()
         .filter_map(|(n, w)| alias_item(n).map(|name| (name, literal(w).map(|v| vec![v]))))
         .collect();
-    let Run::Cmd { name, args, .. } = unwrap(c) else {
+    let Run::Cmd {
+        name, raw, args, ..
+    } = unwrap(c)
+    else {
         return out;
     };
-    // The parameters a positional value binds to, in order.
-    let slots: &[&str] = match name.as_str() {
-        "alias" => {
-            out.extend(args.iter().filter_map(|w| match literal(w) {
-                Some(t) => {
-                    let (n, v) = t.split_once('=')?;
-                    Some((n.to_ascii_lowercase(), bash_alias_value(v)))
+    if name == "alias" {
+        out.extend(args.iter().filter_map(|w| match literal(w) {
+            Some(t) => {
+                let (n, v) = t.split_once('=')?;
+                Some((n.to_ascii_lowercase(), bash_alias_value(v)))
+            }
+            // `alias mk="ln -s $T"`: the name is read, the value is not; `alias $n=…`
+            // may name any alias.
+            None => Some(match w.parts.first() {
+                Some(WordPart::Literal(t)) if t.contains('=') => {
+                    let (n, _) = t.split_once('=').unwrap_or_default();
+                    (n.to_ascii_lowercase(), None)
                 }
-                // `alias mk="ln -s $T"`: the name is read, the value is not; `alias $n=…`
-                // may name any alias.
-                None => Some(match w.parts.first() {
-                    Some(WordPart::Literal(t)) if t.contains('=') => {
-                        let (n, _) = t.split_once('=').unwrap_or_default();
-                        (n.to_ascii_lowercase(), None)
-                    }
-                    _ => ("*".to_string(), None),
-                }),
-            }));
-            return out;
+                _ => ("*".to_string(), None),
+            }),
+        }));
+        return out;
+    }
+    for cmdlet in cmdlet_readings(&name, &raw) {
+        match cmdlet_alias_defs(&cmdlet, args) {
+            Some(found) => out.extend(found),
+            None => out.push(("*".to_string(), None)),
         }
-        "import-alias" | "ipal" => {
-            out.push(("*".to_string(), None));
-            return out;
-        }
-        "set-alias" | "sal" | "new-alias" | "nal" => &["Name", "Value"],
-        "set-item" | "si" => &["Path", "Value"],
-        "new-item" | "ni" => &["Path"],
-        _ => return out,
+    }
+    out
+}
+
+/// The cmdlets a command word may be, lowercased: the one a shipped alias names in pwsh 7 or in
+/// Windows PowerShell 5.1 (`sc` is `Set-Content` in 5.1), else the word itself.
+fn cmdlet_readings(name: &str, raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = [PWSH.alias(raw), POWERSHELL5.alias(raw)]
+        .into_iter()
+        .flatten()
+        .map(str::to_string)
+        .collect();
+    out.dedup();
+    if out.is_empty() {
+        out.push(name.to_string());
+    }
+    out
+}
+
+/// The aliases `cmdlet` (lowercased, not an alias) given `args` defines, its parameters bound as
+/// PowerShell 7.7 binds them (fix11\spike\params-*.log): `Set-Alias`/`New-Alias`;
+/// `Set-Item`/`New-Item`/`Set-Content` on an `Alias:` path, name = value; `Copy-Item` and
+/// `Rename-Item` of an `Alias:` item, read as `Set-Alias <new> <old>`. `None` for a command that
+/// may write an `Alias:` path it names (`writes_item`, the test `defined_by` uses) where this
+/// reader cannot tell which alias, and for `Import-Alias`.
+fn cmdlet_alias_defs(cmdlet: &str, args: &[Word]) -> Option<Vec<Alias>> {
+    let on_alias = writes_item(cmdlet, args, &["alias:"]);
+    // The parameters a positional value binds to, in order.
+    let slots: &[&str] = match cmdlet {
+        "set-alias" | "new-alias" => &["Name", "Value"],
+        "set-item" => &["Path", "Value"],
+        "new-item" => &["Path"],
+        // A copy or a content write defines an alias only on `Alias:`; a rename needs an
+        // `Alias:` path below.
+        "set-content" if on_alias => &["Path", "Value"],
+        "copy-item" if on_alias => &["Path", "Destination"],
+        "rename-item" => &["Path", "NewName"],
+        "import-alias" => return None,
+        _ => return (!on_alias).then(Vec::new),
     };
     let mut bound: Vec<(&str, Option<String>)> = Vec::new();
     let mut positional: Vec<Option<String>> = Vec::new();
     let mut unread = false;
     let mut i = 0;
     while i < args.len() {
-        match pwsh_arg(&name, args, i) {
+        match pwsh_arg(cmdlet, args, i) {
             PwshArg::Param { name, value, next } => {
                 bound.push((name, value.as_ref().and_then(pwsh_text)));
                 i = next;
@@ -1969,42 +2007,80 @@ fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
             }
         }
     }
+    // `-LiteralPath` is the Path of its parameter set: a positional value goes to the next slot.
+    let literal_path = bound.iter().any(|(n, _)| *n == "LiteralPath");
     let free: Vec<&str> = slots
         .iter()
         .copied()
-        .filter(|s| !bound.iter().any(|(n, _)| n == s))
+        .filter(|s| !(bound.iter().any(|(n, _)| n == s) || *s == "Path" && literal_path))
         .collect();
     // A positional value with no parameter left: PowerShell refuses the command.
     unread |= positional.len() > free.len();
     bound.extend(free.into_iter().zip(positional));
+    let has = |s: &str| bound.iter().any(|(n, _)| *n == s);
     let get = |p: &str| {
         bound
             .iter()
             .find(|(n, _)| *n == p)
             .and_then(|(_, v)| v.clone())
     };
-    let alias = match slots[0] {
+    let path = get("Path").or_else(|| get("LiteralPath"));
+    // The alias the path names, `*` for the root or a wildcard; `(list, alias)`, `list` for
+    // `Alias:a,Alias:b`, which the hook does not split.
+    let item = path
+        .as_deref()
+        .and_then(|p| alias_item(p).map(|a| (p.contains(','), a)));
+    // The one alias an `Alias:` path names: the old name of a copy or a rename.
+    let old = match &item {
+        Some((false, a)) if a != "*" => Some(a.clone()),
+        _ => None,
+    };
+    let value = |p: Option<String>| p.filter(|_| !unread).map(|v| vec![v]);
+    let alias = match cmdlet {
         // `Set-Alias $n …`, `Set-Alias @p`: the name may be any.
-        "Name" => get("Name").map(|n| n.to_ascii_lowercase()).or_else(|| {
-            (unread || bound.iter().any(|(n, _)| *n == "Name")).then(|| "*".to_string())
+        "set-alias" | "new-alias" => get("Name")
+            .map(|n| n.to_ascii_lowercase())
+            .or_else(|| (unread || has("Name")).then(|| "*".to_string()))
+            .map(|n| (n, value(get("Value")))),
+        "copy-item" => {
+            let to = get("Destination");
+            let name = match to.as_deref().map(|t| (t.contains(','), alias_item(t))) {
+                Some((false, Some(d))) if d != "*" => Some(d),
+                // `Copy-Item Alias:b -Destination Alias:` keeps the name (spike K2).
+                Some((false, Some(_))) => old.clone(),
+                // Another provider: PowerShell refuses the copy (spike K4).
+                Some((false, None)) => return Some(Vec::new()),
+                // A list, or a destination the hook cannot read or that is the location.
+                _ => None,
+            };
+            Some((name?, value(old.clone())))
+        }
+        "rename-item" => item.as_ref().and_then(|_| {
+            get("NewName")
+                .map(|n| n.to_ascii_lowercase())
+                .or_else(|| (unread || has("NewName")).then(|| "*".to_string()))
+                .map(|n| (n, value(old.clone())))
         }),
-        _ => match get("Path")
-            .or_else(|| get("LiteralPath"))
-            .and_then(|p| alias_item(&p).map(|a| (p.contains(','), a)))
-        {
-            // `Set-Item Alias:a,Alias:b`: a list the hook does not split.
+        _ => match item {
             Some((true, _)) => Some("*".to_string()),
             // `New-Item -Name mk -Path Alias:`.
             Some((false, root)) if root == "*" => {
                 get("Name").map(|n| n.to_ascii_lowercase()).or(Some(root))
             }
             Some((false, a)) => Some(a),
+            // A path the hook cannot read may be on `Alias:`, where an item needs a value
+            // (fix11\spike\writers-*.log W1, W2, W5).
+            None if path.is_none()
+                && (unread || has("Path") || has("LiteralPath"))
+                && (unread || has("Value")) =>
+            {
+                Some("*".to_string())
+            }
             None => None,
-        },
+        }
+        .map(|n| (n, value(get("Value")))),
     };
-    let value = get("Value").filter(|_| !unread).map(|v| vec![v]);
-    out.extend(alias.map(|a| (a, value)));
-    out
+    Some(alias.into_iter().collect())
 }
 
 /// The text of a bound pwsh value: a literal word or the text after `-Name:`.
@@ -2417,8 +2493,7 @@ fn defined_by(c: &SimpleCommand, shell: Shell) -> Vec<String> {
         // word's literal parts hold; D2: a reader or a delete defines nothing.
         _ => {
             let cmd = table(shell).alias(&raw).unwrap_or(name.as_str());
-            let reads = REMOVE_ITEM.contains(&cmd) || cmd == "test-path" || cmd.starts_with("get-");
-            if !reads && args.iter().any(names_command_path) {
+            if writes_item(cmd, args, &["function:", "alias:"]) {
                 out.push(any());
             }
         }
@@ -2426,21 +2501,27 @@ fn defined_by(c: &SimpleCommand, shell: Shell) -> Vec<String> {
     out
 }
 
-/// The word's literal parts, lowercased, name a `Function:` or `Alias:` path.
-fn names_command_path(w: &Word) -> bool {
-    let text: String = w
-        .parts
-        .iter()
-        .filter_map(|p| match p {
-            WordPart::Literal(s) => Some(s.to_ascii_lowercase()),
-            _ => None,
+/// `cmd` (a cmdlet name, lowercased) given `args` may write a path on one of `drives`
+/// (`"alias:"`): it is no reader or delete (D2), and the literal parts of one of its words,
+/// lowercased, name such a path in any spelling (I8).
+fn writes_item(cmd: &str, args: &[Word], drives: &[&str]) -> bool {
+    let reads = REMOVE_ITEM.contains(&cmd) || cmd == "test-path" || cmd.starts_with("get-");
+    !reads
+        && args.iter().any(|w| {
+            let text: String = w
+                .parts
+                .iter()
+                .filter_map(|p| match p {
+                    WordPart::Literal(s) => Some(s.to_ascii_lowercase()),
+                    _ => None,
+                })
+                .collect();
+            drives.iter().any(|d| text.contains(d))
         })
-        .collect();
-    text.contains("function:") || text.contains("alias:")
 }
 
-/// The command a `Function:` or `Alias:` path names (`Function:\f` gives `f`); `*` for the
-/// root or a wildcard.
+/// The command a `Function:` or `Alias:` path names (`Function:\f` gives `f`, as do
+/// `Function:.\f`, `Function:..\f` and `Function:f\`); `*` for the root or a wildcard.
 fn command_item(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     let s = lower
@@ -2450,7 +2531,16 @@ fn command_item(text: &str) -> Option<String> {
     if drive != "function" && drive != "alias" {
         return None;
     }
-    let name = rest.trim_start_matches(':').trim_start_matches(['\\', '/']);
+    let mut name = rest.trim_start_matches(':').trim_start_matches(['\\', '/']);
+    // The drive is flat: `.` and `..` stay at its root (fix11\spike\writers-*.log P1, P3, P6).
+    while let Some(r) = name
+        .strip_prefix("..")
+        .or_else(|| name.strip_prefix('.'))
+        .and_then(|r| r.strip_prefix(['\\', '/']))
+    {
+        name = r;
+    }
+    let name = name.strip_suffix(['\\', '/']).unwrap_or(name);
     Some(if name.is_empty() || name.contains(['*', '?', '[']) {
         "*".to_string()
     } else {

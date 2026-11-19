@@ -8322,6 +8322,81 @@ fn a_script_alias_is_read_as_the_command_it_names() {
         rmrf("/c/w/repo/t/j/x"),
         mbc.clone(),
     ));
+    // ---- re-review 8 (round 11): `<def>; mk t\j -ItemType Junction -Target C:\x; <delete>`.
+    {
+        let mk = || st(lits("mk", &link_at));
+        let del = || rr(r"C:\w\repo\t\j\x");
+        let gdel = || rmrf("/c/w/repo/t/j/x");
+        let pd = || lits("Remove-Item", &[r"Proj:\y"]);
+        let def = |c: &str, a: &[&str]| st(lits(c, a));
+        let b_ni = || def("Set-Alias", &["b", "New-Item"]);
+        let time = |a: &[&str]| lits("time", a);
+        rows.extend([
+            // I-A: every `Alias:` writer has an entry (spike rr8 alias-provider.log C1-C3,
+            // fix11 writers-*.log R2, K1, T1).
+            ("C1 pwsh Set-Item Alias:mk New-Item; mk (control)", ps, vec![def("Set-Item", &["Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("XC1 pwsh Remove-Item Alias:mk; mk (control: a delete defines nothing)", ps, vec![def("Remove-Item", &["Alias:mk"]), mk()], del(), in_link.clone()),
+            ("X1 pwsh Set-Content Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X1b 5.1 Set-Content Alias:mk New-Item; mk", p5, vec![def("Set-Content", &["Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X1c 5.1 sc Alias:mk New-Item; mk", p5, vec![def("sc", &["Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X1d pwsh Set-Content -LiteralPath Alias:mk New-Item; mk", ps, vec![def("Set-Content", &["-LiteralPath", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X2 pwsh Copy-Item Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("X2b pwsh Set-Alias b New-Item; cpi Alias:b Alias:mk; mk", ps, vec![b_ni(), def("cpi", &["Alias:b", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("X2c pwsh Copy-Item -LiteralPath Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-LiteralPath", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("X2d pwsh Copy-Item Alias:ni -Destination Alias:; foo (control: the root keeps the name)", ps, vec![def("Copy-Item", &["Alias:ni", "-Destination", "Alias:"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("X2e pwsh Copy-Item Alias:ni Alias:mk; foo (control: only mk)", ps, vec![def("Copy-Item", &["Alias:ni", "Alias:mk"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("X3 pwsh Set-Alias b New-Item; Rename-Item Alias:b mk; mk", ps, vec![b_ni(), def("Rename-Item", &["Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("X3b 5.1 Set-Alias b New-Item; ren Alias:b mk; mk", p5, vec![b_ni(), def("ren", &["Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("X3c pwsh Set-Alias b New-Item; Rename-Item -LiteralPath Alias:b mk; mk", ps, vec![b_ni(), def("Rename-Item", &["-LiteralPath", "Alias:b", "mk"]), mk()], del(), mbc.clone()),
+            ("X3d pwsh Set-Alias b Get-Date; Rename-Item Alias:b mk; mk (control: the old value)", ps, vec![def("Set-Alias", &["b", "Get-Date"]), def("Rename-Item", &["Alias:b", "mk"]), mk()], del(), in_link.clone()),
+            ("XO1 pwsh Move-Item Alias:ni Alias:mk; foo (any other Alias: writer: any alias)", ps, vec![def("Move-Item", &["Alias:ni", "Alias:mk"]), st(lits("foo", &link_at))], del(), mbc.clone()),
+            ("XO2 pwsh Copy-Item Alias:ni; foo (a copy the reader cannot place: any alias)", ps, vec![def("Copy-Item", &["Alias:ni"]), st(lits("foo", &link_at))], del(), mbc.clone()),
+            ("XO3 pwsh Copy-Item C:\\a C:\\w\\repo\\b; foo (control: no Alias: path)", ps, vec![def("Copy-Item", &[r"C:\a", r"C:\w\repo\b"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("XO4 pwsh Copy-Item Alias:ni C:\\w\\repo\\b; foo (control: another provider refuses the copy)", ps, vec![def("Copy-Item", &["Alias:ni", r"C:\w\repo\b"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("SD3 pwsh Set-Content Alias:mk Invoke-Expression; mk 'x'; Remove-Item Proj:\\y", ps, vec![def("Set-Content", &["Alias:mk", "Invoke-Expression"]), st(lits("mk", &["x"]))], pd(), mbc.clone()),
+            // I-B: a bound -LiteralPath takes the Path slot (spike rr8 literalpath.log).
+            ("B5 pwsh Set-Item -LiteralPath Alias:mk New-Item", ps, vec![def("Set-Item", &["-LiteralPath", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("B5b 5.1 Set-Item -LiteralPath Alias:mk New-Item", p5, vec![def("Set-Item", &["-LiteralPath", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("SD4 pwsh Set-Item -LiteralPath Alias:mk Invoke-Expression; mk 'x'; Remove-Item Proj:\\y", ps, vec![def("Set-Item", &["-LiteralPath", "Alias:mk", "Invoke-Expression"]), st(lits("mk", &["x"]))], pd(), mbc.clone()),
+            // M-A: an unread Set-Item/New-Item path with a value (spike writers-*.log W1, W2,
+            // W5), and the path spellings (rr8 alias-paths.log P5, P7; writers-*.log P1-P3).
+            ("S3 pwsh Set-Item $p New-Item; mk", ps, vec![with("Set-Item", vec![var("p"), lit("New-Item")]), mk()], del(), mbc.clone()),
+            ("S8 pwsh New-Item $p -ItemType Directory; mk (control: no value, no alias)", ps, vec![with("New-Item", vec![var("p"), lit("-ItemType"), lit("Directory")]), mk()], del(), in_link.clone()),
+            ("SD1 pwsh Set-Item $p Invoke-Expression; mk 'x'; Remove-Item Proj:\\y", ps, vec![with("Set-Item", vec![var("p"), lit("Invoke-Expression")]), st(lits("mk", &["x"]))], pd(), mbc.clone()),
+            ("SD2 pwsh New-Item $p -Value Invoke-Expression; mk 'x'; Remove-Item Proj:\\y", ps, vec![with("New-Item", vec![var("p"), lit("-Value"), lit("Invoke-Expression")]), st(lits("mk", &["x"]))], pd(), mbc.clone()),
+            ("X4 pwsh Set-Item Alias:.\\mk New-Item; mk", ps, vec![def("Set-Item", &[r"Alias:.\mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X4b pwsh Set-Item Alias:./mk New-Item; mk", ps, vec![def("Set-Item", &["Alias:./mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X4c pwsh Set-Item Alias:..\\mk New-Item; mk", ps, vec![def("Set-Item", &[r"Alias:..\mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X5 pwsh New-Item Alias:mk\\ -Value New-Item; mk", ps, vec![def("New-Item", &[r"Alias:mk\", "-Value", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X5b pwsh New-Item Alias:mk/ -Value New-Item; mk", ps, vec![def("New-Item", &["Alias:mk/", "-Value", "New-Item"]), mk()], del(), mbc.clone()),
+            // I-C (N1): `time NAME=v X` runs X (spike rr8 bash-alias.log N1a-N1d).
+            ("N1-0 Git Bash time ln -s /c/x t/j (control)", gb, vec![st(time(&["ln", "-s", "/c/x", "/c/w/repo/t/j"]))], gdel(), mbc.clone()),
+            ("N1-1 Git Bash time FOO=1 ln -s /c/x t/j", gb, vec![st(time(&["FOO=1", "ln", "-s", "/c/x", "/c/w/repo/t/j"]))], gdel(), mbc.clone()),
+            ("N1-2 Git Bash time -p FOO=1 ln -s /c/x t/j", gb, vec![st(time(&["-p", "FOO=1", "ln", "-s", "/c/x", "/c/w/repo/t/j"]))], gdel(), mbc.clone()),
+            ("N1-3 Git Bash alias mk='ln -s /c/x' <LF> time FOO=1 mk t/j", gb, vec![st(lits("alias", &["mk=ln -s /c/x"])), st(time(&["FOO=1", "mk", "/c/w/repo/t/j"]))], gdel(), mbc.clone()),
+            ("N1-4 Git Bash time FOO=1 BAR=2 ln -s /c/x t/j", gb, vec![st(time(&["FOO=1", "BAR=2", "ln", "-s", "/c/x", "/c/w/repo/t/j"]))], gdel(), mbc.clone()),
+            ("N1-5 Git Bash cd sub && time cd .. && rm -rf . (control)", gb, vec![stmt(lits("cd", &["/c/w/repo/sub"]), and), stmt(time(&["cd", ".."]), and)], rmrf("."), paths(&[r"C:\w\repo"])),
+            ("N1-6 Git Bash cd sub && time FOO=1 cd .. && rm -rf .", gb, vec![stmt(lits("cd", &["/c/w/repo/sub"]), and), stmt(time(&["FOO=1", "cd", ".."]), and)], rmrf("."), paths(&[r"C:\w\repo"])),
+            ("N1-7 Git Bash cd sub && time -p FOO=1 cd .. && rm -rf .", gb, vec![stmt(lits("cd", &["/c/w/repo/sub"]), and), stmt(time(&["-p", "FOO=1", "cd", ".."]), and)], rmrf("."), paths(&[r"C:\w\repo"])),
+            ("N1-8 Git Bash time FOO=1 subst-like: time FOO=1 eval 'cd ..'", gb, vec![stmt(lits("cd", &["/c/w/repo/sub"]), and), stmt(time(&["FOO=1", "eval", "cd .."]), and)], rmrf("."), mbc.clone()),
+            // Rows for the branches of the round 11 reader (one per mutant alternative).
+            ("X1e pwsh Set-Content Alias:mk Get-Date; mk (control: the value is read)", ps, vec![def("Set-Content", &["Alias:mk", "Get-Date"]), mk()], del(), in_link.clone()),
+            ("X2f pwsh Set-Alias b Get-Date; Copy-Item Alias:b Alias:mk; mk (control: the old value)", ps, vec![def("Set-Alias", &["b", "Get-Date"]), def("Copy-Item", &["Alias:b", "Alias:mk"]), mk()], del(), in_link.clone()),
+            ("X3e pwsh Set-Alias b New-Item; Rename-Item Alias:b mk; foo (control: only mk)", ps, vec![b_ni(), def("Rename-Item", &["Alias:b", "mk"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("X3f pwsh Rename-Item C:\\w\\repo\\a mk; mk (control: no Alias: path)", ps, vec![def("Rename-Item", &[r"C:\w\repo\a", "mk"]), mk()], del(), in_link.clone()),
+            ("X4d pwsh Set-Item Alias:.\\.\\mk New-Item; mk", ps, vec![def("Set-Item", &[r"Alias:.\.\mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("XC2 pwsh Test-Path Alias:mk; foo (control: a reader defines nothing)", ps, vec![def("Test-Path", &["Alias:mk"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("XC3 pwsh Get-Item Alias:mk; foo (control: a reader defines nothing)", ps, vec![def("Get-Item", &["Alias:mk"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("XC4 pwsh Set-Content Function:mk x; foo (control: no Alias: path)", ps, vec![def("Set-Content", &["Function:mk", "x"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("XC5 pwsh Set-Content $f $t; foo (control: no Alias: path)", ps, vec![with("Set-Content", vec![var("f"), var("t")]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("XC6 pwsh Copy-Item $s $d; foo (control: no Alias: path)", ps, vec![with("Copy-Item", vec![var("s"), var("d")]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("S9 pwsh Set-Item -LiteralPath $p New-Item; mk", ps, vec![with("Set-Item", vec![lit("-LiteralPath"), var("p"), lit("New-Item")]), mk()], del(), mbc.clone()),
+            ("S10 pwsh Set-Item @p; mk (a splat may carry an Alias: path and a value)", ps, vec![def("Set-Item", &["@p"]), mk()], del(), mbc.clone()),
+            // M-B: M21, `& mk` reads as the plain New-Item call (rr8_pins; the control
+            // `New-Item t\j …; Remove-Item -Recurse o\x` gives o\x).
+            ("M21 pwsh Set-Alias mk New-Item; & mk t\\j …; Remove-Item -Recurse o\\x", ps, vec![def("Set-Alias", &["mk", "New-Item"]), st(lits("&", &[&["mk"][..], &link_at[..]].concat()))], rr(r"C:\w\repo\o\x"), paths(&[r"C:\w\repo\o\x"])),
+        ]);
+    }
     let mut bad: Vec<String> = Vec::new();
     for (label, shell, before, delete, want) in rows {
         let got = judge(shell, &before, &delete);
@@ -8488,6 +8563,22 @@ fn a_script_alias_is_read_as_the_command_it_names() {
                         span: Span::default(),
                         quote: Quote::Double,
                     }],
+                ),
+                st(lits("x", &["TEMP=/"])),
+            ],
+            "TEMP",
+            true,
+        ),
+        (
+            "KV1 Git Bash alias x=a00 … x=a69 x=export <LF> x TEMP=/ (past the reading cap)",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    (0..70)
+                        .map(|i| lit(&format!("x=a{i:02}")))
+                        .chain([lit("x=export")])
+                        .collect(),
                 ),
                 st(lits("x", &["TEMP=/"])),
             ],
