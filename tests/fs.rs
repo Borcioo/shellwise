@@ -2791,6 +2791,152 @@ fn pwsh_on_posix_reads_a_drive_path_as_powershell_does() {
     );
 }
 
+/// Ruling 49 (I2): the text before a path's first `:` is a drive name unless it is empty or holds
+/// a character pwsh 7.7's `New-PSDrive` rejects (`/ \ . ~`; fix7\probe-drive-chars.log), on
+/// Windows and on POSIX alike.
+#[test]
+fn a_drive_name_is_any_prefix_powershell_does_not_reject() {
+    let seq = Some(ChainOp::Seq);
+    let ps = Shell::Pwsh;
+    let posix_fs = FakeFs::default().dir("/h/u").dir("/w/repo").shared();
+    let win_fs = FakeFs::default().dir(r"C:\Profiles\u").shared();
+    // `<before>; <delete>` (cwd /w/repo or C:\w\repo), the whole command read first; `word` is
+    // the delete's last argument.
+    let judge = |os: Os, before: Vec<Stmt>, delete: SimpleCommand| {
+        let (env, cwd, fs) = match os {
+            Os::Posix => (
+                env_view(ps, os, [("HOME".to_string(), "/h/u".to_string())]),
+                "/w/repo",
+                &posix_fs,
+            ),
+            Os::Windows => (win(ps).1, r"C:\w\repo", &win_fs),
+        };
+        let by = delete_by(&delete, ps, os);
+        let word = delete.args.last().expect("a target").clone();
+        let mut all = before.clone();
+        all.push(stmt(delete, seq));
+        let mut loc = Location::new(ps, os, Some(Path::new(cwd)));
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &env);
+        sorted(target(&word, &loc, &env, by, fs, &far()))
+    };
+    let st = |c: SimpleCommand| stmt(c, seq);
+    let git = || st(lits("git", &["status"]));
+    let ri = |text: &str| lits("Remove-Item", &[text]);
+    let rr = |text: &str| lits("Remove-Item", &["-Recurse", "-Force", text]);
+    let map = |name: &str, root: &str| st(lits("New-PSDrive", &[name, "FileSystem", root]));
+    let px = Os::Posix;
+    let mut rows: Vec<(String, Os, Vec<Stmt>, SimpleCommand, Target)> = Vec::new();
+    // Re-review 4 N7f-N7j: names New-PSDrive accepts, mapped to the home folder.
+    for name in ["my-drive", "my drive", "żol", "-", "a$b", " a"] {
+        rows.push((
+            format!("POSIX New-PSDrive '{name}'; rr '{name}:/'"),
+            px,
+            vec![map(name, "/h/u")],
+            rr(&format!("{name}:/")),
+            MAY_BE_CRITICAL,
+        ));
+    }
+    rows.extend([
+        (
+            "N7k POSIX git; my-drive:/y".to_string(),
+            px,
+            vec![git()],
+            ri("my-drive:/y"),
+            unproven("my-drive"),
+        ),
+        (
+            "N7r POSIX git; ' a:/y'".to_string(),
+            px,
+            vec![git()],
+            ri(" a:/y"),
+            unproven(" a"),
+        ),
+        (
+            "N7l POSIX New-PSDrive my-drive; cd my-drive:/; rr .".to_string(),
+            px,
+            vec![
+                map("my-drive", "/h/u"),
+                st(lits("Set-Location", &["my-drive:/"])),
+            ],
+            rr("."),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "N7m POSIX New-PSDrive my-drive; rr my-drive:*".to_string(),
+            px,
+            vec![map("my-drive", "/h/u")],
+            rr("my-drive:*"),
+            MAY_BE_CRITICAL,
+        ),
+        // Windows: the same rule, so a plain path on such a drive is unproven like `Proj:\y`,
+        // and a remap in sight keeps MayBeCritical.
+        (
+            r"Windows git; my-drive:\y".to_string(),
+            Os::Windows,
+            vec![git()],
+            ri(r"my-drive:\y"),
+            unproven("my-drive"),
+        ),
+        (
+            r"Windows git; 1:\y".to_string(),
+            Os::Windows,
+            vec![git()],
+            ri(r"1:\y"),
+            unproven("1"),
+        ),
+        (
+            r"Windows New-PSDrive my-drive; my-drive:\y".to_string(),
+            Os::Windows,
+            vec![map("my-drive", r"C:\Profiles\u")],
+            ri(r"my-drive:\y"),
+            MAY_BE_CRITICAL,
+        ),
+    ]);
+    // One known-answer row per rejected character on each OS: no drive, so POSIX reads a
+    // relative file and Windows a stream form (MayBeCritical either way, never DriveUnproven).
+    for ch in ['/', '\\', '.', '~'] {
+        let text = format!("a{ch}b:y");
+        rows.push((
+            format!("POSIX git; {text}"),
+            px,
+            vec![git()],
+            ri(&text),
+            paths(&[&format!("/w/repo/{text}")]),
+        ));
+        if ch != '/' {
+            // A glob on a relative file the walk does not find (`a/` holds a folder).
+            rows.push((
+                format!("POSIX git; {text}* (glob)"),
+                px,
+                vec![git()],
+                ri(&format!("{text}*")),
+                paths(&[]),
+            ));
+        }
+        rows.push((
+            format!("Windows git; {text}"),
+            Os::Windows,
+            vec![git()],
+            ri(&text),
+            MAY_BE_CRITICAL,
+        ));
+    }
+    let bad: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(label, os, before, delete, want)| {
+            let got = judge(os, before, delete);
+            (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
 /// A named-drive delete in a command where some part is not read as written.
 fn unproven_unread(drive: &str) -> Target {
     Target::DriveUnproven {

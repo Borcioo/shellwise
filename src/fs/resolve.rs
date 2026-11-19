@@ -2594,8 +2594,7 @@ fn absolutize(
     }
     // `HKCU:\x`, `Temp:\x`: a PowerShell drive.
     if let Some((drive, rest)) = s.split_once(':')
-        && drive.len() > 1
-        && drive.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && drive_named(drive)
     {
         if pwsh && drive.eq_ignore_ascii_case("temp") {
             let t = env.get("env:TEMP").ok_or(Fail::Unknown)?;
@@ -2611,16 +2610,22 @@ fn absolutize(
 }
 
 /// The text after the drive when a provider cmdlet in pwsh on POSIX reads `s` (its
-/// `FileSystem::` prefix stripped) as a PowerShell drive path: any `name:` with a name of
-/// `[A-Za-z0-9_]`. There are no letter drives and no `Temp:` shortcut (it follows the drive,
-/// which may be remapped). A native program gets the literal text, a relative file name.
+/// `FileSystem::` prefix stripped) as a PowerShell drive path: any `name:` whose name
+/// `drive_named` accepts. There are no letter drives and no `Temp:` shortcut (it follows the
+/// drive, which may be remapped). A native program gets the literal text, a relative file name.
 fn posix_drive_rest(s: &str, shell: Shell, os: Os, by: DeleteBy) -> Option<&str> {
     if os != Os::Posix || !is_pwsh(shell) || by != DeleteBy::Provider {
         return None;
     }
     let (drive, rest) = s.split_once(':')?;
-    (!drive.is_empty() && drive.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .then_some(rest)
+    drive_named(drive).then_some(rest)
+}
+
+/// pwsh reads `drive`, the text before a path's first `:`, as a drive name (Ruling 49): a plain
+/// file name only when it is empty (`:x` is a relative item) or holds a character pwsh 7.7's
+/// `New-PSDrive` rejects, `/ \ . ~` (fix7\probe-drive-chars.log; `:` cannot occur here).
+fn drive_named(drive: &str) -> bool {
+    !drive.is_empty() && !drive.contains(['/', '\\', '.', '~'])
 }
 
 /// What is left to do on the file system for one candidate.
