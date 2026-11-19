@@ -27,7 +27,8 @@ bool tree_sitter_powershell_external_scanner_scan(void *payload, TSLexer *lexer,
 
 static void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 
-static bool scan_statement_terminator(void *payload, TSLexer *lexer, const bool *valid_symbols)
+// `gap`: the scan started on whitespace (`scan_bare_dashes` may have skipped it already).
+static bool scan_statement_terminator(void *payload, TSLexer *lexer, const bool *valid_symbols, bool gap)
 {
     if (valid_symbols[STATEMENT_TERMINATOR]) {
         lexer->result_symbol = STATEMENT_TERMINATOR;
@@ -42,8 +43,25 @@ static bool scan_statement_terminator(void *payload, TSLexer *lexer, const bool 
             if (lexer->lookahead == '\n') return true;
             // A CR alone ends a line too (PowerShell reads CR, LF and CRLF alike).
             if (lexer->lookahead == '\r') return true;
+            // A backtick line end after a gap continues the line: look past it, so that a blank
+            // line after it still ends the statement (`git status `<LF><LF>ri x` is two
+            // commands). Glued to a word, it belongs to the word (`git`<LF>`).
+            if (lexer->lookahead == '`' && gap) {
+                skip(lexer);
+                if (lexer->lookahead == '\r') {
+                    skip(lexer);
+                    if (lexer->lookahead == '\n') skip(lexer);
+                    continue;
+                }
+                if (lexer->lookahead == '\n') {
+                    skip(lexer);
+                    continue;
+                }
+                return false;
+            }
             if (!iswspace(lexer->lookahead)) return false;
             skip(lexer);
+            gap = true;
         }
     }
 
@@ -120,8 +138,9 @@ bool tree_sitter_powershell_external_scanner_scan(void *payload, TSLexer *lexer,
     }
     // The statement terminator consumes nothing, so it must be tried last: when
     // both are valid, a `--` has to win over the empty terminator.
+    bool gap = iswspace(lexer->lookahead);
     if (scan_bare_dashes(payload, lexer, valid_symbols)) return true;
-    return scan_statement_terminator(payload, lexer, valid_symbols);
+    return scan_statement_terminator(payload, lexer, valid_symbols, gap);
 }
 
 void *tree_sitter_powershell_external_scanner_create()

@@ -4035,3 +4035,76 @@ error = false
 cmds = [[".\\x.ps1"]]
 comments = []
 methods = []
+
+[[row]]
+id = "bt-r-line-end-blank-line-redirect"
+mechanism = "a backtick line end, then a blank line: the blank line ends the statement and `<` starts the next one"
+parser = "refuses"
+command = "git status `\n\n<x#>"
+error = false
+cmds = [["git", "status"], ["<", "x#>"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-line-end-blank-line-command"
+mechanism = "a backtick line end, then a blank line: the next line is a command of its own"
+command = "git status `\n\nri C:\\x"
+error = false
+cmds = [["git", "status"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-cr-line-end-blank-line-command"
+mechanism = "the same with CR line ends"
+command = "git status `\r\rri C:\\x"
+error = false
+cmds = [["git", "status"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-crlf-line-end-blank-line-command"
+mechanism = "the same with CRLF line ends"
+command = "git status `\r\n\r\nri C:\\x"
+error = false
+cmds = [["git", "status"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-line-end-continues-command"
+mechanism = "a backtick line end then a space: the next line continues the command"
+command = "git log `\n -n 1"
+error = false
+cmds = [["git", "log", "-n", "1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-cr-line-end-continues-command"
+mechanism = "the same with a CR line end"
+command = "git log `\r -n 1"
+error = false
+cmds = [["git", "log", "-n", "1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-name-glued-line-end-blank-line"
+mechanism = "a backtick line end glued to a command name belongs to the name; the blank line after it ends the statement"
+command = "git`\n\nri"
+error = false
+cmds = [["git`\n"], ["ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "bt-name-glued-line-end-at-end"
+mechanism = "a backtick line end glued to a command name at the end of the input belongs to the name"
+command = "git>b`\n"
+error = false
+cmds = [["git>b`\n"]]
+comments = []
+methods = []
