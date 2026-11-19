@@ -303,17 +303,25 @@ struct Taint {
     all: bool,
     /// Names declared integer (`declare -i n`): a value assigned to one is arithmetic.
     integers: BTreeSet<String>,
+    /// A write the collector cannot follow may make any name integer or reach one (a nameref,
+    /// options that are not static, an `eval` body): every name counts as integer.
+    any_integer: bool,
 }
 
 impl Taint {
+    /// Under `all` the clean set is incomplete, so no name is clean.
     fn is_clean(&self, name: &str) -> bool {
-        !SHELL_TEXT_VARIABLES.contains(&name)
+        !self.all
+            && !SHELL_TEXT_VARIABLES.contains(&name)
             && (self.clean.contains(name)
                 || (INTEGER_VARIABLES.contains(&name) && !self.assigned.contains(name)))
     }
 
-    /// Whether arithmetic over `text` reads a tainted name.
+    /// Whether arithmetic over `text` reads a tainted name; text that is not plain does.
     fn reads(&self, text: &str) -> bool {
+        if !plain_arith(text) {
+            return true;
+        }
         let (names, positional) = arith_refs(text);
         self.all || names.iter().any(|n| !self.is_clean(n)) || (positional && self.positional)
     }
@@ -349,6 +357,7 @@ impl Taint {
             positional: false,
             all: false,
             integers,
+            any_integer: false,
         };
         let mut steps = 0;
         for round in 0.. {
@@ -453,6 +462,8 @@ struct Lower {
     arith_texts: RefCell<Vec<String>>,
     /// A value went to a name that is not static (`read "$v"`): any name may be tainted.
     unknown_target: Cell<bool>,
+    /// See `Taint::any_integer`.
+    any_integer: Cell<bool>,
 }
 
 impl Lower {
@@ -469,7 +480,15 @@ impl Lower {
             integers: RefCell::default(),
             arith_texts: RefCell::default(),
             unknown_target: Cell::new(false),
+            any_integer: Cell::new(false),
         }
+    }
+
+    /// A construct that writes names the collector cannot follow: any name may be tainted, and
+    /// any write may reach an integer name.
+    fn unknown_write(&self) {
+        self.unknown_target.set(true);
+        self.any_integer.set(true);
     }
 
     /// The taint from what this pass collected, when a second pass has anything to mark: an
@@ -483,6 +502,7 @@ impl Lower {
             self.integers.into_inner(),
         );
         taint.all |= self.unknown_target.get();
+        taint.any_integer = self.any_integer.get();
         let needed = taint.all
             || self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
             || assigned.iter().any(|(n, _)| taint.integers.contains(n));
@@ -509,8 +529,11 @@ impl Lower {
         }
     }
 
-    fn integers(&self) -> Option<&BTreeSet<String>> {
-        self.taint.as_ref().map(|t| &t.integers)
+    /// Whether the second pass judges a value assigned to `name` as arithmetic.
+    fn is_integer(&self, name: &str) -> bool {
+        self.taint
+            .as_ref()
+            .is_some_and(|t| t.any_integer || t.integers.contains(name))
     }
 
     /// Record a value assigned to `name`; `append` for `name+=value`, which is never clean.
@@ -524,10 +547,15 @@ impl Lower {
     }
 
     /// Every assignment goes through here: a value that is not clean, assigned to an integer
-    /// name, is evaluated as arithmetic.
+    /// name, is evaluated as arithmetic. A target that is no name (`declare 'x:-y=1'`, which
+    /// bash refuses) is not followed: any name may be tainted.
     fn record(&self, name: &str, value: Value) {
+        if !is_identifier(name) {
+            self.runtime_target(None);
+            return;
+        }
         if let Some(t) = &self.taint
-            && t.integers.contains(name)
+            && self.is_integer(name)
             && !t.value_clean(&value)
         {
             self.tainted_read.set(true);
@@ -1004,6 +1032,10 @@ impl Lower {
             _ => false,
         };
         let runs_dynamic_text = runs_text && cmd.args.iter().skip(first_arg).any(Word::is_dynamic);
+        // A static `eval` body is not lowered here: it may write any name.
+        if target.as_deref() == Some("eval") && !runs_dynamic_text {
+            self.unknown_write();
+        }
         self.calls(&cmd, target.as_deref(), first_arg, has_glob);
         self.runtime_targets(&cmd, target.as_deref(), first_arg);
         self.declarations(&cmd, target.as_deref(), first_arg);
@@ -1024,6 +1056,21 @@ impl Lower {
             Some("declare" | "typeset" | "local" | "export" | "readonly")
         ) {
             return;
+        }
+        // A nameref (`-n` in a cluster) writes its target's name, and an option word that is not
+        // static may be `-n` or `-i`: the collector follows neither.
+        if matches!(target, Some("declare" | "typeset" | "local")) {
+            let env = EnvView::new();
+            for w in cmd.args.iter().skip(first_arg) {
+                let unknown = match w.static_value(&env) {
+                    Some(v) => v.starts_with('-') && v[1..].contains('n'),
+                    None => !matches!(w.parts.first(), Some(WordPart::Literal(l))
+                        if !(l.is_empty() || l.starts_with('-') || l.starts_with('+'))),
+                };
+                if unknown {
+                    self.unknown_write();
+                }
+            }
         }
         let words: Vec<(String, &Word)> = cmd
             .args
@@ -1103,7 +1150,13 @@ impl Lower {
         let env = EnvView::new();
         let args = &cmd.args[first_arg.min(cmd.args.len())..];
         let value = |i: usize| args.get(i).and_then(|w| w.static_value(&env));
-        // Options whose next word is their argument; `read -a NAME` names the target.
+        // Options whose argument is the rest of the word or the next word; `read -a NAME` names
+        // the target.
+        let flags = match target {
+            Some("read") => "ers",
+            Some("mapfile" | "readarray") => "t",
+            _ => "",
+        };
         let with_argument = match target {
             Some("read") => "adinNptu",
             Some("mapfile" | "readarray") => "dnOsuCc",
@@ -1115,16 +1168,35 @@ impl Lower {
         let mut operands = Vec::new();
         while i < args.len() {
             match value(i) {
-                Some(v) if v.len() > 1 && v.starts_with('-') && target != Some("getopts") => {
-                    let last = v.chars().last().unwrap_or_default();
-                    // `printf -vNAME`: the target is glued to the option.
-                    if target == Some("printf") && v.starts_with("-v") && v.len() > 2 {
-                        self.runtime_target(Some(&literal(&v[2..], cmd.span)));
-                    } else if with_argument.contains(last) {
-                        if (target == Some("read") && last == 'a') || target == Some("printf") {
-                            self.runtime_target(args.get(i + 1));
+                // `printf -vNAME`: the target is glued to the option.
+                Some(v) if target == Some("printf") && v.starts_with("-v") && v.len() > 2 => {
+                    self.runtime_target(Some(&literal(&v[2..], cmd.span)));
+                }
+                Some(v) if target == Some("printf") && v == "-v" => {
+                    self.runtime_target(args.get(i + 1));
+                    i += 1;
+                }
+                // A `read`/`mapfile` cluster, letter by letter as getopts reads it; a letter not
+                // listed may write a name the collector does not see.
+                Some(v) if v.len() > 1 && v.starts_with('-') && !flags.is_empty() => {
+                    for (k, ch) in v[1..].char_indices() {
+                        if with_argument.contains(ch) {
+                            let rest = &v[1 + k + ch.len_utf8()..];
+                            let argument = if rest.is_empty() {
+                                i += 1;
+                                args.get(i).cloned()
+                            } else {
+                                Some(literal(rest, cmd.span))
+                            };
+                            if target == Some("read") && ch == 'a' {
+                                self.runtime_target(argument.as_ref());
+                            }
+                            break;
                         }
-                        i += 1;
+                        if !flags.contains(ch) {
+                            self.runtime_target(None);
+                            break;
+                        }
                     }
                 }
                 _ if target == Some("printf") => break,
@@ -1308,7 +1380,7 @@ impl Lower {
                 self.assigned(&name, &value.parts, a.append);
                 // A value assigned to an integer name is arithmetic (`assigned` judges it): its
                 // quoted subscripts run their `$(…)`.
-                if self.integers().is_some_and(|i| i.contains(&name)) {
+                if self.is_integer(&name) {
                     self.subscript_substs(&mut value, cx)?;
                 }
                 out.push((name, value));
@@ -1510,6 +1582,10 @@ impl Lower {
                         } => out.push(WordPart::Var(sp.to_string())),
                         _ => {
                             let inner = braced.unwrap_or(raw);
+                            // `${x:=…}` assigns `x`, by a route the collector does not follow.
+                            if matches!(pe, ParameterExpr::AssignDefaultValues { .. }) {
+                                self.runtime_target(None);
+                            }
                             self.parameter_arith(pe, span, cx, out)?;
                             // A name that never resolves: the value depends on the operator.
                             out.push(WordPart::Var(inner.to_string()));
@@ -1808,6 +1884,96 @@ fn subscripts(text: &str) -> Vec<&str> {
         out.push(&text[start..]);
     }
     out
+}
+
+/// A shell variable name.
+fn is_identifier(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Arithmetic text the scanner reads names from: identifiers, numbers, operators, spaces,
+/// `$name`, `${name}`, `$((…))` (also as `value_text` writes it, `${((…))}`), and a `$(…)` or
+/// backtick body whose parentheses balance and which holds no quote, `\`, `#` or nested
+/// backtick. In any other text the scanner may miss where run-time text ends, so it is read as
+/// tainted.
+fn plain_arith(text: &str) -> bool {
+    let b = text.as_bytes();
+    let (mut i, mut braces) = (0usize, 0usize);
+    let hides = |c: u8| matches!(c, b'\'' | b'"' | b'\\' | b'#' | b'`');
+    while i < b.len() {
+        match b[i] {
+            b'$' => match b.get(i + 1) {
+                Some(&d) if d.is_ascii_alphanumeric() || b"_@*#?$!".contains(&d) => i += 2,
+                Some(b'(') if b.get(i + 2) == Some(&b'(') => i += 3,
+                Some(b'(') => {
+                    let mut level = 0usize;
+                    let mut j = i + 1;
+                    loop {
+                        match b.get(j) {
+                            None => return false,
+                            Some(b'(') => level += 1,
+                            Some(b')') => {
+                                level -= 1;
+                                if level == 0 {
+                                    break;
+                                }
+                            }
+                            Some(&c) if hides(c) => return false,
+                            Some(_) => {}
+                        }
+                        j += 1;
+                    }
+                    i = j + 1;
+                }
+                Some(b'{') if b.get(i + 2..i + 4) == Some(b"((") => {
+                    braces += 1;
+                    i += 4;
+                }
+                Some(b'{') => {
+                    let rest = &text[i + 2..];
+                    let Some(end) = rest.find('}') else {
+                        return false;
+                    };
+                    let name = &rest[..end];
+                    let parameter = is_identifier(name)
+                        || (!name.is_empty() && name.bytes().all(|c| c.is_ascii_digit()))
+                        || matches!(name, "@" | "*" | "#" | "?" | "$" | "!");
+                    if !parameter {
+                        return false;
+                    }
+                    i += 2 + end + 1;
+                }
+                _ => return false,
+            },
+            b'`' => {
+                let mut j = i + 1;
+                loop {
+                    match b.get(j) {
+                        None => return false,
+                        Some(b'`') => break,
+                        Some(&c) if hides(c) || c == b'(' || c == b')' => return false,
+                        Some(_) => {}
+                    }
+                    j += 1;
+                }
+                i = j + 1;
+            }
+            b'}' if braces > 0 => {
+                braces -= 1;
+                i += 1;
+            }
+            c if c.is_ascii_alphanumeric()
+                || c == b'_'
+                || c.is_ascii_whitespace()
+                || b"+-*/%<>=!&|^~?:,()[]#".contains(&c) =>
+            {
+                i += 1
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// The byte ranges of the names arithmetic text reads (`a[x+$y]` → `a`, `x`, `y`), and whether

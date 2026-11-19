@@ -355,6 +355,12 @@ fn hidden_commands_inside_words_are_found() {
         ("echo $((1 + $(rm x)))", &["echo", "rm"]),
         ("[[ -n $(rm x) ]]", &["[[", "rm"]),
         ("(( $(rm x) ))", &["((", "rm"]),
+        // A substitution the taint scan skips is still lowered.
+        ("(( $(rm -rf /tmp/x) + 1 ))", &["((", "rm"]),
+        (
+            "t=1; echo $(( $(rm -rf /tmp/x) - t ))",
+            &["<none>", "echo", "rm"],
+        ),
         ("(( x )) > $(rm x)", &["((", "rm"]),
         ("case $(git branch) in main) rm x;; esac", &["git", "rm"]),
         (
@@ -427,6 +433,15 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
         ),
         // bash refuses an unclosed subscript; it is read to the end, on the safe side.
         ("let 'a[$(rm -rf x)'", &["let", "rm"]),
+        // A nameref declared by `local` or `typeset`: its target's subscript runs.
+        (
+            "f() { local -n r='a[$(rm -rf x)]'; echo \"$r\"; }; a=(1 2); f",
+            &["local", "rm", "echo", "<none>", "f"],
+        ),
+        (
+            "a=(1 2); typeset -n r='a[$(rm -rf x)]'; echo \"$r\"",
+            &["<none>", "typeset", "rm", "echo"],
+        ),
     ];
     let no: &[(&str, &[&str])] = &[
         ("a=(1); let 'a[\"[\"]+$(rm -rf x)'", &["<none>", "let"]),
@@ -770,6 +785,121 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}echo \"${{a[x],,}}\""), "echo"),
         (format!("{x}echo \"${{a[x]/1/2}}\""), "echo"),
         (format!("{x}echo \"${{a[x]:0}}\""), "echo"),
+        // A `$(…)` in arithmetic is skipped only when its parentheses balance and it holds no
+        // quote, backslash, `#` or backtick: a quoted or commented `(` hides no name.
+        (format!("{x}(( $(: \"(\") + x ))"), "(("),
+        (format!("{x}(( $(: '(') + x ))"), "(("),
+        (format!("{x}(( $(: \\() + x ))"), "(("),
+        (format!("{x}(( $(: # (\n) + x ))"), "(("),
+        (format!("{x}echo $(( $(: \"(\") + x ))"), "echo"),
+        (format!("{x}a=(1); echo ${{a[$(: \"(\") + x]}}"), "echo"),
+        (format!("{x}s=abc; echo ${{s:$(: \"(\") + x}}"), "echo"),
+        // By rule: bash runs nothing here, but the body's parentheses do not balance.
+        (format!("{x}(( $(echo \")\") + x ))"), "(("),
+        // Writes through a nameref, or a declaration whose options are not static: any name may
+        // change, and any write may reach an integer name.
+        (
+            "x=1; declare -n r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "declare -i n; declare -n r=n; r='a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "declare -n r=RANDOM; r='a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "o=-n; x=1; declare $o r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "o=-i; declare $o n; n='a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "r=x; x=1; declare -n r; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r; r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "f() { local -n r=$1; r='a[$(rm -rf y)]'; }; x=1; f x; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; typeset -n r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; read r <<< 'a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; printf -v r %s 'a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; declare r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; mapfile r <<< 'a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        // `${x:=…}` and `${x=…}` assign a name.
+        ("x=; : ${x:='a[$(rm -rf y)]'}; (( x ))".to_string(), "(("),
+        (
+            "x=1; unset x; : ${x='a[$(rm -rf y)]'}; (( x ))".to_string(),
+            "((",
+        ),
+        ("declare -i n; : ${n:='a[$(rm -rf y)]'}".to_string(), ":"),
+        (
+            "unset SECONDS; : ${SECONDS:='a[$(rm -rf y)]'}; (( SECONDS ))".to_string(),
+            "((",
+        ),
+        ("x=; y=${x:='a[$(rm -rf y)]'}; (( x ))".to_string(), "(("),
+        (
+            "a=(1); a=(); : ${a[0]:='a[$(rm -rf y)]'}; (( a ))".to_string(),
+            "((",
+        ),
+        // A declaration operand bash refuses assigns nothing, and names no clean variable.
+        (
+            "declare 'x:-y=1' 2>/dev/null; x='a[$(rm -rf y)]'; n=${x:-y}; (( n ))".to_string(),
+            "((",
+        ),
+        (
+            "export 'x:-y=1' 2>/dev/null; x='a[$(rm -rf y)]'; n=${x:-y}; (( n ))".to_string(),
+            "((",
+        ),
+        // `read` options as getopts reads them: a target glued to `-a`, `-a` taking the next
+        // letter (a payload without a space, which `read` would split); by rule, a letter the
+        // collector does not know.
+        ("x=0; read -ax <<< 'a[$(>y)]'; (( x ))".to_string(), "(("),
+        ("r=0; read -ar x <<< 'a[$(>y)]'; (( r ))".to_string(), "(("),
+        ("z=1; read -Z x < f; (( z ))".to_string(), "(("),
+        // A static `eval` body is not lowered: any name may change in it, an integer one too.
+        (
+            "x=1; eval \"x='a[\\$(rm -rf y)]'\"; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x='a[$(rm -rf y)]'; eval 'declare -i n'; n=x".to_string(),
+            "<none>",
+        ),
+        (
+            "declare -i n; x=1; eval \"x='a[\\$(rm -rf y)]'\"; n=$x".to_string(),
+            "<none>",
+        ),
+        // An integer declared in an option cluster; a run-time target is its base name.
+        ("declare -ai n; n='a[$(rm -rf y)]'".to_string(), "<none>"),
+        (
+            "a=1; read 'a[0]' <<< 'a[$(rm -rf y)]'; (( a ))".to_string(),
+            "((",
+        ),
     ];
     // Every failing row is listed, not only the first.
     let mut bad = Vec::new();
@@ -844,6 +974,13 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "(( `wc -l < f` > 1 ))".to_string(),
         "(( 16#ff + 0x1F ))".to_string(),
         format!("{x}echo \"$x\""),
+        // A balanced substitution without quotes is skipped; options read in full; an operator
+        // that assigns nothing; a static `eval` with no arithmetic; a subscripted run-time target.
+        "t=1; n=$(( $(date +%s) - t )); (( n ))".to_string(),
+        "z=1; read -rs -p p n < f; (( z ))".to_string(),
+        "z=1; : ${z:-1}; (( z ))".to_string(),
+        "eval 'echo hi'; echo z".to_string(),
+        "a=1; z=1; read 'a[0]' < f; (( z ))".to_string(),
     ] {
         let s = ok(&src);
         if commands(&s).iter().any(|c| c.opaque) {
