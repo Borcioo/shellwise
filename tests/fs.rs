@@ -2097,6 +2097,17 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         &MAY_BE_CRITICAL,
         "[IO.Directory]::Delete('Proj:\\x')",
     );
+    expect(
+        judge(vec![git()], ri(r"FileSystem::Proj:\x")),
+        &unproven("Proj"),
+        r"git; FileSystem::Proj:\x",
+    );
+    // A module-qualified provider name takes the provider form `::` only.
+    expect(
+        judge(vec![], ri(r"Microsoft.PowerShell.Core\Function:x")),
+        &MAY_BE_CRITICAL,
+        r"Microsoft.PowerShell.Core\Function:x",
+    );
     for text in [
         r"FileSystem::C:\Profiles\u",
         r"Microsoft.PowerShell.Core\FileSystem::C:\Profiles\u",
@@ -2193,6 +2204,27 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         &paths(&[r"D:\elsewhere"]),
         "git; existing drive",
     );
+    expect(
+        judge_on(
+            vec![git()],
+            lits("rm", &[r"Z:\u"]),
+            Shell::Bash(BashProfile::GitBash),
+            &machine,
+        ),
+        &paths(&[r"Z:\u"]),
+        "Git Bash git; Z:\\u (pwsh only)",
+    );
+    // A drive root the hook cannot read is not proven to exist.
+    expect(
+        judge_on(
+            vec![git()],
+            ri(r"Z:\u"),
+            Shell::Pwsh,
+            &(Arc::new(RootDenied) as SharedFs),
+        ),
+        &MAY_BE_CRITICAL,
+        "drive root unreadable",
+    );
     let hang: SharedFs = Arc::new(Hang("lstat"));
     let mut hang_loc = base.clone();
     hang_loc.read_script(&script(vec![git()]));
@@ -2216,7 +2248,23 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     );
 }
 
-/// The real drive query: the system drive exists; on POSIX no letter drive does.
+/// `lstat` is refused on every path (the default `drive_exists` reads the root).
+struct RootDenied;
+
+impl Fs for RootDenied {
+    fn lstat(&self, _p: &Path) -> io::Result<Meta> {
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    }
+    fn read_dir(&self, _p: &Path) -> io::Result<Vec<PathBuf>> {
+        Ok(Vec::new())
+    }
+    fn link_target(&self, _p: &Path) -> io::Result<Option<PathBuf>> {
+        Ok(None)
+    }
+}
+
+/// The real drive query against the system's own drive list: the system drive exists, a letter
+/// `GetLogicalDrives` does not list does not; on POSIX no letter drive does.
 #[test]
 fn real_fs_reports_whether_a_drive_exists() {
     #[cfg(windows)]
@@ -2224,6 +2272,13 @@ fn real_fs_reports_whether_a_drive_exists() {
         let sys = std::env::var("SystemDrive").expect("SystemDrive is set");
         let letter = sys.chars().next().expect("a letter");
         assert!(RealFs.drive_exists(letter).expect("readable"), "{sys}");
+        // SAFETY: GetLogicalDrives takes no arguments and only returns a bit mask.
+        let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+        let free = (b'A'..=b'Z')
+            .rev()
+            .find(|l| mask & (1 << (l - b'A')) == 0)
+            .expect("a free letter") as char;
+        assert!(!RealFs.drive_exists(free).expect("readable"), "{free}:");
     }
     #[cfg(not(windows))]
     assert!(!RealFs.drive_exists('C').expect("readable"));
