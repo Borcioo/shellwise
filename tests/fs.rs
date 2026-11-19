@@ -2755,6 +2755,13 @@ fn pwsh_on_posix_reads_a_drive_path_as_powershell_does() {
             MAY_BE_CRITICAL,
         ),
         (
+            "git; module-qualified FileSystem::Proj:x*",
+            ps,
+            vec![git()],
+            ri(r"Microsoft.PowerShell.Core\FileSystem::Proj:x*"),
+            MAY_BE_CRITICAL,
+        ),
+        (
             "rm -rf a:b* (native glob)",
             ps,
             vec![git()],
@@ -3852,6 +3859,28 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
             sub,
             vec![Stmt::Cond {
                 branches: vec![script(vec![one("Get-ChildItem", None)])],
+                span: Span::default(),
+            }],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            r"if { sudo .\up.ps1 }; . (control)",
+            ps,
+            sub,
+            vec![Stmt::Cond {
+                branches: vec![script(vec![stmt(lits("sudo", &[r".\up.ps1"]), None)])],
+                span: Span::default(),
+            }],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "Git Bash if { cd.. }; . (control)",
+            Shell::Bash(BashProfile::GitBash),
+            sub,
+            vec![Stmt::Cond {
+                branches: vec![script(vec![one("cd..", None)])],
                 span: Span::default(),
             }],
             ".",
