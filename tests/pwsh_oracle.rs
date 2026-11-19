@@ -864,7 +864,7 @@ fn held_out_mutants_never_read_differently_from_powershell() {
 
 /// Seeds for the held-out run only: never used by the gate or by a fix round's iterations.
 const HELD_OUT_SEEDS: [u64; 10] = [
-    7349, 18121, 22501, 31337, 40961, 52711, 60013, 71993, 83311, 99991,
+    1009, 2027, 3049, 4093, 5101, 6143, 7177, 8191, 9203, 10007,
 ];
 
 /// `boundaries`, also cutting inside a word at each `-` and `.` (before and after it).
