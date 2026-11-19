@@ -71,5 +71,29 @@ fn gap_rows_read_as_powershell_reads_them() {
 
 #[test]
 fn mechanism_rows_read_as_powershell_reads_them() {
-    check("pwsh_mechanisms.toml", 319);
+    check("pwsh_mechanisms.toml", 347);
+}
+
+/// Each glued pair the parser accepts cites a row that holds it and that the parser reads as
+/// PowerShell does (the checks above prove the reading, `tests/pwsh_oracle.rs` the answer).
+#[test]
+fn every_glue_table_entry_cites_a_kept_row_holding_its_pair() {
+    let mut all = rows("pwsh_gaps.toml", 29);
+    all.extend(rows("pwsh_mechanisms.toml", 347));
+    let table = pwsh::glue_table();
+    assert!(table.len() >= 50, "glue table has {} entries", table.len());
+    let mut bad = Vec::new();
+    for (key, id) in &table {
+        match all.iter().find(|r| r.id == *id) {
+            None => bad.push(format!("{key}: no row {id}")),
+            Some(r) if r.error || r.parser.is_some() => {
+                bad.push(format!("{key}: row {id} is not a row the parser reads"));
+            }
+            Some(r) if !pwsh::glue_keys(&r.command).contains(key) => {
+                bad.push(format!("{key}: row {id} holds no such glued pair"));
+            }
+            Some(_) => {}
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

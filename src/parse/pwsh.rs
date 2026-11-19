@@ -128,7 +128,8 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
     let lower_error = match tree_error {
         None => unproven_special_char(src, root)
             .or_else(|| misread_node(src, root))
-            .or(lower_error),
+            .or(lower_error)
+            .or_else(|| unglued(src, root)),
         Some(_) => lower_error,
     };
     Lossy {
@@ -398,6 +399,269 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
         stack.extend(kids(n));
     }
     None
+}
+
+/// The first character of a glued pair's right piece, in the classes PowerShell's tokenizer
+/// tells apart there (`CharExtensions`: a dash, a single or a double quote of any width) and the
+/// characters that open a member, an index, a variable or a group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lead {
+    Dash,
+    Single,
+    Double,
+    Question,
+    Dot,
+    Dollar,
+    Paren,
+    Brace,
+    Bracket,
+    Other,
+}
+
+fn lead(t: &str) -> Lead {
+    match t.chars().next() {
+        Some(c) if is_dash(c) => Lead::Dash,
+        Some(c) if is_single_quote(c) => Lead::Single,
+        Some(c) if is_double_quote(c) => Lead::Double,
+        Some('?') => Lead::Question,
+        Some('.') => Lead::Dot,
+        Some('$') => Lead::Dollar,
+        Some('(') => Lead::Paren,
+        Some('{') => Lead::Brace,
+        Some('[') => Lead::Bracket,
+        _ => Lead::Other,
+    }
+}
+
+/// Glued pairs PowerShell reads as the lowering does: left piece kind, right piece kind, the right
+/// piece's first character, and the `tests/cases` row that shows PowerShell's reading. A pair
+/// that is not here fails the parse (`unglued`).
+#[rustfmt::skip]
+const GLUE: &[(&str, &str, Lead, &str)] = &[
+    ("generic_token", ",", Lead::Other, "glue-word-comma"),
+    (",", "generic_token", Lead::Other, "glue-word-comma"),
+    (",", "generic_token", Lead::Dot, "glue-comma-dot-word"),
+    ("integer_literal", ",", Lead::Other, "glue-number-comma"),
+    (",", "integer_literal", Lead::Other, "glue-number-comma"),
+    ("expandable_string_literal", ",", Lead::Other, "glue-dquote-comma"),
+    (",", "expandable_string_literal", Lead::Double, "glue-dquote-comma"),
+    ("verbatim_string_characters", ",", Lead::Other, "glue-squote-comma"),
+    (",", "verbatim_string_characters", Lead::Single, "glue-squote-comma"),
+    ("hash_literal_expression", ",", Lead::Other, "glue-hash-comma"),
+    (",", "hash_literal_expression", Lead::Other, "glue-hash-comma"),
+    ("variable", ",", Lead::Other, "glue-variable-comma"),
+    (",", "variable", Lead::Dollar, "comma-glued-vars"),
+    ("glued_argument_tail", ",", Lead::Other, "comma-glued-vars"),
+    ("member_access", ",", Lead::Other, "glue-member-comma"),
+    (",", "member_access", Lead::Dollar, "glue-member-comma"),
+    ("parenthesized_expression", ",", Lead::Other, "glue-paren-comma"),
+    (",", "parenthesized_expression", Lead::Paren, "glue-paren-comma"),
+    ("script_block_expression", ",", Lead::Other, "glue-block-comma"),
+    ("variable", "glued_argument_tail", Lead::Other, "var-glued-path"),
+    ("variable", "glued_argument_tail", Lead::Dash, "glue-variable-dash-tail"),
+    ("glued_argument_tail", "variable", Lead::Dollar, "glue-tail-variable"),
+    ("variable", "path_command_name_token", Lead::Other, "fix2-i2-variable-path-name-kept"),
+    ("variable", "path_command_name_token", Lead::Dot, "glue-path-name-dot"),
+    ("command_invokation_operator", "variable", Lead::Dollar, "fix2-i2-member-space-before-dot-kept"),
+    ("command_invokation_operator", "verbatim_string_characters", Lead::Single, "fix2-i1-dot-ascii-quote-name"),
+    ("command_name", "script_block_expression", Lead::Brace, "glue-name-block"),
+    ("command_name", "line_continuation", Lead::Other, "fuzz-backtick-line-end-in-name"),
+    ("command_name", "\"", Lead::Double, "glue-quote-name"),
+    ("\"", "command_name", Lead::Other, "glue-quote-name"),
+    ("command_parameter", "command_argument_sep", Lead::Other, "glue-colon-variable"),
+    ("command_argument_sep", "variable", Lead::Dollar, "glue-colon-variable"),
+    ("command_argument_sep", "verbatim_string_characters", Lead::Single, "glue-colon-squote"),
+    ("command_argument_sep", "generic_token", Lead::Other, "fix2-i2-colon-value-dot-kept"),
+    ("command_parameter", "expandable_string_literal", Lead::Double, "param-glued-dquote"),
+    ("command_parameter", "verbatim_string_characters", Lead::Single, "param-glued-quote"),
+    ("command_parameter", "parenthesized_expression", Lead::Paren, "subexpr-in-param"),
+    ("generic_token", "argument_list", Lead::Paren, "subexpr-glued-end"),
+    ("generic_token", "parenthesized_expression", Lead::Paren, "glue-word-paren"),
+    ("member_access", "argument_list", Lead::Paren, "member-call"),
+    ("parenthesized_expression", "generic_token", Lead::Other, "glue-escaped-quote-paren"),
+    ("script_block_expression", "script_block_expression", Lead::Brace, "glue-block-block"),
+    ("expandable_string_literal", "generic_token", Lead::Other, "fix2-r1-closing-quote-then-word"),
+    ("expandable_string_literal", "generic_token", Lead::Dash, "fix2-i2-quote-dash-param"),
+    ("expandable_string_literal", "parenthesized_expression", Lead::Paren, "glue-dquote-paren"),
+    ("expandable_string_literal", "line_continuation", Lead::Other, "fix2-i2-backtick-lf-after-quote-kept"),
+    ("expandable_string_literal", "comment", Lead::Other, "glue-dquote-comment"),
+    ("verbatim_string_characters", "generic_token", Lead::Other, "glue-squote-word"),
+    ("verbatim_string_characters", "generic_token", Lead::Dash, "fix2-i2-quote-two-dash-param"),
+    ("verbatim_string_characters", "generic_token", Lead::Question, "fix2-i1-question-word-after-string-kept"),
+    ("verbatim_string_characters", "comment", Lead::Other, "fuzz-comment-after-quote"),
+    ("parenthesized_expression", "comment", Lead::Other, "glued-paren"),
+    ("file_redirection_operator", "variable", Lead::Dollar, "glued-redirect"),
+    ("file_redirection_operator", "generic_token", Lead::Other, "fix2-r2-target-same-line"),
+    ("file_redirection_operator", "comment", Lead::Other, "fix2-r2-comment-before-target"),
+    ("comment", "generic_token", Lead::Other, "fix2-r2-comment-before-target"),
+];
+
+/// A piece of a command element (a node, a backtick line end, or text a node holds outside its
+/// children), or a separator between two.
+#[derive(Clone, Copy)]
+enum Piece<'t> {
+    Part(&'t str, usize, usize),
+    Gap,
+}
+
+/// Nodes whose children are the pieces of a command element.
+const PIECE_HOLDERS: &[&str] = &[
+    "command",               // holds: the invocation operator, the name, the elements
+    "command_name",          // holds: a comment inside a bare name
+    "command_name_expr",     // holds: the name after `&` or `.`
+    "path_command_name",     // holds: a variable and path text in a name
+    "command_elements",      // holds: the arguments, parameters and redirections
+    "glued_string_argument", // holds: a string and the words glued after it
+    "glued_argument",        // holds: a variable and the text glued after it
+    "string_literal",        // holds: the string token
+    "redirections",          // holds: a statement's redirections
+    "redirection",           // holds: a redirect operator and its target
+    "redirected_file_name",  // holds: a redirect target's pieces
+];
+
+/// The kind of the text a node holds outside its children.
+fn text_kind(parent: &str) -> &'static str {
+    match parent {
+        "command_name" => "command_name",
+        "glued_argument" => "glued_argument_tail",
+        _ => "text",
+    }
+}
+
+/// Bytes between pieces, read against the grammar's extras: a space or a zero-width extra
+/// separates, a backtick line end is a piece, any other byte is the holder's text.
+fn gap_pieces(src: &str, from: usize, to: usize, parent: &str, out: &mut Vec<Piece<'_>>) {
+    let t = &src[from..to];
+    let mut i = 0;
+    let mut run: Option<usize> = None;
+    while i < t.len() {
+        let rest = &t[i..];
+        let cont = ["`\r\n", "`\n", "`\r"]
+            .into_iter()
+            .find(|p| rest.starts_with(p));
+        let c = rest.chars().next().unwrap_or(' ');
+        let sep = c.is_whitespace() || matches!(c, '\u{feff}' | '\u{2060}' | '\u{200b}');
+        if (cont.is_some() || sep)
+            && let Some(s) = run.take()
+        {
+            out.push(Piece::Part(text_kind(parent), from + s, from + i));
+        }
+        if let Some(p) = cont {
+            out.push(Piece::Part(
+                "line_continuation",
+                from + i,
+                from + i + p.len(),
+            ));
+            i += p.len();
+        } else if sep {
+            out.push(Piece::Gap);
+            i += c.len_utf8();
+        } else {
+            run.get_or_insert(i);
+            i += c.len_utf8();
+        }
+    }
+    if let Some(s) = run {
+        out.push(Piece::Part(text_kind(parent), from + s, to));
+    }
+}
+
+/// The pieces of `n` in text order. Holders nest a few levels at most (a command, its elements, a
+/// glued word, a string), so the recursion is bounded.
+fn flatten<'t>(src: &str, n: Node<'t>, out: &mut Vec<Piece<'t>>) {
+    let mut pos = n.start_byte();
+    for c in kids(n) {
+        if c.start_byte() == c.end_byte() {
+            continue;
+        }
+        gap_pieces(src, pos, c.start_byte(), n.kind(), out);
+        let t = &src[c.start_byte()..c.end_byte()];
+        if PIECE_HOLDERS.contains(&c.kind()) {
+            flatten(src, c, out);
+        } else if c.kind() == "command_argument_sep" && !t.contains(':') {
+            // Spaces, with any extras the grammar put inside the separator.
+            gap_pieces(src, c.start_byte(), c.end_byte(), c.kind(), out);
+        } else if t.chars().all(char::is_whitespace) {
+            out.push(Piece::Gap);
+        } else {
+            out.push(Piece::Part(c.kind(), c.start_byte(), c.end_byte()));
+        }
+        pos = c.end_byte();
+    }
+    gap_pieces(src, pos, n.end_byte(), n.kind(), out);
+}
+
+/// Every glued pair in the tree: two pieces of one command or `redirections` node with nothing
+/// between them, as (left kind, right kind, right piece's first character, span of both).
+fn glued_pairs<'t>(src: &str, root: Node<'t>) -> Vec<(&'t str, &'t str, Lead, Span)> {
+    let mut pairs = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "command" | "redirections") {
+            let mut pieces = Vec::new();
+            flatten(src, n, &mut pieces);
+            // `ls 2>$null<#x#>`: the tree ends the command before a comment glued to its end.
+            if let Some(c) = root.named_descendant_for_byte_range(n.end_byte(), n.end_byte() + 1)
+                && c.kind() == "comment"
+                && c.start_byte() == n.end_byte()
+            {
+                pieces.push(Piece::Part(c.kind(), c.start_byte(), c.end_byte()));
+            }
+            for w in pieces.windows(2) {
+                if let [Piece::Part(l, s, _), Piece::Part(r, rs, re)] = w {
+                    let at = Span {
+                        start: *s,
+                        end: *re,
+                    };
+                    pairs.push((*l, *r, lead(&src[*rs..*re]), at));
+                }
+            }
+        }
+        stack.extend(kids(n));
+    }
+    pairs
+}
+
+/// The first glued pair that is not in `GLUE`: PowerShell's tokenizer may split or join it
+/// differently from the grammar.
+fn unglued(src: &str, root: Node) -> Option<ParseError> {
+    glued_pairs(src, root)
+        .into_iter()
+        .find(|(l, r, c, _)| !GLUE.iter().any(|g| g.0 == *l && g.1 == *r && g.2 == *c))
+        .map(|(l, r, _, at)| {
+            error(
+                at,
+                &format!("PowerShell may read these glued pieces differently: {l}, {r}"),
+                None,
+            )
+        })
+}
+
+/// `GLUE` as `left|right|Lead` keys with the row each cites (the row tests check the citations).
+#[doc(hidden)]
+pub fn glue_table() -> Vec<(String, &'static str)> {
+    GLUE.iter()
+        .map(|(l, r, c, row)| (format!("{l}|{r}|{c:?}"), *row))
+        .collect()
+}
+
+/// The `left|right|Lead` key of every glued pair in `src` (none when the grammar does not load).
+#[doc(hidden)]
+pub fn glue_keys(src: &str) -> Vec<String> {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_powershell::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(src, None) else {
+        return Vec::new();
+    };
+    glued_pairs(src, tree.root_node())
+        .into_iter()
+        .map(|(l, r, c, _)| format!("{l}|{r}|{c:?}"))
+        .collect()
 }
 
 /// A lowering error, with the statements lowered so far (the dump shows them).
@@ -1263,10 +1527,6 @@ impl<'a> Lower<'a> {
         let mut last_closes = false;
         for k in named_kids(n) {
             match k.kind() {
-                // `git<#x #>`: PowerShell reads a comment glued to the name as name text.
-                "comment" if name.as_ref().is_some_and(|w| w.span.end == k.start_byte()) => {
-                    return Err(self.unmodelled(k));
-                }
                 // `.‘x’`: a dot glued to a typographic quote is name text for PowerShell, not
                 // the dot-source operator.
                 "command_invokation_operator"
@@ -1278,10 +1538,6 @@ impl<'a> Lower<'a> {
                     return Err(self.unmodelled(k));
                 }
                 "command_invokation_operator" | "comment" => {}
-                // `git<#x #>a`: PowerShell's name ends before the `<#`; `#>a` is a comment.
-                "command_name" if named_kids(k).iter().any(|c| c.kind() == "comment") => {
-                    return Err(self.unmodelled(k));
-                }
                 "command_name" | "command_name_expr" => name = Some(self.name_word(k, cx)?),
                 "command_elements" => {
                     let after = name.as_ref().map_or(k.start_byte(), |w| w.span.end);
@@ -1429,29 +1685,6 @@ impl<'a> Lower<'a> {
                     continue;
                 }
                 "redirection" => {
-                    // `2>$null>x`: a redirect glued to the previous redirect's target is that
-                    // target's text for PowerShell.
-                    if glued_to_last && last_redirect {
-                        return Err(self.unmodelled(ch));
-                    }
-                    // `-m>'x'`, `$x>b`, `status*>`: a `>` glued to a word or a command name is
-                    // word text for PowerShell.
-                    let after_name = out.is_empty() && group.is_empty() && last_end == after;
-                    if glued_to_last
-                        && (after_name
-                            || group.last().is_some_and(|l| {
-                                matches!(
-                                    l.kind(),
-                                    "command_parameter"
-                                        | "generic_token"
-                                        | "variable"
-                                        | "verbatim_string_characters"
-                                        | "expandable_string_literal"
-                                )
-                            }))
-                    {
-                        return Err(self.unmodelled(ch));
-                    }
                     out.push(Element::Redirect(ch));
                     last_end = ch.end_byte();
                     last_redirect = true;
@@ -1473,21 +1706,13 @@ impl<'a> Lower<'a> {
             {
                 return Err(self.unmodelled(ch));
             }
-            // `--name=${1}`: a `$` glued to `{` opens a braced variable for PowerShell.
-            if ch.kind() == "script_block_expression"
+            // `$x.'Delete'()`: a `(…)` glued to a member access is a call for PowerShell. Only
+            // `$x.Name(…)` is lowered as one (`member_call`); the glue table refuses the rest.
+            if ch.kind() == "argument_list"
                 && let Some(p) = group.last()
                 && p.end_byte() == ch.start_byte()
-                && self.text(*p).ends_with('$')
-            {
-                return Err(self.unmodelled(ch));
-            }
-            // `$x.'Delete'()`, `$x?.Delete()`, `$x.Delete{1}`: a `(…)` or `{…}` glued to a member
-            // access is a call for PowerShell. Only `$x.Name(…)` is lowered as one (`member_call`).
-            if matches!(ch.kind(), "argument_list" | "script_block_expression")
-                && let Some(p) = group.last()
-                && p.end_byte() == ch.start_byte()
-                && matches!(p.kind(), "member_access" | "glued_argument")
-                && !(ch.kind() == "argument_list" && simple_member_access(*p))
+                && p.kind() == "member_access"
+                && !simple_member_access(*p)
             {
                 return Err(self.unmodelled(ch));
             }
@@ -1695,15 +1920,6 @@ impl<'a> Lower<'a> {
                     let w = self.token_word(*n, cx)?;
                     quotes.push(w.quote);
                     items.extend(w.parts.into_iter().map(Item::Part));
-                }
-                // `$x?`, `$x?.Name`: PowerShell reads `x?` as the variable's name, and then a
-                // member or an index ends the word (`$x?.Name<#c#>` holds a comment).
-                "glued_argument"
-                    if named_kids(*n)
-                        .first()
-                        .is_some_and(|v| self.src[v.end_byte()..n.end_byte()].starts_with('?')) =>
-                {
-                    return Err(self.unmodelled(*n));
                 }
                 // `$env::TEMP\a`: PowerShell ends the argument after the static member access.
                 "glued_argument" if static_member_on_variable(self.text(*n)) => {

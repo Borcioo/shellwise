@@ -3034,3 +3034,260 @@ error = false
 cmds = [["node", "-name=a<#x#>b", "x.js"]]
 comments = []
 methods = []
+
+[[row]]
+id = "glue-word-comma"
+mechanism = "a comma glued between two words joins a list (glue table: generic_token and `,`)"
+command = "Select-Object Id,Name"
+error = false
+cmds = [["Select-Object", "Id,Name"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-number-comma"
+mechanism = "a comma glued between two numbers joins a list"
+command = "Write-Output 1,2"
+error = false
+cmds = [["Write-Output", "1,2"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-dquote-comma"
+mechanism = "a comma glued between two double-quoted strings joins a list"
+command = "Write-Output \"a\",\"b\""
+error = false
+cmds = [["Write-Output", "\"a\",\"b\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-squote-comma"
+mechanism = "a comma glued between two single-quoted strings joins a list"
+command = "Write-Output 'a','b'"
+error = false
+cmds = [["Write-Output", "'a','b'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-colon-variable"
+mechanism = "`-Name:` glued to a variable passes it as the value"
+command = "Get-ChildItem -Path:$p"
+error = false
+cmds = [["Get-ChildItem", "-Path:$p"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-colon-squote"
+mechanism = "`-Name:` glued to a quoted string passes it as the value"
+command = "Get-ChildItem -Filter:'*.rs'"
+error = false
+cmds = [["Get-ChildItem", "-Filter:'*.rs'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-name-block"
+mechanism = "a script block glued to a command name is its first argument"
+command = "ls | %{ $_ }"
+error = false
+cmds = [["ls"], ["%", "{ $_ }"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-hash-comma"
+mechanism = "a comma glued between two hash literals joins a list"
+command = "Write-Output @{a=1},@{b=2}"
+error = false
+cmds = [["Write-Output", "@{a=1},@{b=2}"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-variable-comma"
+mechanism = "a comma glued between two variables joins a list"
+command = "Write-Output $a,$b"
+error = false
+cmds = [["Write-Output", "$a,$b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-variable-dash-tail"
+mechanism = "a dash glued after a variable is word text"
+command = "Write-Output $x-y"
+error = false
+cmds = [["Write-Output", "$x-y"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-comma-dot-word"
+mechanism = "a word starting with a dot after a comma is a list element"
+command = "Write-Output a,.b"
+error = false
+cmds = [["Write-Output", "a,.b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-paren-comma"
+mechanism = "a comma glued between two parenthesized expressions joins a list"
+command = "Write-Output (1),(2)"
+error = false
+cmds = [["Write-Output", "(1),(2)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-block-block"
+mechanism = "two glued script blocks are two arguments"
+command = "Write-Output {1}{2}"
+error = false
+cmds = [["Write-Output", "{1}", "{2}"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-dquote-paren"
+mechanism = "a parenthesized expression glued after a string is a new argument"
+command = "Write-Output \"a\"(1)"
+error = false
+cmds = [["Write-Output", "\"a\"", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-squote-word"
+mechanism = "a word glued after a single-quoted string is a new argument"
+command = "Write-Output 'a'b"
+error = false
+cmds = [["Write-Output", "'a'", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-variable"
+mechanism = "a variable glued after a variable's word text stays in the word"
+command = "Write-Output $a\\$b"
+error = false
+cmds = [["Write-Output", "$a\\$b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-member-comma"
+mechanism = "a comma glued between two member accesses joins a list"
+command = "Write-Output $a.b,$c.d"
+error = false
+cmds = [["Write-Output", "$a.b,$c.d"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-path-name-dot"
+mechanism = "`.ext` glued to a variable command name after `&` is name text"
+command = "& $dir.ps1"
+error = false
+cmds = [["$dir.ps1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-block-comma"
+mechanism = "a comma glued after a script block joins a list"
+command = "Write-Output {1},2"
+error = false
+cmds = [["Write-Output", "{1},2"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-dquote-comment"
+mechanism = "a comment glued after a closing double quote is a comment"
+command = "Write-Output \"a\"<#c#>"
+error = false
+cmds = [["Write-Output", "\"a\""]]
+comments = ["<#c#>"]
+methods = []
+
+[[row]]
+id = "glue-escaped-quote-paren"
+mechanism = "a parenthesized expression and a word glued after a string closed by `\\\"`"
+command = "rg \"a\\\"(b)c\\\"\" x"
+error = false
+cmds = [["rg", "\"a\\\"", "(b)", "c\\\"\"", "x"], ["b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-word-paren"
+mechanism = "a parenthesized expression glued after a word in a string tail is a new argument"
+command = "rg \"\\\"/x/(a)\\\"\" y"
+error = false
+cmds = [["rg", "\"\\\"", "/x/", "(a)", "\\\"\"", "y"], ["a"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-quote-name"
+mechanism = "a string closed by `\\\"` mid-line, then the rest read as commands"
+command = "node -e \"a\n  n(\\\"\\t--f: u;\n\\\", \\\"\\t--m: m;\n\\\");\n\""
+error = false
+cmds = [["node", "-e", "\"a\n  n(\\\"", "\\t--f:", "u"], ["\\\", \\\"\\t--m:", "m"], ["\\\");\n\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-dot-dash"
+mechanism = "`.` glued to `-` is the command name `.-`, not the dot-source operator (not in the glue table)"
+parser = "refuses"
+command = ".- $x"
+error = false
+cmds = [[".-", "$x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-name-line-end"
+mechanism = "a backtick line end glued to a variable command name is name text (not in the glue table)"
+parser = "refuses"
+command = "{.$m1`\n .x}"
+error = false
+cmds = [["$m1`\n", ".x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-stmt-redirect-comment"
+mechanism = "a comment glued to a statement's redirect target is target text (not in the glue table)"
+parser = "refuses"
+command = "git status; 2>$null<#x#>2>&1"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-member-comment"
+mechanism = "a comment glued to a member access in argument mode is word text (not in the glue table)"
+parser = "refuses"
+command = "Write-Output $?.Delete<#x#>"
+error = false
+cmds = [["Write-Output", "$?.Delete<#x#>"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-call-op-dquote"
+mechanism = "`&` glued to a double-quoted name (not in the glue table)"
+parser = "refuses"
+command = "&\"x\""
+error = false
+cmds = [["\"x\""]]
+comments = []
+methods = []
