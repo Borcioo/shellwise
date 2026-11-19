@@ -262,7 +262,8 @@ const SHELL_TEXT_VARIABLES: &[&str] = &[
 
 /// A value assigned to a name, as the taint rule reads it.
 enum Value {
-    /// Cannot hold code: an integer from `$((…))`, a substitution's output.
+    /// An integer from `$((…))`. Also one substitution's output (`n=$(cmd)`), which may be any
+    /// text the command prints: a limit the README states.
     Clean,
     /// Anything the allow-list does not name.
     Tainted,
@@ -306,6 +307,9 @@ struct Taint {
     /// A write the collector cannot follow may make any name integer or reach one (a nameref,
     /// options that are not static, an `eval` body): every name counts as integer.
     any_integer: bool,
+    /// The script may bind a command of `DIGIT_COMMANDS` to other code: no command output read
+    /// as arithmetic is clean.
+    shadowed: bool,
 }
 
 impl Taint {
@@ -319,7 +323,7 @@ impl Taint {
 
     /// Whether arithmetic over `text` reads a tainted name; text that is not plain does.
     fn reads(&self, text: &str) -> bool {
-        let Some(view) = plain_view(text) else {
+        let Some(view) = plain_view(text, !self.shadowed) else {
             return true;
         };
         let (names, positional) = arith_refs(&view);
@@ -358,6 +362,7 @@ impl Taint {
             all: false,
             integers,
             any_integer: false,
+            shadowed: false,
         };
         let mut steps = 0;
         for round in 0.. {
@@ -464,6 +469,8 @@ struct Lower {
     unknown_target: Cell<bool>,
     /// See `Taint::any_integer`.
     any_integer: Cell<bool>,
+    /// A command that may bind a name to other code ran: `REBINDING`, or a name not static.
+    rebinds: Cell<bool>,
 }
 
 impl Lower {
@@ -481,6 +488,7 @@ impl Lower {
             arith_texts: RefCell::default(),
             unknown_target: Cell::new(false),
             any_integer: Cell::new(false),
+            rebinds: Cell::new(false),
         }
     }
 
@@ -495,14 +503,18 @@ impl Lower {
     /// arithmetic context that reads a tainted name, or a value assigned to an integer name.
     fn taint(self) -> Option<Taint> {
         let assigned = self.assigned.into_inner();
+        let functions = self.functions.into_inner();
         let mut taint = Taint::compute(
             &assigned,
             &self.calls.into_inner(),
-            &self.functions.into_inner(),
+            &functions,
             self.integers.into_inner(),
         );
         taint.all |= self.unknown_target.get();
         taint.any_integer = self.any_integer.get();
+        taint.shadowed = self.rebinds.get()
+            || assigned.iter().any(|(n, _)| n == "PATH")
+            || DIGIT_COMMANDS.iter().any(|c| functions.contains(c[0]));
         let needed = taint.all
             || self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
             || assigned.iter().any(|(n, _)| taint.integers.contains(n));
@@ -846,7 +858,7 @@ impl Lower {
                 for w in [a, b] {
                     let mut w = self.ast_word(t, w, span, cx)?;
                     if arithmetic {
-                        self.read_arith(&value_text(&w));
+                        self.read_arith(&arith_text(&w));
                         self.subscript_substs(&mut w, cx)?;
                     }
                     out.push(w);
@@ -1026,6 +1038,11 @@ impl Lower {
             canonical(&cmd.name, self.profile)
         };
         let (target, first_arg, wrapped) = unwrap_builtins(&cmd, self.profile);
+        let named = !cmd.name.parts.is_empty();
+        if named && target.as_deref().is_none_or(|t| REBINDING.contains(&t)) {
+            self.rebinds.set(true);
+        }
+        self.name_writer_words(&cmd, target.as_deref(), first_arg, wrapped);
         let runs_text = match target.as_deref() {
             Some("eval") => true,
             Some("source" | ".") => wrapped,
@@ -1041,11 +1058,54 @@ impl Lower {
         self.declarations(&cmd, target.as_deref(), first_arg);
         self.evaluated_operands(&mut cmd, target.as_deref(), first_arg, cx)?;
         // A name no rule can match is opaque: a variable, a glob, anything without a canonical name.
-        let unknown_name = !cmd.name.parts.is_empty() && cmd.canonical.is_none();
+        let unknown_name = named && cmd.canonical.is_none();
         let tainted_read = self.tainted_read.replace(outer);
         cmd.opaque =
             cmd.name.is_dynamic() || has_glob || runs_dynamic_text || unknown_name || tainted_read;
         Ok(cmd)
+    }
+
+    /// A builtin that writes a name is read exactly only when each word that may be an option, an
+    /// option argument or a name is literal text: an expansion (a variable, a glob, a brace) may
+    /// name another option or target. Bash does not split or glob `name=…` with a literal `name=`
+    /// on the bare builtin, but does behind `command`/`builtin` or a quoted command word.
+    fn name_writer_words(
+        &self,
+        cmd: &SimpleCommand,
+        target: Option<&str>,
+        first_arg: usize,
+        wrapped: bool,
+    ) {
+        let declaration = matches!(
+            target,
+            Some("declare" | "typeset" | "local" | "export" | "readonly")
+        );
+        let words = &cmd.args[first_arg.min(cmd.args.len())..];
+        let words = match target {
+            _ if declaration => words,
+            Some("read" | "mapfile" | "readarray" | "let") => words,
+            // `getopts OPTSTRING NAME [ARG…]`: the arguments are only parsed.
+            Some("getopts") => &words[..words.len().min(2)],
+            Some("printf") => &words[..printf_option_words(words)],
+            _ => return,
+        };
+        let bare = !wrapped && target == Some(cmd.typed.as_str());
+        for w in words {
+            let assignment = declaration
+                && bare
+                && matches!(w.parts.first(), Some(WordPart::Literal(l))
+                if l.split_once('=').is_some_and(|(n, _)| {
+                    is_identifier(n.strip_suffix('+').unwrap_or(n))
+                }));
+            if exact(w).is_none() && !assignment {
+                if matches!(target, Some("declare" | "typeset" | "local")) {
+                    self.unknown_write();
+                } else {
+                    self.runtime_target(None);
+                }
+                return;
+            }
+        }
     }
 
     /// The operands of a declaration builtin (`declare -i n=x`, `local 'x=…'`): what they assign,
@@ -1057,18 +1117,14 @@ impl Lower {
         ) {
             return;
         }
-        // A nameref (`-n` in a cluster) writes its target's name, and an option word that is not
-        // static may be `-n` or `-i`: the collector follows neither. (A `+` word only removes an
-        // attribute.)
+        // A nameref (`-n` in a cluster) writes its target's name: the collector does not follow
+        // it. (`name_writer_words` judges a word that is not literal text.)
         if matches!(target, Some("declare" | "typeset" | "local")) {
             let env = EnvView::new();
             for w in cmd.args.iter().skip(first_arg) {
-                let unknown = match w.static_value(&env) {
-                    Some(v) => v.starts_with('-') && v[1..].contains('n'),
-                    None => !matches!(w.parts.first(), Some(WordPart::Literal(l))
-                        if !(l.is_empty() || l.starts_with('-'))),
-                };
-                if unknown {
+                if w.static_value(&env)
+                    .is_some_and(|v| v.starts_with('-') && v[1..].contains('n'))
+                {
                     self.unknown_write();
                 }
             }
@@ -1390,7 +1446,7 @@ impl Lower {
                 for (key, value) in items {
                     if let Some(k) = key {
                         let k = self.ast_word(t, k, span, cx)?;
-                        self.read_arith(&value_text(&k));
+                        self.read_arith(&arith_text(&k));
                         out.push((name.clone(), k));
                     }
                     let value = self.ast_word(t, value, span, cx)?;
@@ -1893,14 +1949,108 @@ fn is_identifier(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Commands whose output is digits and white space only, as words: unquoted literal text, split
+/// at spaces and tabs (a newline ends the command). A last `<` is a redirect from a literal path.
+const DIGIT_COMMANDS: &[&[&str]] = &[
+    &["date", "+%s"],
+    &["date", "+%s%N"],
+    &["id", "-u"],
+    &["wc", "-l", "<"],
+];
+
+/// Builtins that can bind a command name to other code: `hash -p`, an alias, a loaded builtin,
+/// the functions of a sourced file.
+const REBINDING: &[&str] = &["hash", "alias", "enable", "source", "."];
+
+/// Whether `words` are a command of `DIGIT_COMMANDS`.
+fn digits_only(words: &[&str]) -> bool {
+    DIGIT_COMMANDS.iter().any(|c| match c.split_last() {
+        Some((&"<", _)) => {
+            words.len() == c.len() + 1
+                && words[..c.len()] == c[..]
+                && words[c.len()]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))
+        }
+        _ => words == *c,
+    })
+}
+
+/// Whether a `$(…)` or backtick body is a command of `DIGIT_COMMANDS`.
+fn listed_text(body: &str) -> bool {
+    let mut words = Vec::new();
+    for w in body.split([' ', '\t']).filter(|w| !w.is_empty()) {
+        match w.strip_prefix('<') {
+            Some(path) if !path.is_empty() => words.extend(["<", path]),
+            _ => words.push(w),
+        }
+    }
+    digits_only(&words)
+}
+
+/// The words of a substitution's script when it is one command of `DIGIT_COMMANDS`.
+fn listed_words(s: &Script) -> Option<Vec<String>> {
+    let [Stmt::Pipeline(p)] = &s.stmts[..] else {
+        return None;
+    };
+    let [Elem::Cmd(c)] = &p.elems[..] else {
+        return None;
+    };
+    let bare = |w: &Word| match &w.parts[..] {
+        [WordPart::Literal(l)] if w.quote == Quote::None => Some(l.clone()),
+        _ => None,
+    };
+    let mut words = std::iter::once(&c.name)
+        .chain(&c.args)
+        .map(bare)
+        .collect::<Option<Vec<_>>>()?;
+    match &c.redirects[..] {
+        [] => {}
+        [Redirect::File { op, target, .. }] if op == "<" => {
+            words.push("<".to_string());
+            words.push(bare(target)?);
+        }
+        _ => return None,
+    }
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    digits_only(&refs).then_some(words)
+}
+
+/// A word that is literal text only: no expansion, glob or brace.
+fn exact(w: &Word) -> Option<String> {
+    let mut out = String::new();
+    for p in &w.parts {
+        match p {
+            WordPart::Literal(s) => out.push_str(s),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// How many leading words of `printf` may be an option or its target: up to the first word that
+/// is no `-v` option (the format, `--`, or a word that is not literal text and may be `-v`).
+fn printf_option_words(words: &[Word]) -> usize {
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        match exact(w).as_deref() {
+            Some("-v") => i += 2,
+            Some(v) if v.starts_with("-v") => i += 1,
+            _ => return i + 1,
+        }
+    }
+    i.min(words.len())
+}
+
 /// Arithmetic text as the name scanner reads it, or `None` when it is not plain. The parser
-/// splits the text, so each `$(…)` and backtick body ends where bash ends it; the body becomes a
-/// space (its output, run-time text), as does a nested `$((…))`, which is read as its own context.
-/// Plain pieces are those, unquoted text without `$` (the scanner reads every name in it), and
-/// `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to
-/// a name or another expansion forms a name at run time, so it is not plain; nor is any quote,
+/// splits the text, so each `$(…)` and backtick body ends where bash ends it. A body is plain only
+/// when `listed` and it is a command of `DIGIT_COMMANDS`: other output is text the script may
+/// print. A plain body becomes a space, as does a nested `$((…))`, which is read as its own
+/// context. Plain pieces are those, unquoted text without `$` (the scanner reads every name in
+/// it), and `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to a
+/// name or another expansion forms a name at run time, so it is not plain; nor is any quote,
 /// escape or other expansion.
-fn plain_view(text: &str) -> Option<String> {
+fn plain_view(text: &str, listed: bool) -> Option<String> {
     let pieces = word::parse(text, &ParserOptions::default()).ok()?;
     let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut out = String::new();
@@ -1942,10 +2092,15 @@ fn plain_view(text: &str) -> Option<String> {
                 out.push_str(&name);
                 out.push('}');
             }
-            // Run-time output, and an integer whose text is read as its own context.
-            WordPiece::CommandSubstitution(_)
-            | WordPiece::BackquotedCommandSubstitution(_)
-            | WordPiece::ArithmeticExpression(_) => out.push(' '),
+            WordPiece::CommandSubstitution(body)
+            | WordPiece::BackquotedCommandSubstitution(body) => {
+                if !(listed && listed_text(body)) {
+                    return None;
+                }
+                out.push(' ');
+            }
+            // An integer whose text is read as its own context.
+            WordPiece::ArithmeticExpression(_) => out.push(' '),
             _ => return None,
         }
         joins = true;
@@ -2072,6 +2227,19 @@ fn arith_targets(text: &str) -> Vec<&str> {
 /// A word as the text bash evaluates: literals as written, each variable as `${name}`, an
 /// arithmetic expansion as `$((…))`, each substitution's output left out.
 fn value_text(w: &Word) -> String {
+    rendered(w, |_| String::new())
+}
+
+/// A word as arithmetic reads it: as `value_text`, with each substitution as `$(…)`, holding its
+/// command when that is on `DIGIT_COMMANDS` (`plain_view` judges it again).
+fn arith_text(w: &Word) -> String {
+    rendered(w, |s| {
+        let words = listed_words(s).map(|w| w.join(" "));
+        format!("$({})", words.as_deref().unwrap_or("…"))
+    })
+}
+
+fn rendered(w: &Word, subst: impl Fn(&Script) -> String) -> String {
     let mut out = String::new();
     for p in &w.parts {
         match p {
@@ -2086,7 +2254,7 @@ fn value_text(w: &Word) -> String {
                 out.push('}');
             }
             WordPart::Tilde => out.push('~'),
-            WordPart::Subst(_) | WordPart::Block(_) => {}
+            WordPart::Subst(s) | WordPart::Block(s) => out.push_str(&subst(s)),
         }
     }
     out

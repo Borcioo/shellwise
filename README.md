@@ -21,7 +21,14 @@ Without `-- COMMAND` the command is read from stdin. Exit codes: 0 ok/warn, 1 br
 
 - Bash: a name assigned exactly one run-time expansion and nothing else (`n=$(cmd)`, `n=$1`) counts
   as clean when arithmetic evaluates it, so a `$(…)` that such a value carries in an array
-  subscript is not seen.
+  subscript is not seen: the value is command output or an argument at run time.
+- Bash: command output that arithmetic reads directly (`(( $(cmd) ))`, `$(( $(cmd) ))`,
+  `[[ $(cmd) -eq 1 ]]`, `${s:$(cmd)}`, `${a[$(cmd)]}`, `a[$(cmd)]=1`, `a=([$(cmd)]=1)`) makes the
+  command opaque, unless the command is `date +%s`, `date +%s%N`, `id -u` or `wc -l < FILE` with a
+  literal path, written with spaces or tabs only, and the script defines no function of that name,
+  writes no `PATH` and runs no `hash`, `alias`, `enable`, `source`, `.` or command whose name is
+  not static. A `PATH` inherited from the environment that finds another such command is not
+  seen.
 
 ## Develop
 

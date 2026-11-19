@@ -972,6 +972,120 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             "a=1; read 'a[0]' <<< 'a[$(rm -rf y)]'; (( a ))".to_string(),
             "((",
         ),
+        // A builtin that writes a name is read only when every word is literal text: an option
+        // word of `printf` that is not (up to the format), directly or through a wrapper, or a
+        // brace expansion, may be `-v NAME`.
+        (r#"o=-v; n=0; printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; printf "$o" n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-vn; n=0; printf $o %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o='-v n'; n=0; printf $o %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; declare -i n; printf $o n %s 'a[$(>y)]'"#.into(), "printf"),
+        (r#"o=-v; n=0; command printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; builtin printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"n=0; printf {-v,n} %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        // A declaration word that is not literal text: split, glued to a literal or a `+`, quoted,
+        // a brace expansion.
+        (r#"x=1; o='x=a[$(>y)]'; export $o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; readonly $o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; export "$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; readonly "$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o=' x=a[$(>y)]'; declare y$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o=' x=a[$(>y)]'; export y$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; declare x$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; export x$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; f() { local x$o; (( x )); }; f"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; declare "x$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; export "x$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; readonly "x$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='i -n'; declare +$o r=x; r='a[$(>y)]'; (( x ))"#.into(), "(("),
+        (
+            r#"x=1; o='i -n'; f() { local +$o r=x; r='a[$(>y)]'; (( x )); }; f"#.into(),
+            "((",
+        ),
+        (r#"o='x -i'; declare +$o n; n='a[$(:>y)]'"#.into(), "<none>"),
+        (r#"declare {-i,n}; n='a[$(:>y)]'"#.into(), "<none>"),
+        // `name=$v` splits unless the command word is the bare builtin: through a wrapper, or
+        // with a quoted or escaped command word.
+        (r#"y=1; o='1 y=a[$(>y)]'; command declare x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; builtin declare x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; command export x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; \declare x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; 'export' x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; "declare" x=$o; (( y ))"#.into(), "(("),
+        // A glob is an expansion (a file name picks the name or the option); an option argument
+        // is a word too; `let` reads command output.
+        (
+            r#"touch x1; x1=0; read x[1] <<< 'a[$(>y)]'; (( x1 )); rm -f x1"#.into(),
+            "((",
+        ),
+        (
+            r#"touch -- -n; x=1; declare -* r=x; r='a[$(>y)]'; (( x )); rm -f -- -n"#.into(),
+            "((",
+        ),
+        (r#"b=0; p='a b'; read -p $p x <<< 'a[$(>y)]'; (( b ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; let "$(echo x)""#.into(), "let"),
+        // By rule (bash runs nothing here): a `+` word and a `getopts` option string that are not
+        // literal text.
+        (r#"o=i; z=1; declare +$o z; (( z ))"#.into(), "(("),
+        (r#"z=1; s=ab; getopts $s o; (( z ))"#.into(), "(("),
+        // Command output read as arithmetic is text the script may print; only a command on the
+        // digits-only list prints none.
+        (r#"(( $(echo 'a[$(>y)]') ))"#.into(), "(("),
+        (r#"echo $(( $(printf %s 'a[$(>y)]') ))"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; (( $(echo x) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; echo $(( `printf x` ))"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; s=abc; echo ${s:$(printf x)}"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; [[ $(echo x) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; a=(1 2); echo ${a[$(printf x)]}"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; (( $(printf x) ))"#.into(), "(("),
+        (r#"echo 'a[$(>y)]' > f.txt; (( $(cat f.txt) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; a=([$(echo x)]=1)"#.into(), "<none>"),
+        (r#"x='a[$(>y)]'; a[$(echo x)]=1"#.into(), "<none>"),
+        (r#"touch 'a[$(>y)]'; (( $(wc -l 'a[$(>y)]') ))"#.into(), "(("),
+        // The list holds only while the script cannot rebind a listed name: a function, a PATH
+        // write, `hash`, a sourced file, an alias; by rule `enable`.
+        (r#"date() { echo 'a[$(>y)]'; }; (( $(date +%s) ))"#.into(), "(("),
+        (r#"id() { echo 'a[$(>y)]'; }; (( $(id -u) ))"#.into(), "(("),
+        (r#": > f; wc() { echo 'a[$(>y)]'; }; (( $(wc -l < f) ))"#.into(), "(("),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; PATH=$PWD/b:$PATH; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; export PATH=$PWD/b:$PATH; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; hash -p $PWD/b/date date; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (
+            r#"echo 'date() { echo "a[\$(>y)]"; }' > f.sh; . ./f.sh; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'date() { echo "a[\$(>y)]"; }' > f.sh; source ./f.sh; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            "shopt -s expand_aliases\nalias date='echo \"a[\\$(>y)]\"'\n(( $(date +%s) ))".into(),
+            "((",
+        ),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; c=hash; $c -p $PWD/b/date date; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (r#"enable -f ./none.so date 2>/dev/null; (( $(date +%s) ))"#.into(), "(("),
+        // A newline ends the command: `date` alone prints the day's name.
+        (
+            "Mon='a[$(>y)]'; Tue=$Mon; Wed=$Mon; Thu=$Mon; Fri=$Mon; Sat=$Mon; Sun=$Mon; (( $(date\n+%s) ))".into(),
+            "((",
+        ),
+        // By rule (bash runs nothing here): `wc` reads a path that is not literal text.
+        (
+            r#"printf 'a\nb\n' > 'a[$(>y)]'; (( $(wc -l < 'a[$(>y)]') ))"#.into(),
+            "((",
+        ),
     ];
     // Every failing row is listed, not only the first.
     let mut bad = Vec::new();
@@ -1056,11 +1170,29 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "set -- 1; n=1; (( ${n} + ${1} + ${#} + ${?} + ${$} + $! + ${@} + ${*} ))".to_string(),
         "n=1; (( $((n)) + 1 ))".to_string(),
         "a=(1); _x=1; (( (1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1) + a[0] ))".to_string(),
-        "o=i; z=1; declare +$o z; (( z ))".to_string(),
         "z=1; declare nn=1; (( z ))".to_string(),
         "z=1; : ${z:-1}; (( z ))".to_string(),
         "eval 'echo hi'; echo z".to_string(),
         "a=1; z=1; read 'a[0]' < f; (( z ))".to_string(),
+        // `printf` words after `--` or the format; `name=$v` on the bare builtin, which does not
+        // split it; `getopts` operands after the name.
+        r#"o=-v; n=0; printf -- $o n %s 'a[$(>y)]'; (( n ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; declare x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; typeset x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; export x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; readonly x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; f() { local x=$o; (( y )); }; f"#.into(),
+        r#"z=1; set -- -a; getopts a o "$@"; (( z ))"#.into(),
+        // The digits-only list: spaces and a backtick body, `wc -l` from a literal path.
+        r#"x='a[$(>y)]'; (( $(date +%s) - 1 ))"#.into(),
+        r#"x='a[$(>y)]'; (( $( date +%s ) + 0 ))"#.into(),
+        r#"x='a[$(>y)]'; (( `date +%s` ))"#.into(),
+        r#"x='a[$(>y)]'; (( $(id -u) ))"#.into(),
+        r#"x='a[$(>y)]'; (( $(date +%s%N) ))"#.into(),
+        r#"printf 'a\nb\n' > f; x='a[$(>y)]'; (( $(wc -l < f) ))"#.into(),
+        r#"printf 'a\nb\n' > f; x='a[$(>y)]'; [[ $(wc -l < f) -eq 2 ]]"#.into(),
+        r#"printf 'a\nb\n' > f; x='a[$(>y)]'; (( $(wc -l <f) ))"#.into(),
+        r#"x='a[$(>y)]'; a=([$(date +%s)]=1)"#.into(),
     ] {
         let s = ok(&src);
         if commands(&s).iter().any(|c| c.opaque) {
