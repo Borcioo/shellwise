@@ -1214,6 +1214,42 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"declare -i n; n=($(echo 'a[$(>y)]'))"#.into(), "<none>"),
         (r#"declare -i n; for n in $(echo 'a[$(>y)]'); do :; done"#.into(), "(("),
         (r#"f() { local -i n=$(echo 'a[$(>y)]'); }; f"#.into(), "local"),
+        // A backtick body lowers as `$(…)` does.
+        (r#"f() { local -i n=`echo 'a[$(>y)]'`; }; f"#.into(), "local"),
+        // `EXECIGNORE` hides a command from the `PATH` search, and a script-defined
+        // `command_not_found_handle` then prints its text.
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; read EXECIGNORE <<< '*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; declare EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*wc*'; echo 1 > f; (( $(wc -l <f) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*'; (( $(id -u) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*date*'; declare -i n; n=$(date +%s)"#.into(), "<none>"),
+        (r#"function command_not_found_handle { echo 'a[$(>y)]'; }; EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"f() { command_not_found_handle() { echo 'a[$(>y)]'; }; }; f; EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        // By rule (bash runs nothing here): the handler alone, and `EXECIGNORE` alone, which
+        // moves the search to a later `PATH` entry.
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; (( $(date +%s) ))"#.into(), "(("),
+        (r#"EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        // `{NAME}>f` stores a descriptor number in NAME and evaluates its subscript; `coproc
+        // NAME` writes NAME, and unsets it when the coprocess ends.
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {PATH}>f; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {PATH}>f; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec 3>f {PATH}>&3; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {PATH}>f echo; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {PATH}<<<x; (( $(date +%s) ))"#.into(), "(("),
+        (r#"declare -a a; exec {a[$(echo 'b[$(>y)]')]}>f"#.into(), "exec"),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc "PATH" { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH (:); wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; x=PATH; coproc $x { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        // `{x}>&-` writes nothing: `x` keeps its value from the environment.
+        (r#"exec {x}>&-; (( x ))"#.into(), "(("),
+        // By rule: with a space bash reads `{PATH}` as a word.
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {PATH} >f; (( $(date +%s) ))"#.into(), "(("),
+        // A brace-expanded operand of `unset` or `local` is not static.
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset {PATH,x}; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset P{A,}TH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f(){ local {PATH,x}; (( $(date +%s) )); }; f"#.into(), "(("),
     ];
     // Every failing row is listed, not only the first.
     let mut bad = Vec::new();
@@ -1343,6 +1379,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"declare -a a; unset "a[$(date +%s)]""#.into(),
         r#"declare -i n; n=$(date +%s)"#.into(),
         r#"n=$(echo 'a[$(>y)]'); echo $n"#.into(),
+        // Not a descriptor name (bash writes nothing), another function, another coprocess.
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {x}>f; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; echo {PATH}; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; echo {PATH} x; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {PA\TH}>f; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {a,b}>f; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc C { :; }; wait; (( $(date +%s) ))"#.into(),
+        r#"command_not_found() { echo 'a[$(>y)]'; }; EXECIGNOR='*date*'; (( $(date +%s) ))"#.into(),
     ] {
         let s = ok(&src);
         if commands(&s).iter().any(|c| c.opaque) {

@@ -518,7 +518,9 @@ impl Lower {
             || assigned
                 .iter()
                 .any(|(n, _)| REBINDING_NAMES.contains(&n.as_str()))
-            || DIGIT_COMMANDS.iter().any(|c| functions.contains(c[0]));
+            || DIGIT_COMMANDS.iter().any(|c| functions.contains(c[0]))
+            // Runs for a command the search does not find (`EXECIGNORE`, `PATH`).
+            || functions.contains("command_not_found_handle");
         let needed = taint.all
             || self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
             || assigned.iter().any(|(n, _)| taint.integers.contains(n));
@@ -969,6 +971,11 @@ impl Lower {
                 chain: None,
             })],
             C::Coprocess(c) => {
+                // `coproc NAME` writes NAME (bash expands the word).
+                if let Some(name) = &c.name {
+                    let w = self.ast_word(t, name, span, cx)?;
+                    self.runtime_target(Some(&w));
+                }
                 let inner = self.command(t, &c.body, cx.deeper(span)?)?;
                 vec![Stmt::Block(script(inner, Vec::new()))]
             }
@@ -1014,14 +1021,16 @@ impl Lower {
                 I::ProcessSubstitution(_, sub) => cmd.args.push(self.process_subst(t, sub, cx)?),
             }
         }
+        let suffix: Vec<_> = s.suffix.iter().flat_map(|p| p.0.iter()).collect();
         if let Some(name) = &s.word_or_name {
             cmd.name = self.ast_word(t, name, span, cx)?;
             cmd.typed = name.value.clone();
+            self.fd_name(&name.value, &mut cmd.name, suffix.first().copied(), cx)?;
         }
         // The arguments the parser reads as `name=value` (an unquoted name and `=`) that bash
         // does not brace-expand.
         let mut assignment_args = Vec::new();
-        for item in s.suffix.iter().flat_map(|p| p.0.iter()) {
+        for (i, &item) in suffix.iter().enumerate() {
             match item {
                 I::IoRedirect(r) => cmd.redirects.push(self.redirect(t, r, cx)?),
                 // `export x=$(…)`: an argument of the builtin that also assigns `x`.
@@ -1043,7 +1052,11 @@ impl Lower {
                         cmd.assigns.push((name, value));
                     }
                 }
-                I::Word(w) => cmd.args.push(self.ast_word(t, w, span, cx)?),
+                I::Word(w) => {
+                    let mut word = self.ast_word(t, w, span, cx)?;
+                    self.fd_name(&w.value, &mut word, suffix.get(i + 1).copied(), cx)?;
+                    cmd.args.push(word);
+                }
                 I::ProcessSubstitution(_, sub) => cmd.args.push(self.process_subst(t, sub, cx)?),
             }
         }
@@ -1524,6 +1537,28 @@ impl Lower {
                     out.push((name.clone(), value));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// `{NAME}>f` stores the new descriptor's number in NAME and evaluates a subscript of it
+    /// (`{a[i]}>f`). The parser reads `{NAME}` as a word before the redirect, also when a space
+    /// parts them and bash reads a word (an over-report). The value is recorded as tainted:
+    /// `{x}>&-` writes nothing and keeps a value from the environment.
+    fn fd_name(
+        &self,
+        raw: &str,
+        w: &mut Word,
+        next: Option<&ast::CommandPrefixOrSuffixItem>,
+        cx: Cx,
+    ) -> Result<(), ParseError> {
+        if let Some(ast::CommandPrefixOrSuffixItem::IoRedirect(_)) = next
+            && let Some(inner) = raw.strip_prefix('{').and_then(|r| r.strip_suffix('}'))
+            && let Some(name) = inner.split('[').next()
+            && is_identifier(name)
+        {
+            self.record(name, Value::Tainted);
+            self.name_operand(w, cx)?;
         }
         Ok(())
     }
@@ -2033,8 +2068,9 @@ const DIGIT_COMMANDS: &[&[&str]] = &[
 const REBINDING: &[&str] = &["hash", "alias", "enable", "source", "."];
 
 /// Variables that bind command names: a write of any kind to one (a value, `unset`, a
-/// declaration with or without a value) may rebind a command of `DIGIT_COMMANDS`.
-const REBINDING_NAMES: &[&str] = &["PATH", "BASH_ALIASES", "BASH_CMDS"];
+/// declaration with or without a value, `{NAME}>f`, `coproc NAME`) may rebind a command of
+/// `DIGIT_COMMANDS`. `EXECIGNORE` hides commands from the `PATH` search.
+const REBINDING_NAMES: &[&str] = &["PATH", "BASH_ALIASES", "BASH_CMDS", "EXECIGNORE"];
 
 /// Whether `words` are a command of `DIGIT_COMMANDS`.
 fn digits_only(words: &[&str]) -> bool {
