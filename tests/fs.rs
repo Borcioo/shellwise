@@ -2633,6 +2633,116 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     );
 }
 
+#[test]
+fn pwsh_on_posix_reads_a_drive_path_as_powershell_does() {
+    let seq = Some(ChainOp::Seq);
+    let fs = FakeFs::default().dir("/h/u").dir("/w/repo").shared();
+    // `<before>; <delete>` on POSIX (cwd /w/repo, home /h/u), the whole command read first;
+    // `word` is the delete's last argument.
+    let judge = |shell: Shell, before: Vec<Stmt>, delete: SimpleCommand| {
+        let env = env_view(shell, Os::Posix, [("HOME".to_string(), "/h/u".to_string())]);
+        let by = delete_by(&delete, shell, Os::Posix);
+        let word = delete.args.last().expect("a target").clone();
+        let mut all = before.clone();
+        all.push(stmt(delete, seq));
+        let mut loc = Location::new(shell, Os::Posix, Some(Path::new("/w/repo")));
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &env);
+        sorted(target(&word, &loc, &env, by, &fs, &far()))
+    };
+    let ps = Shell::Pwsh;
+    let st = |c: SimpleCommand| stmt(c, seq);
+    let git = || st(lits("git", &["status"]));
+    let ri = |text: &str| lits("Remove-Item", &[text]);
+    let rr = |text: &str| lits("Remove-Item", &["-Recurse", "-Force", text]);
+    let to_home = |name: &str| st(lits("New-PSDrive", &[name, "FileSystem", "/h/u"]));
+    let rows: Vec<(&str, Shell, Vec<Stmt>, SimpleCommand, Target)> = vec![
+        // pwsh on POSIX has no letter drives, but any `name:` is a PSDrive.
+        (
+            "New-PSDrive Proj /h/u; Proj:/",
+            ps,
+            vec![to_home("Proj")],
+            rr("Proj:/"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "git; Proj:/y",
+            ps,
+            vec![git()],
+            ri("Proj:/y"),
+            unproven("Proj"),
+        ),
+        ("git; X:/y", ps, vec![git()], ri("X:/y"), unproven("X")),
+        (
+            "git; Proj:../x",
+            ps,
+            vec![git()],
+            ri("Proj:../x"),
+            MAY_BE_CRITICAL,
+        ),
+        // `Temp:` has no shortcut on POSIX: a remap of it is one in sight.
+        (
+            "git; Temp:/x",
+            ps,
+            vec![git()],
+            ri("Temp:/x"),
+            unproven("Temp"),
+        ),
+        (
+            "Remove-PSDrive Temp; New-PSDrive Temp /h/u; Temp:/",
+            ps,
+            vec![st(lits("Remove-PSDrive", &["Temp"])), to_home("Temp")],
+            rr("Temp:/"),
+            MAY_BE_CRITICAL,
+        ),
+        // Set-Location reads its path through the provider.
+        (
+            "New-PSDrive Proj /h/u; cd Proj:/; x",
+            ps,
+            vec![to_home("Proj"), st(lits("Set-Location", &["Proj:/"]))],
+            rr("x"),
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: a built-in drive in a harmless command; a native program gets the literal
+        // text (fix6\probe-native.log); a `:` after a folder is no drive; bash has no drives.
+        ("Env:FOO alone", ps, vec![], ri("Env:FOO"), Target::NotAFile),
+        (
+            "rm foo:bar (native)",
+            ps,
+            vec![git()],
+            lits("rm", &["-rf", "foo:bar"]),
+            paths(&["/w/repo/foo:bar"]),
+        ),
+        (
+            "git; a/b:c",
+            ps,
+            vec![git()],
+            ri("a/b:c"),
+            paths(&["/w/repo/a/b:c"]),
+        ),
+        (
+            "bash rm -rf Proj:/x",
+            Shell::Bash(BashProfile::Posix),
+            vec![git()],
+            lits("rm", &["-rf", "Proj:/x"]),
+            paths(&["/w/repo/Proj:/x"]),
+        ),
+    ];
+    let bad: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(label, shell, before, delete, want)| {
+            let got = judge(shell, before, delete);
+            (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
 /// A named-drive delete in a command where some part is not read as written.
 fn unproven_unread(drive: &str) -> Target {
     Target::DriveUnproven {

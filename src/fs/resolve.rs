@@ -1007,7 +1007,7 @@ impl Location {
         self.runs_script |= script;
         for l in links {
             let d = match l {
-                Some(w) => self.dir_from_word(&w, env),
+                Some(w) => self.dir_from_word(&w, env, DeleteBy::Native),
                 None => Dirs::unknown(UnknownKind::MayBeCritical),
             };
             self.new_link_unknown |= d.unknown.is_some();
@@ -1097,7 +1097,7 @@ impl Location {
             match t.as_str() {
                 "-C" => {
                     let d = match args.get(i + 1) {
-                        Some(w) => loc.dir_from_word(w, env),
+                        Some(w) => loc.dir_from_word(w, env, DeleteBy::Native),
                         None => Dirs::unknown(UnknownKind::MayBeCritical),
                     };
                     loc.dirs = d;
@@ -1199,7 +1199,7 @@ impl Location {
             && matches!(to, ".." | "\\" | "~")
             && shipped
         {
-            return Some(self.dir_from_segs(&[Seg::lit(to)], env));
+            return Some(self.dir_from_segs(&[Seg::lit(to)], env, DeleteBy::Provider));
         }
         let b = raw.as_bytes();
         let letter = b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
@@ -1248,19 +1248,21 @@ impl Location {
                 if wild || (searched && cdpath) {
                     Dirs::unknown(UnknownKind::MayBeCritical)
                 } else {
-                    self.dir_from_word(w, env)
+                    self.dir_from_word(w, env, self.location_reader())
                 }
             }
             LocArg::Text(t) => {
                 if pwsh && t.contains(['*', '?', '[']) {
                     Dirs::unknown(UnknownKind::MayBeCritical)
                 } else {
-                    self.dir_from_segs(&[Seg::lit(&t)], env)
+                    self.dir_from_segs(&[Seg::lit(&t)], env, self.location_reader())
                 }
             }
-            LocArg::LiteralText(t) => self.dir_from_segs(&[Seg::lit(&t)], env),
+            LocArg::LiteralText(t) => {
+                self.dir_from_segs(&[Seg::lit(&t)], env, self.location_reader())
+            }
             LocArg::Home => match env.home() {
-                Some(h) => self.dir_from_segs(&[Seg::lit(h)], env),
+                Some(h) => self.dir_from_segs(&[Seg::lit(h)], env, self.location_reader()),
                 // `HOME` is assigned in the command.
                 None => Dirs::unknown(UnknownKind::Dynamic),
             },
@@ -1268,13 +1270,22 @@ impl Location {
         }
     }
 
-    fn dir_from_word(&self, w: &Word, env: &EnvView) -> Dirs {
+    /// How `Set-Location`/`cd` reads its path: through the provider in pwsh.
+    fn location_reader(&self) -> DeleteBy {
+        if is_pwsh(self.shell) {
+            DeleteBy::Provider
+        } else {
+            DeleteBy::Native
+        }
+    }
+
+    fn dir_from_word(&self, w: &Word, env: &EnvView, by: DeleteBy) -> Dirs {
         let mut out = Dirs::default();
         for base in self.bases() {
             match expand(w, env, self.shell, base) {
                 Ok(segs) => {
                     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
-                    match absolutize(&text, base, self.shell, self.os, env, DeleteBy::Native) {
+                    match absolutize(&text, base, self.shell, self.os, env, by) {
                         Ok(p) => out.union(&Dirs {
                             known: vec![p],
                             unknown: None,
@@ -1288,11 +1299,11 @@ impl Location {
         out
     }
 
-    fn dir_from_segs(&self, segs: &[Seg], env: &EnvView) -> Dirs {
+    fn dir_from_segs(&self, segs: &[Seg], env: &EnvView, by: DeleteBy) -> Dirs {
         let text: String = segs.iter().map(|s| s.text.as_str()).collect();
         let mut out = Dirs::default();
         for base in self.bases() {
-            match absolutize(&text, base, self.shell, self.os, env, DeleteBy::Native) {
+            match absolutize(&text, base, self.shell, self.os, env, by) {
                 Ok(p) => out.union(&Dirs {
                     known: vec![p],
                     unknown: None,
@@ -2427,6 +2438,22 @@ fn absolutize(
         let sep = if os == Os::Windows { '\\' } else { '/' };
         Ok(canonical(&format!("{b}{sep}{rel}"), os))
     };
+    // A provider cmdlet in pwsh on POSIX reads any `name:` as a PowerShell drive: there are no
+    // letter drives and no `Temp:` shortcut (it follows the drive, which may be remapped). A
+    // native program gets the literal text, a relative file name.
+    if os == Os::Posix
+        && pwsh
+        && by == DeleteBy::Provider
+        && let Some((drive, rest)) = s.split_once(':')
+        && !drive.is_empty()
+        && drive.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(if plain_drive_rest(rest) {
+            Fail::Drive
+        } else {
+            Fail::Unknown
+        });
+    }
     if os == Os::Posix {
         return if s.starts_with('/') {
             Ok(canonical(&s, os))
