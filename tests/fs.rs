@@ -1638,10 +1638,17 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             stmt(lits("command", &["Get-ChildItem"]), seq),
         ),
     ] {
-        // Ruling 33: not proven, but no remap in sight.
+        // Ruling 33: not proven, but no remap in sight; Ruling 36: unless a part is not read
+        // as written.
+        let unread = ["function: assignment", "Invoke-Command $sb", "opaque echo"];
+        let want = if unread.contains(&label) {
+            MAY_BE_CRITICAL
+        } else {
+            unproven("Env")
+        };
         expect(
             judge(vec![other], ri("Env:FOO"), Vec::new()),
-            &unproven("Env"),
+            &want,
             format!("not harmless {label}"),
         );
     }
@@ -1817,16 +1824,42 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
     // Ruling 33 + I1: only a drive mapping before the delete (or a command that may be one,
     // `Start-Process`) keeps MayBeCritical; any other part, or one after it, leaves the drive
     // unproven.
+    // Ruling 36: so does any command not read as written (opaque, unread, code from text, a call
+    // to a function or alias the command defines, or a definition whose names the hook cannot
+    // read), wherever it stands.
     let remaps = [
         "New-PSDrive",
         "ndr",
         "mount",
+        "rdr",
+        "Remove-PSDrive",
         "module-qualified",
-        "Start-Process",
         "nested New-PSDrive",
     ];
+    let unread = [
+        "Start-Process",
+        "Invoke-Expression",
+        "iex",
+        "opaque",
+        "function",
+        "Set-Item Function:",
+        "Set-Item $p",
+        "Import-Alias",
+        "ipal",
+        "New-Module",
+        "nmo",
+        "Import-PSSession",
+        "ipsn",
+        "Import-Module",
+        "ipmo",
+    ];
     for (label, s) in redefiners {
-        let before = if remaps.contains(&label) {
+        let before = if remaps.contains(&label) || unread.contains(&label) {
+            MAY_BE_CRITICAL
+        } else {
+            unproven("Env")
+        };
+        let after = if unread.contains(&label) {
             MAY_BE_CRITICAL
         } else {
             unproven("Env")
@@ -1838,7 +1871,7 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         );
         expect(
             judge(Vec::new(), ri("Env:FOO"), vec![s]),
-            &unproven("Env"),
+            &after,
             format!("note 2 after: {label}"),
         );
     }
@@ -2046,6 +2079,7 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             "unread",
             stmt(lits("Start-Process", &["pwsh", "-ArgumentList", "x"]), seq),
         ),
+        ("opaque", stmt(opaque.clone(), seq)),
     ] {
         expect(
             judge(vec![remap.clone(), git()], ri(r"Proj:\y")),
@@ -2056,6 +2090,101 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             judge(vec![remap, git()], ri("Env:FOO")),
             &MAY_BE_CRITICAL,
             &format!("{label}; git; Env:FOO"),
+        );
+    }
+    // Ruling 36: a command the hook does not read as written may define a drive unseen.
+    let dynamic_name = {
+        let mut c = cmd("", vec![lit("Proj"), lit("FileSystem"), lit(r"C:\x")]);
+        c.name = var("c");
+        c.typed = "$c".to_string();
+        c.canonical = None;
+        c
+    };
+    let defines_f = Stmt::Func {
+        name: "f".to_string(),
+        body: script(vec![stmt(
+            lits("New-PSDrive", &["Proj", "FileSystem", r"C:\x"]),
+            None,
+        )]),
+    };
+    for (label, before) in [
+        ("opaque", vec![stmt(opaque.clone(), seq)]),
+        ("iex $x", vec![stmt(cmd("iex", vec![var("x")]), seq)]),
+        ("& $f", vec![stmt(cmd("&", vec![var("f")]), seq)]),
+        (". $f", vec![stmt(cmd(".", vec![var("f")]), seq)]),
+        ("$c ...", vec![stmt(dynamic_name, seq)]),
+        (
+            "function f; f",
+            vec![defines_f.clone(), stmt(lits("f", &[]), seq)],
+        ),
+        (
+            "function f; & f",
+            vec![defines_f, stmt(lits("&", &["f"]), seq)],
+        ),
+        (
+            "Set-Alias g New-PSDrive; g",
+            vec![
+                stmt(lits("Set-Alias", &["g", "New-PSDrive"]), seq),
+                stmt(lits("g", &["Proj", "FileSystem", r"C:\x"]), seq),
+            ],
+        ),
+        (
+            "Set-Item Function:g; g",
+            vec![
+                stmt(lits("Set-Item", &["Function:g", "x"]), seq),
+                stmt(lits("g", &[]), seq),
+            ],
+        ),
+    ] {
+        let mut with_git = before.clone();
+        with_git.push(git());
+        expect(
+            judge(with_git.clone(), ri(r"Proj:\y")),
+            &MAY_BE_CRITICAL,
+            &format!("{label}; git; Proj:\\y"),
+        );
+        expect(
+            judge(with_git, ri("Function:x")),
+            &MAY_BE_CRITICAL,
+            &format!("{label}; git; Function:x"),
+        );
+    }
+    expect(
+        judge(vec![git()], ri(r"Proj:\y")),
+        &unproven("Proj"),
+        "git; Proj:\\y (Ruling 36 control)",
+    );
+    // A literal operand and a plain command are read; a defined name not called is no call.
+    for (label, before) in [
+        ("& literal", stmt(lits("&", &[r"C:\x\run.ps1"]), seq)),
+        (
+            "Set-Alias g; git",
+            stmt(lits("Set-Alias", &["g", "x"]), seq),
+        ),
+    ] {
+        expect(
+            judge(vec![before, git()], ri(r"Proj:\y")),
+            &unproven("Proj"),
+            &format!("{label}; Proj:\\y"),
+        );
+    }
+    // Ruling 36.2: after a remap `Function:` may be a file-system drive; a removed drive too.
+    expect(
+        judge(
+            vec![stmt(
+                lits("New-PSDrive", &["Function", "FileSystem", r"C:\x"]),
+                seq,
+            )],
+            ri(r"Function:\y"),
+        ),
+        &MAY_BE_CRITICAL,
+        "New-PSDrive Function; Function:\\y",
+    );
+    for remover in ["Remove-PSDrive", "rdr"] {
+        expect(
+            judge(vec![stmt(lits(remover, &["Env"]), seq)], ri("Env:FOO")),
+            &MAY_BE_CRITICAL,
+            &format!("{remover} Env; Env:FOO"),
         );
     }
     // I2: every other unknown form, reader and shell stays MayBeCritical.
