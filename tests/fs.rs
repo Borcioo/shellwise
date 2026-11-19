@@ -7736,6 +7736,49 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             rr(r"C:\w\repo\t\j\x"),
             in_link.clone(),
         ),
+        (
+            "UN8 pwsh Set-Alias $n Get-Date; Set-Alias mk New-Item; & mk … (& is no alias name)",
+            ps,
+            vec![
+                with("Set-Alias", vec![var("n"), lit("Get-Date")]),
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("&", &[&["mk"][..], &link_at[..]].concat())),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "UN9 pwsh Set-Alias $n Get-Date; Set-Alias Get-Y Invoke-Expression; . Get-Y 'x' (. is no alias name)",
+            ps,
+            vec![
+                with("Set-Alias", vec![var("n"), lit("Get-Date")]),
+                st(lits("Set-Alias", &["Get-Y", "Invoke-Expression"])),
+                st(lits(".", &["Get-Y", "x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "UN10 Git Bash alias $n=true; alias mk='ln -s /c/x'; time mk t/j (time is read past)",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    vec![Word {
+                        parts: vec![
+                            WordPart::Var("n".to_string()),
+                            WordPart::Literal("=true".to_string()),
+                        ],
+                        span: Span::default(),
+                        quote: Quote::None,
+                    }],
+                ),
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                st(lits("time", &["mk", "/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
