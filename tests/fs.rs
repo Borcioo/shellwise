@@ -7329,6 +7329,278 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ri(r"Proj:\y"),
             mbc.clone(),
         ),
+        // ---- each parameter the binder knows: `e` bound to the harmless Get-Date reads as it
+        // (controls); a form PowerShell refuses or the hook cannot bind may be any command.
+        (
+            "C1 pwsh Set-Alias -Name e -Value Get-Date; e 'x' (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["-Name", "e", "-Value", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C2 pwsh Set-Alias e Get-Date -Description d (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date", "-Description", "d"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C3 pwsh Set-Alias e Get-Date -Option None (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date", "-Option", "None"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C4 pwsh Set-Alias e -PassThru Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "-PassThru", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C5 pwsh Set-Alias e Get-Date -Scope Global (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date", "-Scope", "Global"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C6 pwsh Set-Alias e -Force Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "-Force", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C7 pwsh sal -Name e -Value Get-Date (control)",
+            ps,
+            vec![
+                st(lits("sal", &["-Name", "e", "-Value", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C8 pwsh New-Alias -Name e -Value Get-Date (control)",
+            ps,
+            vec![
+                st(lits("New-Alias", &["-Name", "e", "-Value", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C9 pwsh nal -Name e -Value Get-Date (control)",
+            ps,
+            vec![
+                st(lits("nal", &["-Name", "e", "-Value", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C10 pwsh Set-Item -Path Alias:e -Value Get-Date (control)",
+            ps,
+            vec![
+                st(lits(
+                    "Set-Item",
+                    &["-Path", "Alias:e", "-Value", "Get-Date"],
+                )),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C11 pwsh si -Path Alias:e -Value Get-Date (control)",
+            ps,
+            vec![
+                st(lits("si", &["-Path", "Alias:e", "-Value", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C12 pwsh Set-Item -LiteralPath Alias:e Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["-LiteralPath", "Alias:e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C13 pwsh Set-Item -PSPath Alias:e Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["-PSPath", "Alias:e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C14 pwsh Set-Item -LP Alias:e Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["-LP", "Alias:e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C15 pwsh Set-Item -Force Alias:e Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["-Force", "Alias:e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C16 pwsh Set-Item -PassThru Alias:e Get-Date (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["-PassThru", "Alias:e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C17 pwsh Set-Item Alias:e Get-Date -Filter f (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Alias:e", "Get-Date", "-Filter", "f"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C18 pwsh Set-Item Alias:e Get-Date -Include i (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Alias:e", "Get-Date", "-Include", "i"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C19 pwsh Set-Item Alias:e Get-Date -Exclude x (control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Alias:e", "Get-Date", "-Exclude", "x"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C20 pwsh Set-Item Alias:e Get-Date -Credential c (control)",
+            ps,
+            vec![
+                st(lits(
+                    "Set-Item",
+                    &["Alias:e", "Get-Date", "-Credential", "c"],
+                )),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C21 pwsh Set-Alias e Get-Date extra (a positional too many)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date", "extra"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "C22 pwsh Set-Alias e @p (a splat)",
+            ps,
+            vec![st(lits("Set-Alias", &["e", "@p"])), st(lits("e", &["x"]))],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "C23 pwsh Set-Alias e Get-Date -Bogus (a parameter it does not have)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date", "-Bogus"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LG5 pwsh Set-Alias ni Invoke-Expression; ni 'x' read as New-Item (the name as typed)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["ni", "Invoke-Expression"])),
+                st({
+                    let mut c = lits("ni", &["x"]);
+                    c.canonical = Some("New-Item".to_string());
+                    c
+                }),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LG6 pwsh Set-Alias Get-Error Invoke-Expression; gerr 'x' (a pwsh 7 alias)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["Get-Error", "Invoke-Expression"])),
+                st(lits("gerr", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LG7 5.1 Set-Alias Invoke-WebRequest Invoke-Expression; curl 'x' (a 5.1 alias)",
+            p5,
+            vec![
+                st(lits(
+                    "Set-Alias",
+                    &["Invoke-WebRequest", "Invoke-Expression"],
+                )),
+                st(lits("curl", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
