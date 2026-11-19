@@ -2720,6 +2720,24 @@ fn pwsh_on_posix_reads_a_drive_path_as_powershell_does() {
             rr("x"),
             MAY_BE_CRITICAL,
         ),
+        // Re-review 4 I4 (R9b, R9c): the inline parameter forms read through the provider too.
+        (
+            "New-PSDrive Proj /h/u; Set-Location -Path:Proj:/; .",
+            ps,
+            vec![to_home("Proj"), st(lits("Set-Location", &["-Path:Proj:/"]))],
+            rr("."),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "New-PSDrive Proj /h/u; Set-Location -LiteralPath:Proj:/; .",
+            ps,
+            vec![
+                to_home("Proj"),
+                st(lits("Set-Location", &["-LiteralPath:Proj:/"])),
+            ],
+            rr("."),
+            MAY_BE_CRITICAL,
+        ),
         // Controls: a built-in drive in a harmless command; a native program gets the literal
         // text (fix6\probe-native.log); a `:` after a folder is no drive; bash has no drives.
         ("Env:FOO alone", ps, vec![], ri("Env:FOO"), Target::NotAFile),
@@ -3996,6 +4014,21 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
                 ),
                 seq,
             )],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Re-review 4 I4 (R1): one branch moves, the other does not.
+        (
+            "if { cd.. } else { git status }; .",
+            ps,
+            sub,
+            vec![Stmt::Cond {
+                branches: vec![
+                    script(vec![one("cd..", None)]),
+                    script(vec![stmt(lits("git", &["status"]), None)]),
+                ],
+                span: Span::default(),
+            }],
             ".",
             MAY_BE_CRITICAL,
         ),
