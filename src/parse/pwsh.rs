@@ -551,8 +551,9 @@ fn text_kind(parent: &str) -> &'static str {
     }
 }
 
-/// Bytes between pieces, read against the grammar's extras: a space or a zero-width extra
-/// separates, a backtick line end is a piece, any other byte is the holder's text.
+/// Bytes between pieces, read against the grammar's extras: a space separates, a backtick line
+/// end is a piece, and any other byte is the holder's text (a zero-width extra too: PowerShell
+/// keeps `a<U+200B>,b` as one word).
 fn gap_pieces(src: &str, from: usize, to: usize, parent: &str, out: &mut Vec<Piece<'_>>) {
     let t = &src[from..to];
     let mut i = 0;
@@ -563,7 +564,7 @@ fn gap_pieces(src: &str, from: usize, to: usize, parent: &str, out: &mut Vec<Pie
             .into_iter()
             .find(|p| rest.starts_with(p));
         let c = rest.chars().next().unwrap_or(' ');
-        let sep = c.is_whitespace() || matches!(c, '\u{feff}' | '\u{2060}' | '\u{200b}');
+        let sep = c.is_whitespace();
         if (cont.is_some() || sep)
             && let Some(s) = run.take()
         {

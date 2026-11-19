@@ -447,7 +447,7 @@ panic), H = 0 matching the harmless grammar, R = 86 that `ParseInput` also rejec
 (F − H − R) / N = 27 / 28,516 = 0.095 %, budget 0.1 %. Over the `ok` rows alone: 20 / 25,004 =
 0.080 %.
 
-Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (370) hold
+Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (371) hold
 `ParseInput`'s answer; `tests/pwsh_rows.rs` checks the parser against them and
 `tests/pwsh_oracle.rs` (feature `oracle`) checks them against the real `ParseInput`.
 

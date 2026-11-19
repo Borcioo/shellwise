@@ -3511,3 +3511,13 @@ error = false
 cmds = [["Write-Output", "'a'", "]", "b"]]
 comments = []
 methods = []
+
+[[row]]
+id = "glue-r-zero-width-between-parens"
+mechanism = "a zero-width space between two `(\U00002026)` is a word of its own for PowerShell, not a separator"
+parser = "refuses"
+command = "Write-Output (1)\U0000200B(2)"
+error = false
+cmds = [["Write-Output", "(1)", "\U0000200B", "(2)"]]
+comments = []
+methods = []
