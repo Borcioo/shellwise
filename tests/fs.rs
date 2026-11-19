@@ -8713,3 +8713,79 @@ fn a_script_alias_is_read_as_the_command_it_names() {
         bad.join("\n")
     );
 }
+
+// ------------------------------------------------- statement joins, through the bash parser
+
+/// The target of the last argument of the last statement of `src`, parsed by the real bash
+/// parser, after the location has followed every statement before it.
+fn last_target_bash(src: &str) -> Target {
+    let shell = Shell::Bash(BashProfile::Posix);
+    let script = shellwise::parse::bash::parse(src, BashProfile::Posix).unwrap();
+    let mut loc = Location::new(shell, Os::Posix, Some(Path::new("/w/repo")));
+    let env = env_view(shell, Os::Posix, [("HOME".to_string(), "/h".to_string())]);
+    loc.read_script(&script);
+    let n = script.stmts.len();
+    for i in 0..n - 1 {
+        loc.after_in(&script, i, &env);
+    }
+    let Stmt::Pipeline(p) = &script.stmts[n - 1] else {
+        panic!(
+            "{src}: last statement is no pipeline: {:?}",
+            script.stmts[n - 1]
+        )
+    };
+    let Elem::Cmd(c) = &p.elems[0] else {
+        panic!("{src}: no command")
+    };
+    sorted(target(
+        c.args.last().unwrap(),
+        &loc,
+        &env,
+        NATIVE,
+        &real(),
+        &far(),
+    ))
+}
+
+#[test]
+fn a_cd_on_one_branch_of_a_join_leaves_the_location_uncertain() {
+    // An uncertain `cd` keeps both folders (`after_pipeline`, the branch that is not `certain`).
+    let both = paths(&["/tmp/x", "/w/repo"]);
+    let rows: &[(&str, Target)] = &[
+        ("cd /tmp/x && rm -rf .", paths(&["/tmp/x"])),
+        ("[[ -d y ]] || cd /tmp/x && rm -rf .", both.clone()),
+        // A compound statement before the `||`: only `Script::joins` carries the operator.
+        ("{ [[ -d y ]]; } || cd /tmp/x && rm -rf .", both.clone()),
+        (
+            "if [[ -d y ]]; then :; fi || cd /tmp/x && rm -rf .",
+            both.clone(),
+        ),
+        ("(true) || cd /tmp/x && rm -rf .", both.clone()),
+    ];
+    let bad: Vec<String> = rows
+        .iter()
+        .filter_map(|(src, want)| {
+            let got = last_target_bash(src);
+            (got != *want).then(|| format!("{src}: {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
+fn a_cd_in_a_heredoc_substitution_is_seen() {
+    let nl = '\n';
+    // An expanding body runs its `$(…)`: a nested `cd` makes the location unknown
+    // (`elem_nests_location_change` reads the body through `cmd_words`).
+    let open = format!("cat <<EOF{nl}$(cd /tmp/x){nl}EOF{nl}rm -rf .");
+    assert_eq!(last_target_bash(&open), MAY_BE_CRITICAL, "{open}");
+    // A quoted delimiter keeps the body literal: nothing runs.
+    let q = '\'';
+    let quoted = format!("cat <<{q}EOF{q}{nl}$(cd /tmp/x){nl}EOF{nl}rm -rf .");
+    assert_eq!(last_target_bash(&quoted), paths(&["/w/repo"]), "{quoted}");
+}
