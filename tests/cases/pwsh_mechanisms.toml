@@ -3723,3 +3723,57 @@ error = false
 cmds = [["node", "''", "--name=$$``$($m.p)", "x.js"]]
 comments = []
 methods = []
+
+[[row]]
+id = "param-one-dash-quoted-value-subexpression"
+mechanism = "a quote in a one-dash value makes it a word for PowerShell: `$(\U00002026)` stays in it"
+command = "node -name=''$(ri C:\\x)"
+error = false
+cmds = [["node", "-name=''$(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-quoted-space-value-subexpression"
+mechanism = "a quoted value with a space, then `$(\U00002026)`: one word"
+command = "node -name='a b'$(ri C:\\x)"
+error = false
+cmds = [["node", "-name='a b'$(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-double-quoted-value-subexpression"
+mechanism = "a double-quoted value in a one-dash parameter, then `$(\U00002026)`: one word"
+command = "node -name=\"\"$(ri C:\\x)"
+error = false
+cmds = [["node", "-name=\"\"$(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "tail-dash-word-quoted-value-subexpression"
+mechanism = "a dash word after a quote holding a quote: `$(\U00002026)` stays in it"
+command = "Write-Output 'a'-_x=''$(x)"
+error = false
+cmds = [["Write-Output", "'a'", "-_x=''$(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "tail-dash-word-double-quoted-value-subexpression"
+mechanism = "a dash word after a quote holding a double quote: `$(\U00002026)` stays in it"
+command = "Write-Output 'a'-_x=\"\"$(x)"
+error = false
+cmds = [["Write-Output", "'a'", "-_x=\"\"$(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-plain-value-subexpression-split"
+mechanism = "a one-dash value with no quote: PowerShell ends the parameter at `$`"
+command = "node -name=a$(ri C:\\x)"
+error = false
+cmds = [["node", "-name=a$", "(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []

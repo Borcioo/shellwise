@@ -1757,12 +1757,14 @@ impl<'a> Lower<'a> {
                             // (`$$(…)` is the variable `$$`, then a new argument; `$$$(…)` is
                             // `$$` and a subexpression: the `$` run before `(` is odd.)
                             // A one-dash `-name=$` is a parameter: the `(` starts a new argument,
-                            // unless a `:` gave the parameter its value (`-name=:$(x)`).
+                            // unless a `:` gave the parameter its value (`-name=:$(x)`) or a
+                            // quote makes it a word (`-name=''$(x)`).
                             (opens_subexpression(prev)
                                 && !((last.kind() == "command_parameter"
                                     || (in_tail && starts_parameter(self.text(*last))))
                                     && !prev.starts_with(b"--")
-                                    && !prev.contains(&b':'))
+                                    && !prev.contains(&b':')
+                                    && !holds_quote(&String::from_utf8_lossy(prev)))
                                 && matches!(ch.kind(), "parenthesized_expression" | "argument_list"))
                             // `''b$(x)c`: after a quote, text glued to a `$(…)` stays in its word.
                             || (in_tail
@@ -2589,6 +2591,11 @@ fn opens_subexpression(t: &[u8]) -> bool {
 /// (``a``$`` ends in an escaped backtick and a plain `$`).
 fn escaped_at(t: &[u8], at: usize) -> bool {
     t[..at].iter().rev().take_while(|c| **c == b'`').count() % 2 == 1
+}
+
+/// Text holding a single or a double quote of either class.
+fn holds_quote(t: &str) -> bool {
+    t.chars().any(|c| is_single_quote(c) || is_double_quote(c))
 }
 
 /// A word PowerShell reads as a parameter: a dash, then a letter, `_`, `?` or a second dash
