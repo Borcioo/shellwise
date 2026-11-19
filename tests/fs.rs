@@ -4478,6 +4478,23 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             r"..\repo",
             MAY_BE_CRITICAL,
         ),
+        // Re-review 5 Y1r, Y2r: the other two rows of the shipped functions that run Set-Location.
+        (
+            r"Y1r function Set-Location {}; cd\",
+            ps,
+            sub,
+            vec![func("Set-Location", vec![]), one(r"cd\", and)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Y2r function Set-Location {}; cd~",
+            ps,
+            sub,
+            vec![func("Set-Location", vec![]), one("cd~", and)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
         (
             "function Push-Location {}; pushd sub",
             ps,
@@ -4661,6 +4678,38 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
         let got = resolve(&lit("."), &loc, &px_env);
         if got != want {
             bad.push(format!("POSIX bash {label}: got {got:?}, want {want:?}"));
+        }
+    }
+    // Re-review 5 X14d, X3a: a bash alias called inside a nested body (the bash leg of
+    // `is_location_command`), and an alias name written in mixed case (each real target `/w/repo`).
+    let alias_rows: Vec<(&str, &str, Vec<Stmt>)> = vec![
+        (
+            "X14d alias up='cd ..' <LF> { up; }",
+            "/w/repo/sub",
+            vec![
+                stmt(lits("alias", &["up=cd .."]), seq),
+                Stmt::Block(script(vec![one("up", seq)])),
+            ],
+        ),
+        (
+            "X3a alias Up='cd ..' <LF> cd /w/repo/sub && Up",
+            "/w/repo",
+            vec![
+                stmt(lits("alias", &["Up=cd .."]), seq),
+                stmt(lits("cd", &["/w/repo/sub"]), and),
+                one("Up", and),
+            ],
+        ),
+    ];
+    for (label, cwd, before) in alias_rows {
+        let mut all = before.clone();
+        all.push(stmt(lits("rm", &["-rf", "."]), seq));
+        let mut loc = Location::new(px, Os::Posix, Some(Path::new(cwd)));
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &px_env);
+        let got = resolve(&lit("."), &loc, &px_env);
+        if got != MAY_BE_CRITICAL {
+            bad.push(format!("POSIX bash {label}: got {got:?}"));
         }
     }
     // A loop body that calls a defined name starts each pass somewhere unknown (`inner`).
