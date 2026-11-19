@@ -863,7 +863,7 @@ fn held_out_mutants_never_read_differently_from_powershell() {
 }
 
 /// Seeds for the held-out run only: never used by the gate or by a fix round's iterations.
-const HELD_OUT_SEEDS: [u64; 10] = [1009, 2027, 3049, 4093, 5101, 6143, 7177, 8191, 9203, 10007];
+const HELD_OUT_SEEDS: [u64; 10] = [1103, 2203, 3301, 4409, 5503, 6607, 7703, 8807, 9901, 11003];
 
 /// `boundaries`, also cutting inside a word at each `-` and `.` (before and after it).
 fn boundaries_fine(s: &str) -> Vec<usize> {
