@@ -370,6 +370,44 @@ const SET_ITEM: &[Param] = &[
     value("Credential", &[]),
 ];
 
+/// `Copy-Item`, on `Alias:` (fix11\spike\params-7.log: the provider adds no parameter).
+const COPY_ITEM: &[Param] = &[
+    value("Path", &[]),
+    value("LiteralPath", &["PSPath", "LP"]),
+    value("Destination", &[]),
+    switch("Container", &[]),
+    switch("Force", &[]),
+    value("Filter", &[]),
+    value("Include", &[]),
+    value("Exclude", &[]),
+    switch("Recurse", &[]),
+    switch("PassThru", &[]),
+    value("Credential", &[]),
+];
+
+/// `Rename-Item`, on `Alias:`.
+const RENAME_ITEM: &[Param] = &[
+    value("Path", &[]),
+    value("LiteralPath", &["PSPath", "LP"]),
+    value("NewName", &[]),
+    switch("Force", &[]),
+    switch("PassThru", &[]),
+    value("Credential", &[]),
+];
+
+/// `Set-Content`, on `Alias:`.
+const SET_CONTENT: &[Param] = &[
+    value("Value", &[]),
+    switch("PassThru", &[]),
+    value("Path", &[]),
+    value("LiteralPath", &["PSPath", "LP"]),
+    value("Filter", &[]),
+    value("Include", &[]),
+    value("Exclude", &[]),
+    switch("Force", &[]),
+    value("Credential", &[]),
+];
+
 /// `Set-Location` (`cd`, `chdir`, `sl`) and `Push-Location` (`pushd`): the same list.
 const SET_LOCATION: &[Param] = &[
     value("Path", &[]),
@@ -404,6 +442,9 @@ fn cmdlet_params(cmdlet: &str) -> Option<(&'static [Param], Vec<&'static Param>)
         "new-item" | "ni" => (NEW_ITEM, true),
         "set-alias" | "sal" | "new-alias" | "nal" => (SET_ALIAS, true),
         "set-item" | "si" => (SET_ITEM, true),
+        "copy-item" => (COPY_ITEM, true),
+        "rename-item" => (RENAME_ITEM, true),
+        "set-content" => (SET_CONTENT, true),
         "set-location" | "sl" | "cd" | "chdir" | "push-location" | "pushd" => (SET_LOCATION, false),
         _ => return None,
     };

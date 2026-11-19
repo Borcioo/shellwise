@@ -8396,6 +8396,15 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ("X3g pwsh Set-Alias b New-Item; Rename-Item Alias:b $n; foo", ps, vec![b_ni(), with("Rename-Item", vec![lit("Alias:b"), var("n")]), st(lits("foo", &link_at))], del(), mbc.clone()),
             ("B5c pwsh Set-Item -LiteralPath Alias:mk New-Item; foo (control: only mk)", ps, vec![def("Set-Item", &["-LiteralPath", "Alias:mk", "New-Item"]), st(lits("foo", &link_at))], del(), in_link.clone()),
             ("XC7 pwsh Move-Item Function:a Function:mk; foo (control: no Alias: path)", ps, vec![def("Move-Item", &["Function:a", "Function:mk"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            // Named parameters of Copy-Item, Rename-Item and Set-Content (fix11 writers-*.log K1,
+            // K3, R2, R3, T1, T2): each binds by its own table, the value read.
+            ("X2g pwsh Copy-Item -Destination Alias:mk Alias:ni; mk", ps, vec![def("Copy-Item", &["-Destination", "Alias:mk", "Alias:ni"]), mk()], del(), mbc.clone()),
+            ("X2h pwsh Set-Alias b Get-Date; Copy-Item -LiteralPath Alias:b Alias:mk; mk (control: the value is read)", ps, vec![def("Set-Alias", &["b", "Get-Date"]), def("Copy-Item", &["-LiteralPath", "Alias:b", "Alias:mk"]), mk()], del(), in_link.clone()),
+            ("X3h pwsh Set-Alias b New-Item; Rename-Item -NewName mk Alias:b; mk", ps, vec![b_ni(), def("Rename-Item", &["-NewName", "mk", "Alias:b"]), mk()], del(), mbc.clone()),
+            ("X3i pwsh Set-Alias b Get-Date; Rename-Item -LiteralPath Alias:b mk; mk (control: the value is read)", ps, vec![def("Set-Alias", &["b", "Get-Date"]), def("Rename-Item", &["-LiteralPath", "Alias:b", "mk"]), mk()], del(), in_link.clone()),
+            ("X1g pwsh Set-Content -Value New-Item Alias:mk; mk", ps, vec![def("Set-Content", &["-Value", "New-Item", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("X1h pwsh Set-Content -LiteralPath Alias:mk Get-Date; mk (control: the value is read)", ps, vec![def("Set-Content", &["-LiteralPath", "Alias:mk", "Get-Date"]), mk()], del(), in_link.clone()),
+            ("X1i pwsh Set-Content -Force Alias:mk Get-Date; mk (control: a switch takes no value)", ps, vec![def("Set-Content", &["-Force", "Alias:mk", "Get-Date"]), mk()], del(), in_link.clone()),
             // M-B: M21, `& mk` reads as the plain New-Item call (rr8_pins; the control
             // `New-Item t\j …; Remove-Item -Recurse o\x` gives o\x).
             ("M21 pwsh Set-Alias mk New-Item; & mk t\\j …; Remove-Item -Recurse o\\x", ps, vec![def("Set-Alias", &["mk", "New-Item"]), st(lits("&", &[&["mk"][..], &link_at[..]].concat()))], rr(r"C:\w\repo\o\x"), paths(&[r"C:\w\repo\o\x"])),
