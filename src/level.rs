@@ -41,6 +41,16 @@ pub struct Finding {
     pub span: Span,
 }
 
+impl Finding {
+    /// The correction as one line, `Fix: <text>`; `None` when the finding has none.
+    pub fn fix_line(&self) -> Option<String> {
+        self.fix
+            .as_deref()
+            .filter(|f| !f.is_empty())
+            .map(|f| format!("Fix: {f}"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Verdict {
     pub level: Level,

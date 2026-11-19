@@ -1,6 +1,9 @@
 //! shellwise: a command guard and lint for shell commands written by AI coding agents.
 
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 pub mod adapter;
@@ -16,14 +19,17 @@ use config::Config;
 use ir::{EnvView, Script};
 use level::{Finding, Level, Span, Verdict};
 
-/// Commands longer than this (in bytes) are not analysed; they get the fail-closed verdict.
+/// Commands longer than this (in bytes) are not parsed; the analysis is incomplete.
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 
 /// Input longer than this (in bytes) is not even scanned: it is `danger` unread.
 pub const MAX_READ_BYTES: usize = 1024 * 1024;
 
-/// The rule id of every fail-closed verdict.
-pub const ANALYSIS_FAILED: &str = "analysis-failed";
+/// The rule id of every analysis that did not finish for a reason other than a parse error.
+pub const ANALYSIS_INCOMPLETE: &str = "analysis-incomplete";
+
+/// The stack of the thread that parses and runs the rules.
+const WORKER_STACK: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -55,6 +61,25 @@ impl Os {
     }
 }
 
+/// Where the text comes from: a command line a host is about to run, or a script file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    CommandLine,
+    File,
+}
+
+/// One text to analyse, as its caller read it.
+#[derive(Debug, Clone)]
+pub struct AnalyseInput<'a> {
+    pub bytes: &'a [u8],
+    pub shell: Shell,
+    pub os: Os,
+    pub cwd: Option<PathBuf>,
+    pub env: EnvView,
+    pub origin: Origin,
+}
+
+/// What a rule sees of the command: the decoded text and its context.
 #[derive(Debug, Clone)]
 pub struct CheckInput<'a> {
     pub shell: Shell,
@@ -62,6 +87,7 @@ pub struct CheckInput<'a> {
     pub command: &'a str,
     pub cwd: Option<PathBuf>,
     pub env: EnvView,
+    pub origin: Origin,
 }
 
 /// The one deadline of a run, started first in `main`.
@@ -93,96 +119,290 @@ impl Deadline {
     }
 }
 
-/// Analyse one command. Rules run on the IR; there is no parser yet, so the IR is empty.
-pub fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
-    let script = Script::default();
-    let fs: fs::SharedFs = std::sync::Arc::new(fs::RealFs);
+/// The whole pipeline for one text, in this order: the length rules on the raw text (before any
+/// size cap), the parse and the rules on a big-stack worker inside `catch_unwind` under the
+/// deadline, then the config levels. Input over `MAX_READ_BYTES` is `danger` unread; invalid
+/// UTF-8, input over `MAX_INPUT_BYTES`, a panic, a dead worker and the deadline make the analysis
+/// incomplete (`incomplete`).
+pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdict {
+    if input.bytes.len() > MAX_READ_BYTES {
+        return unread("input over the hard size cap");
+    }
+    let invalid = std::str::from_utf8(input.bytes).is_err();
+    let command = String::from_utf8_lossy(input.bytes).into_owned();
+    let check = CheckInput {
+        shell: input.shell,
+        os: input.os,
+        command: &command,
+        cwd: input.cwd.clone(),
+        env: input.env.clone(),
+        origin: input.origin,
+    };
+    let mut findings = match length_stage(&check, cfg, deadline) {
+        Ok(found) => found,
+        Err(reason) => return levels(incomplete(&command, reason).findings, cfg),
+    };
+    let problem = if invalid {
+        Some("invalid UTF-8")
+    } else if command.len() > MAX_INPUT_BYTES {
+        Some("input over the size cap")
+    } else {
+        None
+    };
+    findings.extend(checked(&check, problem, cfg, deadline).findings);
+    levels(findings, cfg)
+}
+
+/// The configured level of each finding.
+fn levels(findings: Vec<Finding>, cfg: &Config) -> Verdict {
+    Verdict::new(
+        findings
+            .into_iter()
+            .map(|mut f| {
+                f.level = cfg.level(f.rule, f.level);
+                f
+            })
+            .collect(),
+    )
+}
+
+/// The length rules, on the raw text and with no parse. A panic in one is a reason.
+fn length_stage(
+    input: &CheckInput,
+    cfg: &Config,
+    deadline: &Deadline,
+) -> Result<Vec<Finding>, &'static str> {
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        let script = Script::default();
+        let fs: fs::SharedFs = Arc::new(fs::RealFs);
+        let ctx = rules::Ctx {
+            input,
+            script: &script,
+            parse_error: None,
+            cfg,
+            fs: &fs,
+            deadline,
+        };
+        let mut out = Vec::new();
+        for rule in rules::length_rules() {
+            if rule.scope().covers(input.origin) {
+                rule.check(&ctx, &mut out);
+            }
+        }
+        out
+    }))
+    .map_err(|_| "internal error in a length rule")
+}
+
+/// Parse and run the rules on a big-stack worker inside `catch_unwind`, and the raw-text scan on
+/// a second worker, both under the deadline. When the worker cannot finish, or `problem` says it
+/// must not run, the verdict is `incomplete` from the scan's answer.
+fn checked(
+    input: &CheckInput,
+    problem: Option<&'static str>,
+    cfg: &Config,
+    deadline: &Deadline,
+) -> Verdict {
+    let command = Arc::new(input.command.to_string());
+    let (scan_tx, scan_rx) = mpsc::channel();
+    let text = Arc::clone(&command);
+    let scan = thread::Builder::new()
+        .name("scan".into())
+        .stack_size(WORKER_STACK)
+        .spawn(move || {
+            if testhook_is("panic-scan-sleep") {
+                thread::sleep(Duration::from_secs(60));
+            }
+            let _ = scan_tx.send(panic::catch_unwind(|| scan::raw_destructive(&text)));
+        });
+    let reason = match problem {
+        Some(reason) => reason,
+        None => match run_checker(Arc::clone(&command), input, cfg, *deadline) {
+            Ok(verdict) => return verdict,
+            Err(reason) => reason,
+        },
+    };
+    let hit = match (scan, scan_rx.recv_timeout(deadline.remaining())) {
+        (Ok(_), Ok(Ok(hit))) => Some(hit),
+        _ => None,
+    };
+    incomplete_from(hit, &command, reason)
+}
+
+fn run_checker(
+    command: Arc<String>,
+    input: &CheckInput,
+    cfg: &Config,
+    deadline: Deadline,
+) -> Result<Verdict, &'static str> {
+    let (tx, rx) = mpsc::channel();
+    let cfg = cfg.clone();
+    let (shell, os, cwd, env, origin) = (
+        input.shell,
+        input.os,
+        input.cwd.clone(),
+        input.env.clone(),
+        input.origin,
+    );
+    let job = move || {
+        let input = CheckInput {
+            shell,
+            os,
+            command: &command,
+            cwd,
+            env,
+            origin,
+        };
+        let result = panic::catch_unwind(AssertUnwindSafe(|| check(&input, &cfg, &deadline)));
+        if testhook_is("dead-worker") {
+            return;
+        }
+        let _ = tx.send(result);
+    };
+    let spawned = if testhook_is("spawn-fail") {
+        Err(std::io::Error::other("testhook: spawn-fail"))
+    } else {
+        thread::Builder::new()
+            .name("check".into())
+            .stack_size(WORKER_STACK)
+            .spawn(job)
+    };
+    if spawned.is_err() {
+        return Err("the worker thread did not start");
+    }
+    match rx.recv_timeout(deadline.remaining()) {
+        Ok(Ok(verdict)) => Ok(verdict),
+        Ok(Err(_)) => Err("internal error"),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err("deadline"),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err("the worker ended without a result"),
+    }
+}
+
+/// Parse the command and run every rule whose scope covers its origin. On a parse error the
+/// rules see an empty script and the error. A deny kind is the only finding: the shell refuses
+/// the text, so nothing in it runs.
+fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
+    let parsed = match input.shell {
+        Shell::Pwsh | Shell::Powershell5 => {
+            parse::pwsh::parse(input.command, input.shell, input.os)
+        }
+        Shell::Bash(profile) => parse::bash::parse(input.command, profile),
+    };
+    let (script, parse_error) = match parsed {
+        Ok(script) => (script, None),
+        Err(e) => (Script::default(), Some(e)),
+    };
+    let fs: fs::SharedFs = Arc::new(fs::RealFs);
     let ctx = rules::Ctx {
         input,
         script: &script,
+        parse_error: parse_error.as_ref(),
         cfg,
         fs: &fs,
         deadline,
     };
     let mut findings = Vec::new();
     for rule in rules::all() {
-        rule.check(&ctx, &mut findings);
+        if rule.scope().covers(input.origin) {
+            rule.check(&ctx, &mut findings);
+        }
+    }
+    if parse_error
+        .as_ref()
+        .is_some_and(|e| rules::parse_error::is_deny_kind(&e.kind, input.command))
+    {
+        findings.retain(|f| f.rule == rules::parse_error::PARSE_ERROR);
     }
     Verdict::new(findings)
 }
 
-/// The longest scan hit (in bytes) the fail-closed reason quotes.
-const MAX_QUOTED: usize = 80;
-
-/// The verdict when the analysis cannot finish: `ok` only when the raw text is a harmless simple
-/// command, otherwise `danger`. The allow marker has no effect here: without a parse nothing shows
-/// it is a comment or what the command deletes. The raw-text scan only names what it flags.
-pub fn fail_closed(command: &str, reason: &str) -> Verdict {
-    fail_closed_with(command, reason, scan::raw_destructive)
+#[cfg(feature = "testhooks")]
+fn testhook_is(mode: &str) -> bool {
+    rules::testhooks::mode() == mode
 }
 
-fn fail_closed_with(
+#[cfg(not(feature = "testhooks"))]
+fn testhook_is(_mode: &str) -> bool {
+    false
+}
+
+/// The longest scan hit (in bytes) the reason quotes.
+const MAX_QUOTED: usize = 80;
+
+const SPLIT_FIX: &str = "split the command into simpler calls so each can be checked";
+
+/// The verdict when the analysis cannot finish for `reason`: `danger` when the raw-text scan
+/// flags a destructive or unreadable command, or when the scan itself does not finish, and `warn`
+/// otherwise. The allow marker has no effect here: without a parse nothing shows it is a comment.
+pub fn incomplete(command: &str, reason: &str) -> Verdict {
+    incomplete_with(command, reason, scan::raw_destructive)
+}
+
+fn incomplete_with(
     command: &str,
     reason: &str,
     scan: impl FnOnce(&str) -> Option<Span> + std::panic::UnwindSafe,
 ) -> Verdict {
-    let hit = std::panic::catch_unwind(|| scan(command)).ok();
-    scan_verdict(hit, command, reason)
+    let hit = panic::catch_unwind(|| scan(command)).ok();
+    incomplete_from(hit, command, reason)
 }
 
-/// The fail-closed verdict from a scan result (`None` when the scan did not finish). Only the
-/// harmless grammar clears the command; a scan hit sets the span and names the command, and
-/// otherwise the span is the whole text.
-pub fn scan_verdict(hit: Option<Option<Span>>, command: &str, reason: &str) -> Verdict {
-    if scan::harmless(command) {
-        return Verdict::new(Vec::new());
-    }
+/// `incomplete` from a scan result (`None` when the scan did not finish). A scan hit sets the
+/// span and names the command; otherwise the span is the whole text.
+fn incomplete_from(hit: Option<Option<Span>>, command: &str, reason: &str) -> Verdict {
     let whole = Span {
         start: 0,
         end: command.len(),
     };
-    let (span, message) = match hit.flatten() {
-        Some(span) => match command.get(span.start..span.end) {
+    let (level, span, message) = match hit {
+        Some(None) => (
+            Level::Warn,
+            whole,
+            format!(
+                "the command could not be analysed ({reason}); its raw text names no command that deletes or discards data"
+            ),
+        ),
+        Some(Some(span)) => match command.get(span.start..span.end) {
             Some(found) if found.len() <= MAX_QUOTED && !found.chars().any(char::is_control) => (
+                Level::Danger,
                 span,
                 format!(
                     "the command could not be analysed ({reason}); the raw scan flags `{found}` as destructive or unreadable"
                 ),
             ),
-            Some(_) => (
+            _ => (
+                Level::Danger,
                 span,
                 format!(
                     "the command could not be analysed ({reason}); the raw scan flags part of it as destructive or unreadable"
                 ),
             ),
-            None => (whole, not_simple(reason)),
         },
-        None => (whole, not_simple(reason)),
+        None => (
+            Level::Danger,
+            whole,
+            format!(
+                "the command could not be analysed ({reason}) and the raw scan did not finish, so it may destroy data"
+            ),
+        ),
     };
-    danger(span, message)
-}
-
-fn not_simple(reason: &str) -> String {
-    format!(
-        "the command could not be analysed ({reason}) and is not a simple read-only command, so it may destroy data"
-    )
+    Verdict::new(vec![Finding {
+        rule: ANALYSIS_INCOMPLETE,
+        level,
+        message,
+        fix: Some(SPLIT_FIX.to_string()),
+        span,
+    }])
 }
 
 /// The verdict for input that was not read whole (over the hard cap, stdin still open).
-pub fn fail_closed_unread(reason: &str) -> Verdict {
-    danger(
-        Span::default(),
-        format!("the command could not be read ({reason}), so it may destroy data"),
-    )
-}
-
-fn danger(span: Span, message: String) -> Verdict {
+pub fn unread(reason: &str) -> Verdict {
     Verdict::new(vec![Finding {
-        rule: ANALYSIS_FAILED,
+        rule: ANALYSIS_INCOMPLETE,
         level: Level::Danger,
-        message,
-        fix: Some("split the command into simpler calls so each can be checked".to_string()),
-        span,
+        message: format!("the command could not be read ({reason}), so it may destroy data"),
+        fix: Some(SPLIT_FIX.to_string()),
+        span: Span::default(),
     }])
 }
 
@@ -221,43 +441,36 @@ mod tests {
         assert_eq!(d.remaining(), Duration::ZERO);
     }
 
-    /// Every row whose fail-closed verdict is not `danger` from `analysis-failed`, so a red run
+    /// Every row whose incomplete verdict is not `level` from `analysis-incomplete`, so a red run
     /// lists all failing rows at once.
-    fn not_danger<'a>(rows: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    fn not_at<'a>(level: Level, rows: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
         rows.into_iter()
             .filter(|cmd| {
-                let v = fail_closed(cmd, "test");
-                v.level != Level::Danger
+                let v = incomplete(cmd, "test");
+                v.level != level
                     || v.findings.len() != 1
-                    || v.findings[0].rule != ANALYSIS_FAILED
+                    || v.findings[0].rule != ANALYSIS_INCOMPLETE
             })
             .collect()
     }
 
-    /// Every row whose fail-closed verdict is not the plain `ok`.
-    fn not_ok<'a>(rows: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
-        rows.into_iter()
-            .filter(|cmd| fail_closed(cmd, "test") != Verdict::new(vec![]))
-            .collect()
-    }
-
-    fn assert_danger(v: &Verdict, cmd: &str) {
-        assert_eq!(v.level, Level::Danger, "{cmd:?} -> {v:?}");
+    fn assert_at(level: Level, v: &Verdict, cmd: &str) {
+        assert_eq!(v.level, level, "{cmd:?} -> {v:?}");
         assert_eq!(v.findings.len(), 1, "{cmd:?}");
-        assert_eq!(v.findings[0].rule, ANALYSIS_FAILED, "{cmd:?}");
+        assert_eq!(v.findings[0].rule, ANALYSIS_INCOMPLETE, "{cmd:?}");
     }
 
     #[test]
-    fn fail_closed_names_the_destructive_command_the_scan_found() {
-        let v = fail_closed("echo hi; rm -rf x", "test");
-        assert_danger(&v, "echo hi; rm -rf x");
+    fn incomplete_names_the_destructive_command_the_scan_found() {
+        let v = incomplete("echo hi; rm -rf x", "test");
+        assert_at(Level::Danger, &v, "echo hi; rm -rf x");
         assert_eq!(v.findings[0].span, Span { start: 9, end: 17 });
         let msg = &v.findings[0].message;
         assert!(msg.contains("test") && msg.contains("`rm -rf x`"), "{msg}");
     }
 
     #[test]
-    fn fail_closed_quotes_only_a_short_one_line_hit() {
+    fn incomplete_quotes_only_a_short_one_line_hit() {
         // A hit may be an unreadable region or the whole text (a spent budget): it is not quoted
         // when long or multi-line, so the reason stays one short line.
         let long = format!("{} #", "env -S ".repeat(100));
@@ -267,8 +480,8 @@ mod tests {
                 end: c.len(),
             })
         };
-        let v = fail_closed_with(&long, "test", all);
-        assert_danger(&v, &long);
+        let v = incomplete_with(&long, "test", all);
+        assert_at(Level::Danger, &v, &long);
         assert_eq!(
             v.findings[0].span,
             Span {
@@ -280,30 +493,31 @@ mod tests {
         assert!(msg.len() < 200 && !msg.contains("env -S env"), "{msg}");
 
         let lines = "rm -rf x\nrm -rf y #";
-        let v = fail_closed_with(lines, "test", all);
-        assert_danger(&v, lines);
+        let v = incomplete_with(lines, "test", all);
+        assert_at(Level::Danger, &v, lines);
         let msg = &v.findings[0].message;
         assert!(!msg.contains('\n') && !msg.contains("rm -rf"), "{msg}");
     }
 
     #[test]
-    fn fail_closed_is_danger_without_a_scan_hit() {
-        // Not harmless, and the scan finds nothing: still danger, spanning the whole text.
-        let v = fail_closed("Get-Date", "test");
-        assert_danger(&v, "Get-Date");
+    fn incomplete_is_warn_without_a_scan_hit() {
+        let v = incomplete("Get-Date", "test");
+        assert_at(Level::Warn, &v, "Get-Date");
         assert_eq!(v.findings[0].span, Span { start: 0, end: 8 });
         assert!(v.findings[0].message.contains("test"));
     }
 
     #[test]
-    fn fail_closed_is_danger_when_the_scan_itself_panics() {
-        let v = fail_closed_with("Get-Date", "test", |_| panic!("scan bug"));
-        assert_danger(&v, "Get-Date");
+    fn incomplete_is_danger_when_the_scan_itself_panics() {
+        // The scan gave no answer, so nothing shows the text holds no delete.
+        let v = incomplete_with("Get-Date", "test", |_| panic!("scan bug"));
+        assert_at(Level::Danger, &v, "Get-Date");
         assert_eq!(v.findings[0].span, Span { start: 0, end: 8 });
     }
 
-    /// The shapes the re-review found the raw scan missing (N1-N6). U+2018/U+2019 hide a row
-    /// from the PowerShell reading, as in the review.
+    /// The shapes the re-review found the raw scan missing (N1-N6). They are obfuscations
+    /// (Ruling 91), so an incomplete analysis of one is `warn`; each is a row of the hardening
+    /// register. U+2018/U+2019 hide a row from the PowerShell reading, as in the review.
     const MISSED_BY_THE_SCAN: &[&str] = &[
         // N1 process substitution feeding more than one command
         "bash <(echo hi; echo 'rm -rf x')",
@@ -351,14 +565,14 @@ mod tests {
     ];
 
     #[test]
-    fn failed_analysis_of_a_shape_the_scan_misses_is_danger() {
-        let missed = not_danger(MISSED_BY_THE_SCAN.iter().copied());
-        assert!(missed.is_empty(), "not danger: {missed:?}");
+    fn incomplete_analysis_of_a_shape_the_scan_misses_is_warn() {
+        let wrong = not_at(Level::Warn, MISSED_BY_THE_SCAN.iter().copied());
+        assert!(wrong.is_empty(), "not warn: {wrong:?}");
     }
 
-    /// One harmless row per entry of the read-only list and per `--version` tool, plus spacing
-    /// variants.
-    const HARMLESS_ROWS: &[&str] = &[
+    /// Texts that name no delete: read-only commands, near misses of the old harmless grammar,
+    /// and every metacharacter. With the allow-list gone they are all `warn`.
+    const NOTHING_DESTRUCTIVE: &[&str] = &[
         "git status",
         "ls src",
         "echo hi",
@@ -381,44 +595,11 @@ mod tests {
         "  echo hi  ",
         "echo  hi",
         "echo rm x",
-    ];
-
-    #[test]
-    fn failed_analysis_of_a_harmless_simple_command_is_ok() {
-        let wrong = not_ok(HARMLESS_ROWS.iter().copied());
-        assert!(wrong.is_empty(), "not ok: {wrong:?}");
-    }
-
-    #[test]
-    fn harmless_text_is_ok_whatever_the_scan_says() {
-        // The scan only names a command; it neither clears nor condemns a harmless text.
-        let hit = |_: &str| Some(Span { start: 0, end: 4 });
-        assert_eq!(fail_closed_with("echo hi", "t", hit), Verdict::new(vec![]));
-        let v = fail_closed_with("echo hi", "t", |_| panic!("scan bug"));
-        assert_eq!(v, Verdict::new(vec![]));
-        assert_danger(&fail_closed_with("Get-Date", "t", |_| None), "Get-Date");
-    }
-
-    /// The metacharacters of the harmless grammar, written out here (not read from the code) so a
-    /// character dropped from the code keeps its row. Control and non-ASCII characters count as
-    /// metacharacters too.
-    const METACHARACTERS: &[&str] = &[
-        ";", "&", "|", "<", ">", "(", ")", "$", "`", "\\", "\"", "'", "{", "}", "[", "]", "*", "?",
-        "~", "#", "\n", "\r", "\t", "\u{b}", "\u{c}", "\u{a0}", "\u{3000}", "\u{1b}", "\u{0}",
-    ];
-
-    /// Near misses of the harmless grammar: each stays danger.
-    const NEAR_MISSES: &[&str] = &[
         "echo hi > x",
-        "ls; rm x",
-        "git status && rm -rf x",
         "cat $f",
         "echo ~",
         "ls *",
-        "rm -rf x",
-        "rm x",
         "lsx",
-        // Shorter than every entry it starts: only the length check refuses it.
         "git",
         "git -C x status",
         "git statusx",
@@ -426,7 +607,6 @@ mod tests {
         "./deploy --version",
         "deploy --version x",
         "--version",
-        // No option word after the command, and `--version` only alone after a listed tool.
         "rg --pre rm x .",
         "rg todo",
         "git diff --output=f",
@@ -439,14 +619,11 @@ mod tests {
         "cargo --version x",
         "cargo build",
         "git --version --exec-path",
-        // pwsh reads U+2013/U+2014/U+2015 as dashes and a leading `/` as a switch; no non-ASCII.
         "git diff \u{2013}output=f",
         "git diff \u{2014}output=f",
         "git log \u{2015}output f",
         "ls /s",
         "echo \u{ef}",
-        // Words compare case-sensitively: git sends a mixed-case subcommand to alias lookup, and
-        // POSIX names differ by case.
         "git Status",
         "git Log",
         "GIT DIFF",
@@ -457,7 +634,6 @@ mod tests {
         "Cargo --version",
         "GIT --version",
         "git --VERSION",
-        // `cat` and `type` are not listed: a device path blocks them.
         "cat notes.txt",
         "type ls",
         "cat CON",
@@ -465,45 +641,77 @@ mod tests {
         "cat ../../../../../../../dev/stdin",
     ];
 
+    /// The metacharacters of the old harmless grammar, each in `echo a<c>b`.
+    const METACHARACTERS: &[&str] = &[
+        ";", "&", "|", "<", ">", "(", ")", "$", "`", "\\", "\"", "'", "{", "}", "[", "]", "*", "?",
+        "~", "#", "\n", "\r", "\t", "\u{b}", "\u{c}", "\u{a0}", "\u{3000}", "\u{1b}", "\u{0}",
+    ];
+
     #[test]
-    fn failed_analysis_of_a_near_miss_is_danger() {
+    fn incomplete_analysis_of_text_with_no_delete_is_warn() {
         let rows: Vec<String> = METACHARACTERS
             .iter()
             .map(|c| format!("echo a{c}b"))
             .collect();
-        let wrong = not_danger(
-            NEAR_MISSES
+        let wrong = not_at(
+            Level::Warn,
+            NOTHING_DESTRUCTIVE
                 .iter()
                 .copied()
                 .chain(rows.iter().map(|s| s.as_str())),
+        );
+        assert!(wrong.is_empty(), "not warn: {wrong:?}");
+    }
+
+    #[test]
+    fn incomplete_analysis_of_a_delete_is_danger() {
+        let wrong = not_at(
+            Level::Danger,
+            [
+                "rm -rf x",
+                "rm x",
+                "ls; rm x",
+                "git status && rm -rf x",
+                "Remove-Item -Recurse x",
+            ],
         );
         assert!(wrong.is_empty(), "not danger: {wrong:?}");
     }
 
     #[test]
-    fn allow_marker_has_no_effect_on_a_failed_analysis() {
-        // Without a parse nothing shows the marker is a comment, nor what the command deletes.
-        let wrong = not_danger([
-            "rm -rf x # shellwise: allow",
-            "rm -rf x # baseline-guard: allow",
-            "rm -rf x # shellwise: allow\n",
-            "# shellwise: allow",
-            "bash <(echo hi; echo 'rm -rf x') # shellwise: allow\r\n",
-            // Critical targets.
-            "rm -rf / # shellwise: allow",
-            "rm -rf ~ # baseline-guard: allow",
-            "Remove-Item -Recurse -Force C:\\ # shellwise: allow",
-            "bash -c 'rm -rf /' # shellwise: allow",
-            "eval $(echo rm -rf /) # shellwise: allow",
-            "echo 'rm -rf /' | su # shellwise: allow",
-            // The shell does not read these as a comment.
-            "rm -rf x\\ # shellwise: allow",
-            "rm -rf x \\ # shellwise: allow",
-            "Remove-Item x` # shellwise: allow",
-            "Remove-Item x --% # shellwise: allow",
-            "rm -rf x <<EOF\n # shellwise: allow",
-            "rm -rf y\n # shellwise: allow",
-        ]);
+    fn allow_marker_has_no_effect_on_an_incomplete_analysis() {
+        // Without a parse nothing shows the marker is a comment, nor what the command deletes:
+        // every row with a delete stays danger, and the marker alone is no delete.
+        let wrong = not_at(
+            Level::Danger,
+            [
+                "rm -rf x # shellwise: allow",
+                "rm -rf x # baseline-guard: allow",
+                "rm -rf x # shellwise: allow\n",
+                // Critical targets.
+                "rm -rf / # shellwise: allow",
+                "rm -rf ~ # baseline-guard: allow",
+                "Remove-Item -Recurse -Force C:\\ # shellwise: allow",
+                "bash -c 'rm -rf /' # shellwise: allow",
+                // The shell does not read these as a comment.
+                "rm -rf x\\ # shellwise: allow",
+                "rm -rf x \\ # shellwise: allow",
+                "Remove-Item x` # shellwise: allow",
+                "Remove-Item x --% # shellwise: allow",
+                "rm -rf x <<EOF\n # shellwise: allow",
+                "rm -rf y\n # shellwise: allow",
+            ],
+        );
         assert!(wrong.is_empty(), "not danger: {wrong:?}");
+        let wrong = not_at(
+            Level::Warn,
+            [
+                "# shellwise: allow",
+                "bash <(echo hi; echo 'rm -rf x') # shellwise: allow\r\n",
+                "eval $(echo rm -rf /) # shellwise: allow",
+                "echo 'rm -rf /' | su # shellwise: allow",
+            ],
+        );
+        assert!(wrong.is_empty(), "not warn: {wrong:?}");
     }
 }

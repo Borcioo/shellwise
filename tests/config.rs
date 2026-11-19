@@ -499,6 +499,29 @@ fn check_reports_config_findings() {
     assert_eq!(finding_rules(&r), [CONFIG_REPO_IGNORED], "{}", r.stdout);
 }
 
+#[test]
+fn check_applies_the_configured_levels() {
+    let d = scratch("cli_levels");
+    let raise = write(&d, "raise.toml", "[levels]\nparse-error = 'break'\n");
+    let r = check(
+        &d,
+        &["--config", raise.to_str().unwrap()],
+        "Get-Date (",
+        &[],
+    );
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert_eq!(finding_rules(&r), ["parse-error"], "{}", r.stdout);
+    let lower = write(&d, "lower.toml", "[levels]\nparse-error = 'warn'\n");
+    let r = check(
+        &d,
+        &["--config", lower.to_str().unwrap()],
+        "Write-Output \"abc",
+        &[],
+    );
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert_eq!(r.json()["level"], "warn", "{}", r.stdout);
+}
+
 /// The `slow` test hook sleeps 1 s inside the analysis; a 500 ms walk budget is the deadline, so
 /// the analysis fails closed instead of finishing.
 #[cfg(feature = "testhooks")]
@@ -550,7 +573,7 @@ fn check_fails_closed_when_the_config_does_not_load_in_time() {
     assert!(r.elapsed.as_millis() < 2500, "took {:?}", r.elapsed);
     let r = check(&d, &[], "echo hi", &env);
     assert_eq!(r.code, 0, "{}", r.stdout);
-    assert_eq!(r.json()["level"], "ok");
+    assert_eq!(r.json()["level"], "warn");
 }
 
 /// A panic in the config load and a config thread that cannot start both fail closed.

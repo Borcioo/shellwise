@@ -1,7 +1,7 @@
 //! The raw-text destructive scan used on every fail-closed path. It needs no parser: it splits the
 //! text into simple commands leniently, once in the bash and once in the PowerShell reading, and
-//! matches the names and flags of `data/destructive.toml` from every shell. On a fail-closed path
-//! it only names the destructive command in the reason; `harmless` alone clears a command there.
+//! matches the names and flags of `data/destructive.toml` from every shell. On an incomplete
+//! analysis or a parse error a hit makes the verdict `danger` and names the command.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -164,62 +164,6 @@ pub fn raw_destructive(cmd: &str) -> Option<Span> {
         .into_iter()
         .map(|h| h.span)
         .min_by_key(|s| (s.start, s.end))
-}
-
-/// The ASCII metacharacters of the harmless grammar. Every control character (newline, CR and tab
-/// included) and every non-ASCII character count as metacharacters too: pwsh reads U+2013-U+2015
-/// as dashes and other non-ASCII characters as quotes.
-const METACHARACTERS: &str = ";&|<>()$`\\\"'{}[]*?~#";
-
-/// The read-only commands of the harmless grammar, as the words the text starts with. No word
-/// after them may start with `-` or `/` (a cmd or pwsh switch): an option can run a command or
-/// write a file (`rg --pre`, `git diff --output`). `cat` and `type` are left out: a device path
-/// blocks them.
-const READ_ONLY: &[&str] = &[
-    "ls",
-    "echo",
-    "pwd",
-    "git status",
-    "git log",
-    "git diff",
-    "git show",
-    "grep",
-    "head",
-    "tail",
-    "wc",
-    "which",
-];
-
-/// The tools for which `<tool> --version`, with no other word, is harmless.
-const VERSION_TOOLS: &[&str] = &["git", "cargo", "rustc", "node", "npm", "python", "pwsh"];
-
-/// Whether a text whose analysis failed is still a harmless simple command: no metacharacter, and
-/// either a `READ_ONLY` command followed by words that are not options, or a `VERSION_TOOLS` tool
-/// followed by `--version` alone. Words compare whole and case-sensitively, as written: git sends
-/// a mixed-case subcommand to alias lookup, and POSIX names differ by case.
-pub fn harmless(text: &str) -> bool {
-    if text
-        .chars()
-        .any(|c| !c.is_ascii() || c.is_ascii_control() || METACHARACTERS.contains(c))
-    {
-        return false;
-    }
-    let words: Vec<&str> = text.split(' ').filter(|w| !w.is_empty()).collect();
-    if let [tool, flag] = words.as_slice()
-        && *flag == "--version"
-        && VERSION_TOOLS.contains(tool)
-    {
-        return true;
-    }
-    READ_ONLY.iter().any(|entry| {
-        let want: Vec<&str> = entry.split(' ').collect();
-        words.iter().zip(&want).all(|(w, e)| w == e)
-            && words.get(want.len()..).is_some_and(|rest| {
-                !rest
-                    .iter()
-                    .any(|w| w.starts_with('-') || w.starts_with('/'))
-            })
-    })
 }
 
 /// Whether a table flag entry matches one word, as the table header defines it.

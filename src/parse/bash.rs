@@ -19,7 +19,7 @@ use brush_parser::word::{
 };
 use brush_parser::{ParserOptions, SourceSpan, Token, TokenizerError};
 
-use super::{ParseError, QuoteKind};
+use super::{ParseError, ParseKind, QuoteKind};
 use crate::BashProfile;
 use crate::ir::{
     ChainOp, Comment, Elem, EnvView, MAX_NESTING, Pipeline, Quote, Redirect, Script, SimpleCommand,
@@ -66,12 +66,16 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
         return Err(error(
             whole,
             &format!("brackets nested deeper than {MAX_NESTING} levels"),
-            None,
+            ParseKind::TooDeep,
         ));
     }
     let stack = BASE_STACK.saturating_add(nesting_bound(src).saturating_mul(STACK_PER_LEVEL));
     if stack > MAX_STACK {
-        return Err(error(whole, "nesting too deep to parse safely", None));
+        return Err(error(
+            whole,
+            "nesting too deep to parse safely",
+            ParseKind::TooDeep,
+        ));
     }
     let owned = src.to_string();
     let worker = thread::Builder::new()
@@ -88,10 +92,14 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
             }
         });
     match worker {
-        Err(_) => Err(error(whole, "the parser thread did not start", None)),
+        Err(_) => Err(error(
+            whole,
+            "the parser thread did not start",
+            ParseKind::Syntax,
+        )),
         Ok(handle) => handle
             .join()
-            .unwrap_or_else(|_| Err(error(whole, "the parser panicked", None))),
+            .unwrap_or_else(|_| Err(error(whole, "the parser panicked", ParseKind::Syntax))),
     }
 }
 
@@ -138,11 +146,11 @@ fn bracket_depth(src: &str) -> usize {
     max
 }
 
-fn error(span: Span, message: &str, unclosed: Option<QuoteKind>) -> ParseError {
+fn error(span: Span, message: &str, kind: ParseKind) -> ParseError {
     ParseError {
         span,
         message: message.to_string(),
-        unclosed,
+        kind,
     }
 }
 
@@ -229,7 +237,7 @@ impl Cx {
             return Err(error(
                 span,
                 &format!("nesting deeper than {MAX_NESTING} levels"),
-                None,
+                ParseKind::TooDeep,
             ));
         }
         Ok(Cx { depth, ..self })
@@ -616,7 +624,11 @@ impl Lower {
     fn charge(&self, len: usize, span: Span) -> Result<(), ParseError> {
         let left = self.reparse_budget.get();
         if len > left {
-            return Err(error(span, "nested text too large to parse in time", None));
+            return Err(error(
+                span,
+                "nested text too large to parse in time",
+                ParseKind::TooDeep,
+            ));
         }
         self.reparse_budget.set(left - len);
         Ok(())
@@ -638,7 +650,7 @@ impl Lower {
             self.charge(src.len(), t.whole())?;
         }
         let tokens = brush_parser::tokenize_str_with_options(src, &self.opts.tokenizer_options())
-            .map_err(|e| tokenizer_error(&t, &e))?;
+            .map_err(|e| tokenizer_error(&t, &e, depth))?;
         let program = brush_parser::parse_tokens(&tokens, &self.opts).map_err(|e| {
             let span = match &e {
                 brush_parser::ParseError::ParsingNear(pos) => {
@@ -647,7 +659,7 @@ impl Lower {
                 }
                 _ => t.origin.span(src.len(), src.len()),
             };
-            error(span, &format!("bash: {e}"), None)
+            error(span, &format!("bash: {e}"), ParseKind::Syntax)
         })?;
         let cx = Cx {
             in_loop: false,
@@ -1722,8 +1734,9 @@ impl Lower {
                         Some(s) => t.origin.shift(s),
                         None => Origin::Inexact(body_span),
                     };
-                    let pieces = word::parse_heredoc(&doc.value, &self.opts)
-                        .map_err(|e| error(body_span, &format!("heredoc: {e}"), None))?;
+                    let pieces = word::parse_heredoc(&doc.value, &self.opts).map_err(|e| {
+                        error(body_span, &format!("heredoc: {e}"), ParseKind::Syntax)
+                    })?;
                     let mut parts = Vec::new();
                     self.pieces(&doc.value, &pieces, origin, true, cx, &mut parts)?;
                     Word {
@@ -1780,8 +1793,8 @@ impl Lower {
         span: Span,
         cx: Cx,
     ) -> Result<Word, ParseError> {
-        let pieces =
-            word::parse(value, &self.opts).map_err(|e| error(span, &format!("word: {e}"), None))?;
+        let pieces = word::parse(value, &self.opts)
+            .map_err(|e| error(span, &format!("word: {e}"), ParseKind::Syntax))?;
         let mut parts = Vec::new();
         self.pieces(value, &pieces, origin, false, cx, &mut parts)?;
         Ok(Word {
@@ -2723,7 +2736,11 @@ fn quote_of(pieces: &[WordPieceWithSource]) -> Quote {
     }
 }
 
-fn tokenizer_error(t: &Text, e: &TokenizerError) -> ParseError {
+/// A tokenizer error. An unclosed quote is `UnclosedQuote` only in the command's own text
+/// (`depth` 0): text nested in a substitution was already tokenized once as part of the
+/// command, so an unclosed quote there is a disagreement between the two readings, not a proven
+/// error of the shell.
+fn tokenizer_error(t: &Text, e: &TokenizerError, depth: usize) -> ParseError {
     let (pos, unclosed) = match e {
         TokenizerError::UnterminatedSingleQuote(p) | TokenizerError::UnterminatedAnsiCQuote(p) => {
             (Some(p), Some(QuoteKind::Single))
@@ -2736,7 +2753,12 @@ fn tokenizer_error(t: &Text, e: &TokenizerError) -> ParseError {
         Some(p) => t.origin.span(t.byte(p.index), t.src.len()),
         None => t.whole(),
     };
-    error(span, &format!("bash: {e}"), unclosed)
+    let kind = match (unclosed, e) {
+        (Some(q), _) if depth == 0 => ParseKind::UnclosedQuote(q),
+        (_, TokenizerError::UnterminatedHereDocuments(..)) => ParseKind::UnterminatedHeredoc,
+        _ => ParseKind::Syntax,
+    };
+    error(span, &format!("bash: {e}"), kind)
 }
 
 /// `#` comments: the text the tokenizer skipped (between tokens, or before a newline token).

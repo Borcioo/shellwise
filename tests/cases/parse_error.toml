@@ -1,0 +1,201 @@
+# The parse-error rule and its levels, through analyse. A deny kind (an unclosed quote) is break
+# and the only finding; any other kind is warn, or danger when the raw text holds a destructive
+# command. `oracle` says what the real shell's parser does with the text (pwsh ParseInput,
+# bash -n); every break row must say "refuses".
+
+# --- PowerShell ---
+
+[[row]]
+id = "pwsh-unclosed-double"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "abc'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 14'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-unclosed-single"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'abc"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 14"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-unclosed-after-an-earlier-error"
+os = "any"
+shell = "pwsh"
+command = 'Get-Date ( ; Write-Output "abc'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 27'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-unclosed-on-line-2"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'ok'\nWrite-Output \"abc"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at line 2, column 14'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-unclosed-with-a-delete-is-break-only"
+os = "any"
+shell = "pwsh"
+command = 'Get-Date; rm -rf "x'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 18'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-other-kind-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-Date ("
+level = "warn"
+rules = ["parse-error"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-other-kind-with-a-delete-is-danger"
+os = "any"
+shell = "pwsh"
+command = "Get-Date ( ; rm -rf x"
+level = "danger"
+rules = ["parse-error"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-clean"
+os = "any"
+shell = "pwsh"
+command = "Get-Date"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-unknown-tool"
+os = "any"
+shell = "pwsh"
+command = "newtool --any x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-unknown-tool-under-a-wrapper"
+os = "any"
+shell = "pwsh"
+command = "timeout 60 newtool -x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-opener-keeps-an-unclosed-quote-warn"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"abc @'\nx"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-the-same-without-the-opener-is-break"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"abc\nx"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 14'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-double-quote-opener-keeps-an-unclosed-quote-warn"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'abc @\"\nx"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# --- Bash ---
+# `bash -n` does not parse inside backticks, so an unclosed quote there is not a proven refusal:
+# only an unclosed quote in the command's own text is a deny kind.
+
+[[row]]
+id = "bash-unclosed-single"
+os = "any"
+shell = "bash"
+command = "echo 'abc"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 6"
+oracle = "refuses"
+
+[[row]]
+id = "bash-unclosed-double-with-a-delete-is-break-only"
+os = "any"
+shell = "bash"
+command = 'rm -rf "x'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 8'
+oracle = "refuses"
+
+[[row]]
+id = "bash-unclosed-backtick"
+os = "any"
+shell = "bash"
+command = "echo `date"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ` opened at column 6"
+oracle = "refuses"
+
+[[row]]
+id = "bash-unterminated-heredoc-is-warn"
+os = "any"
+shell = "bash"
+command = "cat <<EOF\nhello"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "bash-clean"
+os = "any"
+shell = "bash"
+command = "echo hi"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bash-dynamic-body"
+os = "any"
+shell = "bash"
+command = 'bash -c "$y"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bash-unclosed-quote-inside-a-nested-backtick-is-warn"
+os = "any"
+shell = "bash"
+command = "echo \"`echo '`\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"

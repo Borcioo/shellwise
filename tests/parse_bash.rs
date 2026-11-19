@@ -5,8 +5,8 @@ mod bash_util;
 use bash_util::{command_shape, commands, names};
 use shellwise::BashProfile;
 use shellwise::ir::{ChainOp, EnvView, MAX_NESTING, Quote, Redirect, Script, Stmt, WordPart};
-use shellwise::parse::QuoteKind;
 use shellwise::parse::bash::parse;
+use shellwise::parse::{ParseKind, QuoteKind};
 
 fn ok(src: &str) -> Script {
     parse(src, BashProfile::GitBash).unwrap_or_else(|e| panic!("{src:?}: {e:?}"))
@@ -309,9 +309,21 @@ fn unterminated_quotes_name_the_quote() {
     ];
     for (src, want) in cases {
         let e = parse(src, BashProfile::Posix).expect_err(src);
-        assert_eq!(e.unclosed, want, "{src}: {e:?}");
+        let unclosed = match e.kind {
+            ParseKind::UnclosedQuote(q) => Some(q),
+            _ => None,
+        };
+        assert_eq!(unclosed, want, "{src}: {e:?}");
         assert!(e.span.end <= src.len(), "{src}: {e:?}");
     }
+}
+
+#[test]
+fn an_unterminated_heredoc_is_its_own_kind() {
+    let e = parse("cat <<EOF\nhi", BashProfile::Posix).unwrap_err();
+    assert_eq!(e.kind, ParseKind::UnterminatedHeredoc, "{e:?}");
+    let e = parse("if true; then", BashProfile::Posix).unwrap_err();
+    assert_eq!(e.kind, ParseKind::Syntax, "{e:?}");
 }
 
 #[test]

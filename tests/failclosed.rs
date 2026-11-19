@@ -1,16 +1,17 @@
-//! Every path that cannot finish the analysis: `danger` unless the raw text is a harmless simple
-//! command; a destructive command the raw scan finds is named in the span.
+//! Every path that cannot finish the analysis: `analysis-incomplete`, `danger` when the raw scan
+//! finds a destructive or unreadable command (named in the span) or does not finish, `warn`
+//! otherwise.
 
 mod common;
 
-use common::{assert_failclosed_danger, assert_ok, run};
+use common::{assert_failclosed_danger, assert_incomplete_warn, assert_ok, run};
 
 const CHECK: &[&str] = &["check", "--shell", "pwsh", "--json"];
 
-/// Assert `danger` from `analysis-failed`, wherever the span is.
+/// Assert `danger` from `analysis-incomplete`, wherever the span is.
 fn assert_failed(r: &common::Run) {
     assert_eq!(r.code, 2, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
-    assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+    assert_eq!(r.json()["findings"][0]["rule"], "analysis-incomplete");
 }
 
 #[test]
@@ -20,14 +21,14 @@ fn input_over_the_size_cap_fails_closed() {
     let r = run(CHECK, Some(cmd.as_bytes()), &[]);
     assert_failclosed_danger(&r, &cmd, "rm -rf x");
 
-    // Nothing destructive in the raw text, but not a simple command either.
+    // Nothing destructive in the raw text.
     let mut nested = "(".repeat(200 * 1024);
     nested.push_str("Get-Date");
-    assert_failed(&run(CHECK, Some(nested.as_bytes()), &[]));
+    assert_incomplete_warn(&run(CHECK, Some(nested.as_bytes()), &[]));
 
-    let mut harmless = " ".repeat(200 * 1024);
-    harmless.push_str("echo hi");
-    assert_ok(&run(CHECK, Some(harmless.as_bytes()), &[]));
+    let mut plain = " ".repeat(200 * 1024);
+    plain.push_str("echo hi");
+    assert_incomplete_warn(&run(CHECK, Some(plain.as_bytes()), &[]));
 
     // Padding past the cap with an allow marker must not clear a delete of `/`.
     let mut marked = " ".repeat(64 * 1024 + 1);
@@ -47,25 +48,14 @@ fn size_cap_is_64_kib() {
 }
 
 #[test]
-fn invalid_utf8_fails_closed() {
-    let mut bytes = b"echo \xff\xfe; ".to_vec();
-    bytes.extend_from_slice(b"rm -rf x");
-    let r = run(CHECK, Some(&bytes), &[]);
-    assert_eq!(r.code, 2, "{:?}", r.stdout);
-    assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
-
-    assert_failed(&run(CHECK, Some(b"Get-\xffDate"), &[]));
-    // The lossy decode puts U+FFFD in the text, and a non-ASCII text is never harmless.
-    assert_failed(&run(CHECK, Some(b"echo \xff"), &[]));
-}
-
-#[test]
 fn input_over_the_hard_cap_is_danger_without_scanning() {
     // 16 MB of harmless text: too big to scan inside the deadline, so it is danger unread.
     let big = vec![b'a'; 16 * 1024 * 1024];
     let r = run(CHECK, Some(&big), &[]);
     assert_eq!(r.code, 2, "{:?}", r.stderr);
-    assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+    assert_eq!(r.json()["findings"][0]["rule"], "analysis-incomplete");
+    let message = r.json()["findings"][0]["message"].to_string();
+    assert!(message.contains("could not be read"), "{message}");
     assert!(
         r.elapsed < std::time::Duration::from_secs(9),
         "{:?}",
@@ -76,8 +66,8 @@ fn input_over_the_hard_cap_is_danger_without_scanning() {
 #[test]
 fn chained_env_split_strings_get_a_verdict() {
     // Each `env -S` link nests one more command. The invalid byte forces the fail path, where the
-    // raw scan must still finish in time; the text is not a simple command, so both tails are
-    // danger, printed as JSON.
+    // raw scan must still finish in time; past its depth limit the scan cannot read the tail, so
+    // both tails are danger, printed as JSON.
     for tail in ["rm -rf x", "echo hi"] {
         let mut cmd = "env -S ".repeat(9000).into_bytes();
         cmd.extend_from_slice(tail.as_bytes());
@@ -88,7 +78,7 @@ fn chained_env_split_strings_get_a_verdict() {
             "{tail}: stdout {:?} stderr {:?}",
             r.stdout, r.stderr
         );
-        assert_eq!(r.json()["findings"][0]["rule"], "analysis-failed");
+        assert_eq!(r.json()["findings"][0]["rule"], "analysis-incomplete");
         // The default deadline is 8 s; one more second covers the process start.
         assert!(
             r.elapsed < std::time::Duration::from_secs(9),
@@ -115,7 +105,7 @@ fn argv_that_is_not_unicode_fails_closed() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "{:?}", out);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["findings"][0]["rule"], "analysis-failed");
+    assert_eq!(v["findings"][0]["rule"], "analysis-incomplete");
 }
 
 #[cfg(feature = "testhooks")]
@@ -124,9 +114,9 @@ mod hooks {
     use std::time::Duration;
 
     const DESTRUCTIVE: &str = "Get-Date; rm -rf x";
-    /// Not destructive, but not a simple read-only command either.
-    const NOT_SIMPLE: &str = "Get-Date";
-    const HARMLESS: &str = "git status";
+    const PLAIN: &str = "Get-Date";
+    /// A read-only command the removed harmless grammar used to clear.
+    const READ_ONLY: &str = "git status";
 
     fn hook(mode: &str, command: &str) -> common::Run {
         let mut args = CHECK.to_vec();
@@ -142,48 +132,28 @@ mod hooks {
     }
 
     #[test]
-    fn panic_in_a_rule_fails_closed() {
-        assert_failclosed_danger(&hook("panic", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
-        assert_failed(&hook("panic", NOT_SIMPLE));
-        assert_ok(&hook("panic", HARMLESS));
-    }
-
-    #[test]
-    fn rule_past_the_deadline_fails_closed_in_bounded_time() {
-        let r = hook("sleep", DESTRUCTIVE);
-        assert_failclosed_danger(&r, DESTRUCTIVE, "rm -rf x");
-        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
-        let r = hook("sleep", NOT_SIMPLE);
-        assert_failed(&r);
-        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
-        let r = hook("sleep", HARMLESS);
-        assert_ok(&r);
-        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
-    }
-
-    #[test]
     fn worker_that_ends_without_a_result_fails_closed() {
         assert_failclosed_danger(&hook("dead-worker", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
-        assert_failed(&hook("dead-worker", NOT_SIMPLE));
-        assert_ok(&hook("dead-worker", HARMLESS));
+        assert_incomplete_warn(&hook("dead-worker", PLAIN));
+        assert_incomplete_warn(&hook("dead-worker", READ_ONLY));
     }
 
     #[test]
     fn worker_that_cannot_start_fails_closed() {
         assert_failclosed_danger(&hook("spawn-fail", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
-        assert_failed(&hook("spawn-fail", NOT_SIMPLE));
-        assert_ok(&hook("spawn-fail", HARMLESS));
+        assert_incomplete_warn(&hook("spawn-fail", PLAIN));
+        assert_incomplete_warn(&hook("spawn-fail", READ_ONLY));
     }
 
     #[test]
-    fn scan_that_misses_the_deadline_is_danger_unless_harmless() {
-        // The rule panics and the raw-text scan is too slow: only the harmless grammar clears it.
-        let r = hook("panic-scan-sleep", NOT_SIMPLE);
-        assert_failed(&r);
-        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
-        let r = hook("panic-scan-sleep", HARMLESS);
-        assert_ok(&r);
-        assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
+    fn scan_that_misses_the_deadline_is_danger() {
+        // The rule panics and the raw-text scan is too slow: nothing shows the text holds no
+        // delete.
+        for cmd in [PLAIN, READ_ONLY] {
+            let r = hook("panic-scan-sleep", cmd);
+            assert_failed(&r);
+            assert!(r.elapsed < Duration::from_secs(5), "{cmd}: {:?}", r.elapsed);
+        }
     }
 
     #[test]
@@ -219,7 +189,7 @@ mod hooks {
         drop(stdin);
         assert_eq!(out.status.code(), Some(2), "{out:?}");
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(v["findings"][0]["rule"], "analysis-failed");
+        assert_eq!(v["findings"][0]["rule"], "analysis-incomplete");
         assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     }
 
@@ -241,7 +211,13 @@ mod hooks {
     #[test]
     fn deep_nesting_is_checked_on_a_big_stack() {
         // A deeply nested command must not overflow the worker's stack (the hook rule recurses).
+        // The parse refuses the nesting, and the rules still run on the parse error.
         let cmd = format!("{}Get-Date", "(".repeat(10_000));
-        assert_ok(&hook("recurse", &cmd));
+        let r = hook("recurse", &cmd);
+        assert_eq!(r.code, 0, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
+        let v = r.json();
+        let findings = v["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1, "{v}");
+        assert_eq!(findings[0]["rule"], "parse-error", "{v}");
     }
 }

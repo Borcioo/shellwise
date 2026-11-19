@@ -910,6 +910,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "syn 3.0.10",
  "toml",
  "tree-sitter",
  "tree-sitter-powershell",

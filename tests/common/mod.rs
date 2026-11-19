@@ -68,13 +68,23 @@ pub fn run(args: &[&str], stdin: Option<&[u8]>, env: &[(&str, &str)]) -> Run {
     }
 }
 
+/// Assert the `warn` verdict of an analysis that did not finish on text with nothing destructive.
+pub fn assert_incomplete_warn(r: &Run) {
+    assert_eq!(r.code, 0, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
+    let v = r.json();
+    assert_eq!(v["level"], "warn", "{v}");
+    let findings = v["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{v}");
+    assert_eq!(findings[0]["rule"], "analysis-incomplete", "{v}");
+}
+
 /// Assert a fail-closed `danger` verdict whose span covers `needle` in `command`.
 pub fn assert_failclosed_danger(r: &Run, command: &str, needle: &str) {
     assert_eq!(r.code, 2, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
     let v = r.json();
     assert_eq!(v["level"], "danger", "{v}");
     let f = &v["findings"][0];
-    assert_eq!(f["rule"], "analysis-failed", "{v}");
+    assert_eq!(f["rule"], "analysis-incomplete", "{v}");
     assert_eq!(f["level"], "danger", "{v}");
     let start = f["span"]["start"].as_u64().unwrap() as usize;
     let end = f["span"]["end"].as_u64().unwrap() as usize;

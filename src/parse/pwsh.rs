@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 
 use tree_sitter::{Node, Parser, Tree};
 
-use super::{ParseError, QuoteKind};
+use super::{ParseError, ParseKind, QuoteKind};
 use crate::ir::{
     ChainOp, Comment, Elem, MAX_NESTING, MethodCall, Pipeline, Quote, Redirect, Script,
     SimpleCommand, Stmt, Word, WordPart,
@@ -67,7 +67,7 @@ pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
         end: src.len(),
     };
     if !matches!(dialect, Shell::Pwsh | Shell::Powershell5) {
-        let e = error(whole, "not a PowerShell dialect", None);
+        let e = error(whole, "not a PowerShell dialect", ParseKind::Syntax);
         return Lossy {
             tree_error: Some(e),
             ..Lossy::default()
@@ -83,7 +83,11 @@ pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
         Err(_) => None,
     };
     joined.unwrap_or_else(|| Lossy {
-        tree_error: Some(error(whole, "the PowerShell parser did not finish", None)),
+        tree_error: Some(error(
+            whole,
+            "the PowerShell parser did not finish",
+            ParseKind::Syntax,
+        )),
         ..Lossy::default()
     })
 }
@@ -99,13 +103,21 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
         .is_err()
     {
         return Lossy {
-            tree_error: Some(error(whole, "the PowerShell grammar did not load", None)),
+            tree_error: Some(error(
+                whole,
+                "the PowerShell grammar did not load",
+                ParseKind::Syntax,
+            )),
             ..Lossy::default()
         };
     }
     let Some(tree) = parser.parse(src, None) else {
         return Lossy {
-            tree_error: Some(error(whole, "the PowerShell parser gave no tree", None)),
+            tree_error: Some(error(
+                whole,
+                "the PowerShell parser gave no tree",
+                ParseKind::Syntax,
+            )),
             ..Lossy::default()
         };
     };
@@ -140,11 +152,11 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
     }
 }
 
-fn error(span: Span, message: &str, unclosed: Option<QuoteKind>) -> ParseError {
+fn error(span: Span, message: &str, kind: ParseKind) -> ParseError {
     ParseError {
         span,
         message: message.to_string(),
-        unclosed,
+        kind,
     }
 }
 
@@ -197,7 +209,6 @@ fn first_tree_error(src: &str, tree: &Tree) -> Option<ParseError> {
             stack.extend(kids(n));
         }
     }
-    let unclosed = unclosed_quote(src);
     let (sp, message) = match best {
         Some(n) if n.is_missing() => (
             span(n),
@@ -212,12 +223,23 @@ fn first_tree_error(src: &str, tree: &Tree) -> Option<ParseError> {
             "PowerShell syntax error".to_string(),
         ),
     };
-    Some(error(sp, &message, unclosed))
+    Some(match unclosed_quote(src) {
+        Some((quote, at)) => error(
+            Span {
+                start: at,
+                end: src.len(),
+            },
+            &message,
+            ParseKind::UnclosedQuote(quote),
+        ),
+        None => error(sp, &message, ParseKind::Syntax),
+    })
 }
 
-/// The quote left open at the end of `src`, read the way PowerShell reads quotes: `''` inside
-/// single quotes, backtick escapes and `""` inside double quotes, `#` comments outside them.
-fn unclosed_quote(src: &str) -> Option<QuoteKind> {
+/// The quote left open at the end of `src` and the byte offset where it opens, read the way
+/// PowerShell reads quotes: `''` inside single quotes, backtick escapes and `""` inside double
+/// quotes, `#` comments outside them.
+fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
     #[derive(PartialEq)]
     enum S {
         Out,
@@ -226,17 +248,24 @@ fn unclosed_quote(src: &str) -> Option<QuoteKind> {
         Line,
         Block,
     }
-    let b: Vec<char> = src.chars().collect();
+    let b: Vec<(usize, char)> = src.char_indices().collect();
     let mut s = S::Out;
+    let mut opened = 0;
     let mut i = 0;
     while i < b.len() {
-        let c = b[i];
-        let next = b.get(i + 1).copied();
+        let (at, c) = b[i];
+        let next = b.get(i + 1).map(|&(_, c)| c);
         match s {
             S::Out => match c {
                 '`' => i += 1,
-                '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' => s = S::Single,
-                '"' | '\u{201c}' | '\u{201d}' | '\u{201e}' => s = S::Double,
+                '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' => {
+                    s = S::Single;
+                    opened = at;
+                }
+                '"' | '\u{201c}' | '\u{201d}' | '\u{201e}' => {
+                    s = S::Double;
+                    opened = at;
+                }
                 '<' if next == Some('#') => {
                     s = S::Block;
                     i += 1;
@@ -279,8 +308,8 @@ fn unclosed_quote(src: &str) -> Option<QuoteKind> {
         i += 1;
     }
     match s {
-        S::Single => Some(QuoteKind::Single),
-        S::Double => Some(QuoteKind::Double),
+        S::Single => Some((QuoteKind::Single, opened)),
+        S::Double => Some((QuoteKind::Double, opened)),
         _ => None,
     }
 }
@@ -338,7 +367,7 @@ fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
             return Some(error(
                 Span { start: i, end },
                 "PowerShell reads this character as an ASCII dash, quote or space here",
-                None,
+                ParseKind::Unmodelled,
             ));
         }
     }
@@ -457,7 +486,7 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             return Some(error(
                 span(n),
                 "PowerShell's tokenizer reads this as another token",
-                None,
+                ParseKind::Unmodelled,
             ));
         }
         stack.extend(kids(n));
@@ -696,7 +725,7 @@ fn unglued(src: &str, root: Node) -> Option<ParseError> {
             error(
                 at,
                 &format!("PowerShell may read these glued pieces differently: {l}, {r}"),
-                None,
+                ParseKind::Unmodelled,
             )
         })
 }
@@ -744,7 +773,7 @@ impl Cx {
             return Err(error(
                 at,
                 &format!("nesting deeper than {MAX_NESTING} levels"),
-                None,
+                ParseKind::TooDeep,
             ));
         }
         Ok(Cx { depth, ..self })
@@ -777,7 +806,7 @@ impl<'a> Lower<'a> {
         error(
             span(n),
             &format!("PowerShell construct not modelled: {}", n.kind()),
-            None,
+            ParseKind::Unmodelled,
         )
     }
 
@@ -1278,7 +1307,7 @@ impl<'a> Lower<'a> {
                         return Err(error(
                             span(k),
                             "`&&` and `||` are PowerShell 7 syntax; Windows PowerShell 5.1 rejects them",
-                            None,
+                            ParseKind::Syntax,
                         ));
                     }
                     let op = if self.text(k) == "&&" {
@@ -2500,7 +2529,7 @@ impl<'a> Lower<'a> {
                                 end: at + 2,
                             },
                             "a subexpression inside a word that the parser did not read",
-                            None,
+                            ParseKind::Unmodelled,
                         ));
                     } else if c == '$'
                         && let Some(vlen) = var_len(&text[i..])
