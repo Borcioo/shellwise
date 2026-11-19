@@ -1589,3 +1589,1448 @@ error = false
 cmds = [["Write-Output", "x\"a\U00002028b\""]]
 comments = []
 methods = []
+
+[[row]]
+id = "fix2-r2-lt-after-target-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-gt-after-target-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null>\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-append-after-target-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null>>\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-star-after-target-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls *>$null<\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-lt-blank-line"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<\n\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-lt-comment-line"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<\n# c\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = ["# c"]
+methods = []
+
+[[row]]
+id = "fix2-r2-lt-block-comment"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<<#c#>\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-lt-crlf"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<\r\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-lt-cr"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<\rri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-lt-tab-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+parser = "refuses"
+command = "ls 2>$null<\t\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-gt-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls >\nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-stream-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls 2>\nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-star-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls *>\nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-append-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls >>\nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-after-string-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls 'a'>\nri C:\\x"
+error = true
+cmds = [["ls", "'a'"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-after-paren-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls (1)>\nri C:\\x"
+error = true
+cmds = [["ls", "(1)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-after-merge-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls 2>&1<\nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-statement-redirect-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "(ls) >\nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2e-space-then-lf"
+mechanism = "fix2: a redirection with no target is a PowerShell error"
+command = "ls > \nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2e-statement-space-then-lf"
+mechanism = "fix2: a redirection with no target is a PowerShell error"
+command = "(ls) > \nri C:\\x"
+error = true
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-target-same-line"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls 2>$null >x\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-merge-then-lf"
+mechanism = "fix2: a redirection target never starts past a line end"
+command = "ls 2>&1\nri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r3-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.'Delete'()"
+error = false
+cmds = [["Write-Output", "$x.'Delete'()"]]
+comments = []
+methods = ["$x.'Delete'"]
+
+[[row]]
+id = "fix2-r3-double-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.\"Delete\"()"
+error = false
+cmds = [["Write-Output", "$x.\"Delete\"()"]]
+comments = []
+methods = ["$x.\"Delete\""]
+
+[[row]]
+id = "fix2-r3-expandable-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.\"$m\"()"
+error = false
+cmds = [["Write-Output", "$x.\"$m\"()"]]
+comments = []
+methods = ["$x.\"$m\""]
+
+[[row]]
+id = "fix2-r3-typographic-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.\U00002018Delete\U00002019()"
+error = false
+cmds = [["Write-Output", "$x.\U00002018Delete\U00002019()"]]
+comments = []
+methods = ["$x.\U00002018Delete\U00002019"]
+
+[[row]]
+id = "fix2-r3-variable-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.$m()"
+error = false
+cmds = [["Write-Output", "$x.$m()"]]
+comments = []
+methods = ["$x.$m"]
+
+[[row]]
+id = "fix2-r3-braced-variable-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.${m}()"
+error = false
+cmds = [["Write-Output", "$x.${m}()"]]
+comments = []
+methods = ["$x.${m}"]
+
+[[row]]
+id = "fix2-r3-paren-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.('Delete')()"
+error = false
+cmds = [["Write-Output", "$x.('Delete')()"]]
+comments = []
+methods = ["$x.('Delete')"]
+
+[[row]]
+id = "fix2-r3-subexpr-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.$($m)()"
+error = false
+cmds = [["Write-Output", "$x.$($m)()"]]
+comments = []
+methods = ["$x.$($m)"]
+
+[[row]]
+id = "fix2-r3-array-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.@('a')()"
+error = false
+cmds = [["Write-Output", "$x.@('a')()"]]
+comments = []
+methods = ["$x.@('a')"]
+
+[[row]]
+id = "fix2-r3-index-then-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x[0].'Delete'()"
+error = false
+cmds = [["Write-Output", "$x[0].'Delete'()"]]
+comments = []
+methods = ["$x[0].'Delete'"]
+
+[[row]]
+id = "fix2-r3-chain-then-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.a.'Delete'()"
+error = false
+cmds = [["Write-Output", "$x.a.'Delete'()"]]
+comments = []
+methods = ["$x.a.'Delete'"]
+
+[[row]]
+id = "fix2-r3-paren-receiver-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output (gi x).'Delete'()"
+error = false
+cmds = [["Write-Output", "(gi x).'Delete'()"], ["gi", "x"]]
+comments = []
+methods = ["(gi x).'Delete'"]
+
+[[row]]
+id = "fix2-r3-paren-receiver-variable-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output (gi x).$m()"
+error = false
+cmds = [["Write-Output", "(gi x).$m()"], ["gi", "x"]]
+comments = []
+methods = ["(gi x).$m"]
+
+[[row]]
+id = "fix2-r3-env-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $env:x.'Delete'()"
+error = false
+cmds = [["Write-Output", "$env:x.'Delete'()"]]
+comments = []
+methods = ["$env:x.'Delete'"]
+
+[[row]]
+id = "fix2-r3-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x?.Delete()"
+error = false
+cmds = [["Write-Output", "$x?.Delete()"]]
+comments = []
+methods = ["$x?.Delete"]
+
+[[row]]
+id = "fix2-r3-null-conditional-variable-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x?.$m()"
+error = false
+cmds = [["Write-Output", "$x?.$m()"]]
+comments = []
+methods = ["$x?.$m"]
+
+[[row]]
+id = "fix2-r3-null-conditional-chain"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x?.a.Delete()"
+error = false
+cmds = [["Write-Output", "$x?.a.Delete()"]]
+comments = []
+methods = ["$x?.a.Delete"]
+
+[[row]]
+id = "fix2-r3-null-conditional-index"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x?[0].Delete()"
+error = false
+cmds = [["Write-Output", "$x?[0].Delete()"]]
+comments = []
+methods = ["$x?[0].Delete"]
+
+[[row]]
+id = "fix2-r3-env-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $env:x?.Delete()"
+error = false
+cmds = [["Write-Output", "$env:x?.Delete()"]]
+comments = []
+methods = ["$env:x?.Delete"]
+
+[[row]]
+id = "fix2-r3-member-then-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.a?.$m()"
+error = false
+cmds = [["Write-Output", "$x.a?.$m()"]]
+comments = []
+methods = ["$x.a.$m"]
+
+[[row]]
+id = "fix2-r3-braced-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+command = "Write-Output ${x}?.Delete()"
+error = true
+cmds = [["Write-Output", "${x}?.Delete", "()"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r3-block-call"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.Delete{1}"
+error = false
+cmds = [["Write-Output", "$x.Delete{1}"]]
+comments = []
+methods = ["$x.Delete"]
+
+[[row]]
+id = "fix2-r3-block-call-paren-receiver"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output (gi x).Delete{1}"
+error = false
+cmds = [["Write-Output", "(gi x).Delete{1}"], ["gi", "x"]]
+comments = []
+methods = ["(gi x).Delete"]
+
+[[row]]
+id = "fix2-r3-block-call-paren-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output (gi x)?.Delete{1}"
+error = false
+cmds = [["Write-Output", "(gi x)?.Delete{1}"], ["gi", "x"]]
+comments = []
+methods = ["(gi x).Delete"]
+
+[[row]]
+id = "fix2-r3-block-call-quoted-foreach"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.'ForEach'{1}"
+error = false
+cmds = [["Write-Output", "$x.'ForEach'{1}"]]
+comments = []
+methods = ["$x.'ForEach'"]
+
+[[row]]
+id = "fix2-r3-block-call-null-conditional-foreach"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x?.ForEach{1}"
+error = false
+cmds = [["Write-Output", "$x?.ForEach{1}"]]
+comments = []
+methods = ["$x?.ForEach"]
+
+[[row]]
+id = "fix2-r3-block-call-chain"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.Delete.Invoke{1}"
+error = false
+cmds = [["Write-Output", "$x.Delete.Invoke{1}"]]
+comments = []
+methods = ["$x.Delete.Invoke"]
+
+[[row]]
+id = "fix2-r3-block-call-variable-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.$m{1}"
+error = false
+cmds = [["Write-Output", "$x.$m{1}"]]
+comments = []
+methods = ["$x.$m"]
+
+[[row]]
+id = "fix2-r3-block-call-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x.'Delete'{1}"
+error = false
+cmds = [["Write-Output", "$x.'Delete'{1}"]]
+comments = []
+methods = ["$x.'Delete'"]
+
+[[row]]
+id = "fix2-r3-block-call-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output $x?.Delete{1}"
+error = false
+cmds = [["Write-Output", "$x?.Delete{1}"]]
+comments = []
+methods = ["$x?.Delete"]
+
+[[row]]
+id = "fix2-r3-in-list-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output a,$x.'Delete'()"
+error = false
+cmds = [["Write-Output", "a,$x.'Delete'()"]]
+comments = []
+methods = ["$x.'Delete'"]
+
+[[row]]
+id = "fix2-r3-in-list-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output a,$x?.Delete()"
+error = false
+cmds = [["Write-Output", "a,$x?.Delete()"]]
+comments = []
+methods = ["$x?.Delete"]
+
+[[row]]
+id = "fix2-r3-after-colon-quoted-member"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output -a:$x.'Delete'()"
+error = false
+cmds = [["Write-Output", "-a:$x.'Delete'()"]]
+comments = []
+methods = ["$x.'Delete'"]
+
+[[row]]
+id = "fix2-r3-after-colon-null-conditional"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output -a:$x?.Delete()"
+error = false
+cmds = [["Write-Output", "-a:$x?.Delete()"]]
+comments = []
+methods = ["$x?.Delete"]
+
+[[row]]
+id = "fix2-r3-after-colon-block-call"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+parser = "refuses"
+command = "Write-Output -a:$x.Delete{1}"
+error = false
+cmds = [["Write-Output", "-a:$x.Delete{1}"]]
+comments = []
+methods = ["$x.Delete"]
+
+[[row]]
+id = "fix2-r3-simple-member-call"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+command = "Write-Output (gi x)?.Delete()"
+error = false
+cmds = [["Write-Output", "(gi x)?.Delete()"], ["gi", "x"]]
+comments = []
+methods = ["(gi x).Delete"]
+
+[[row]]
+id = "fix2-r3-foreach-block"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+command = "Write-Output $x.ForEach{1}"
+error = false
+cmds = [["Write-Output", "$x.ForEach{1}"]]
+comments = []
+methods = ["$x.ForEach"]
+
+[[row]]
+id = "fix2-r3-glued-paren-after-word"
+mechanism = "fix2: a member followed by an argument list or block in argument mode is a call"
+command = "Write-Output New-Object Text.UTF8Encoding($false)"
+error = false
+cmds = [["Write-Output", "New-Object", "Text.UTF8Encoding", "($false)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r3-property-null-conditional"
+mechanism = "fix2: a null-conditional member or index glued to a variable is an expression"
+parser = "refuses"
+command = "Write-Output $x?.Delete"
+error = false
+cmds = [["Write-Output", "$x?.Delete"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-param-value-trailing-comma-space"
+mechanism = "fix2: a comma ending an attached parameter value continues the list past a space"
+parser = "refuses"
+command = "node --name=a, b x.js"
+error = false
+cmds = [["node", "--name=a, b", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-param-value-trailing-comma-unicode-space"
+mechanism = "fix2: a comma ending an attached parameter value continues the list past a space"
+parser = "refuses"
+command = "node --name=a,\U00003000b x.js"
+error = false
+cmds = [["node", "--name=a,\U00003000b", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-param-value-trailing-comma-parameter"
+mechanism = "fix2: a comma ending an attached parameter value continues the list past a space"
+parser = "refuses"
+command = "Remove-Item --x=a, -Recurse"
+error = false
+cmds = [["Remove-Item", "--x=a, -Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-glued-redirect-comment"
+mechanism = "fix2: a redirect glued to the previous redirect target is that target text"
+parser = "refuses"
+command = "ls 2>$null<<#c#>ri C:\\x"
+error = false
+cmds = [["ls", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-glued-redirect-gt"
+mechanism = "fix2: a redirect glued to the previous redirect target is that target text"
+parser = "refuses"
+command = "ls 2>$null>x"
+error = false
+cmds = [["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-glued-redirect-semicolon"
+mechanism = "fix2: a redirect glued to the previous redirect target is that target text"
+parser = "refuses"
+command = "ls 2>$null>x;ri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r2-comment-before-target"
+mechanism = "fix2: a redirect glued to the previous redirect target is that target text"
+command = "ls ><#c#>x"
+error = false
+cmds = [["ls"]]
+comments = ["<#c#>"]
+methods = []
+
+[[row]]
+id = "fix2-null-conditional-member-glued-comment"
+mechanism = "fix2: a null-conditional member or index glued to a variable is an expression"
+parser = "refuses"
+command = "Write-Output $x?.Delete<#x#>"
+error = false
+cmds = [["Write-Output", "$x?.Delete"]]
+comments = ["<#x#>"]
+methods = []
+
+[[row]]
+id = "fix2-null-conditional-index"
+mechanism = "fix2: a null-conditional member or index glued to a variable is an expression"
+parser = "refuses"
+command = "Write-Output $x?[0]"
+error = false
+cmds = [["Write-Output", "$x?[0]"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-comma-backtick-line-end"
+mechanism = "fix2: a comma followed by a backtick line end or a comment continues the list"
+parser = "refuses"
+command = "Remove-Item x`, C:,`\n\\ -Recurse"
+error = false
+cmds = [["Remove-Item", "x`,", "C:,`\n\\", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-comma-block-comment"
+mechanism = "fix2: a comma followed by a backtick line end or a comment continues the list"
+parser = "refuses"
+command = "Remove-Item a,<#c#>b -Recurse"
+error = false
+cmds = [["Remove-Item", "a,<#c#>b", "-Recurse"]]
+comments = ["<#c#>"]
+methods = []
+
+[[row]]
+id = "fix2-dot-variable-word"
+mechanism = "fix2: a dot before a variable or subexpression at a word start is its own argument"
+parser = "refuses"
+command = "Write-Output .$m"
+error = false
+cmds = [["Write-Output", ".", "$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-subexpr-word"
+mechanism = "fix2: a dot before a variable or subexpression at a word start is its own argument"
+parser = "refuses"
+command = "Write-Output .$(1)"
+error = false
+cmds = [["Write-Output", ".", "$(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-variable-glued-word"
+mechanism = "fix2: a dot before a variable or subexpression at a word start is its own argument"
+parser = "refuses"
+command = "npm view .$m@scope/pkg version"
+error = false
+cmds = [["npm", "view", ".", "$m@scope/pkg", "version"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-path-variable-word"
+mechanism = "fix2: a dot before a variable or subexpression at a word start is its own argument"
+command = "Write-Output .\\$m"
+error = false
+cmds = [["Write-Output", ".\\$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-single-quote-word"
+mechanism = "fix2: a dot before a variable, subexpression or quote at a word start is its own argument"
+parser = "refuses"
+command = "Write-Output .'x'"
+error = false
+cmds = [["Write-Output", ".", "'x'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-double-quote-word"
+mechanism = "fix2: a dot before a variable, subexpression or quote at a word start is its own argument"
+parser = "refuses"
+command = "Write-Output .\"x\""
+error = false
+cmds = [["Write-Output", ".", "\"x\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-single-quote-word-comment"
+mechanism = "fix2: a dot before a variable, subexpression or quote at a word start is its own argument"
+parser = "refuses"
+command = "git status .'x'# trailing"
+error = false
+cmds = [["git", "status", ".", "'x'"]]
+comments = ["# trailing"]
+methods = []
+
+[[row]]
+id = "fix2-dot-typographic-single-quote-word"
+mechanism = "fix2: a dot before a variable, subexpression or quote at a word start is its own argument"
+parser = "refuses"
+command = "Write-Output .\U00002018x\U00002019"
+error = false
+cmds = [["Write-Output", ".\U00002018x\U00002019"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-dot-typographic-double-quote-word"
+mechanism = "fix2: a dot before a variable, subexpression or quote at a word start is its own argument"
+parser = "refuses"
+command = "Write-Output .\U0000201Cx\U0000201D"
+error = false
+cmds = [["Write-Output", ".\U0000201Cx\U0000201D"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-question-mark-after-variable"
+mechanism = "fix2: a question mark glued to a variable belongs to the variable name"
+parser = "refuses"
+command = "Write-Output $x?"
+error = false
+cmds = [["Write-Output", "$x?"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-question-marks-member-glued-comment"
+mechanism = "fix2: a question mark glued to a variable belongs to the variable name"
+parser = "refuses"
+command = "Write-Output $x??.Delete<#x#>"
+error = false
+cmds = [["Write-Output", "$x??.Delete"]]
+comments = ["<#x#>"]
+methods = []
+
+[[row]]
+id = "fix2-question-mark-after-braced-variable"
+mechanism = "fix2: a question mark glued to a variable belongs to the variable name"
+parser = "refuses"
+command = "Write-Output ${x}?"
+error = false
+cmds = [["Write-Output", "${x}?"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-question-mark-variable-kept"
+mechanism = "fix2: a question mark glued to a variable belongs to the variable name"
+command = "Write-Output $?x"
+error = false
+cmds = [["Write-Output", "$?x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-comment-inside-name-redirect"
+mechanism = "fix2: a comment inside a command name is name text and a comment for PowerShell"
+parser = "refuses"
+command = "git<#x #>>status"
+error = false
+cmds = [["git<#x"]]
+comments = ["#>>status"]
+methods = []
+
+[[row]]
+id = "fix2-comment-inside-name-text"
+mechanism = "fix2: a comment inside a command name is name text and a comment for PowerShell"
+parser = "refuses"
+command = "git<#x #>a"
+error = false
+cmds = [["git<#x"]]
+comments = ["#>a"]
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-typographic-name"
+mechanism = "fix2: a dot glued to a typographic quote is name text"
+parser = "refuses"
+command = "Write-Output\n .\U00002018x\U00002019"
+error = false
+cmds = [["Write-Output"], [".\U00002018x\U00002019"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-typographic-double-name"
+mechanism = "fix2: a dot glued to a typographic quote is name text"
+parser = "refuses"
+command = "ls\n.\U0000201Cx\U0000201D"
+error = false
+cmds = [["ls"], [".\U0000201Cx\U0000201D"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-ascii-quote-name"
+mechanism = "fix2: a dot glued to a typographic quote is name text"
+command = "Write-Output\n .'x'"
+error = false
+cmds = [["Write-Output"], ["'x'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-comment-in-static-call"
+mechanism = "fix2: a comment inside a static method call fails closed"
+parser = "refuses"
+command = "$null = [IO.Directory]<#x#>::Delete('x')"
+error = false
+cmds = []
+comments = ["<#x#>"]
+methods = ["[IO.Directory]::Delete"]
+
+[[row]]
+id = "fix2-i1-number-member-statement"
+mechanism = "fix2: a number glued to a member is a command for PowerShell"
+parser = "refuses"
+command = "1.x"
+error = false
+cmds = [["1.x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-number-quoted-member-in-block"
+mechanism = "fix2: a number glued to a member is a command for PowerShell"
+parser = "refuses"
+command = "{1.'x'}"
+error = false
+cmds = [["1.'x'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-number-variable-member-in-block"
+mechanism = "fix2: a number glued to a member is a command for PowerShell"
+parser = "refuses"
+command = "{1.$m}"
+error = false
+cmds = [["1.$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-question-mark-member-variable"
+mechanism = "fix2: a question mark glued to a variable belongs to the variable name"
+parser = "refuses"
+command = "Write-Output -a:$x.$m?.Delete()"
+error = false
+cmds = [["Write-Output", "-a:$x.$m?.Delete()"]]
+comments = []
+methods = ["$x.$m?.Delete"]
+
+[[row]]
+id = "fix2-i1-dot-in-one-dash-value"
+mechanism = "fix2: a dot before a variable or quote splits a parameter value"
+parser = "refuses"
+command = "Write-Output -a=x.$m"
+error = false
+cmds = [["Write-Output", "-a=x", ".", "$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-at-two-dash-value-start"
+mechanism = "fix2: a dot before a variable or quote splits a parameter value"
+parser = "refuses"
+command = "node -name=.'x' x.js"
+error = false
+cmds = [["node", "-name=", ".", "'x'", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-after-comma-in-value"
+mechanism = "fix2: a dot before a variable or quote splits a parameter value"
+parser = "refuses"
+command = "node --name=a,.$m b x.js"
+error = false
+cmds = [["node", "--name=a,.", "$m", "b", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-in-two-dash-value-kept"
+mechanism = "fix2: a dot before a variable or quote splits a parameter value"
+command = "Write-Output --a=x.$m"
+error = false
+cmds = [["Write-Output", "--a=x.$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-dot-list-element"
+mechanism = "fix2: a dot before a variable or subexpression at a word start is its own argument"
+parser = "refuses"
+command = "Remove-Item a,.$m -Recurse"
+error = false
+cmds = [["Remove-Item", "a,.", "$m", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-index-after-string"
+mechanism = "fix2: a null-conditional index or member glued to a string belongs to it"
+parser = "refuses"
+command = "Write-Output 'a'?[0]"
+error = false
+cmds = [["Write-Output", "'a'?[0]"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-member-after-string"
+mechanism = "fix2: a null-conditional index or member glued to a string belongs to it"
+parser = "refuses"
+command = "Write-Output \"a\"?.Length"
+error = false
+cmds = [["Write-Output", "\"a\"?.Length"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-index-after-here-string"
+mechanism = "fix2: a null-conditional index or member glued to a string belongs to it"
+parser = "refuses"
+command = "Write-Output @\U0000201C\nx\n\U0000201D@?[0]"
+error = false
+cmds = [["Write-Output", "@\U0000201C\nx\n\U0000201D@?[0]"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-question-word-after-string-kept"
+mechanism = "fix2: a null-conditional index or member glued to a string belongs to it"
+command = "Write-Output 'a'?x"
+error = false
+cmds = [["Write-Output", "'a'", "?x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-braced-variable-in-value"
+mechanism = "fix2: a dollar ending a parameter value opens a braced variable"
+parser = "refuses"
+command = "node --name=${1} x.js"
+error = false
+cmds = [["node", "--name=${1}", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-braced-variable-after-dollars"
+mechanism = "fix2: a dollar ending a parameter value opens a braced variable"
+parser = "refuses"
+command = "node --name=$$${1} x.js"
+error = false
+cmds = [["node", "--name=$$${1}", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i1-comment-in-member-target"
+mechanism = "fix2: a comment inside a member access in argument position is word text"
+parser = "refuses"
+command = ":(ls) 2>$null<#x#>.$m"
+error = false
+cmds = [[":", "(ls)"], ["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-number-dot-call"
+mechanism = "fix2: a number glued to a dot is one token for PowerShell"
+parser = "refuses"
+command = "$n = 5GB.(\"x\"); git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-number-dot-call-plain"
+mechanism = "fix2: a number glued to a dot is one token for PowerShell"
+parser = "refuses"
+command = "$n = 5KB.(\"x\"); ls"
+error = false
+cmds = [["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-number-name-kept"
+mechanism = "fix2: a number glued to a dot is one token for PowerShell"
+command = "7z.exe x a.7z"
+error = false
+cmds = [["7z.exe", "x", "a.7z"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-member-line-end"
+mechanism = "fix2: a member access with a space or line end inside fails closed"
+parser = "refuses"
+command = "{.$m1.\r\n'x'}"
+error = false
+cmds = [["$m1", "."]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-member-lf"
+mechanism = "fix2: a member access with a space or line end inside fails closed"
+parser = "refuses"
+command = "{.$m1.\n'x'}"
+error = false
+cmds = [["$m1", "."]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-member-space-before-dot-kept"
+mechanism = "fix2: a member access with a space or line end inside fails closed"
+command = "{.$m1 .x}"
+error = false
+cmds = [["$m1", ".x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-variable-dots-name"
+mechanism = "fix2: a dot after a variable in a command name is not path text"
+parser = "refuses"
+command = ".$mcd..; git status"
+error = false
+cmds = [["$mcd", ".."], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-variable-dots-name-call"
+mechanism = "fix2: a dot after a variable in a command name is not path text"
+parser = "refuses"
+command = "& $m..x"
+error = false
+cmds = [["$m", "..x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-variable-path-name-kept"
+mechanism = "fix2: a dot after a variable in a command name is not path text"
+command = ". $dir\\x.ps1"
+error = false
+cmds = [["$dir\\x.ps1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-redirect-glued-to-name"
+mechanism = "fix2: a redirect glued to a word is word text for PowerShell"
+parser = "refuses"
+command = "git \rstatus*> out.txt"
+error = false
+cmds = [["git"], ["status*>", "out.txt"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-redirect-glued-to-name-plain-kept"
+mechanism = "fix2: a redirect glued to a word is word text for PowerShell"
+command = "git>b"
+error = false
+cmds = [["git>b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-redirect-glued-to-variable-kept"
+mechanism = "fix2: a redirect glued to a word is word text for PowerShell"
+command = "Remove-Item $x>b"
+error = false
+cmds = [["Remove-Item", "$x>b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-redirect-after-quoted-name-kept"
+mechanism = "fix2: a redirect glued to a word is word text for PowerShell"
+command = "\"git\">b"
+error = false
+cmds = []
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-stop-parsing-escaped-after-quote"
+mechanism = "fix2: an escaped character in --% still stops parsing"
+parser = "refuses"
+command = "Write-Output \"a\"--`%; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "--`%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-stop-parsing-escaped"
+mechanism = "fix2: an escaped character in --% still stops parsing"
+parser = "refuses"
+command = "Write-Output --`%; git status"
+error = false
+cmds = [["Write-Output", "--`%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-stop-parsing-escaped-dash"
+mechanism = "fix2: an escaped character in --% still stops parsing"
+parser = "refuses"
+command = "Write-Output -`-%; git status"
+error = false
+cmds = [["Write-Output", "-`-%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-stop-parsing-escaped-redirect"
+mechanism = "fix2: an escaped character in --% still stops parsing"
+parser = "refuses"
+command = "Write-Output ''--`% x > ri"
+error = false
+cmds = [["Write-Output", "''", "--`%", "x > ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-quote-dash-nbsp"
+mechanism = "fix2: a dash glued after a closing quote starts an argument"
+parser = "refuses"
+command = "Write-Output \"aa\"--\U000000A0%''; git status"
+error = false
+cmds = [["Write-Output", "\"aa\"", "--", "%''"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-quote-dash-param"
+mechanism = "fix2: a dash glued after a closing quote starts an argument"
+command = "Write-Output \"aa\"-x"
+error = false
+cmds = [["Write-Output", "\"aa\"", "-x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-quote-two-dash-param"
+mechanism = "fix2: a dash glued after a closing quote starts an argument"
+command = "Write-Output 'a'--x"
+error = false
+cmds = [["Write-Output", "'a'", "--x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-end"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "Write-Output -a=x.;$mm"
+error = false
+cmds = [["Write-Output", "-a=x", "."]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-name"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "Write-Output -a=x.m"
+error = false
+cmds = [["Write-Output", "-a=x", ".m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-plain"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "Write-Output -a.b"
+error = false
+cmds = [["Write-Output", "-a", ".b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-colon"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "Write-Output -a=xx.:$m"
+error = false
+cmds = [["Write-Output", "-a=xx", ".:$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-space"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "Write-Output -a=x.  $m"
+error = false
+cmds = [["Write-Output", "-a=x", ".", "$m"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-dollars"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "node -name=$$m.p x.js"
+error = false
+cmds = [["node", "-name=$$m", ".p", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-question"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "node -name=?..'x' x.js"
+error = false
+cmds = [["node", "-name=?", "..'x'", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-one-dash-dot-quote-lf"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+parser = "refuses"
+command = "node -name=.'>>\nx' x.js"
+error = false
+cmds = [["node", "-name=", ".", "'>>\nx'", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-colon-value-dot-kept"
+mechanism = "fix2: a dot splits a one-dash parameter for PowerShell"
+command = "Write-Output -Path:C:\\x.txt"
+error = false
+cmds = [["Write-Output", "-Path:C:\\x.txt"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-nel-before-comment"
+mechanism = "fix2: a space PowerShell splits on before a string or comment is outside it"
+parser = "refuses"
+command = "Write-Output 'say'\U00000085# x"
+error = false
+cmds = [["Write-Output", "'say'"]]
+comments = ["# x"]
+methods = []
+
+[[row]]
+id = "fix2-i2-nel-before-string"
+mechanism = "fix2: a space PowerShell splits on before a string or comment is outside it"
+parser = "refuses"
+command = "Write-Output \U00000085'say'"
+error = false
+cmds = [["Write-Output", "'say'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-nel-before-here-string"
+mechanism = "fix2: a space PowerShell splits on before a string or comment is outside it"
+parser = "refuses"
+command = "Write-Output \U00000085@'\nx\n'@"
+error = false
+cmds = [["Write-Output", "@'\nx\n'@"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-nel-in-comment"
+mechanism = "fix2: a space PowerShell splits on before a string or comment is outside it"
+parser = "refuses"
+command = "# x\U00000085git status"
+error = false
+cmds = []
+comments = ["# x\U00000085git status"]
+methods = []
+
+[[row]]
+id = "fix2-i2-backtick-lf-after-glued-quote"
+mechanism = "fix2: a backtick line end glued to a word is word text for PowerShell"
+parser = "refuses"
+command = "ggit log -S\"text\"`\n --oneline"
+error = false
+cmds = [["ggit", "log", "-S\"text\"`\n", "--oneline"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-backtick-lf-after-word-quote-kept"
+mechanism = "fix2: a backtick line end glued to a word is word text for PowerShell"
+command = "git log a'b'`\n --oneline"
+error = false
+cmds = [["git", "log", "a'b'`\n", "--oneline"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-backtick-lf-after-quote-kept"
+mechanism = "fix2: a backtick line end glued to a word is word text for PowerShell"
+command = "git log \"text\"`\n --oneline"
+error = false
+cmds = [["git", "log", "\"text\"", "--oneline"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-comment-after-glued-backtick-lf-kept"
+mechanism = "fix2: a backtick line end glued to a word is word text for PowerShell"
+command = "git status x`\n<#x#>"
+error = false
+cmds = [["git", "status", "x`\n<#x#>"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-comment-after-redirect-backtick-lf"
+mechanism = "fix2: a backtick line end glued to a word is word text for PowerShell"
+parser = "refuses"
+command = "git status; 2>$null`\n<#x#>"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-i2-comment-after-spaced-backtick-lf-kept"
+mechanism = "fix2: a backtick line end glued to a word is word text for PowerShell"
+command = "git status `\n<#x#>"
+error = false
+cmds = [["git", "status"]]
+comments = ["<#x#>"]
+methods = []
+
+[[row]]
+id = "fix2-i2-comment-in-two-dash-param"
+mechanism = "fix2: a comment inside a parameter token fails closed"
+parser = "refuses"
+command = "node --name=a,<#x#>\U00003000b x.js"
+error = false
+cmds = [["node", "--name=a,<#x#>\U00003000b", "x.js"]]
+comments = ["<#x#>"]
+methods = []
+
+[[row]]
+id = "fix2-i2-comment-in-one-dash-param"
+mechanism = "fix2: a comment inside a parameter token fails closed"
+parser = "refuses"
+command = "node -name=a<#x#>b x.js"
+error = false
+cmds = [["node", "-name=a<#x#>b", "x.js"]]
+comments = []
+methods = []

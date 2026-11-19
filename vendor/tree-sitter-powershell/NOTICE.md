@@ -16,6 +16,14 @@ whose parser the `tree-sitter` 0.27.2 runtime loads. `GENERATED` holds the hashe
 - `bindings/rust/build.rs` defines `TREE_SITTER_HIDE_SYMBOLS`: the parser is linked into an
   executable, and an exported symbol made MSVC's linker print a warning on every binary.
 
+## PowerShell character classes
+
+The grammar's typographic quote and dash classes, and the lowering's table of characters it
+refuses outside proven text (`unproven_special_char` in `src/parse/pwsh.rs`), are PowerShell
+7.7.0's own (`System.Management.Automation` 7.7.0.500, `CharExtensions` read by reflection):
+`IsDash` adds U+2013 to U+2015, `IsSingleQuote` U+2018 to U+201B, `IsDoubleQuote` U+201C to
+U+201E, and `IsWhitespace` U+0085, U+2028 and U+2029 beyond `\p{Zs}`.
+
 ## Grammar changes
 
 Each change makes the tree agree with PowerShell's `Parser::ParseInput` on a shape the parser

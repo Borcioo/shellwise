@@ -5,7 +5,9 @@
 //!    must equal the row's recorded answer, and the parser must give it.
 //! 2. A differential fuzz: seeded mutations of those rows at token boundaries (comment, quote,
 //!    escape and whitespace variants). The parser may refuse a mutant PowerShell accepts (that
-//!    fails closed); it must never accept a mutant PowerShell rejects, nor read one differently.
+//!    fails closed) and must never read a mutant PowerShell accepts differently, except the
+//!    `LISTED` ones. It may accept a mutant PowerShell rejects, since PowerShell runs nothing of
+//!    a script it cannot parse; the test counts and prints those.
 #![cfg(feature = "oracle")]
 
 use std::process::Command;
@@ -14,15 +16,44 @@ use serde::{Deserialize, Serialize};
 use shellwise::parse::pwsh;
 use shellwise::{Os, Shell};
 
-/// Seed and size of the differential fuzz.
-const SEED: u64 = 0x5EED_0005;
+/// Seeds and size (per seed) of the differential fuzz.
+const SEEDS: [u64; 10] = [
+    0x5EED_0005,
+    0x5EED_0006,
+    0x5EED_0007,
+    0x5EED_0008,
+    0x5EED_0009,
+    0x5EED_000A,
+    0x5EED_000B,
+    0x5EED_000C,
+    0x5EED_000D,
+    0x5EED_000E,
+];
 const MUTANTS: usize = 2_000;
 
-/// Text inserted at a token boundary.
+/// Commands whose arguments the delete guard resolves: a disagreement in one of their
+/// statements must be a refusal, never a listed shape.
+const GUARDED: &[&str] = &[
+    "remove-item",
+    "ri",
+    "rm",
+    "rmdir",
+    "del",
+    "rd",
+    "erase",
+    "git",
+    "robocopy",
+    "cmd",
+];
+
+/// Text inserted at a token boundary: each member of PowerShell's dash, quote and extra space
+/// classes, member and call forms, and a line end after each redirect operator.
 const INSERTS: &[&str] = &[
     " ", "\t", "  ", "`", "#", "# x", "<#x#>", "'", "\"", "`\"", "''", "\u{00A0}", "\u{3000}",
-    "\u{2018}", "\u{201C}", ";", ",", "\r", "\n", "\r\n", "`\n", "$", "@", "(", ")", "{", "}",
-    "--%", ">", "2>&1", ":", "-",
+    "\u{2018}", "\u{2019}", "\u{201A}", "\u{201B}", "\u{201C}", "\u{201D}", "\u{201E}", "\u{2013}",
+    "\u{2014}", "\u{2015}", "\u{85}", "\u{2028}", "\u{2029}", ";", ",", "\r", "\n", "\r\n", "`\n",
+    "$", "@", "(", ")", "{", "}", "--%", ">", "2>&1", ":", "-", "?.", "?[0]", ".'x'", ".$m",
+    ".(\"x\")", "()", "{1}", ">\n", ">>\n", "2>\n", "2>>\n", "*>\n", "<\n", "$null<\n",
 ];
 
 #[derive(Deserialize)]
@@ -184,6 +215,27 @@ fn nested_comment_artefact(src: &str, seen: &pwsh::Seen, want: &pwsh::Seen) -> b
 }
 
 #[test]
+fn a_comment_outside_a_glued_subexpression_stays_a_disagreement() {
+    let seen = |comments: &[&str]| pwsh::Seen {
+        cmds: vec![vec!["Write-Output".to_string(), "x".to_string()]],
+        comments: comments.iter().map(|c| c.to_string()).collect(),
+        methods: Vec::new(),
+    };
+    // The artefact's shape: the extra comment sits in a `$(` glued to its word.
+    assert!(nested_comment_artefact(
+        "Write-Output x$(<#c#>1)",
+        &seen(&["<#c#>"]),
+        &seen(&[])
+    ));
+    // A `$(` before it, but a space between: a real comment difference.
+    assert!(!nested_comment_artefact(
+        "Write-Output x $(1) <#c#>",
+        &seen(&["<#c#>"]),
+        &seen(&[])
+    ));
+}
+
+#[test]
 fn rows_hold_powershells_answer_and_the_parser_gives_it() {
     let mut all = rows("pwsh_gaps.toml");
     all.extend(rows("pwsh_mechanisms.toml"));
@@ -283,47 +335,108 @@ fn mutate(src: &str, rng: &mut Rng) -> String {
     }
 }
 
-/// Mutants the parser reads differently from PowerShell, by their text, each listed with its
-/// mechanism in `docs/spikes.md` ("PowerShell grammar fork"). Every one splits or joins argument
-/// text; none hides a command PowerShell runs or names one it does not. A change to the seed,
-/// the generator or the seed rows makes new mutants: list or fix each new one.
+/// How a disagreement differs from PowerShell's reading.
+#[derive(Debug, PartialEq)]
+enum Class {
+    /// PowerShell runs a command name or a method the parser does not see in its place, or the
+    /// statements break elsewhere: never allowed.
+    A,
+    /// Only argument boundaries, argument text or comments differ, or the parser sees a method
+    /// PowerShell does not call.
+    B,
+}
+
+fn class(seen: &pwsh::Seen, want: &pwsh::Seen) -> Class {
+    let names = |s: &pwsh::Seen| -> Vec<String> {
+        s.cmds
+            .iter()
+            .map(|c| c.first().cloned().unwrap_or_default())
+            .collect()
+    };
+    if names(seen) != names(want) {
+        return Class::A;
+    }
+    let mut extra = seen.methods.clone();
+    for m in &want.methods {
+        match extra.iter().position(|e| e == m) {
+            Some(i) => {
+                extra.remove(i);
+            }
+            None => return Class::A,
+        }
+    }
+    Class::B
+}
+
+/// Whether a statement PowerShell or the parser reads names a delete-guard command.
+fn guarded(s: &pwsh::Seen) -> bool {
+    s.cmds.iter().filter_map(|c| c.first()).any(|name| {
+        let base = name
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(name)
+            .to_lowercase();
+        let base = base.strip_suffix(".exe").unwrap_or(&base);
+        GUARDED.contains(&base)
+    })
+}
+
+/// Shapes of class-B disagreements the parser may keep, each by a text the mutant holds and its
+/// mechanism in `docs/spikes.md` ("PowerShell grammar fork"). None is in a guarded statement. A
+/// change to the seeds, the generator or the seed rows makes new mutants: refuse or list each.
 const LISTED: &[(&str, &str)] = &[
     (
-        "Write-Output ('a'),# don't\ngit status",
-        "a comma, a comment and a line end continue a comma list",
-    ),
-    (
-        "Get-ChildItem  | # note\nSelect-Object -First 1`\n",
+        "1`\n",
         "a backtick after a leading digit escapes the line end",
     ),
     (
-        "(ls).ForEach{ ri $_`\n }",
-        "a backtick and a line end glued after a variable stay in the argument",
+        "$?.",
+        "a member glued to `$?` is not a member access in argument mode",
     ),
 ];
+
+#[test]
+fn disagreements_are_classed_by_what_powershell_runs() {
+    let cmd = |names: &[&[&str]]| pwsh::Seen {
+        cmds: names
+            .iter()
+            .map(|c| c.iter().map(|s| s.to_string()).collect())
+            .collect(),
+        comments: Vec::new(),
+        methods: Vec::new(),
+    };
+    let ls_ri = cmd(&[&["ls"], &["ri", "C:\\x"]]);
+    assert_eq!(class(&cmd(&[&["ls", "ri", "C:\\x"]]), &ls_ri), Class::A);
+    assert_eq!(class(&cmd(&[&["ls"], &["rm", "C:\\x"]]), &ls_ri), Class::A);
+    assert_eq!(
+        class(&cmd(&[&["ls"], &["ri", "C:\\", "x"]]), &ls_ri),
+        Class::B
+    );
+    let mut called = cmd(&[&["Write-Output", "x"]]);
+    called.methods = vec!["$x.Delete".to_string()];
+    assert_eq!(class(&cmd(&[&["Write-Output", "x"]]), &called), Class::A);
+    assert_eq!(class(&called, &cmd(&[&["Write-Output", "x"]])), Class::B);
+    assert!(guarded(&cmd(&[&["C:\\Windows\\System32\\CMD.EXE", "/c"]])));
+    assert!(guarded(&cmd(&[&["ls"], &["Remove-Item", "x"]])));
+    assert!(!guarded(&cmd(&[&["Write-Output", "rm"]])));
+}
 
 #[test]
 fn seeded_mutants_never_read_differently_from_powershell() {
     let mut seeds = rows("pwsh_gaps.toml");
     seeds.extend(rows("pwsh_mechanisms.toml"));
-    let mut rng = Rng(SEED);
-    let mut mutants: Vec<(String, String)> = (0..MUTANTS)
-        .map(|n| {
+    let mut mutants: Vec<(String, String)> = Vec::new();
+    for seed in SEEDS {
+        let mut rng = Rng(seed);
+        mutants.extend((0..MUTANTS).map(|n| {
             let base = &seeds[rng.below(seeds.len())];
             let mut text = mutate(&base.command, &mut rng);
             if rng.below(3) == 0 {
                 text = mutate(&text, &mut rng);
             }
-            (format!("{}~{n}", base.id), text)
-        })
-        .collect();
-    // The listed texts run every time, so a fix that makes one agree shows up.
-    mutants.extend(
-        LISTED
-            .iter()
-            .enumerate()
-            .map(|(i, (text, _))| (format!("listed~{i}"), text.to_string())),
-    );
+            (format!("{}~{seed:x}~{n}", base.id), text)
+        }));
+    }
     let inputs: Vec<Input> = mutants
         .iter()
         .map(|(id, c)| Input {
@@ -333,8 +446,8 @@ fn seeded_mutants_never_read_differently_from_powershell() {
         .collect();
     let answers = ask_powershell("fuzz", &inputs);
     let mut bad = Vec::new();
-    let mut listed = Vec::new();
-    let (mut refused, mut accepted) = (0usize, 0usize);
+    let mut used = vec![0usize; LISTED.len()];
+    let (mut refused, mut accepted, mut a_count, mut b_count) = (0usize, 0usize, 0usize, 0usize);
     for ((id, src), a) in mutants.iter().zip(&answers) {
         let parsed = pwsh::parse(src, Shell::Pwsh, Os::Windows);
         match (&parsed, a.error) {
@@ -346,23 +459,48 @@ fn seeded_mutants_never_read_differently_from_powershell() {
         if a.error {
             continue;
         }
-        if let Some(d) = disagreement(src, a) {
-            if LISTED.iter().any(|(l, _)| l == src) {
-                listed.push(src.as_str());
-            } else {
-                bad.push(format!("{id} {src:?}: {d}"));
+        let Some(d) = disagreement(src, a) else {
+            continue;
+        };
+        let Ok(script) = parsed else {
+            continue;
+        };
+        let seen = pwsh::seen(src, &script);
+        let want = a.seen();
+        match class(&seen, &want) {
+            Class::A => {
+                a_count += 1;
+                bad.push(format!("A {id} {src:?}: {d}"));
+            }
+            Class::B if guarded(&seen) || guarded(&want) => {
+                b_count += 1;
+                bad.push(format!("B in a guarded statement {id} {src:?}: {d}"));
+            }
+            Class::B => {
+                b_count += 1;
+                match LISTED.iter().position(|(l, _)| src.contains(l)) {
+                    Some(i) => used[i] += 1,
+                    None => bad.push(format!("B unlisted {id} {src:?}: {d}")),
+                }
             }
         }
     }
     eprintln!(
-        "fuzz seed {SEED:#x}: {} mutants; read differently: {} unlisted, {} listed; \
-         {refused} refused that PowerShell accepts; {accepted} accepted that PowerShell rejects",
+        "fuzz seeds {}: {} mutants; class A {a_count}, class B {b_count} (listed {:?}); \
+         {} failing; {refused} refused that PowerShell accepts; {accepted} accepted that \
+         PowerShell rejects",
+        SEEDS.len(),
         answers.len(),
-        bad.len(),
-        listed.len()
+        used,
+        bad.len()
     );
-    assert_eq!(answers.len(), MUTANTS + LISTED.len());
+    assert_eq!(answers.len(), MUTANTS * SEEDS.len());
     assert!(bad.is_empty(), "{}", bad.join("\n"));
-    let stale: Vec<_> = LISTED.iter().filter(|(l, _)| !listed.contains(l)).collect();
-    assert!(stale.is_empty(), "listed mutants that now agree: {stale:?}");
+    let stale: Vec<_> = LISTED
+        .iter()
+        .zip(&used)
+        .filter(|(_, n)| **n == 0)
+        .map(|(l, _)| l)
+        .collect();
+    assert!(stale.is_empty(), "listed shapes no mutant shows: {stale:?}");
 }
