@@ -2052,8 +2052,9 @@ fn digits_only(words: &[&str]) -> bool {
 /// Whether a `$(…)` or backtick body is a command of `DIGIT_COMMANDS`.
 fn listed_text(body: &str) -> bool {
     let mut words = Vec::new();
-    // brush renders a `$(…)` body without a redirect with a tab as a space; a backtick body or
-    // a redirect keeps its tab, and such a body is not listed. A newline it keeps.
+    // brush renders a tab between the words of a `$(…)` body as a space. A tab it keeps (in a
+    // backtick body, first in the body, right after `<`) and a newline stay inside a word, which
+    // then matches no listed command.
     for w in body.split(' ').filter(|w| !w.is_empty()) {
         match w.strip_prefix('<') {
             Some(path) if !path.is_empty() => words.extend(["<", path]),
