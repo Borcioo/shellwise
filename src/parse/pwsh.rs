@@ -399,6 +399,9 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                         r.starts_with(|c: char| c.is_ascii_digit()) && r.contains(['#', '.'])
                     })
                     || colon_word_backtick(t)
+                    // `5GB# x`, `0x5L#x`, `1e5.x`, `5L>x`: PowerShell reads the number first.
+                    || t.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .is_some_and(|i| is_number_literal(&t[..i]))
             }
             // `& $x.Name` is a member access for PowerShell too.
             "path_command_name" => kids(n).windows(2).any(|w| {
@@ -2621,6 +2624,40 @@ fn opens_subexpression(t: &[u8]) -> bool {
 /// (``a``$`` ends in an escaped backtick and a plain `$`).
 fn escaped_at(t: &[u8], at: usize) -> bool {
     t[..at].iter().rev().take_while(|c| **c == b'`').count() % 2 == 1
+}
+
+/// A PowerShell number literal: decimal digits with an optional exponent, `0x` hex or `0b` binary
+/// digits, then an optional type suffix and an optional multiplier (`5GB`, `0x5L`, `1e5`, `5lkb`).
+fn is_number_literal(t: &str) -> bool {
+    let t = t.to_ascii_lowercase();
+    let (digits, rest) = if let Some(h) = t.strip_prefix("0x") {
+        let n = h.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(h.len());
+        (n, &h[n..])
+    } else if let Some(b) = t.strip_prefix("0b") {
+        let n = b.find(|c: char| c != '0' && c != '1').unwrap_or(b.len());
+        (n, &b[n..])
+    } else {
+        let n = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+        let mut r = &t[n..];
+        if let Some(e) = r.strip_prefix('e') {
+            let m = e.find(|c: char| !c.is_ascii_digit()).unwrap_or(e.len());
+            if m > 0 {
+                r = &e[m..];
+            }
+        }
+        (n, r)
+    };
+    if digits == 0 {
+        return false;
+    }
+    let r = ["kb", "mb", "gb", "tb", "pb"]
+        .iter()
+        .find_map(|m| rest.strip_suffix(m))
+        .unwrap_or(rest);
+    matches!(
+        r,
+        "" | "l" | "u" | "ul" | "us" | "uy" | "y" | "s" | "n" | "d"
+    )
 }
 
 /// `:x`;ri`: after `:` and a letter or `_` PowerShell keeps a backtick as a plain character.

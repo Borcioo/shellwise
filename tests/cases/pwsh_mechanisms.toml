@@ -4374,3 +4374,247 @@ error = false
 cmds = [["Remove-Item", "a:x`;ri"]]
 comments = []
 methods = []
+
+[[row]]
+id = "name-r-number-multiplier-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "$n = 5GB# git status"
+error = false
+cmds = []
+comments = ["# git status"]
+methods = []
+
+[[row]]
+id = "name-r-number-multiplier-member"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5GB.x;ri C:\\x"
+error = false
+cmds = [["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-r-number-hex-suffix-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "0x5L#x;ri"
+error = false
+cmds = []
+comments = ["#x;ri"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-redirect"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5L>x"
+error = false
+cmds = []
+comments = []
+methods = []
+
+[[row]]
+id = "name-r-number-exponent-member"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "1e5.x"
+error = false
+cmds = []
+comments = []
+methods = []
+
+[[row]]
+id = "name-r-number-binary-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "0b1#x;ri"
+error = false
+cmds = []
+comments = ["#x;ri"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-kilobytes"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5lkb#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-u-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5u#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-ul-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5ul#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-us-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5us#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-uy-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5uy#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-y-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5y#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-s-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5s#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-n-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5n#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-d-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5d#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-kb-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5kb#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-mb-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5mb#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-tb-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5tb#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-r-number-suffix-pb-comment"
+mechanism = "a command name whose text before the first non-word character is a number literal: PowerShell reads the number"
+parser = "refuses"
+command = "5pb#x;ri C:\\x"
+error = false
+cmds = []
+comments = ["#x;ri C:\\x"]
+methods = []
+
+[[row]]
+id = "name-digit-word-comment"
+mechanism = "no number before `#`: one command name"
+command = "7z#x a b"
+error = false
+cmds = [["7z#x", "a", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-suffix-lu-comment"
+mechanism = "`lu` is no number suffix for PowerShell: one command name"
+command = "5lu#x;ri C:\\x"
+error = false
+cmds = [["5lu#x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-multiplier-then-suffix-comment"
+mechanism = "a suffix after a multiplier is no number: one command name"
+command = "5kbl#x;ri C:\\x"
+error = false
+cmds = [["5kbl#x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-binary-digit-comment"
+mechanism = "`0b2` is no binary number: one command name"
+command = "0b2#x;ri"
+error = false
+cmds = [["0b2#x"], ["ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-exponent-no-digit-comment"
+mechanism = "`1e` is no number: one command name"
+command = "1e#x a"
+error = false
+cmds = [["1e#x", "a"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-hex-no-digit-comment"
+mechanism = "`0xg` is no number: one command name"
+command = "0xg#x a"
+error = false
+cmds = [["0xg#x", "a"]]
+comments = []
+methods = []
