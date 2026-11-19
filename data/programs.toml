@@ -1,0 +1,185 @@
+# The program table: every program name, alias, option spelling and per-program fact the rules
+# use. Read by `src/programs.rs` (the one walker); rule code holds no program or option names.
+# Only programs that occur in the corpus or the trap catalogue go in.
+#
+# [[program]]
+# name           = "timeout"          the name as a shell finds it, lowercase; a path and `.exe`
+#                                     on the typed name are ignored (`/usr/bin/timeout`,
+#                                     `timeout.exe`), and case is ignored on Windows and Git Bash
+# shells         = ["bash"]           where the name applies: "bash", "pwsh"; [] or absent = both
+# aliases        = { bash = [], pwsh_windows = [], pwsh_posix = [] }
+#                                     further names per shell (the alias keys are optional)
+# kind           = ["wrapper"]        any of "wrapper", "native-msys", "delete", "eval", "shell",
+#                                     "interactive", "launcher"
+# value_options  = ["-s"]             options that take the next word as their value
+# fix            = "..."              the Fix line text a rule about this program prints; `<path>`
+#                                     and the like are filled in by the rule
+#
+# Wrapper facts (kind = "wrapper"; `programs::strip_wrappers` reads them):
+# operands       = 1                  words before the wrapped command that are not options
+#                                     (`timeout DURATION cmd`)
+# assignments    = true               `NAME=value` words before the command are assignments to it
+# no_run_options = ["-v"]             with one of these the wrapper runs nothing (`command -v x`)
+#
+# Rule facts:
+# escapes        = "always"           the program turns `\\` into `\` itself: "always" (printf),
+#                                     "option" (only with one of `escape_options`, echo -e) or
+#                                     "regex" (its script is a regex, sed)
+# escape_options = ["-e"]             for escapes = "option"; a short cluster holding the letter
+#                                     counts (`-ne`)
+# cmd_options    = ["/d"]             cmd.exe spellings that break in this shell (`cd /d`)
+#
+# Any other key is kept for the task that reads it (`Program::extra`).
+
+# --- Wrappers: run the rest of their words as a command (Ruling 93: only the common ones) ---
+
+[[program]]
+name = "timeout"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-s", "--signal", "-k", "--kill-after"]
+operands = 1
+
+[[program]]
+name = "nice"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-n", "--adjustment"]
+
+[[program]]
+name = "env"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-u", "--unset", "-C", "--chdir", "-a", "--argv0"]
+assignments = true
+
+[[program]]
+name = "sudo"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type"]
+assignments = true
+
+[[program]]
+name = "command"
+shells = ["bash"]
+kind = ["wrapper"]
+no_run_options = ["-v", "-V"]
+
+[[program]]
+name = "nohup"
+shells = ["bash"]
+kind = ["wrapper"]
+
+# --- Programs that turn `\\` into `\` themselves (bash-backslash-collapse) ---
+
+[[program]]
+name = "printf"
+shells = ["bash"]
+escapes = "always"
+value_options = ["-v"]
+
+[[program]]
+name = "echo"
+shells = ["bash"]
+escapes = "option"
+escape_options = ["-e"]
+
+[[program]]
+name = "sed"
+shells = ["bash"]
+escapes = "regex"
+value_options = ["-e", "--expression", "-f", "--file", "-l", "--line-length"]
+
+# --- Native Windows programs that take Linux paths, which Git Bash rewrites (bash-msys-path-mangle) ---
+
+[[program]]
+name = "docker"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+[[program]]
+name = "docker-compose"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+[[program]]
+name = "wsl"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+[[program]]
+name = "kubectl"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+[[program]]
+name = "podman"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+# --- Herd's versioned PHP launchers: .bat files, not on the Git Bash PATH by that name (bash-versioned-php) ---
+
+[[program]]
+name = "php74"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php80"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php81"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php82"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php83"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php84"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php85"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+# --- Builtins with a cmd.exe spelling that breaks in bash (bash-cd-slash-d) ---
+
+[[program]]
+name = "cd"
+shells = ["bash"]
+cmd_options = ["/d"]
+fix = "cd <path>"
+
+# --- The Git Bash path conversion (bash-msys-path-mangle) ---
+
+[msys]
+# A word Git Bash rewrites into a Windows path: `/<root>` or `/<root>/...`, alone or as the value
+# of `--opt=` / `-o=`.
+roots = ["var", "usr", "etc", "tmp", "home", "opt", "bin", "sbin", "app", "srv", "data", "root", "mnt", "run", "lib", "workspace", "code"]
+# Environment names that turn the conversion off; the rule stays quiet when the command sets one.
+opt_out = ["MSYS_NO_PATHCONV", "MSYS2_ARG_CONV_EXCL"]
