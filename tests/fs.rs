@@ -7475,24 +7475,30 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             proj(true),
         ),
         (
-            "C15 pwsh Set-Item -Force Alias:e Get-Date (control)",
+            "C15 pwsh Set-Item -Force Alias:e Invoke-Expression (a switch before the path)",
             ps,
             vec![
-                st(lits("Set-Item", &["-Force", "Alias:e", "Get-Date"])),
+                st(lits(
+                    "Set-Item",
+                    &["-Force", "Alias:e", "Invoke-Expression"],
+                )),
                 st(lits("e", &["x"])),
             ],
             ri(r"Proj:\y"),
-            proj(true),
+            mbc.clone(),
         ),
         (
-            "C16 pwsh Set-Item -PassThru Alias:e Get-Date (control)",
+            "C16 pwsh Set-Item -PassThru Alias:e Invoke-Expression (a switch before the path)",
             ps,
             vec![
-                st(lits("Set-Item", &["-PassThru", "Alias:e", "Get-Date"])),
+                st(lits(
+                    "Set-Item",
+                    &["-PassThru", "Alias:e", "Invoke-Expression"],
+                )),
                 st(lits("e", &["x"])),
             ],
             ri(r"Proj:\y"),
-            proj(true),
+            mbc.clone(),
         ),
         (
             "C17 pwsh Set-Item Alias:e Get-Date -Filter f (control)",
@@ -7606,6 +7612,16 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ps,
             vec![
                 st(lits("Set-Alias", &["-Name", "e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "C25 pwsh Set-Alias e -Value:Get-Date; e 'x' (an inline value, control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "-Value:Get-Date"])),
                 st(lits("e", &["x"])),
             ],
             ri(r"Proj:\y"),
