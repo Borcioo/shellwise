@@ -4872,6 +4872,23 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             ".",
             MAY_BE_CRITICAL,
         ),
+        // Re-review 7 M1: the names looked up are compared lowercased (`& Sudo`, `time Sudo`).
+        (
+            "E1 pwsh function sudo; & Sudo x",
+            ps,
+            repo,
+            then_call(func("sudo", sl_up()), lits("&", &["Sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "E2 Git Bash Sudo() { cd ..; }; time Sudo x",
+            gb,
+            repo,
+            gb_call(func("Sudo", cd_up()), lits("time", &["Sudo", "x"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
         (
             "W7 pwsh function start; start x (the Start-Process path)",
             ps,
@@ -6569,4 +6586,1105 @@ fn repo_root_finds_the_nearest_git_folder_or_file() {
     let r = repo_root(Path::new(&at("x")), &hang, &Deadline::new(start, 100));
     assert!(r.is_err());
     assert!(start.elapsed() < Duration::from_millis(150));
+}
+
+/// Ruling 65 (re-review 7 I1): a call of an alias the script defines runs the alias's value
+/// (rr7\spike-*.log, fix10\spike\spike-alias.log), so every rule that reads the command run reads
+/// it as that value too. The call is still read as written: an alias defined later, in a branch
+/// or on a name the shell ships may not be in effect. A value the hook cannot read may be any
+/// command. Bash rows put the call on a new line, with `expand_aliases` on.
+#[test]
+fn a_script_alias_is_read_as_the_command_it_names() {
+    let seq = Some(ChainOp::Seq);
+    let and = Some(ChainOp::And);
+    let gb = Shell::Bash(BashProfile::GitBash);
+    let ps = Shell::Pwsh;
+    let p5 = Shell::Powershell5;
+    // `<before>; <delete>`, the whole command read first, then `before` applied; the delete's
+    // last word is judged with the delete's own DeleteBy.
+    let judge = |shell: Shell, before: &[Stmt], delete: &SimpleCommand| {
+        let (_, env) = win(shell);
+        let by = delete_by(delete, shell, Os::Windows);
+        let word = delete.args.last().expect("a target").clone();
+        let mut all = before.to_vec();
+        all.push(stmt(delete.clone(), seq));
+        let mut loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before.to_vec()), &env);
+        sorted(target(&word, &loc, &env, by, &real(), &far()))
+    };
+    let func = |name: &str, body: Vec<Stmt>| Stmt::Func {
+        name: name.to_string(),
+        body: script(body),
+    };
+    let st = |c: SimpleCommand| stmt(c, seq);
+    let with = |name: &str, args: Vec<Word>| st(cmd(name, args));
+    let rr = |t: &str| lits("Remove-Item", &["-Recurse", t]);
+    let ri = |t: &str| lits("Remove-Item", &[t]);
+    let rmrf = |t: &str| lits("rm", &["-rf", t]);
+    let junction = [
+        "-ItemType",
+        "Junction",
+        "-Path",
+        r"C:\w\repo\t\j",
+        "-Target",
+        r"C:\x",
+    ];
+    let link_at = [
+        r"C:\w\repo\t\j",
+        "-ItemType",
+        "Junction",
+        "-Target",
+        r"C:\x",
+    ];
+    let mbc = MAY_BE_CRITICAL;
+    let in_link = paths(&[r"C:\w\repo\t\j\x"]);
+    let x_sub = paths(&[r"X:\sub"]);
+    let sub = paths(&[r"C:\w\repo\sub"]);
+    let proj = |unread_before: bool| Target::DriveUnproven {
+        drive: "Proj".to_string(),
+        unread_before,
+    };
+    type Row<'a> = (&'a str, Shell, Vec<Stmt>, SimpleCommand, Target);
+    let mut rows: Vec<Row> = vec![
+        // ---- created_links: a link inside the new link (rr7 L, LB).
+        (
+            "L0 pwsh New-Item -ItemType Junction (control)",
+            ps,
+            vec![st(lits("New-Item", &junction))],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "L1 pwsh Set-Alias mk New-Item; mk -ItemType Junction -Path t\\j",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("mk", &junction)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "L2 pwsh Set-Alias sudo New-Item; sudo -ItemType … (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["sudo", "New-Item"])),
+                st(lits("sudo", &junction)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "L3 pwsh Set-Alias env New-Item; env t\\j -ItemType Junction",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["env", "New-Item"])),
+                st(lits("env", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "L3b 5.1 Set-Alias env New-Item; env t\\j -ItemType Junction",
+            p5,
+            vec![
+                st(lits("Set-Alias", &["env", "New-Item"])),
+                st(lits("env", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "L3c pwsh Set-Alias mk New-Item; mk t\\j -ItemType Junction",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "L4 pwsh function sudo { New-Item … }; sudo (control)",
+            ps,
+            vec![
+                func("sudo", vec![st(lits("New-Item", &junction))]),
+                st(lits("sudo", &[])),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LB0 Git Bash ln -s /c/x t/j (control)",
+            gb,
+            vec![st(lits("ln", &["-s", "/c/x", "/c/w/repo/t/j"]))],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LB1 Git Bash alias mk='ln -s /c/x'; mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LB2 Git Bash alias sudo='ln -s /c/x'; sudo t/j",
+            gb,
+            vec![
+                st(lits("alias", &["sudo=ln -s /c/x"])),
+                st(lits("sudo", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LB3 Git Bash sudo() { ln -s /c/x t/j; }; sudo (control)",
+            gb,
+            vec![
+                func(
+                    "sudo",
+                    vec![st(lits("ln", &["-s", "/c/x", "/c/w/repo/t/j"]))],
+                ),
+                st(lits("sudo", &[])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        // ---- the other ways pwsh defines an alias, a case fold, `&`, a chain.
+        (
+            "LF1 pwsh New-Alias mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("New-Alias", &["mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF2 pwsh Set-Alias -Name mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["-Name", "mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF3 pwsh Set-Item Alias:mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Alias:mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF4 pwsh New-Item Alias:mk -Value New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("New-Item", &["Alias:mk", "-Value", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF5 pwsh $alias:mk = 'New-Item'; mk t\\j …",
+            ps,
+            vec![st(assign("alias:mk", "New-Item")), st(lits("mk", &link_at))],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF6 pwsh Set-Alias MK New-Item; mk t\\j … (case)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["MK", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF7 pwsh Set-Alias mk New-Item; & mk t\\j …",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("&", &[&["mk"][..], &link_at[..]].concat())),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF8 pwsh Set-Alias a2 mk; Set-Alias mk New-Item; a2 t\\j … (chain)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["a2", "mk"])),
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("a2", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        // ---- bash: `time`, a chain, a name aliased to itself, a cycle.
+        (
+            "LT1 Git Bash alias mk='ln -s /c/x'; time mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                st(lits("time", &["-p", "mk", "/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LC1 Git Bash alias a=b; alias b='ln -s /c/x'; a t/j (chain)",
+            gb,
+            vec![
+                st(lits("alias", &["a=b"])),
+                st(lits("alias", &["b=ln -s /c/x"])),
+                st(lits("a", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LC2 Git Bash alias ln='ln -s /c/x'; ln t/j (itself)",
+            gb,
+            vec![
+                st(lits("alias", &["ln=ln -s /c/x"])),
+                st(lits("ln", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LC3 Git Bash alias a=b b=a; a t/j (cycle, control)",
+            gb,
+            vec![
+                st(lits("alias", &["a=b", "b=a"])),
+                st(lits("a", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            in_link.clone(),
+        ),
+        (
+            "LF9 pwsh Set-Item Microsoft.PowerShell.Core\\Alias::mk New-Item; mk …",
+            ps,
+            vec![
+                st(lits(
+                    "Set-Item",
+                    &[r"Microsoft.PowerShell.Core\Alias::mk", "New-Item"],
+                )),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF10 pwsh Set-Item Function:mk New-Item; mk … (a function, control)",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Function:mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            in_link.clone(),
+        ),
+        (
+            "LF11 pwsh Set-Alias Get-Y Invoke-Expression; . Get-Y 'x'",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["Get-Y", "Invoke-Expression"])),
+                st(lits(".", &["Get-Y", "x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LF12 pwsh Set-Alias mk New-Item; & MK t\\j …",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("&", &[&["MK"][..], &link_at[..]].concat())),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LB4 Git Bash alias MK='ln -s /c/x'; MK t/j (case)",
+            gb,
+            vec![
+                st(lits("alias", &["MK=ln -s /c/x"])),
+                st(lits("MK", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LT3 Git Bash alias mk='ln -s /c/x'; time -- mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                st(lits("time", &["--", "mk", "/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        // ---- a value the hook cannot read may be any command.
+        (
+            "SU6 pwsh Set-Alias e -Value:Invoke-Expression; e 'x'",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "-Value:Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "SU7 pwsh Set-Item Alias:e -Value:Invoke-Expression; e 'x'",
+            ps,
+            vec![
+                st(lits("Set-Item", &["Alias:e", "-Value:Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "SU8 pwsh Set-Alias e $v; & e 'x'",
+            ps,
+            vec![
+                with("Set-Alias", vec![lit("e"), var("v")]),
+                st(lits("&", &["e", "x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LU1 Git Bash alias mk='ln -s $T'; mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s $T"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU2 Git Bash alias mk='T=1 ln -s /c/x'; mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["mk=T=1 ln -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU3 Git Bash alias s='sudo ' mk='ln -s /c/x'; s mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["s=sudo ", "mk=ln -s /c/x"])),
+                st(lits("s", &["mk", "/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU4 Git Bash alias mk='ln -s C:\\x'; mk t/j (a backslash)",
+            gb,
+            vec![
+                st(lits("alias", &[r"mk=ln -s C:\x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU5 Git Bash alias mk (prints, defines nothing); mk t/j (control)",
+            gb,
+            vec![
+                st(lits("alias", &["mk"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            in_link.clone(),
+        ),
+        (
+            "LU6 Git Bash alias mk=echo; alias mk='ln -s /c/x'; mk t/j (two values)",
+            gb,
+            vec![
+                st(lits("alias", &["mk=echo"])),
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        // ---- the call is still read as written (an alias defined later or in a branch).
+        (
+            "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
+            gb,
+            vec![
+                st(lits("ln", &["-s", "/c/x", "/c/w/repo/t/j"])),
+                st(lits("alias", &["ln=true"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "SH2 pwsh New-Item -ItemType Junction …; Set-Alias New-Item Get-Date",
+            ps,
+            vec![
+                st(lits(
+                    "New-Item",
+                    &[
+                        "-ItemType",
+                        "Junction",
+                        r"C:\w\repo\t\j",
+                        "-Target",
+                        r"C:\x",
+                    ],
+                )),
+                st(lits("Set-Alias", &["New-Item", "Get-Date"])),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "SH3 Git Bash sudo subst X: …; alias sudo=true",
+            gb,
+            vec![
+                st(lits("sudo", &["subst", "X:", r"C:\Profiles\u"])),
+                st(lits("alias", &["sudo=true"])),
+            ],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        // ---- remaps_drives (rr7 R, RB).
+        (
+            "R0 pwsh subst X: (control)",
+            ps,
+            vec![st(lits("subst", &["X:", r"C:\Profiles\u"]))],
+            rr(r"X:\sub"),
+            mbc.clone(),
+        ),
+        (
+            "R1 pwsh Set-Alias m subst; m X: (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["m", "subst"])),
+                st(lits("m", &["X:", r"C:\Profiles\u"])),
+            ],
+            rr(r"X:\sub"),
+            mbc.clone(),
+        ),
+        (
+            "R2 pwsh Set-Alias sudo subst; sudo X: (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["sudo", "subst"])),
+                st(lits("sudo", &["X:", r"C:\Profiles\u"])),
+            ],
+            rr(r"X:\sub"),
+            mbc.clone(),
+        ),
+        (
+            "R3 pwsh Set-Alias env New-PSDrive; env X … (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["env", "New-PSDrive"])),
+                st(lits("env", &["X", "FileSystem", r"C:\Profiles\u"])),
+            ],
+            rr(r"X:\sub"),
+            mbc.clone(),
+        ),
+        (
+            "R4 pwsh nothing (control)",
+            ps,
+            vec![st(lits("git", &["status"]))],
+            rr(r"X:\sub"),
+            x_sub.clone(),
+        ),
+        (
+            "RB0 Git Bash subst X: (control)",
+            gb,
+            vec![st(lits("subst", &["X:", r"C:\Profiles\u"]))],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        (
+            "RB1 Git Bash alias m=subst; m X:",
+            gb,
+            vec![
+                st(lits("alias", &["m=subst"])),
+                st(lits("m", &["X:", r"C:\Profiles\u"])),
+            ],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        (
+            "RB2 Git Bash alias sudo=subst; sudo X:",
+            gb,
+            vec![
+                st(lits("alias", &["sudo=subst"])),
+                st(lits("sudo", &["X:", r"C:\Profiles\u"])),
+            ],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        (
+            "RB3 Git Bash alias sudo='subst X: C:\\Profiles\\u'; sudo",
+            gb,
+            vec![
+                st(lits("alias", &[r"sudo=subst X: C:\Profiles\u"])),
+                st(lits("sudo", &[])),
+            ],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        (
+            "RB4 Git Bash m() { subst X: …; }; m (control)",
+            gb,
+            vec![
+                func("m", vec![st(lits("subst", &["X:", r"C:\Profiles\u"]))]),
+                st(lits("m", &[])),
+            ],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        (
+            "RB5 Git Bash nothing (control)",
+            gb,
+            vec![st(lits("git", &["status"]))],
+            rmrf("/x/sub"),
+            x_sub.clone(),
+        ),
+        // ---- runs_script: a drive that does not exist (rr7 S).
+        (
+            "S0 pwsh Invoke-Expression 'x' (control)",
+            ps,
+            vec![st(lits("Invoke-Expression", &["x"]))],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "S1 pwsh Set-Alias e Invoke-Expression; e 'x'",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "S2 pwsh Set-Alias sudo Invoke-Expression; sudo 'x'",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["sudo", "Invoke-Expression"])),
+                st(lits("sudo", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "S3 pwsh Set-Alias env Import-Module; env m",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["env", "Import-Module"])),
+                st(lits("env", &["m"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "S4 pwsh function sudo { Invoke-Expression 'x' }; sudo (control)",
+            ps,
+            vec![
+                func("sudo", vec![st(lits("Invoke-Expression", &["x"]))]),
+                st(lits("sudo", &[])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "S5 pwsh git status (control)",
+            ps,
+            vec![st(lits("git", &["status"]))],
+            ri(r"Proj:\y"),
+            proj(false),
+        ),
+        (
+            "S6 pwsh Set-Alias e Invoke-Expression; e 'x'; ri Function:x (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Function:x"),
+            mbc.clone(),
+        ),
+        (
+            "SU1 pwsh Set-Alias e $v; e 'x' (a value not read)",
+            ps,
+            vec![
+                with("Set-Alias", vec![lit("e"), var("v")]),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "SU2 pwsh Set-Alias e Get-Date -Option x; e 'x' (a form not read)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date", "-Option", "x"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "SU3 pwsh Set-Item Alias:e $v; e 'x' (a value not read)",
+            ps,
+            vec![
+                with("Set-Item", vec![lit("Alias:e"), var("v")]),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "SU4 pwsh $alias:e = $v; e 'x' (a value not read)",
+            ps,
+            vec![
+                st({
+                    let mut c = assign("alias:e", "x");
+                    c.assigns = vec![("alias:e".to_string(), var("v"))];
+                    c
+                }),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "SU5 pwsh Set-Alias e Get-Date; e 'x' (a value read, control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        // ---- harmless (rr7 H): only stricter, keeps its level.
+        (
+            "H0 pwsh Get-Date; Remove-Item Env:FOO (control)",
+            ps,
+            vec![st(lits("Get-Date", &[]))],
+            ri("Env:FOO"),
+            Target::NotAFile,
+        ),
+        (
+            "H1 pwsh Set-Alias sudo Get-Date; sudo (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["sudo", "Get-Date"])),
+                st(lits("sudo", &[])),
+            ],
+            ri("Env:FOO"),
+            Target::DriveUnproven {
+                drive: "Env".to_string(),
+                unread_before: true,
+            },
+        ),
+        (
+            "H2 pwsh Set-Alias Get-X New-PSDrive; Get-X (control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["Get-X", "New-PSDrive"])),
+                st(lits("Get-X", &[])),
+            ],
+            ri("Env:FOO"),
+            mbc.clone(),
+        ),
+    ];
+    // ---- definitions through an alias: a call that defines `up`, then
+    // `cd sub && up && rm -rf .` (rr7 A, P, Q, QB; each real target is C:\w\repo).
+    let gb_tail = |mut v: Vec<Stmt>| {
+        v.push(stmt(lits("cd", &["/c/w/repo/sub"]), and));
+        v.push(stmt(lits("up", &[]), and));
+        v
+    };
+    let ps_tail = |mut v: Vec<Stmt>| {
+        v.push(stmt(lits("cd", &[r"C:\w\repo\sub"]), and));
+        v.push(stmt(lits("up", &[".."]), and));
+        v
+    };
+    let fdef = "function up { Set-Location .. }";
+    let bdef = "up(){ cd ..; }";
+    rows.extend([
+        (
+            "A0 Git Bash alias up='cd ..' (control)",
+            gb,
+            gb_tail(vec![st(lits("alias", &["up=cd .."]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "A1 Git Bash alias defalias=alias; defalias up='cd ..'",
+            gb,
+            gb_tail(vec![
+                st(lits("alias", &["defalias=alias"])),
+                st(lits("defalias", &["up=cd .."])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "A2 Git Bash alias sudo=alias; sudo up='cd ..'",
+            gb,
+            gb_tail(vec![
+                st(lits("alias", &["sudo=alias"])),
+                st(lits("sudo", &["up=cd .."])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "A3 Git Bash alias() { :; }; alias up='cd ..' (control)",
+            gb,
+            gb_tail(vec![
+                func("alias", vec![st(lits(":", &[]))]),
+                st(lits("alias", &["up=cd .."])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "A4 Git Bash \\alias up='cd ..' (control)",
+            gb,
+            gb_tail(vec![st(lits(r"\alias", &["up=cd .."]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "A5 Git Bash command alias up='cd ..' (control)",
+            gb,
+            gb_tail(vec![st(lits("command", &["alias", "up=cd .."]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "A6 Git Bash nothing (control)",
+            gb,
+            gb_tail(vec![st(lits("git", &["status"]))]),
+            rmrf("."),
+            sub.clone(),
+        ),
+        (
+            "P0 pwsh Set-Alias up Set-Location (control)",
+            ps,
+            ps_tail(vec![st(lits("Set-Alias", &["up", "Set-Location"]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "P1 pwsh Set-Alias sa Set-Alias; sa up Set-Location",
+            ps,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["sa", "Set-Alias"])),
+                st(lits("sa", &["up", "Set-Location"])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "P2 pwsh Set-Alias sudo Set-Alias; sudo up Set-Location",
+            ps,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["sudo", "Set-Alias"])),
+                st(lits("sudo", &["up", "Set-Location"])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "P3 pwsh Set-Alias si2 Set-Item; si2 Function:up … (control)",
+            ps,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["si2", "Set-Item"])),
+                st(lits("si2", &["Function:up", "Set-Location .."])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "P4 5.1 Set-Alias sa Set-Alias; sa up Set-Location",
+            p5,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["sa", "Set-Alias"])),
+                st(lits("sa", &["up", "Set-Location"])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "P5 pwsh nothing (control)",
+            ps,
+            ps_tail(vec![st(lits("git", &["status"]))]),
+            rmrf("."),
+            sub.clone(),
+        ),
+        (
+            "Q0 pwsh Invoke-Expression 'function up' (control)",
+            ps,
+            ps_tail(vec![st(lits("Invoke-Expression", &[fdef]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "Q1 pwsh Set-Alias e Invoke-Expression; e 'function up'",
+            ps,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &[fdef])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "Q2 pwsh Set-Alias sudo Invoke-Expression; sudo 'function up'",
+            ps,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["sudo", "Invoke-Expression"])),
+                st(lits("sudo", &[fdef])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "Q3 5.1 Set-Alias e Invoke-Expression; e 'function up'",
+            p5,
+            ps_tail(vec![
+                st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &[fdef])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "QB0 Git Bash eval 'up(){ cd ..; }' (control)",
+            gb,
+            gb_tail(vec![st(lits("eval", &[bdef]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "QB1 Git Bash alias e=eval; e 'up(){ cd ..; }'",
+            gb,
+            gb_tail(vec![st(lits("alias", &["e=eval"])), st(lits("e", &[bdef]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "QB2 Git Bash alias sudo=eval; sudo 'up(){ cd ..; }'",
+            gb,
+            gb_tail(vec![
+                st(lits("alias", &["sudo=eval"])),
+                st(lits("sudo", &[bdef])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "QB3 Git Bash source h.sh (control)",
+            gb,
+            gb_tail(vec![st(lits("source", &["h.sh"]))]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+        (
+            "QB4 Git Bash alias s=source; s h.sh",
+            gb,
+            gb_tail(vec![
+                st(lits("alias", &["s=source"])),
+                st(lits("s", &["h.sh"])),
+            ]),
+            rmrf("."),
+            mbc.clone(),
+        ),
+    ]);
+    let mut bad: Vec<String> = Vec::new();
+    for (label, shell, before, delete, want) in rows {
+        let got = judge(shell, &before, &delete);
+        if got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    }
+    // ---- a body that runs later sees a remap or script run anywhere (`inner`): `f` defined
+    // first, `<alias>; <call>; f`, the word judged at the start of `f`'s body.
+    let inner_rows: Vec<(&str, Shell, Vec<Stmt>, SimpleCommand, Target)> = vec![
+        (
+            "RN0 Git Bash f() { rm -rf /x/sub; }; git status; f (control)",
+            gb,
+            vec![st(lits("git", &["status"]))],
+            rmrf("/x/sub"),
+            x_sub.clone(),
+        ),
+        (
+            "RN1 Git Bash f() { rm -rf /x/sub; }; alias m=subst; m X: …; f",
+            gb,
+            vec![
+                st(lits("alias", &["m=subst"])),
+                st(lits("m", &["X:", r"C:\Profiles\u"])),
+            ],
+            rmrf("/x/sub"),
+            mbc.clone(),
+        ),
+        (
+            "SN0 pwsh function f { ri Proj:\\y }; git status; f (control)",
+            ps,
+            vec![st(lits("git", &["status"]))],
+            ri(r"Proj:\y"),
+            proj(true),
+        ),
+        (
+            "SN1 pwsh function f { ri Proj:\\y }; Set-Alias e Invoke-Expression; e 'x'; f",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+    ];
+    for (label, shell, middle, delete, want) in inner_rows {
+        let (_, env) = win(shell);
+        let by = delete_by(&delete, shell, Os::Windows);
+        let word = delete.args.last().expect("a target").clone();
+        let mut all = vec![func("f", vec![st(delete.clone())])];
+        all.extend(middle);
+        all.push(st(lits("f", &[])));
+        let s = script(all);
+        let mut loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w\repo")));
+        loc.read_script(&s);
+        let got = sorted(target(
+            &word,
+            &loc.inner(&s.stmts[0]),
+            &env,
+            by,
+            &real(),
+            &far(),
+        ));
+        if got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    }
+    // ---- mark_assigned: a variable an alias call may assign (rr7 V, VP; `TEMP` set in `win`).
+    let temp = paths(&[r"C:\Profiles\u\AppData\Local\Temp"]);
+    let env_rows: Vec<(&str, Shell, Vec<Stmt>, &str, bool)> = vec![
+        (
+            "V0 Git Bash eval 'TEMP=/' (control)",
+            gb,
+            vec![st(lits("eval", &["TEMP=/"]))],
+            "TEMP",
+            true,
+        ),
+        (
+            "V1 Git Bash alias e=eval; e 'TEMP=/'",
+            gb,
+            vec![st(lits("alias", &["e=eval"])), st(lits("e", &["TEMP=/"]))],
+            "TEMP",
+            true,
+        ),
+        (
+            "V2 Git Bash export TEMP=/ (control)",
+            gb,
+            vec![st(lits("export", &["TEMP=/"]))],
+            "TEMP",
+            true,
+        ),
+        (
+            "V3 Git Bash alias x=export; x TEMP=/",
+            gb,
+            vec![st(lits("alias", &["x=export"])), st(lits("x", &["TEMP=/"]))],
+            "TEMP",
+            true,
+        ),
+        (
+            "V4 Git Bash alias sudo=export; sudo TEMP=/",
+            gb,
+            vec![
+                st(lits("alias", &["sudo=export"])),
+                st(lits("sudo", &["TEMP=/"])),
+            ],
+            "TEMP",
+            true,
+        ),
+        (
+            "V5 Git Bash git status (control)",
+            gb,
+            vec![st(lits("git", &["status"]))],
+            "TEMP",
+            false,
+        ),
+        (
+            "VP0 pwsh Invoke-Expression 'x' (control)",
+            ps,
+            vec![st(lits("Invoke-Expression", &["x"]))],
+            "env:TEMP",
+            true,
+        ),
+        (
+            "VP1 pwsh Set-Alias e Invoke-Expression; e 'x'",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            "env:TEMP",
+            true,
+        ),
+        (
+            "VP2 pwsh git status (control)",
+            ps,
+            vec![st(lits("git", &["status"]))],
+            "env:TEMP",
+            false,
+        ),
+    ];
+    for (label, shell, before, name, dynamic) in env_rows {
+        let (loc, mut env) = win(shell);
+        mark_assigned(&mut env, &script(before), "");
+        let w = var(name);
+        let got = resolve(&w, &loc, &env);
+        let want = if dynamic {
+            Target::Dynamic(w.span)
+        } else {
+            temp.clone()
+        };
+        if got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }

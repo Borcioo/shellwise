@@ -599,6 +599,8 @@ pub struct Location {
     /// The command names the whole command defines (`defined_names`): a call of one may move
     /// the shell.
     defined: Vec<String>,
+    /// The aliases the whole command defines (`script_aliases`).
+    aliases: Vec<Alias>,
 }
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
@@ -929,6 +931,7 @@ impl Location {
             names_fixed: false,
             commands_read: false,
             defined: Vec::new(),
+            aliases: Vec::new(),
         }
     }
 
@@ -940,19 +943,21 @@ impl Location {
     /// no file system is no file only when every part of the command is in a small harmless set
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
+        let aliases = script_aliases(script);
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
-        self.defined = defined_names(script, self.shell);
+        self.defined = defined_names(script, &aliases, self.shell);
         let shell = self.shell;
         let (mut remap, mut run) = (false, false);
-        visit_script(script, &mut |n| {
+        visit_script(script, &aliases, &mut |n| {
             let (r, s) = remap_facts(&n, shell);
             remap |= r;
             run |= s;
         });
         self.remaps_anywhere = remap;
         self.script_runs_anywhere = run;
+        self.aliases = aliases;
     }
 
     pub fn os(&self) -> Os {
@@ -994,7 +999,7 @@ impl Location {
         let mut script = false;
         let mut links: Vec<Option<Word>> = Vec::new();
         let shell = self.shell;
-        visit_stmt(stmt, &mut |n| {
+        visit_stmt(stmt, &self.aliases, &mut |n| {
             let (r, s) = remap_facts(&n, shell);
             remap |= r;
             script |= s;
@@ -1734,7 +1739,8 @@ fn is_location_command(c: &SimpleCommand, shell: Shell, defined: &[String]) -> b
 /// True when anything in `s` (nested bodies and substitutions included) may move.
 fn changes_location(s: &Script, shell: Shell, defined: &[String]) -> bool {
     let mut hit = false;
-    visit_script(s, &mut |n| {
+    // An alias call is a call of a name in `defined`: `is_location_command` reads it as moving.
+    visit_script(s, &[], &mut |n| {
         if let Node::Cmd(c) = n {
             hit |= is_location_command(c, shell, defined);
         }
@@ -1799,9 +1805,9 @@ fn looks_up_defined(c: &SimpleCommand, shell: Shell, defined: &[String]) -> bool
 /// every function or filter; every alias (`defined_by` in pwsh, `alias name=…` in bash); `*`
 /// for a name the hook cannot read, and for a script or code text run in this shell (pwsh
 /// `runs_script`; bash `source`, `eval`, an opaque command), which may define any name.
-fn defined_names(s: &Script, shell: Shell) -> Vec<String> {
+fn defined_names(s: &Script, aliases: &[Alias], shell: Shell) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    visit_script(s, &mut |n| match n {
+    visit_script(s, aliases, &mut |n| match n {
         Node::Func(name) => out.push(name.to_ascii_lowercase()),
         Node::Cmd(c) if is_pwsh(shell) => {
             out.extend(defined_by(c, shell));
@@ -1840,6 +1846,211 @@ fn bash_defined(c: &SimpleCommand) -> Vec<String> {
             .collect(),
         Run::Cmd { name, .. } if name == "source" || name == "eval" => vec!["*".to_string()],
         _ => Vec::new(),
+    }
+}
+
+/// An alias the script defines: its name, lowercased, and the words of its value, `None` when
+/// the hook cannot read the value or the script gives the name more than one value.
+type Alias = (String, Option<Vec<String>>);
+
+/// The aliases `s` defines anywhere (`alias_defs`), also through a call of one of them
+/// (`Set-Alias sa Set-Alias; sa up Set-Location`). Each pass reads every node with the table so
+/// far and keeps every definition any pass found, so the table only grows; its values are words
+/// of the script's own text, so it stops.
+fn script_aliases(s: &Script) -> Vec<Alias> {
+    let mut defs: Vec<Alias> = Vec::new();
+    let mut table: Vec<Alias> = Vec::new();
+    loop {
+        visit_script(s, &table, &mut |n| {
+            if let Node::Cmd(c) = n {
+                defs.extend(alias_defs(c));
+            }
+        });
+        defs.sort();
+        defs.dedup();
+        let mut next: Vec<Alias> = Vec::new();
+        for (name, value) in &defs {
+            match next.last_mut() {
+                Some((n, v)) if n == name => {
+                    if v != value {
+                        *v = None;
+                    }
+                }
+                _ => next.push((name.clone(), value.clone())),
+            }
+        }
+        if next == table {
+            return table;
+        }
+        table = next;
+    }
+}
+
+/// The aliases command `c` defines (pwsh `Set-Alias`/`New-Alias n v`, `Set-Item`/`New-Item
+/// Alias:n v`, `$alias:n = v`; bash `alias n='v …'`), whatever the dialect: a definition the
+/// shell does not run only adds a reading. A name the hook cannot read (`*`) matches no call; it
+/// is `defined_names`' `*`.
+fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
+    let mut out: Vec<Alias> = c
+        .assigns
+        .iter()
+        .filter_map(|(n, w)| alias_item(n).map(|name| (name, literal(w).map(|v| vec![v]))))
+        .collect();
+    let Run::Cmd { name, args, .. } = unwrap(c) else {
+        return out;
+    };
+    let words: Vec<Option<String>> = args.iter().map(literal).collect();
+    let plain = |w: &Option<String>| w.as_deref().is_some_and(|t| !t.starts_with('-'));
+    match name.as_str() {
+        "alias" => out.extend(words.iter().flatten().filter_map(|t| {
+            let (n, v) = t.split_once('=')?;
+            Some((n.to_ascii_lowercase(), bash_alias_value(v)))
+        })),
+        // `[-Name] <name> <value>` only; any other form gives a value the hook cannot read.
+        "set-alias" | "sal" | "new-alias" | "nal" => {
+            let named = words
+                .first()
+                .and_then(|w| w.as_deref())
+                .is_some_and(|w| w.len() > 1 && "-name".starts_with(&w.to_ascii_lowercase()));
+            let rest = &words[usize::from(named)..];
+            if let Some(Some(n)) = rest.first() {
+                let value = match rest {
+                    [_, Some(v)] if plain(&rest[1]) => Some(vec![v.clone()]),
+                    _ => None,
+                };
+                out.push((n.to_ascii_lowercase(), value));
+            }
+        }
+        // `Alias:n v`, `-Path` and `-Value` named or not.
+        "set-item" | "si" | "new-item" | "ni" => {
+            let Some((i, n)) = words
+                .iter()
+                .enumerate()
+                .find_map(|(i, w)| w.as_deref().and_then(alias_item).map(|n| (i, n)))
+            else {
+                return out;
+            };
+            let rest: Vec<&Option<String>> = words
+                .iter()
+                .enumerate()
+                .filter(|(j, w)| {
+                    *j != i
+                        && !w.as_deref().is_some_and(|t| {
+                            matches!(t.to_ascii_lowercase().as_str(), "-path" | "-value")
+                        })
+                })
+                .map(|(_, w)| w)
+                .collect();
+            let value = match rest.as_slice() {
+                [Some(v)] if !v.starts_with('-') => Some(vec![v.clone()]),
+                _ => None,
+            };
+            out.push((n, value));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// The alias a `Alias:` path names (`Alias:\mk` gives `mk`, the root or a wildcard `*`).
+fn alias_item(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    let s = lower
+        .strip_prefix("microsoft.powershell.core\\")
+        .unwrap_or(&lower);
+    s.starts_with("alias:").then(|| command_item(s)).flatten()
+}
+
+/// The words of a bash alias value, `None` unless it is plain words: a quote, `$`, a backslash,
+/// an operator or any other shell syntax, a leading `NAME=value`, and a trailing blank (which
+/// makes bash expand the next word too) leave it unread.
+fn bash_alias_value(v: &str) -> Option<Vec<String>> {
+    let plain = |ch: char| ch.is_ascii_alphanumeric() || "_./:-+,@%= ".contains(ch);
+    if v.ends_with(' ') || !v.chars().all(plain) {
+        return None;
+    }
+    let words: Vec<String> = v.split_whitespace().map(str::to_string).collect();
+    words.first().filter(|w| !w.contains('='))?;
+    Some(words)
+}
+
+/// The commands a call `c` runs through the aliases in `aliases`: the word the shell looks up
+/// (the name, the operand of `&` or `.`, the word after `time` past its options and assignments)
+/// replaced by the alias's value, once per alias down a chain (`alias a=b b='ln -s'`); an alias
+/// is not expanded again inside its own expansion (`alias ln='ln -s'`). A value the hook cannot
+/// read gives a command `unwrap` reads as `Unread`.
+fn alias_runs(c: &SimpleCommand, aliases: &[Alias]) -> Vec<SimpleCommand> {
+    let mut out: Vec<SimpleCommand> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut cur = c.clone();
+    while let Some((p, (name, value))) = looked_up_alias(&cur, aliases, &seen) {
+        seen.push(name);
+        let word = |t: &str| Word {
+            parts: vec![WordPart::Literal(t.to_string())],
+            span: c.name.span,
+            quote: crate::ir::Quote::None,
+        };
+        let unread = Word {
+            parts: vec![WordPart::Var(name.clone())],
+            span: c.name.span,
+            quote: crate::ir::Quote::None,
+        };
+        let mut next = cur.clone();
+        match (p, value) {
+            (0, Some(v)) => {
+                next.name = word(&v[0]);
+                next.typed = v[0].clone();
+                next.canonical = Some(v[0].clone());
+                next.args = v[1..]
+                    .iter()
+                    .map(|t| word(t))
+                    .chain(cur.args.clone())
+                    .collect();
+            }
+            (0, None) => {
+                next.name = word("&");
+                next.typed = "&".to_string();
+                next.canonical = Some("&".to_string());
+                next.args = std::iter::once(unread).chain(cur.args.clone()).collect();
+            }
+            (p, Some(v)) => {
+                next.args.splice(p - 1..p, v.iter().map(|t| word(t)));
+            }
+            (p, None) => next.args[p - 1] = unread,
+        }
+        out.push(next.clone());
+        cur = next;
+    }
+    out
+}
+
+/// The first word the shell looks up for `c` (0 the name, `i` the `i`th argument) that names an
+/// alias in `aliases`, and that alias; `None` when the word names none or one in `seen`.
+fn looked_up_alias<'t>(
+    c: &SimpleCommand,
+    aliases: &'t [Alias],
+    seen: &[&str],
+) -> Option<(usize, &'t Alias)> {
+    let mut name = raw_name(c);
+    let mut p = 0;
+    loop {
+        if let Some(a) = aliases.iter().find(|(n, _)| *n == name) {
+            return (!seen.contains(&a.0.as_str())).then_some((p, a));
+        }
+        let rest = &c.args[p..];
+        let next = match name.as_str() {
+            "&" | "." => rest.first().map(|_| 0),
+            // `time -p -- FOO=1 mk x`.
+            "time" => rest.iter().position(|w| match literal(w) {
+                Some(t) => {
+                    !matches!(t.as_str(), "-p" | "--") && (t.starts_with('-') || !t.contains('='))
+                }
+                None => true,
+            }),
+            _ => None,
+        }?;
+        name = literal(&rest[next])?.to_ascii_lowercase();
+        p += next + 1;
     }
 }
 
@@ -1882,19 +2093,24 @@ fn word_scripts(w: &Word) -> impl Iterator<Item = &Script> {
     })
 }
 
-fn visit_script<'a>(s: &'a Script, f: &mut dyn FnMut(Node<'a>)) {
+/// Every node of `s`. A call of an alias in `aliases` is visited as written and then as each
+/// command it expands to (`alias_runs`): the alias may not be in effect where the call runs.
+fn visit_script(s: &Script, aliases: &[Alias], f: &mut dyn FnMut(Node<'_>)) {
     for st in &s.stmts {
-        visit_stmt(st, f);
+        visit_stmt(st, aliases, f);
     }
 }
 
-fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
+fn visit_stmt(st: &Stmt, aliases: &[Alias], f: &mut dyn FnMut(Node<'_>)) {
     match st {
         Stmt::Pipeline(p) => {
             for e in &p.elems {
                 let words: Vec<&Word> = match e {
                     Elem::Cmd(c) => {
                         f(Node::Cmd(c));
+                        for run in alias_runs(c, aliases) {
+                            f(Node::Cmd(&run));
+                        }
                         cmd_words(c)
                     }
                     Elem::Method(m) => {
@@ -1908,25 +2124,25 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
                 };
                 for w in words {
                     for s in word_scripts(w) {
-                        visit_script(s, f);
+                        visit_script(s, aliases, f);
                     }
                 }
             }
         }
         Stmt::Loop { body, span } => {
             f(Node::Loop(*span));
-            visit_script(body, f);
+            visit_script(body, aliases, f);
         }
         Stmt::Cond { branches, .. } => {
             for b in branches {
-                visit_script(b, f);
+                visit_script(b, aliases, f);
             }
         }
         Stmt::Func { name, body } => {
             f(Node::Func(name));
-            visit_script(body, f);
+            visit_script(body, aliases, f);
         }
-        Stmt::Block(body) => visit_script(body, f),
+        Stmt::Block(body) => visit_script(body, aliases, f),
     }
 }
 
@@ -1936,7 +2152,8 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
 /// spelling it does not know is not harmless.
 fn only_harmless(s: &Script, shell: Shell, os: Os) -> bool {
     let mut ok = true;
-    visit_script(s, &mut |n| {
+    // An alias definition is never harmless, so an alias call needs no reading as its value.
+    visit_script(s, &[], &mut |n| {
         ok &= match n {
             Node::Cmd(c) => harmless(c, shell, os),
             Node::Loop(_) => true,
@@ -1952,7 +2169,8 @@ fn only_harmless(s: &Script, shell: Shell, os: Os) -> bool {
 /// defines; and every definition in `s` names what it defines.
 fn all_read(s: &Script, shell: Shell) -> bool {
     let mut defined: Vec<String> = Vec::new();
-    visit_script(s, &mut |n| match n {
+    // A pwsh alias definition puts its name in `defined`, so a call of it is not read as written.
+    visit_script(s, &[], &mut |n| match n {
         Node::Func(name) => defined.push(name.to_ascii_lowercase()),
         Node::Cmd(c) => defined.extend(defined_by(c, shell)),
         _ => {}
@@ -1962,7 +2180,7 @@ fn all_read(s: &Script, shell: Shell) -> bool {
     let mut ok = !defined.iter().any(|d| d == "*");
     // Ruling 37: an allow-list over the node kinds; a method call or an expression may make a
     // drive (`$ExecutionContext.SessionState.Drive.New(…)`).
-    visit_script(s, &mut |n| {
+    visit_script(s, &[], &mut |n| {
         ok &= match n {
             Node::Cmd(c) => read_as_written(c, &defined, shell),
             Node::Loop(_) | Node::Func(_) => true,
@@ -2266,7 +2484,7 @@ const PS_ITEM_WRITERS: [&str; 30] = [
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
 /// command or a script call (PowerShell) may assign anything.
 pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
-    visit_script(script, &mut |n| match n {
+    visit_script(script, &script_aliases(script), &mut |n| match n {
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {
             let ty = m.type_name.to_ascii_lowercase();
