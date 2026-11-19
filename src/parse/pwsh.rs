@@ -361,11 +361,14 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                     || ks.windows(2).any(|w| w[0].end_byte() != w[1].start_byte())
                     // `(ls)<#x#>.ForEach(…)`: what PowerShell names the member is not modelled.
                     || ks.iter().any(|k| k.kind() == "comment")
-                    // `$?.{x}`, `$$.(x)`: PowerShell ends the argument at the dot.
+                    // `$?.{x}`, `$$.(x)`, `$?.$x`: PowerShell ends the argument at the dot unless
+                    // a letter or `_` follows it.
                     || (ks.first().is_some_and(|r| {
                         matches!(&src[r.start_byte()..r.end_byte()], "$?" | "$^" | "$$")
                     }) && ks.last().is_some_and(|m| {
-                        m.kind() == "member_name" && src[m.start_byte()..].starts_with(['{', '('])
+                        m.kind() == "member_name"
+                            && !src[m.start_byte()..]
+                                .starts_with(|c: char| c.is_alphabetic() || c == '_')
                     }))
             }
             "invokation_expression" | "invokation_foreach_expression" => {

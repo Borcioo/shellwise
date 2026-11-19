@@ -4783,3 +4783,52 @@ error = false
 cmds = [["Write-Output", "a:b:", "(1)"]]
 comments = []
 methods = []
+
+[[row]]
+id = "member-r-question-variable-array"
+mechanism = "a member of `$?`, `$^` or `$$` that does not start with a letter or `_`: PowerShell ends the argument at the dot"
+parser = "refuses"
+command = "Write-Output $?.@(x)?.Delete()"
+error = false
+cmds = [["Write-Output", "$?.@", "(x)?.Delete()"], ["x"]]
+comments = []
+methods = ["(x).Delete"]
+
+[[row]]
+id = "member-r-question-variable-variable"
+mechanism = "a member of `$?`, `$^` or `$$` that does not start with a letter or `_`: PowerShell ends the argument at the dot"
+parser = "refuses"
+command = "Write-Output $?.$x"
+error = false
+cmds = [["Write-Output", "$?.$x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-r-question-variable-string"
+mechanism = "a member of `$?`, `$^` or `$$` that does not start with a letter or `_`: PowerShell ends the argument at the dot"
+parser = "refuses"
+command = "Write-Output $?.'a'"
+error = false
+cmds = [["Write-Output", "$?.'a'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-r-caret-variable-variable"
+mechanism = "a member of `$?`, `$^` or `$$` that does not start with a letter or `_`: PowerShell ends the argument at the dot"
+parser = "refuses"
+command = "Write-Output $^.$x"
+error = false
+cmds = [["Write-Output", "$^.$x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-question-variable-underscore"
+mechanism = "a member of `$?` starting with `_` is a member"
+command = "Write-Output $?._x"
+error = false
+cmds = [["Write-Output", "$?._x"]]
+comments = []
+methods = []
