@@ -739,7 +739,7 @@ fn guarded(s: &pwsh::Seen) -> bool {
 /// `docs/spikes.md` ("PowerShell grammar fork"). None is in a guarded statement. A change to the
 /// seeds, the generator or the seed rows makes new mutants: refuse each.
 const LISTED: &[(&str, &str, &str)] = &[(
-    "$?.",
+    "$?.ForEach{1}",
     "Write-Output $?.ForEach{1}",
     "a member glued to `$?` is not a member access in argument mode",
 )];

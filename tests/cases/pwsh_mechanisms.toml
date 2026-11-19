@@ -3777,3 +3777,61 @@ error = false
 cmds = [["node", "-name=a$", "(ri C:\\x)"], ["ri", "C:\\x"]]
 comments = []
 methods = []
+
+[[row]]
+id = "member-r-question-variable-block"
+mechanism = "PowerShell ends the argument at `$?.` and calls the method on `{x}`"
+parser = "refuses"
+command = "Write-Output $?.{x}?.Delete()"
+error = false
+cmds = [["Write-Output", "$?.", "{x}?.Delete()"], ["x"]]
+comments = []
+methods = ["{x}.Delete"]
+
+[[row]]
+id = "member-r-dollar-variable-block"
+mechanism = "PowerShell ends the argument at `$$.` and calls the method on `{x}`"
+parser = "refuses"
+command = "Write-Output $$.{x}?.Delete()"
+error = false
+cmds = [["Write-Output", "$$.", "{x}?.Delete()"], ["x"]]
+comments = []
+methods = ["{x}.Delete"]
+
+[[row]]
+id = "member-r-caret-variable-block"
+mechanism = "PowerShell ends the argument at `$^.` and calls the method on `{x}`"
+parser = "refuses"
+command = "Write-Output $^.{x}?.Delete()"
+error = false
+cmds = [["Write-Output", "$^.", "{x}?.Delete()"], ["x"]]
+comments = []
+methods = ["{x}.Delete"]
+
+[[row]]
+id = "member-r-question-variable-paren"
+mechanism = "PowerShell ends the argument at `$?.`: `(x)` is the next argument"
+parser = "refuses"
+command = "Write-Output $?.(x)"
+error = false
+cmds = [["Write-Output", "$?.", "(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-question-variable-name"
+mechanism = "a plain name after `$?.` is a member access"
+command = "Write-Output $?.Length"
+error = false
+cmds = [["Write-Output", "$?.Length"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-variable-block-method"
+mechanism = "after a plain variable, `.{x}` is a member and the call stays on it"
+command = "Write-Output $x.{x}?.Delete()"
+error = false
+cmds = [["Write-Output", "$x.{x}?.Delete()"], ["x"]]
+comments = []
+methods = ["$x.{x}.Delete"]
