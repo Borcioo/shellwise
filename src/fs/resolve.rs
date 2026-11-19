@@ -562,8 +562,9 @@ struct Pushed {
 
 /// Where the shell is while a command runs: tracks `cd`, `Set-Location`, `Push-Location`,
 /// `Pop-Location` (and `git -C` through `for_git`). Feed it every statement in order with
-/// `after`, after judging the statement's own commands; a body that runs later or more than
-/// once starts from `inner`; a substitution starts from a clone.
+/// `after`, after judging the statement's own commands; a nested statement's body starts from
+/// `inner`; a script-block word's body (`WordPart::Block`) from `inner_block`; a substitution
+/// starts from a clone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Location {
     shell: Shell,
@@ -1078,8 +1079,8 @@ impl Location {
     }
 
     /// The location a nested body starts at: unknown for a function (it runs later) and for
-    /// a loop whose body moves (the next pass starts where the last one ended). A function or
-    /// loop body sees every remap and script run in the command, wherever it stands.
+    /// a loop whose body moves (the next pass starts where the last one ended). Every body
+    /// sees every remap and script run in the command, wherever it stands (Ruling 49).
     pub fn inner(&self, stmt: &Stmt) -> Location {
         let mut loc = match stmt {
             Stmt::Func { .. } => self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical)),
@@ -1088,10 +1089,22 @@ impl Location {
             }
             _ => self.with_dirs(self.dirs.clone()),
         };
-        if matches!(stmt, Stmt::Func { .. } | Stmt::Loop { .. }) {
-            loc.remapped |= self.remaps_anywhere;
-            loc.runs_script |= self.script_runs_anywhere;
-        }
+        loc.remapped |= self.remaps_anywhere;
+        loc.runs_script |= self.script_runs_anywhere;
+        loc
+    }
+
+    /// The location the body of a script-block word (`WordPart::Block`) starts at, whenever it
+    /// runs (`% { … }`, a stored `$sb = { … }` run later): as a loop body, unknown when the
+    /// body moves, and it sees every remap and script run in the command.
+    pub fn inner_block(&self, body: &Script) -> Location {
+        let mut loc = if changes_location(body, self.shell, &self.defined) {
+            self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
+        } else {
+            self.with_dirs(self.dirs.clone())
+        };
+        loc.remapped |= self.remaps_anywhere;
+        loc.runs_script |= self.script_runs_anywhere;
         loc
     }
 

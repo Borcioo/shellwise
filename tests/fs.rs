@@ -5084,8 +5084,25 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
             true,
             MAY_BE_CRITICAL,
         ),
-        // Controls: a straight-line delete before the remap, a loop with no remap, and a block,
-        // which runs once and in order.
+        // Ruling 49 (I3): every body judged from `inner` sees them, a block and a branch too.
+        (
+            "{ Proj:\\x; New-PSDrive Proj } (a block)",
+            vec![Stmt::Block(script(vec![ri(r"Proj:\x"), remap()]))],
+            r"Proj:\x",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "if { Proj:\\x; New-PSDrive Proj }",
+            vec![Stmt::Cond {
+                branches: vec![script(vec![ri(r"Proj:\x"), remap()])],
+                span: Span::default(),
+            }],
+            r"Proj:\x",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: a straight-line delete before the remap, a loop with no remap.
         (
             "Proj:\\x; New-PSDrive Proj (straight line)",
             vec![ri(r"Proj:\x"), remap()],
@@ -5100,21 +5117,80 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
             true,
             unproven("Proj"),
         ),
-        (
-            "{ Proj:\\x; New-PSDrive Proj } (a block)",
-            vec![Stmt::Block(script(vec![ri(r"Proj:\x"), remap()]))],
-            r"Proj:\x",
-            true,
-            unproven("Proj"),
-        ),
     ];
-    let bad: Vec<String> = rows
+    let mut bad: Vec<String> = rows
         .into_iter()
         .filter_map(|(label, whole, word, from_inner, want)| {
             let got = judge(whole, word, from_inner);
             (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
         })
         .collect();
+    // A script-block word (`% { … }`, a stored `$sb = { … }` run later) starts from
+    // `inner_block`: it sees every remap and script run, and starts unknown when it moves.
+    let block = |body: Vec<Stmt>| word_at(vec![WordPart::Block(Box::new(script(body)))], 0);
+    let each = |body: Vec<Stmt>| st(cmd("ForEach-Object", vec![block(body)]));
+    let stored = |body: Vec<Stmt>| {
+        let mut c = assign("sb", "");
+        c.assigns = vec![("sb".to_string(), block(body))];
+        st(c)
+    };
+    let run_sb = || st(cmd("&", vec![var("sb")]));
+    /// Label, the whole command, the block's body, the delete's word, result.
+    type BlockRow<'a> = (&'a str, Vec<Stmt>, Vec<Stmt>, &'a str, Target);
+    let block_rows: Vec<BlockRow> = vec![
+        (
+            "B1 % { Proj:\\x; New-PSDrive Proj }",
+            vec![each(vec![ri(r"Proj:\x"), remap()])],
+            vec![ri(r"Proj:\x"), remap()],
+            r"Proj:\x",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "% { Proj:\\x; .\\setup.ps1 }",
+            vec![each(vec![ri(r"Proj:\x"), st(lits(r".\setup.ps1", &[]))])],
+            vec![ri(r"Proj:\x"), st(lits(r".\setup.ps1", &[]))],
+            r"Proj:\x",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "B4 $sb = { Proj:\\x }; New-PSDrive Proj; & $sb",
+            vec![stored(vec![ri(r"Proj:\x")]), remap(), run_sb()],
+            vec![ri(r"Proj:\x")],
+            r"Proj:\x",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "% { cd ..; y }",
+            vec![each(vec![st(lits("cd", &[".."]))])],
+            vec![st(lits("cd", &[".."]))],
+            "y",
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: no remap, no move.
+        (
+            "% { Proj:\\x; git status } (control)",
+            vec![each(vec![ri(r"Proj:\x"), st(lits("git", &["status"]))])],
+            vec![ri(r"Proj:\x"), st(lits("git", &["status"]))],
+            r"Proj:\x",
+            unproven("Proj"),
+        ),
+        (
+            "% { git status; y } (control)",
+            vec![each(vec![st(lits("git", &["status"]))])],
+            vec![st(lits("git", &["status"]))],
+            "y",
+            paths(&[r"C:\w\repo\y"]),
+        ),
+    ];
+    for (label, whole, body, word, want) in block_rows {
+        let mut loc = base.clone();
+        loc.read_script(&script(whole));
+        let inner = loc.inner_block(&script(body));
+        let got = sorted(target(&lit(word), &inner, &env, by, &machine, &far()));
+        if got != want {
+            bad.push(format!("{label}: got {got:?}, want {want:?}"));
+        }
+    }
     assert!(
         bad.is_empty(),
         "{} rows failed:\n{}",
