@@ -2128,14 +2128,48 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
                 stmt(lits("g", &["Proj", "FileSystem", r"C:\x"]), seq),
             ],
         ),
+        ("icm $sb", vec![stmt(cmd("icm", vec![var("sb")]), seq)]),
         (
-            "Set-Item Function:g; g",
-            vec![
-                stmt(lits("Set-Item", &["Function:g", "x"]), seq),
-                stmt(lits("g", &[]), seq),
-            ],
+            "Set-Alias $n x",
+            vec![stmt(cmd("Set-Alias", vec![var("n"), lit("x")]), seq)],
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        [
+            vec!["Set-Alias", "g", "New-PSDrive"],
+            vec!["sal", "g", "New-PSDrive"],
+            vec!["New-Alias", "g", "New-PSDrive"],
+            vec!["nal", "g", "New-PSDrive"],
+            vec!["Set-Alias", "-Scope", "Global", "g", "New-PSDrive"],
+            vec!["Set-Item", "Function:g", "x"],
+            vec!["si", "Function:g", "x"],
+            vec!["New-Item", "Function:g", "-Value", "x"],
+            vec!["ni", "Function:g", "-Value", "x"],
+            vec!["Set-Item", r"Microsoft.PowerShell.Core\Function::g", "x"],
+            vec!["Set-Item", "Alias:g", "x"],
+            vec!["Set-Item", "Function::g", "x"],
+            vec!["Set-Item", r"Function:\g", "x"],
+            vec!["Set-Item", "FUNCTION:G", "x"],
+            vec!["Set-Item", r"Function:\", "x"],
+            vec!["Set-Item", "Function:g*", "x"],
+        ]
+        .into_iter()
+        .map(|d| {
+            (
+                "defines g; g",
+                vec![
+                    stmt(lits(d[0], &d[1..]), seq),
+                    stmt(
+                        lits(if d[1] == "Function:g*" { "gx" } else { "g" }, &[]),
+                        seq,
+                    ),
+                ],
+            )
+        }),
+    )
+    .collect::<Vec<_>>()
+    {
         let mut with_git = before.clone();
         with_git.push(git());
         expect(
@@ -2155,11 +2189,28 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         "git; Proj:\\y (Ruling 36 control)",
     );
     // A literal operand and a plain command are read; a defined name not called is no call.
+    let in_block = word_at(vec![WordPart::Block(Box::new(script(vec![git()])))], 0);
     for (label, before) in [
         ("& literal", stmt(lits("&", &[r"C:\x\run.ps1"]), seq)),
         (
             "Set-Alias g; git",
             stmt(lits("Set-Alias", &["g", "x"]), seq),
+        ),
+        (
+            "Set-Alias -Name g",
+            stmt(lits("Set-Alias", &["-Name", "g", "x"]), seq),
+        ),
+        (
+            "Set-Alias -N g",
+            stmt(lits("Set-Alias", &["-N", "g", "x"]), seq),
+        ),
+        (
+            "Set-Item Env:git",
+            stmt(lits("Set-Item", &["Env:git", "x"]), seq),
+        ),
+        (
+            "Invoke-Command { git }",
+            stmt(cmd("Invoke-Command", vec![in_block]), seq),
         ),
     ] {
         expect(
