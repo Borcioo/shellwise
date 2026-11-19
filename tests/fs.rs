@@ -8334,6 +8334,27 @@ fn a_script_alias_is_read_as_the_command_it_names() {
         let gmk = || st(lits("mk", &["/c/w/repo/t/j"]));
         let gsub = || stmt(lits("cd", &["/c/w/repo/sub"]), and);
         let back = || def("cd", &[r"C:\w\repo"]);
+        let pipe = |elems: Vec<SimpleCommand>| {
+            Stmt::Pipeline(Pipeline {
+                elems: elems.into_iter().map(Elem::Cmd).collect(),
+                chain: seq,
+            })
+        };
+        let dot = |a: &[&str]| lits(".", a);
+        let block = |body: Vec<Stmt>| word_at(vec![WordPart::Block(Box::new(script(body)))], 0);
+        let wo = |a: &str| lits("Write-Output", &[a]);
+        let rn_nn = || lits("Rename-Item", &["-NewName", "mk"]);
+        let sc_v = |v: &str| st(cmd("Set-Content", vec![var(v), lit("New-Item")]));
+        let rn_v = |v: &str| cmd("Rename-Item", vec![var(v), lit("mk")]);
+        // `$p = Write-Output Alias:b`: a command with no name, its value a substitution.
+        let p_is_wo_b = || {
+            let mut a = cmd("", Vec::new());
+            a.typed = String::new();
+            a.canonical = None;
+            let value = WordPart::Subst(Box::new(script(vec![st(wo("Alias:b"))])));
+            a.assigns = vec![("p".to_string(), word_at(vec![value], 0))];
+            st(a)
+        };
         rows.extend([
             // I-A: every `Alias:` writer has an entry (spike rr8 alias-provider.log C1-C3,
             // fix11 writers-*.log R2, K1, T1).
@@ -8418,8 +8439,10 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             // that may write an item, in a pwsh dialect (rr9 probe5.log, probe8.log OB1-OB5,
             // O1, O2): each row gives what its control gives.
             ("O0 pwsh mk; Remove-Item (control)", ps, vec![mk()], del(), in_link.clone()),
-            ("O1 pwsh Write-Host 'Alias: x'; mk", ps, vec![def("Write-Host", &["Alias: x"]), mk()], del(), in_link.clone()),
-            ("O2 pwsh git commit -m 'alias: x'; mk", ps, vec![def("git", &["commit", "-m", "alias: x"]), mk()], del(), in_link.clone()),
+            // deferred to hardening H7 (Ruling 81)
+            ("O1 pwsh Write-Host 'Alias: x'; mk", ps, vec![def("Write-Host", &["Alias: x"]), mk()], del(), mbc.clone()),
+            // deferred to hardening H7 (Ruling 81)
+            ("O2 pwsh git commit -m 'alias: x'; mk", ps, vec![def("git", &["commit", "-m", "alias: x"]), mk()], del(), mbc.clone()),
             ("OB0 Git Bash mk t/j; rm (control)", gb, vec![gmk()], gdel(), in_link.clone()),
             ("OB1 Git Bash echo alias:x; mk t/j", gb, vec![def("echo", &["alias:x"]), gmk()], gdel(), in_link.clone()),
             ("OB2 Git Bash git commit -m 'alias: x'; mk t/j", gb, vec![def("git", &["commit", "-m", "alias: x"]), gmk()], gdel(), in_link.clone()),
@@ -8440,6 +8463,15 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ("U1g pwsh cd Alias:; Copy-Item ni mk; cd repo; mk", ps, vec![def("cd", &["Alias:"]), def("Copy-Item", &["ni", "mk"]), back(), mk()], del(), mbc.clone()),
             ("U1h pwsh Set-Alias b New-Item; cd Alias:; Rename-Item b mk; cd repo; mk", ps, vec![b_ni(), def("cd", &["Alias:"]), def("Rename-Item", &["b", "mk"]), back(), mk()], del(), mbc.clone()),
             ("U1i pwsh cd C:\\w; New-Item mk -Value New-Item; cd repo; mk (control: a file)", ps, vec![def("cd", &[r"C:\w"]), def("New-Item", &["mk", "-Value", "New-Item"]), back(), mk()], del(), in_link.clone()),
+            // Re-review 10 N1: an `Alias:` path the reader cannot place, handed on by a printer,
+            // a pipeline or a script function (rr10 spikes N8, N8e, E2, N6d, N4d).
+            ("N8 pwsh Set-Alias b New-Item; Write-Output Alias:b | Rename-Item -NewName mk; mk", ps, vec![b_ni(), pipe(vec![wo("Alias:b"), rn_nn()]), mk()], del(), mbc.clone()),
+            ("N8e pwsh Set-Alias b New-Item; echo Alias:b | Rename-Item -NewName mk; mk", ps, vec![b_ni(), pipe(vec![lits("echo", &["Alias:b"]), rn_nn()]), mk()], del(), mbc.clone()),
+            ("E2 pwsh Set-Alias b New-Item; cmd /c echo Alias:b | Rename-Item -NewName mk; mk", ps, vec![b_ni(), pipe(vec![lits("cmd", &["/c", "echo", "Alias:b"]), rn_nn()]), mk()], del(), mbc.clone()),
+            ("N6d pwsh filter f { Set-Content $_ New-Item }; Write-Output Alias:mk | . f; mk", ps, vec![func("f", vec![sc_v("_")]), pipe(vec![wo("Alias:mk"), dot(&["f"])]), mk()], del(), mbc.clone()),
+            ("N4d pwsh function Write-Foo($p) { Set-Content $p New-Item }; . Write-Foo Alias:mk; mk", ps, vec![func("Write-Foo", vec![sc_v("p")]), st(dot(&["Write-Foo", "Alias:mk"])), mk()], del(), mbc.clone()),
+            ("P-FE pwsh Set-Alias b New-Item; Write-Output Alias:b | ForEach-Object { Rename-Item $_ mk }; mk", ps, vec![b_ni(), pipe(vec![wo("Alias:b"), cmd("ForEach-Object", vec![block(vec![st(rn_v("_"))])])]), mk()], del(), mbc.clone()),
+            ("P-VAR pwsh Set-Alias b New-Item; $p = Write-Output Alias:b; Rename-Item $p mk; mk", ps, vec![b_ni(), p_is_wo_b(), st(rn_v("p")), mk()], del(), mbc.clone()),
             // Re-review 9 F2: one row per Copy-Item, Rename-Item and Set-Content table row
             // (rr9 probe-rows9.rs rr9_tables): a value takes the next word, a switch does not.
             ("TC1 pwsh Copy-Item -Path Alias:ni Alias:mk; mk", ps, vec![def("Copy-Item", &["-Path", "Alias:ni", "Alias:mk"]), mk()], del(), mbc.clone()),

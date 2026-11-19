@@ -1946,7 +1946,7 @@ fn script_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
 /// The aliases command `c` defines, whatever the dialect: a definition the shell does not run
 /// only adds a reading. pwsh: `$alias:n = v`, and each cmdlet the command word may be
 /// (`cmdlet_readings`) as `cmdlet_alias_defs` reads it, and where it cannot, an alias of any name
-/// and value when `pwsh` (a pwsh dialect) and the cmdlet may write an item (`item_cmdlet`).
+/// and value when `pwsh` (a pwsh dialect).
 /// bash: `alias n='v …'`. A name the hook cannot read is `defined_names`' `*`.
 fn alias_defs(c: &SimpleCommand, pwsh: bool) -> Vec<Alias> {
     let mut out: Vec<Alias> = c
@@ -1979,25 +1979,16 @@ fn alias_defs(c: &SimpleCommand, pwsh: bool) -> Vec<Alias> {
         return out;
     }
     for cmdlet in cmdlet_readings(&name, &raw) {
-        // `None`: an `Alias:` path the reader cannot place. A move there (`cd Alias:`) may put
-        // a later relative item path on `Alias:` (rr9 spike U1a-h).
-        let moves = matches!(cmdlet.as_str(), "set-location" | "push-location");
+        // `None`: an `Alias:` path the reader cannot place. Any command may hand it to a writer
+        // (`Write-Output Alias:b | Rename-Item -NewName mk`, rr10 spike N8), and a move there
+        // (`cd Alias:`) may put a later relative item path on `Alias:` (rr9 spike U1a-h).
         match cmdlet_alias_defs(&cmdlet, args) {
             Some(found) => out.extend(found),
-            None if pwsh && (moves || item_cmdlet(&cmdlet)) => out.push(("*".to_string(), None)),
+            None if pwsh => out.push(("*".to_string(), None)),
             None => {}
         }
     }
     out
-}
-
-/// `cmdlet` (lowercased, no alias) may be a cmdlet that writes a provider item: a Verb-Noun name,
-/// shipped or not, other than a stream writer (`Write-Host`, `Write-Output`), which takes no
-/// path, and a location move, which writes no item.
-fn item_cmdlet(cmdlet: &str) -> bool {
-    cmdlet_name(cmdlet)
-        && !cmdlet.starts_with("write-")
-        && !matches!(cmdlet, "set-location" | "push-location")
 }
 
 /// The cmdlets a command word may be, lowercased: the one a shipped alias names in pwsh 7 or in
