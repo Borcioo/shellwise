@@ -4509,6 +4509,33 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             paths(&[sub]),
         ),
         (
+            "function Get-ChildItem {}; cd sub && if { ls }",
+            ps,
+            repo,
+            vec![
+                func("Get-ChildItem", vec![]),
+                cd_sub(),
+                Stmt::Cond {
+                    branches: vec![script(vec![one("ls", None)])],
+                    span: Span::default(),
+                },
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Git Bash function Set-Location {}; cd sub && cd.. (control: no such function)",
+            gb,
+            repo,
+            vec![
+                func("Set-Location", vec![]),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("cd..", and),
+            ],
+            ".",
+            paths(&[sub]),
+        ),
+        (
             "Git Bash function Get-ChildItem {}; cd sub && ls (control)",
             gb,
             repo,
