@@ -8435,9 +8435,9 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             // M-B: M21, `& mk` reads as the plain New-Item call (rr8_pins; the control
             // `New-Item t\j …; Remove-Item -Recurse o\x` gives o\x).
             ("M21 pwsh Set-Alias mk New-Item; & mk t\\j …; Remove-Item -Recurse o\\x", ps, vec![def("Set-Alias", &["mk", "New-Item"]), st(lits("&", &[&["mk"][..], &link_at[..]].concat()))], rr(r"C:\w\repo\o\x"), paths(&[r"C:\w\repo\o\x"])),
-            // Re-review 9 F1: a word holding `alias:` defines an alias only through a cmdlet
-            // that may write an item, in a pwsh dialect (rr9 probe5.log, probe8.log OB1-OB5,
-            // O1, O2): each row gives what its control gives.
+            // Re-review 9 F1, Ruling 81: in a pwsh dialect any command with an `Alias:` path the
+            // reader cannot place may define any alias; in Git Bash none does, so each Git Bash
+            // row gives what its control gives (rr9 probe8.log OB1-OB5).
             ("O0 pwsh mk; Remove-Item (control)", ps, vec![mk()], del(), in_link.clone()),
             // deferred to hardening H7 (Ruling 81)
             ("O1 pwsh Write-Host 'Alias: x'; mk", ps, vec![def("Write-Host", &["Alias: x"]), mk()], del(), mbc.clone()),
