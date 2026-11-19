@@ -777,6 +777,14 @@ fn remaps_drives(c: &SimpleCommand) -> bool {
         Run::Nothing => return false,
         run => return run.may_be(&REMAP_COMMANDS),
     };
+    // `& New-PSDrive …`: the call operator runs the name it is given; any name, unread.
+    let (name, args) = match (name.as_str(), args.split_first()) {
+        ("&" | ".", Some((first, rest))) => match literal(first) {
+            Some(n) => (base_name(&n.to_ascii_lowercase()), rest),
+            None => return true,
+        },
+        _ => (name, args),
+    };
     match name.as_str() {
         "net" | "net1" => args
             .first()
@@ -1539,23 +1547,48 @@ fn all_read(s: &Script) -> bool {
         _ => {}
     });
     let mut ok = !defined.iter().any(|d| d == "*");
+    // Ruling 37: an allow-list over the node kinds; a method call or an expression may make a
+    // drive (`$ExecutionContext.SessionState.Drive.New(…)`).
     visit_script(s, &mut |n| {
-        if let Node::Cmd(c) = n {
-            ok &= read_as_written(c, &defined);
+        ok &= match n {
+            Node::Cmd(c) => read_as_written(c, &defined),
+            Node::Loop(_) | Node::Func(_) => true,
+            Node::Method(_) | Node::Expr => false,
         }
     });
     ok
+}
+
+/// `name` (lowercased) is a plain cmdlet name, `Verb-Noun`: no path, no `.ps1`, `.psm1` or
+/// other extension, so no script file runs under it.
+fn cmdlet_name(name: &str) -> bool {
+    name.split_once('-').is_some_and(|(verb, noun)| {
+        !verb.is_empty()
+            && !noun.is_empty()
+            && verb.chars().all(|c| c.is_ascii_alphabetic())
+            && noun.chars().all(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// `name` as written may run a script file: a path (`.\x`, `C:\x\run`) or a `.ps1`/`.psm1`.
+fn may_run_script(raw: &str) -> bool {
+    raw.contains(['\\', '/']) || raw.ends_with(".ps1") || raw.ends_with(".psm1")
 }
 
 fn read_as_written(c: &SimpleCommand, defined: &[String]) -> bool {
     if c.opaque || literal(&c.name).is_none() {
         return false;
     }
-    let (name, args) = match unwrap(c) {
-        Run::Cmd { name, args, .. } => (name, args),
+    let (name, raw, args) = match unwrap(c) {
+        Run::Cmd {
+            name, raw, args, ..
+        } => (name, raw, args),
         Run::Nothing => return true,
         Run::Unread { .. } => return false,
     };
+    if may_run_script(&raw) {
+        return false;
+    }
     let called = |n: &str| !defined.iter().any(|d| d == n);
     match name.as_str() {
         "invoke-expression" | "iex" => false,
@@ -1565,7 +1598,8 @@ fn read_as_written(c: &SimpleCommand, defined: &[String]) -> bool {
         "&" | "." => args
             .first()
             .and_then(literal)
-            .is_some_and(|o| called(&base_name(&o.to_ascii_lowercase()))),
+            .map(|o| o.to_ascii_lowercase())
+            .is_some_and(|o| cmdlet_name(&o) && called(&o)),
         n => called(n),
     }
 }

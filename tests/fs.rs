@@ -1843,6 +1843,7 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         "nested New-PSDrive",
     ];
     let unread = [
+        "module-qualified",
         "psm1",
         "bare ps1",
         "dot-source",
