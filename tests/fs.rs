@@ -103,8 +103,43 @@ fn far() -> Deadline {
     Deadline::new(Instant::now(), 60_000)
 }
 
+/// The real file system, except that the drives that exist are declared (C:, D: and X:), so a
+/// row reads the same on every machine and on the WSL leg, which has no letter drives.
 fn real() -> SharedFs {
-    Arc::new(RealFs)
+    Arc::new(Declared("CDX"))
+}
+
+/// `RealFs` with `drive_exists` answered from a declared set of letters.
+struct Declared(&'static str);
+
+impl Fs for Declared {
+    fn lstat(&self, p: &Path) -> io::Result<Meta> {
+        RealFs.lstat(p)
+    }
+    fn read_dir(&self, p: &Path) -> io::Result<Vec<PathBuf>> {
+        RealFs.read_dir(p)
+    }
+    fn link_target(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+        RealFs.link_target(p)
+    }
+    fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
+        RealFs.long_path(p)
+    }
+    fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
+        RealFs.link_kind(p)
+    }
+    fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
+        RealFs.file_id(p)
+    }
+    fn device(&self, p: &Path) -> io::Result<Option<u64>> {
+        RealFs.device(p)
+    }
+    fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
+        RealFs.mount_points()
+    }
+    fn drive_exists(&self, letter: char) -> io::Result<bool> {
+        Ok(self.0.contains(letter.to_ascii_uppercase()))
+    }
 }
 
 /// A target the hook cannot place that may be a critical folder under another name.
@@ -907,7 +942,7 @@ fn dynamic_words_resolve_only_from_the_env_view() {
 fn short_names_are_expanded_before_comparison() {
     let shell = Shell::Pwsh;
     let loc = Location::new(shell, Os::Windows, Some(Path::new(r"C:\w")));
-    let mut fake = FakeFs::default();
+    let mut fake = FakeFs::default().dir(r"C:\w");
     fake.long.insert(
         PathBuf::from(r"C:\PROFILES\U~1"),
         PathBuf::from(r"C:\Profiles\u.name"),
@@ -1779,15 +1814,31 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             stmt(cmd("ForEach-Object", vec![nested]), seq),
         ),
     ];
+    // Ruling 33 + I1: only a drive mapping before the delete (or a command that may be one,
+    // `Start-Process`) keeps MayBeCritical; any other part, or one after it, leaves the drive
+    // unproven.
+    let remaps = [
+        "New-PSDrive",
+        "ndr",
+        "mount",
+        "module-qualified",
+        "Start-Process",
+        "nested New-PSDrive",
+    ];
     for (label, s) in redefiners {
+        let before = if remaps.contains(&label) {
+            MAY_BE_CRITICAL
+        } else {
+            unproven("Env")
+        };
         expect(
             judge(vec![s.clone()], ri("Env:FOO"), Vec::new()),
-            &MAY_BE_CRITICAL,
+            &before,
             format!("note 2 before: {label}"),
         );
         expect(
             judge(Vec::new(), ri("Env:FOO"), vec![s]),
-            &MAY_BE_CRITICAL,
+            &unproven("Env"),
             format!("note 2 after: {label}"),
         );
     }
@@ -1991,7 +2042,10 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             "ndr",
             stmt(lits("ndr", &["Proj", "-PSProvider", "FileSystem"]), seq),
         ),
-        ("unread", stmt(opaque.clone(), seq)),
+        (
+            "unread",
+            stmt(lits("Start-Process", &["pwsh", "-ArgumentList", "x"]), seq),
+        ),
     ] {
         expect(
             judge(vec![remap.clone(), git()], ri(r"Proj:\y")),

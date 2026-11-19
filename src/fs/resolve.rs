@@ -581,6 +581,8 @@ pub struct Location {
     /// `read_script` found only harmless commands: nothing defines or redefines a drive or a
     /// command.
     names_fixed: bool,
+    /// `read_script` ran: without it nothing about the command is proven.
+    script_read: bool,
 }
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
@@ -815,6 +817,7 @@ impl Location {
             new_links: Vec::new(),
             new_link_unknown: false,
             names_fixed: false,
+            script_read: false,
         }
     }
 
@@ -827,6 +830,7 @@ impl Location {
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
         self.names_fixed = only_harmless(script, self.shell, self.os);
+        self.script_read = true;
     }
 
     pub fn os(&self) -> Os {
@@ -845,7 +849,7 @@ impl Location {
     fn kind_of(&self, fail: Fail) -> UnknownKind {
         match fail {
             Fail::Dynamic => UnknownKind::Dynamic,
-            Fail::Unknown => UnknownKind::MayBeCritical,
+            Fail::Unknown | Fail::Drive => UnknownKind::MayBeCritical,
             // A known candidate is dropped with the unknown one (`cd $x; rm -rf ..` from the
             // repo root), and it may be critical.
             Fail::NoLocation if !self.dirs.known.is_empty() => UnknownKind::MayBeCritical,
@@ -1116,7 +1120,7 @@ impl Location {
             match expand(w, env, self.shell, base) {
                 Ok(segs) => {
                     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
-                    match absolutize(&text, base, self.shell, self.os, env) {
+                    match absolutize(&text, base, self.shell, self.os, env, DeleteBy::Native) {
                         Ok(p) => out.union(&Dirs {
                             known: vec![p],
                             unknown: None,
@@ -1134,7 +1138,7 @@ impl Location {
         let text: String = segs.iter().map(|s| s.text.as_str()).collect();
         let mut out = Dirs::default();
         for base in self.bases() {
-            match absolutize(&text, base, self.shell, self.os, env) {
+            match absolutize(&text, base, self.shell, self.os, env, DeleteBy::Native) {
                 Ok(p) => out.union(&Dirs {
                     known: vec![p],
                     unknown: None,
@@ -1931,6 +1935,9 @@ enum Fail {
     Unknown,
     /// A relative path, and the folder it is relative to is unknown: as unknown as that folder.
     NoLocation,
+    /// A plain path on a named PowerShell drive, read by a provider cmdlet: `DriveUnproven`
+    /// unless the command remaps a drive.
+    Drive,
 }
 
 /// The built-in PowerShell drives whose provider is no file system. `Function:` and `Alias:`
@@ -1943,9 +1950,58 @@ fn on_non_fs_drive(text: &str) -> bool {
     let Some((drive, rest)) = text.split_once(':') else {
         return false;
     };
-    NON_FS_DRIVES.iter().any(|d| drive.eq_ignore_ascii_case(d))
-        && !rest.contains([':', ',', ';'])
-        && !rest.split(['\\', '/']).any(|c| c == "." || c == "..")
+    NON_FS_DRIVES.iter().any(|d| drive.eq_ignore_ascii_case(d)) && plain_drive_rest(rest)
+}
+
+/// The text after a drive's `:` is one plain path on that drive: no `,` or `;` (a list), no
+/// further `:` (a stream, another drive) and no `.` or `..` step.
+fn plain_drive_rest(rest: &str) -> bool {
+    !rest.contains([':', ',', ';']) && !rest.split(['\\', '/']).any(|c| c == "." || c == "..")
+}
+
+/// `text` is a path on `Function:` or `Alias:`, or a `Variable:` path that may name a `__sw*`
+/// variable: the root, any wildcard (`-Include __sw*` widens one) or a `__sw` name. Drive or
+/// provider form (`Function::x`, `Microsoft.PowerShell.Core\Function::x`), any case.
+fn session_command(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let (qualified, s) = match lower.strip_prefix("microsoft.powershell.core\\") {
+        Some(s) => (true, s),
+        None => (false, lower.as_str()),
+    };
+    let Some((drive, rest)) = s.split_once(':') else {
+        return false;
+    };
+    let rest = match rest.strip_prefix(':') {
+        Some(r) => r,
+        None if qualified => return false,
+        None => rest,
+    };
+    if !plain_drive_rest(rest) {
+        return false;
+    }
+    let name = rest.trim_start_matches(['\\', '/']);
+    match drive {
+        "function" | "alias" => true,
+        "variable" => name.is_empty() || name.contains(['*', '?', '[']) || name.starts_with("__sw"),
+        _ => false,
+    }
+}
+
+/// The drive a named-drive path names, as written, after a `FileSystem::` provider prefix.
+fn drive_name(text: &str) -> String {
+    let s = strip_fs_provider(text);
+    s.split_once(':').map_or(s, |(d, _)| d).to_string()
+}
+
+/// `s` without a leading `FileSystem::` or `Microsoft.PowerShell.Core\FileSystem::`, any case.
+fn strip_fs_provider(s: &str) -> &str {
+    let lower = s.to_ascii_lowercase();
+    for p in ["microsoft.powershell.core\\filesystem::", "filesystem::"] {
+        if lower.starts_with(p) {
+            return &s[p.len()..];
+        }
+    }
+    s
 }
 
 fn is_pwd(name: &str, shell: Shell) -> bool {
@@ -2009,17 +2065,12 @@ fn absolutize(
     shell: Shell,
     os: Os,
     env: &EnvView,
+    by: DeleteBy,
 ) -> Result<String, Fail> {
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
     let mut s = text.to_string();
     if pwsh {
-        let lower = s.to_ascii_lowercase();
-        for p in ["microsoft.powershell.core\\filesystem::", "filesystem::"] {
-            if lower.starts_with(p) {
-                s = s[p.len()..].to_string();
-                break;
-            }
-        }
+        s = strip_fs_provider(&s).to_string();
         if s == "~" || s.starts_with("~\\") || s.starts_with("~/") {
             s = format!("{}{}", env.home().ok_or(Fail::Dynamic)?, &s[1..]);
         }
@@ -2075,6 +2126,10 @@ fn absolutize(
         if pwsh && drive.eq_ignore_ascii_case("temp") {
             let t = env.get("env:TEMP").ok_or(Fail::Unknown)?;
             return Ok(canonical(&format!("{t}\\{rest}"), os));
+        }
+        // Ruling 33: the provider cmdlet reads the drive at run time.
+        if pwsh && by == DeleteBy::Provider && plain_drive_rest(rest) {
+            return Err(Fail::Drive);
         }
         return Err(Fail::Unknown);
     }
@@ -2132,7 +2187,14 @@ fn dotdot_prefixes(
         if piece == ".." {
             let prefix = &text[..start];
             let prefix = if prefix.is_empty() { "." } else { prefix };
-            out.push(absolutize(prefix, base, loc.shell, loc.os, env)?);
+            out.push(absolutize(
+                prefix,
+                base,
+                loc.shell,
+                loc.os,
+                env,
+                DeleteBy::Native,
+            )?);
         }
         start += piece.len() + 1;
     }
@@ -2162,11 +2224,17 @@ fn split_comps(segs: &[Seg], os: Os) -> Vec<Vec<Seg>> {
     comps
 }
 
-fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Result<Plan, Fail> {
+fn plan(
+    segs: &[Seg],
+    base: Option<&str>,
+    loc: &Location,
+    env: &EnvView,
+    by: DeleteBy,
+) -> Result<Plan, Fail> {
     let text: String = segs.iter().map(|s| s.text.as_str()).collect();
     let link_free = dotdot_prefixes(&text, base, loc, env)?;
     if !segs.iter().any(|s| s.glob) {
-        let whole = absolutize(&text, base, loc.shell, loc.os, env)?;
+        let whole = absolutize(&text, base, loc.shell, loc.os, env, by)?;
         if is_alias(&whole, loc) {
             return Err(Fail::Unknown);
         }
@@ -2203,7 +2271,7 @@ fn plan(segs: &[Seg], base: Option<&str>, loc: &Location, env: &EnvView) -> Resu
     } else {
         prefix
     };
-    let start = absolutize(&prefix, base, loc.shell, loc.os, env)?;
+    let start = absolutize(&prefix, base, loc.shell, loc.os, env, by)?;
     let stream = loc.os == Os::Windows
         && comps[first..]
             .iter()
@@ -2314,6 +2382,13 @@ fn run_plan(fs: &dyn Fs, p: &Plan, os: Os, deadline: &Deadline) -> Result<Vec<St
     Ok(out)
 }
 
+/// The drive letter of a rooted Windows path (`C:\x` gives `C`).
+fn drive_letter(p: &str) -> Option<char> {
+    let b = p.as_bytes();
+    (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+        .then(|| (b[0] as char).to_ascii_uppercase())
+}
+
 /// The paths `word` names for a delete, from every folder the command may be in.
 pub fn target(
     word: &Word,
@@ -2323,6 +2398,7 @@ pub fn target(
     fs: &SharedFs,
     deadline: &Deadline,
 ) -> Target {
+    let pwsh = matches!(loc.shell, Shell::Pwsh | Shell::Powershell5);
     let mut plans = Vec::new();
     for base in loc.bases() {
         let segs = match expand(word, env, loc.shell, base) {
@@ -2334,24 +2410,46 @@ pub fn target(
             return Target::Paths(Vec::new());
         }
         let text: String = segs.iter().map(|s| s.text.as_str()).collect();
-        if by == DeleteBy::Provider
-            && matches!(loc.shell, Shell::Pwsh | Shell::Powershell5)
-            && on_non_fs_drive(&text)
-        {
-            // `New-PSDrive Env -PSProvider FileSystem` anywhere may map the name to a folder.
-            return if loc.names_fixed {
-                Target::NotAFile
-            } else {
-                Target::UnknownLocation(UnknownKind::MayBeCritical)
-            };
+        let provider = by == DeleteBy::Provider && pwsh;
+        if provider && session_command(&text) {
+            return Target::SessionCommand;
         }
-        match plan(&segs, base, loc, env) {
+        // `New-PSDrive Env -PSProvider FileSystem` anywhere may map the name to a folder.
+        if provider && loc.names_fixed && on_non_fs_drive(&text) {
+            return Target::NotAFile;
+        }
+        match plan(&segs, base, loc, env, by) {
             Ok(p) => plans.push(p),
             Err(Fail::Dynamic) => return Target::Dynamic(word.span),
+            // I1: a drive the command maps (or may map) keeps MayBeCritical.
+            Err(Fail::Drive) if loc.script_read && !loc.remapped => {
+                return Target::DriveUnproven {
+                    drive: drive_name(&text),
+                };
+            }
             Err(f) => return Target::UnknownLocation(loc.kind_of(f)),
         }
     }
     let os = loc.os;
+    // Ruling 34: a letter drive missing now may be made by the command before the delete.
+    if pwsh && os == Os::Windows && !loc.names_fixed {
+        let mut letters: Vec<char> = plans.iter().filter_map(|p| drive_letter(&p.base)).collect();
+        letters.sort_unstable();
+        letters.dedup();
+        if !letters.is_empty() {
+            let fs = Arc::clone(fs);
+            let all = move || {
+                letters
+                    .iter()
+                    .all(|l| matches!(fs.drive_exists(*l), Ok(true)))
+            };
+            match bounded(deadline, all) {
+                Ok(true) => {}
+                Ok(false) => return Target::UnknownLocation(UnknownKind::MayBeCritical),
+                Err(_) => return Target::Timeout,
+            }
+        }
+    }
     let needs_fs = plans.iter().any(|p| {
         !p.comps.is_empty()
             || !p.link_free.is_empty()
