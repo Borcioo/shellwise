@@ -1,0 +1,148 @@
+# The ps-var-colon rule through analyse: `"$name: text"` in a PowerShell double-quoted string is
+# break, because PowerShell reads `$name:` as a drive-qualified variable and refuses the string.
+# `oracle` says what pwsh's ParseInput does with the text; every break row must say "refuses" and
+# every allow twin "accepts".
+
+# --- Findings ---
+
+[[row]]
+id = "name-colon-space"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "name-colon-variable"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$f:$l"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${f}:" instead of "$f:"'
+oracle = "refuses"
+
+[[row]]
+id = "automatic-variable-colon-space"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$LASTEXITCODE: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${LASTEXITCODE}:" instead of "$LASTEXITCODE:"'
+oracle = "refuses"
+
+[[row]]
+id = "name-colon-at-the-end-of-the-string"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "at $h:"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${h}:" instead of "$h:"'
+oracle = "refuses"
+
+[[row]]
+id = "windows-powershell-5-reads-it-the-same"
+os = "any"
+shell = "powershell5"
+command = 'Write-Output "$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+
+[[row]]
+id = "inside-a-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "x $(Write-Output "$n: y")"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-an-assignment"
+os = "any"
+shell = "pwsh"
+command = '$m = "$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# --- Allow twins ---
+
+[[row]]
+id = "braced-name"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "${n}: done"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "drive-reference-env"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$env:TEMP x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$($n): x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "single-quoted"
+os = "any"
+shell = "pwsh"
+command = "Write-Output '$n: x'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "scope-reference-script"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$script:x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "scope-reference-global"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$global:x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "colon-with-no-variable"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "time: 10:30"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bash-is-not-read"
+os = "any"
+shell = "bash"
+command = 'echo "$n: done"'
+level = "ok"
+rules = []
