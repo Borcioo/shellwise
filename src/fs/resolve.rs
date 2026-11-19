@@ -1016,12 +1016,7 @@ impl Location {
                 args,
                 wrapped,
                 in_shell,
-                sourced,
             } => {
-                // `. x`: a source, which may move the shell.
-                if sourced {
-                    return unknown;
-                }
                 if !LOCATION_COMMANDS.contains(&name.as_str()) {
                     return None;
                 }
@@ -1298,8 +1293,6 @@ enum Run<'a> {
         wrapped: bool,
         /// Every wrapper in front runs it in this shell.
         in_shell: bool,
-        /// Run by `.`, in this scope: as a `source` it may change anything in the shell.
-        sourced: bool,
     },
     /// `command -v X`: describes X and runs nothing.
     Nothing,
@@ -1321,17 +1314,18 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
     let mut args: &[Word] = &c.args;
     let mut wrapped = false;
     let mut in_shell = true;
-    // `& name …`, `. name …` run the name they are given, `.` in this scope (Ruling 38). A
-    // name that is not a literal plain token may be any command.
-    let sourced = name == "." && raw == ".";
-    if raw == "&" || sourced {
+    // `& name …`, `. name …` run the name they are given (Ruling 38). A name that is not a
+    // literal plain token may be any command. `.` runs it in this scope, where a script can do
+    // anything: only a cmdlet name is read through it (Ruling 39).
+    if raw == "&" || raw == "." {
+        let dot = raw == ".";
         let Some(first) = args.first() else {
             return Run::Nothing;
         };
-        match literal(first) {
-            Some(t) if plain_command(&t.to_ascii_lowercase()) => {
-                raw = t.to_ascii_lowercase();
-                name = base_name(&raw);
+        match literal(first).map(|t| t.to_ascii_lowercase()) {
+            Some(t) if plain_command(&t) && (!dot || cmdlet_name(&t)) => {
+                name = base_name(&t);
+                raw = t;
                 args = &args[1..];
             }
             _ => return Run::Unread { in_shell },
@@ -1402,7 +1396,6 @@ fn unwrap(c: &SimpleCommand) -> Run<'_> {
         args,
         wrapped,
         in_shell,
-        sourced,
     }
 }
 
@@ -1415,6 +1408,17 @@ fn plain_command(raw: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
         && !raw.ends_with(".ps1")
         && !raw.ends_with(".psm1")
+}
+
+/// `name` (lowercased) is a cmdlet name, `Verb-Noun`: a dot-source of it runs that cmdlet, not
+/// a script (Ruling 39).
+fn cmdlet_name(name: &str) -> bool {
+    name.split_once('-').is_some_and(|(verb, noun)| {
+        !verb.is_empty()
+            && !noun.is_empty()
+            && verb.chars().all(|c| c.is_ascii_alphabetic())
+            && noun.chars().all(|c| c.is_ascii_alphanumeric())
+    })
 }
 
 impl Run<'_> {
@@ -1906,8 +1910,6 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     // The command run, after wrappers (`builtin export X=…`); the names below are read from
     // every argument, the wrapper's included, which can only mark more of them.
     let name = match unwrap(c) {
-        // `. x` is a source whatever it runs.
-        Run::Cmd { sourced: true, .. } => ".".to_string(),
         Run::Cmd { name, .. } => name,
         Run::Nothing => String::new(),
         Run::Unread { in_shell, .. } => {
