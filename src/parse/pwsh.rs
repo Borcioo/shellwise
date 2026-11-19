@@ -353,7 +353,7 @@ impl<'a> Lower<'a> {
         while let Some(n) = stack.pop() {
             let r = match n.kind() {
                 "command" => self.command(n, cx).map(|c| Some(Elem::Cmd(c))),
-                "invokation_expression" => self.static_call(n, cx).map(|m| m.map(Elem::Method)),
+                "invokation_expression" => self.method_call(n, cx).map(|m| m.map(Elem::Method)),
                 _ => Ok(None),
             };
             match r {
@@ -979,6 +979,7 @@ impl<'a> Lower<'a> {
                     {
                         return Err(self.unmodelled(k));
                     }
+                    self.verbatim_ends_here(k, k.start_byte() + 3)?;
                     let w = Word {
                         parts: vec![WordPart::Literal(self.text(k).to_string())],
                         span: span(k),
@@ -1022,28 +1023,36 @@ impl<'a> Lower<'a> {
     /// An expression at the head of a pipeline: a static method call, or an expression.
     fn head(&self, n: Node, cx: Cx) -> R<Elem> {
         let leaf = peel(n);
-        if let Some(m) = self.static_call(leaf, cx)? {
+        if let Some(m) = self.method_call(leaf, cx)? {
             return Ok(Elem::Method(m));
         }
         Ok(Elem::Expr(self.expr_word(n, cx)?))
     }
 
-    /// `[T]::M(args)` (or `$t::M(args)`): the method call, spanning from the receiver.
-    fn static_call(&self, n: Node, cx: Cx) -> R<Option<MethodCall>> {
+    /// `[T]::M(args)`, `$t::M(args)` or the instance call `$x.M(args)`: the method call, spanning
+    /// from the receiver.
+    fn method_call(&self, n: Node, cx: Cx) -> R<Option<MethodCall>> {
         if n.kind() != "invokation_expression" {
             return Ok(None);
         }
-        let ks = kids(n);
-        if !ks.iter().any(|k| k.kind() == "::") {
-            return Ok(None);
+        let mut ks = kids(n);
+        // `(x).ForEach({…})` and `(x).ForEach{…}`: the grammar's own node for the same call.
+        if let [f] = ks.as_slice()
+            && f.kind() == "invokation_foreach_expression"
+        {
+            ks = kids(*f);
         }
+        let is_static = ks.iter().any(|k| k.kind() == "::");
         let mut receiver = None;
         let mut method = String::new();
         let mut args = Vec::new();
         for k in &ks {
             match k.kind() {
-                "::" | "comment" => {}
+                "::" | "." | "comment" => {}
                 "member_name" => method = self.text(*k).to_string(),
+                "script_block_expression" if receiver.is_some() => {
+                    args.push(self.expr_word(*k, cx)?);
+                }
                 "argument_list" => {
                     for list in named_kids(*k) {
                         if list.kind() != "argument_expression_list" {
@@ -1061,8 +1070,25 @@ impl<'a> Lower<'a> {
         let Some(receiver) = receiver else {
             return Ok(None);
         };
+        if method.is_empty() {
+            // `.ForEach` is a hidden token: the method is the text after the receiver.
+            let next = ks
+                .iter()
+                .find(|k| k.is_named() && k.start_byte() >= receiver.end_byte())
+                .map_or(n.end_byte(), |k| k.start_byte());
+            let between = &self.src[receiver.end_byte()..next];
+            // `(x).ForEach<LF>{…}`: a block after a space or line end is not the call's argument.
+            if between.trim() != between {
+                return Err(self.unmodelled(n));
+            }
+            method = between.trim_start_matches('.').to_string();
+        }
         let recv = peel(receiver);
-        let type_name = if recv.kind() == "type_literal" {
+        let type_name = if !is_static {
+            // An instance call: the receiver is the first argument, and the type is unknown.
+            args.insert(0, self.expr_word(receiver, cx)?);
+            String::new()
+        } else if recv.kind() == "type_literal" {
             named_kids(recv)
                 .first()
                 .map_or_else(String::new, |t| self.text(*t).to_string())
@@ -1079,6 +1105,41 @@ impl<'a> Lower<'a> {
         }))
     }
 
+    /// `$x.M(args)` in argument mode, where the tree holds the member and the argument list side
+    /// by side.
+    fn member_call(&self, member: Node, list: Node, cx: Cx) -> R<MethodCall> {
+        let mut args = Vec::new();
+        let mut method = String::new();
+        for k in named_kids(member) {
+            match k.kind() {
+                "member_name" => method = self.text(k).to_string(),
+                "comment" => {}
+                _ if args.is_empty() => args.push(self.expr_word(k, cx)?),
+                _ => return Err(self.unmodelled(k)),
+            }
+        }
+        for l in named_kids(list) {
+            if l.kind() != "argument_expression_list" {
+                continue;
+            }
+            for a in named_kids(l) {
+                args.push(self.expr_word(a, cx)?);
+            }
+        }
+        if args.is_empty() || method.is_empty() {
+            return Err(self.unmodelled(member));
+        }
+        Ok(MethodCall {
+            type_name: String::new(),
+            method,
+            args,
+            span: Span {
+                start: member.start_byte(),
+                end: list.end_byte(),
+            },
+        })
+    }
+
     fn command(&self, n: Node, cx: Cx) -> R<SimpleCommand> {
         let mut name: Option<Word> = None;
         let mut args = Vec::new();
@@ -1086,6 +1147,10 @@ impl<'a> Lower<'a> {
         let mut last_closes = false;
         for k in named_kids(n) {
             match k.kind() {
+                // `git<#x #>`: PowerShell reads a comment glued to the name as name text.
+                "comment" if name.as_ref().is_some_and(|w| w.span.end == k.start_byte()) => {
+                    return Err(self.unmodelled(k));
+                }
                 "command_invokation_operator" | "comment" => {}
                 "command_name" | "command_name_expr" => name = Some(self.name_word(k, cx)?),
                 "command_elements" => {
@@ -1096,11 +1161,22 @@ impl<'a> Lower<'a> {
                             Element::Arg(nodes)
                                 if nodes.len() == 1 && nodes[0].kind() == "stop_parsing" =>
                             {
-                                args.extend(self.stop_parsing(nodes[0]));
+                                args.extend(self.stop_parsing(nodes[0])?);
                             }
                             Element::Arg(nodes) => args.push(self.element_word(&nodes, cx)?),
                             Element::Redirect(r) => redirects.push(self.redirection(r, cx)?),
                         }
+                    }
+                    // `ls 2>$null<#x#>`: a comment glued to the last redirect target is word
+                    // text for PowerShell; the tree ends the command before it.
+                    let rest = &self.src[k.end_byte()..];
+                    if self.src[..k.end_byte()].ends_with(|c: char| !c.is_whitespace())
+                        && (rest.starts_with('#') || rest.starts_with("<#"))
+                        && named_kids(k)
+                            .last()
+                            .is_some_and(|l| l.kind() == "redirection")
+                    {
+                        return Err(self.unmodelled(k));
                     }
                 }
                 "ERROR" if self.lossy => {
@@ -1170,7 +1246,13 @@ impl<'a> Lower<'a> {
                 _ => self.expr_word(*inner, cx),
             };
         }
-        self.token_word(n, cx)
+        let w = self.token_word(n, cx)?;
+        // ``Foo` -a="$(x)"``: PowerShell reads a bare command name as constant text, so a
+        // variable or `$(…)` inside it is not the one a word would expand. Not modelled.
+        if n.kind() == "command_name" && w.is_dynamic() {
+            return Err(self.unmodelled(n));
+        }
+        Ok(w)
     }
 
     /// Group command elements as PowerShell does: one argument is the children between two
@@ -1281,7 +1363,6 @@ impl<'a> Lower<'a> {
                         );
                     glued
                         || gap.trim() == ","
-                        || prev.ends_with(b",")
                         || (gap == ":" && prev.starts_with(b"-"))
                         || (gap.is_empty() && prev.starts_with(b"-") && prev.ends_with(b":"))
                 }
@@ -1296,6 +1377,10 @@ impl<'a> Lower<'a> {
             if new_arg {
                 // `''2>$null`: a stream redirection glued after a string.
                 let t = self.text(ch).as_bytes();
+                // `"a"--%x`: what PowerShell stops parsing at is not modelled after a quote.
+                if t.starts_with(b"--%") {
+                    return Err(self.unmodelled(ch));
+                }
                 if t.len() > 1 && (t[0].is_ascii_digit() || t[0] == b'*') && t[1] == b'>' {
                     return Err(self.unmodelled(ch));
                 }
@@ -1339,7 +1424,11 @@ impl<'a> Lower<'a> {
         let mut items: Vec<Item> = Vec::new();
         let mut quotes: Vec<Quote> = Vec::new();
         let mut prev_end: Option<usize> = None;
-        for n in nodes {
+        let mut call_args: Option<Node> = None;
+        for (i, n) in nodes.iter().enumerate() {
+            if call_args.take().is_some() {
+                continue;
+            }
             if let Some(e) = prev_end {
                 let gap = &self.src[e..n.start_byte()];
                 if gap.is_empty()
@@ -1360,8 +1449,41 @@ impl<'a> Lower<'a> {
                 }
             }
             prev_end = Some(n.end_byte());
+            // `$x.Delete()`: a member glued to an argument list is an instance method call.
+            if n.kind() == "member_access"
+                && let Some(list) = nodes.get(i + 1)
+                && list.kind() == "argument_list"
+                && list.start_byte() == n.end_byte()
+            {
+                let m = self.member_call(*n, *list, cx)?;
+                quotes.push(Quote::None);
+                items.push(Item::Part(WordPart::Subst(Box::new(script_of(vec![
+                    single_pipeline(Elem::Method(m)),
+                ])))));
+                prev_end = Some(list.end_byte());
+                call_args = Some(*list);
+                continue;
+            }
             match n.kind() {
-                "command_parameter" | "stop_parsing" => {
+                "command_parameter" => {
+                    // A one-dash parameter keeps a backtick as a plain character only as far as
+                    // the grammar can tell; what PowerShell names it is not proven, so it fails
+                    // closed. A value (`--a=$x`) expands like any word.
+                    let t = self.text(*n);
+                    if !t.starts_with("--") && t.contains('`') {
+                        return Err(self.unmodelled(*n));
+                    }
+                    let w = self.decode(n.start_byte(), n.end_byte(), &[], Mode::Bare, cx)?;
+                    // ``--`%``: an escaped `--%` still stops parsing for PowerShell.
+                    if t.contains('`')
+                        && matches!(w.parts.first(), Some(WordPart::Literal(v)) if v.starts_with("--%"))
+                    {
+                        return Err(self.unmodelled(*n));
+                    }
+                    quotes.push(w.quote);
+                    items.extend(w.parts.into_iter().map(Item::Part));
+                }
+                "stop_parsing" => {
                     quotes.push(Quote::None);
                     items.push(Item::Part(WordPart::Literal(self.text(*n).to_string())));
                 }
@@ -1393,10 +1515,11 @@ impl<'a> Lower<'a> {
     }
 
     /// `--% rest`: the rest of the line passes to the program as written.
-    fn stop_parsing(&self, n: Node) -> Vec<Word> {
+    fn stop_parsing(&self, n: Node) -> R<Vec<Word>> {
         let t = self.text(n);
         // The token may start with the separator before `--%`.
         let at = t.find("--%").unwrap_or(0);
+        self.verbatim_ends_here(n, n.start_byte() + at + 3)?;
         let rest = t
             .get(at + 3..)
             .unwrap_or("")
@@ -1420,7 +1543,16 @@ impl<'a> Lower<'a> {
                 quote: Quote::Single,
             });
         }
-        out
+        Ok(out)
+    }
+
+    /// The tree's `--%` text (from `start` to the end of `n`) must end where PowerShell ends it.
+    fn verbatim_ends_here(&self, n: Node, start: usize) -> R<()> {
+        let rest = self.src.get(start..).unwrap_or("");
+        if start + verbatim_end(rest) != n.end_byte() {
+            return Err(self.unmodelled(n));
+        }
+        Ok(())
     }
 
     fn redirection(&self, n: Node, cx: Cx) -> R<Redirect> {
@@ -1611,9 +1743,9 @@ impl<'a> Lower<'a> {
                 }
                 "script_block" => out.push(Stmt::Block(self.script_block(x, cx)?)),
                 "statement_block" => out.push(Stmt::Block(self.block(x, cx)?)),
-                "invokation_expression" if kids(x).iter().any(|k| k.kind() == "::") => {
+                "invokation_expression" => {
                     let inner = cx.deeper(span(x))?;
-                    match self.static_call(x, inner)? {
+                    match self.method_call(x, inner)? {
                         Some(m) => out.push(single_pipeline(Elem::Method(m))),
                         None => push_kids(&mut stack, x),
                     }
@@ -1660,6 +1792,15 @@ impl<'a> Lower<'a> {
             }
         }
         holes.sort_by_key(|h| h.start_byte());
+        // `$(a)b`: PowerShell ends the argument after a leading subexpression, so the text glued
+        // after it is the next argument.
+        if n.kind() == "glued_argument"
+            && holes
+                .first()
+                .is_some_and(|h| h.kind() == "sub_expression" && h.start_byte() == n.start_byte())
+        {
+            return Err(self.unmodelled(n));
+        }
         if matches!(n.kind(), "variable" | "braced_variable") {
             holes.clear();
             return Ok(Word {
@@ -1887,6 +2028,25 @@ enum Item {
 }
 
 /// `….Name` at the end of `prev`: a member name a call's argument list belongs to.
+/// Where PowerShell ends the verbatim text after `--%`, as `Parser::ParseInput` does (probed over
+/// every ASCII character and the typographic quotes, single, doubled and inside double quotes):
+/// at CR or LF, or at a `|` or `&&` outside double quotes. A double quote (`"` or U+201C to
+/// U+201E) runs to the next one or to the line end. grammar.js `stop_parsing` mirrors this table.
+fn verbatim_end(t: &str) -> usize {
+    let mut quoted = false;
+    let mut chars = t.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\r' | '\n' => return i,
+            '"' | '\u{201C}'..='\u{201E}' => quoted = !quoted,
+            '|' if !quoted => return i,
+            '&' if !quoted && chars.peek().is_some_and(|(_, d)| *d == '&') => return i,
+            _ => {}
+        }
+    }
+    t.len()
+}
+
 /// `$name::` in argument text: a static member access on a variable.
 fn static_member_on_variable(t: &str) -> bool {
     t.match_indices('$').any(|(i, _)| {
@@ -2338,7 +2498,8 @@ pub fn canonical(typed: &str, dialect: Shell, os: Os) -> Option<String> {
 
 /// What a script holds, in the shape `Parser::ParseInput` reports it: every named command as its
 /// name and argument texts as written (in source order), every comment, and every static method
-/// call as `Receiver::Method`. Measurement and oracle tests compare it with PowerShell's answer.
+/// call as `Receiver::Method` and every instance call as `Receiver.Method`. Measurement and oracle
+/// tests compare it with PowerShell's answer.
 #[doc(hidden)]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Seen {
@@ -2382,13 +2543,19 @@ pub fn seen(src: &str, script: &Script) -> Seen {
                                 words.extend(c.assigns.iter().map(|(_, v)| v));
                             }
                             Elem::Method(m) => {
-                                let end = src[m.span.start..]
-                                    .find("::")
-                                    .map_or(m.span.start, |i| m.span.start + i);
-                                methods.push((
-                                    m.span.start,
-                                    format!("{}::{}", &src[m.span.start..end], m.method),
-                                ));
+                                let called = match m.args.first() {
+                                    // An instance call: the receiver is the first argument.
+                                    Some(r) if m.type_name.is_empty() => {
+                                        format!("{}.{}", text(r), m.method)
+                                    }
+                                    _ => {
+                                        let end = src[m.span.start..]
+                                            .find("::")
+                                            .map_or(m.span.start, |i| m.span.start + i);
+                                        format!("{}::{}", &src[m.span.start..end], m.method)
+                                    }
+                                };
+                                methods.push((m.span.start, called));
                                 words.extend(m.args.iter());
                             }
                             Elem::Expr(w) => words.push(w),
@@ -2403,7 +2570,8 @@ pub fn seen(src: &str, script: &Script) -> Seen {
         }
     }
     cmds.sort_by_key(|c| c.0);
-    methods.sort_by_key(|m| m.0);
+    // `a.B().C()`: calls that start at one offset sort by their text (ordinal).
+    methods.sort();
     Seen {
         cmds: cmds.into_iter().map(|c| c.1).collect(),
         comments: script.comments.iter().map(|c| c.text.clone()).collect(),

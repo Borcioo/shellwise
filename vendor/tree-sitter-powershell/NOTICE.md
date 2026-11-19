@@ -33,12 +33,21 @@ spike measured (`docs/spikes.md`).
   escapes the next character inside it, a line end included (`` git`<LF> status ``); Unicode
   spaces and typographic quotes end it.
 - `stop_parsing`: `--%` is the token only before a space, a tab or the line end (`--%x` is not).
-  Its text ends at a `|` outside double quotes (`--% x | git status` runs `git`).
+  Its text ends where `Parser::ParseInput` ends it, probed over every ASCII character and the
+  typographic quotes: at CR, LF, or a `|` or `&&` outside double quotes (`--% x && git status`
+  runs `git`). A double quote, ASCII or typographic, protects `|` and `&&` up to the next quote or
+  the line end. A trailing `&` stays out of the token (a regex cannot tell it from `&&`).
 - New rule `glued_string_argument`: a closing quote ends an argument, so a bare word or a `(`
   glued after a string starts the next argument (`"a \"b\""`, `"x \"(a|b)\""`, `'a'x`).
-- `command_parameter`: a backtick escapes the next character, a line end included; a `%` may follow the first letter (`-M50%`); a Unicode space ends an
-  attached value (`--name=a`).
-- `generic_token` never starts with `#` (a comment starts there); `command_argument_sep`: a
+- `command_parameter`: a one-dash parameter ends at the line end and keeps a backtick as a plain
+  character (`-a`<LF>ri` is `-a`` and the command `ri`); in a two-dash word a backtick escapes the
+  next character, a line end included; a `%` may follow the first letter (`-M50%`); a Unicode
+  space ends an attached value (`--name=a`); a double-quoted part of an attached value holds no
+  `$` and no backtick, so such a string is lexed as its own node (`--a="$(x)"`).
+- New hidden rule `_glued_expandable_string`: an expandable string glued to a parameter
+  (`--a="$x"`) is a real string node with its variables and subexpressions.
+- `_command_token`: a Unicode space ends it.
+- `generic_token` never starts with `#` (a comment starts there) or `;` (a statement ends there); `command_argument_sep`: a
   Unicode space separates arguments.
 - Null-conditional member access `${a}?.Name`.
 - New rule `glued_argument`: a variable or `$(…)` with text glued after it (`$env:TEMP\x`,

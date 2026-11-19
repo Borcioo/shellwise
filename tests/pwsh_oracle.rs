@@ -83,9 +83,9 @@ foreach ($r in $rows) {
     $cmds = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true) |
         Sort-Object { $_.Extent.StartOffset } |
         ForEach-Object { , @($_.CommandElements | ForEach-Object { $_.Extent.Text }) })
-    $methods = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $a.Static }, $true) |
-        Sort-Object { $_.Extent.StartOffset } |
-        ForEach-Object { $_.Expression.Extent.Text + '::' + $_.Member.Extent.Text })
+    $ms = [Collections.Generic.List[object]]::new(); foreach ($m in $ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)) { $ms.Add([pscustomobject]@{ At = $m.Extent.StartOffset; Text = $m.Expression.Extent.Text + $(if ($m.Static) { '::' } else { '.' }) + $m.Member.Extent.Text }) }; $ms.Sort([Comparison[object]] { param($x, $y) $c = $x.At.CompareTo($y.At); if ($c -ne 0) { $c } else { [string]::CompareOrdinal($x.Text, $y.Text) } })
+    $methods = @($ms | ForEach-Object Text)
+
     $comments = @($tokens | Where-Object Kind -eq 'Comment' | ForEach-Object Text)
     $lines.Add((ConvertTo-Json -Compress -Depth 5 -InputObject ([ordered]@{
         id = $r.id; error = ($errors.Count -gt 0); cmds = $cmds; comments = $comments; methods = $methods })))
@@ -151,9 +151,36 @@ fn disagreement(src: &str, ps: &Answer) -> Option<String> {
         Ok(script) => {
             let seen = pwsh::seen(src, &script);
             let want = ps.seen();
-            (seen != want).then(|| format!("got {seen:?}, want {want:?}"))
+            (seen != want && !nested_comment_artefact(src, &seen, &want))
+                .then(|| format!("got {seen:?}, want {want:?}"))
         }
     }
+}
+
+/// `ParseInput` lists a comment inside a word's `$(…)` only among that word's nested tokens, so
+/// its top-level comment list lacks it. Everything else agrees, and each comment only the parser
+/// lists sits inside a `$(` glued to the word (no space between them).
+fn nested_comment_artefact(src: &str, seen: &pwsh::Seen, want: &pwsh::Seen) -> bool {
+    if seen.cmds != want.cmds || seen.methods != want.methods {
+        return false;
+    }
+    let mut extra = seen.comments.clone();
+    for c in &want.comments {
+        match extra.iter().position(|e| e == c) {
+            Some(i) => {
+                extra.remove(i);
+            }
+            None => return false,
+        }
+    }
+    !extra.is_empty()
+        && extra.iter().all(|c| {
+            src.match_indices(c.as_str()).any(|(p, _)| {
+                src[..p]
+                    .rfind("$(")
+                    .is_some_and(|o| !src[o..p].contains(char::is_whitespace))
+            })
+        })
 }
 
 #[test]
@@ -190,7 +217,7 @@ fn rows_hold_powershells_answer_and_the_parser_gives_it() {
         }
     }
     eprintln!("oracle rows {}", answers.len());
-    assert!(answers.len() >= 94, "ran {} rows", answers.len());
+    assert!(answers.len() >= 151, "ran {} rows", answers.len());
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
@@ -266,12 +293,12 @@ const LISTED: &[(&str, &str)] = &[
         "a comma, a comment and a line end continue a comma list",
     ),
     (
-        "git worktree remove --force F:\\w\\$(#$p[0]\r\n)",
-        "`ParseInput` lists a comment inside a word's `$(…)` only among its nested tokens",
-    ),
-    (
         "Get-ChildItem  | # note\nSelect-Object -First 1`\n",
         "a backtick after a leading digit escapes the line end",
+    ),
+    (
+        "(ls).ForEach{ ri $_`\n }",
+        "a backtick and a line end glued after a variable stay in the argument",
     ),
 ];
 

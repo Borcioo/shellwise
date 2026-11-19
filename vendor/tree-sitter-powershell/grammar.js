@@ -319,12 +319,13 @@ export default grammar({
     braced_variable: ($) => /\$\{[^}]+\}/,
 
     // Commands
+    // A word never starts with `;` (a statement ends there: `ls 2>$null<;ri x` runs `ri`).
     generic_token: ($) =>
       token(
         prec(
           0,
           choice(
-            /[^\(\)\$\"\'\-\{\}@\|\[`\&\s\p{Zs}<>,#0-9*\u2018-\u201B\u201C-\u201E]([^\&\s\p{Zs}\(\)\}\|;,"'`\u2018-\u201B\u201C-\u201E]|`[\s\S]|["\u201C-\u201E]([^"\u201C-\u201E`]|`[\s\S])*["\u201C-\u201E]|['\u2018-\u201B]([^'\u2018-\u201B]|['\u2018-\u201B]['\u2018-\u201B])*['\u2018-\u201B])*/,
+            /[^\(\)\$;\"\'\-\{\}@\|\[`\&\s\p{Zs}<>,#0-9*\u2018-\u201B\u201C-\u201E]([^\&\s\p{Zs}\(\)\}\|;,"'`\u2018-\u201B\u201C-\u201E]|`[\s\S]|["\u201C-\u201E]([^"\u201C-\u201E`]|`[\s\S])*["\u201C-\u201E]|['\u2018-\u201B]([^'\u2018-\u201B]|['\u2018-\u201B]['\u2018-\u201B])*['\u2018-\u201B])*/,
             // A word may hold `>` and `<` (`a>b` is one word), but `2>`, `*>` at its
             // start redirect a stream: a leading digit or `*` is not followed by `>`.
             /[0-9*]/,
@@ -340,12 +341,17 @@ export default grammar({
       choice(
         token(
           choice(
-            // `-Name`, `-Name1`, `--long-flag`, `-A5`
-            // `-M50%` (git diff): a `%` belongs to the parameter; a backtick escapes the next
-            // character, a line end included (`--name`<LF>=a` is one word)
-            /-+([a-zA-Z_?\-]|`[\s\S])([a-zA-Z0-9_?\-%]|`[\s\S])*/,
-            // `--format=%H`, `--pretty=format:"%B"`: a native option with an attached value
-            /--?[a-zA-Z_][a-zA-Z0-9_\-]*=([^\s\p{Zs}"'`;|&(){}]|"[^"\r\n]*"|'[^'\r\n]*')*/,
+            // `-Name`, `-Name1`, `-A5`, `-M50%` (git diff: a `%` belongs to the parameter).
+            // A one-dash parameter ends at the line end: a backtick in it is a plain character
+            // (`-a`<LF>ri` is `-a`` and the command `ri`).
+            /-[a-zA-Z_?`][a-zA-Z0-9_?\-`%]*/,
+            // `--long-flag`: a word, where a backtick escapes the next character, a line end
+            // included (`--a`<LF>ri` is one word).
+            /--([a-zA-Z0-9_?\-%]|`[\s\S])*/,
+            // `--format=%H`, `--pretty=format:"%B"`: a native option with an attached value. A
+            // double-quoted part holds no `$` and no backtick: such a string is lexed on its own
+            // (`--a="$(x)"`, `--a="x`" "`).
+            /--?[a-zA-Z_][a-zA-Z0-9_\-]*=([^\s\p{Zs}"'`;|&(){}]|"[^"\r\n`$]*"|'[^'\r\n]*')*/,
           ),
         ),
         // A bare `--` or `-` argument (see scanner.c).
@@ -816,6 +822,7 @@ export default grammar({
             choice(
               alias(token.immediate(/['\u2018-\u201B]([^'\u2018-\u201B]|['\u2018-\u201B]['\u2018-\u201B])*['\u2018-\u201B]/), $.verbatim_string_characters),
               alias(token.immediate(/["\u201C-\u201E]([^"\u201C-\u201E`$]|`[\s\S])*["\u201C-\u201E]/), $.expandable_string_literal),
+              alias($._glued_expandable_string, $.expandable_string_literal),
             ),
           ),
           seq($._command_argument, optional($.argument_list)),
@@ -826,9 +833,12 @@ export default grammar({
 
     // Stop parsing is a token that end the parsing of command line
     // `--%` stops parsing only before a space or the line end (`--%x` is not the token). The
-    // verbatim text ends at the line end or at a `|` outside double quotes: the pipe still
-    // starts the next command (`--% x | git status`).
-    stop_parsing: ($) => /--%([ \t]([^"\|\r\n]|"[^"\r\n]*")*)?/,
+    // verbatim text ends where `Parser::ParseInput` ends it (probed over every ASCII character,
+    // single, doubled and inside quotes): at CR, LF, or a `|` or `&&` outside double quotes. A
+    // double quote (`"` or a typographic one) runs to its closing quote or to the line end. A
+    // trailing `&` is text for PowerShell, but a regex cannot tell it from `&&`; the lowering
+    // refuses it (`verbatim_end` in src/parse/pwsh.rs holds the same table).
+    stop_parsing: ($) => /--%([ \t]([^"\u201C-\u201E\|&\r\n]|&[^"\u201C-\u201E\|&\r\n]|&?["\u201C-\u201E][^"\u201C-\u201E\r\n]*["\u201C-\u201E])*(&?["\u201C-\u201E][^"\u201C-\u201E\r\n]*)?)?/,
 
     // Generic token is hard to manage
     // So a definition is that a generic token must have to begin by one or more space char
@@ -907,6 +917,25 @@ export default grammar({
       ),
 
     _glued_parenthesized_expression: ($) => seq(token.immediate('('), $.pipeline, ')'),
+
+    // `expandable_string_literal` opened right after the previous token (`--a="$(x)"`).
+    _glued_expandable_string: ($) =>
+      seq(
+        token.immediate(/["\u201C-\u201E](\s*\#*)*/),
+        repeat(
+          choice(
+            $._expandable_string_text,
+            $.variable,
+            $.sub_expression,
+            token.immediate(/\$(`.{1}|`\r?\n|[\s\\])/),
+            token.immediate(/`.{1}|`\r?\n/),
+            token.immediate(/["\u201C-\u201E]["\u201C-\u201E]/),
+            token.immediate('$'),
+          ),
+        ),
+        repeat(token.immediate('$')),
+        token.immediate(/(\s*\#*)*["\u201C-\u201E]/),
+      ),
 
     verbatim_command_argument: ($) =>
       seq('--%', $._verbatim_command_argument_chars),

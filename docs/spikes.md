@@ -419,12 +419,17 @@ The baseline is the unchanged grammar regenerated with tree-sitter-cli 0.27.2 an
 | Equal error status | 96.80 % (27,542 of 28,453) | 99.85 % (28,409) | ≥ 99 % |
 | Errors only the parser reports | 886 | 26 | — |
 | Errors only `ParseInput` reports | 25 | 18 | — |
-| Silent mismatches (both parse, commands differ) | 3.94 % (1,120) | 0.028 % (8) | ≤ 0.5 % |
+| Silent mismatches (both parse, commands differ) | 3.94 % (1,120) | 0.032 % (9) | ≤ 0.5 % |
 | Mismatches on destructive rows | 77 of 1,058 | 1 of 1,058 (listed) | 0 unlisted |
 | Gap rows correct | 22 of 29 | 29 of 29 | all |
 
 Listed destructive row: both `ParseInput` and the parser report a syntax error, so the row fails
 closed either way; the mismatch is only in the commands the comparison reads from an error row.
+
+The comparison counts instance method calls too (`$x.Delete()` as `$x.Delete`), with the
+reference script changed to match; calls that start at one offset are compared in text order.
+One of the 9 silent rows is a lowering refusal (a `$` inside a bare command name), which the
+table counts as parsed; in use it fails closed.
 
 Error status here is the tree's (an ERROR or MISSING node). The lowering refuses more: a
 construct it does not model, or glued text PowerShell reads as one word (see the fuzz below).
@@ -437,12 +442,12 @@ expression (`(…)..HEAD`); braces in a revision (`v1^{commit}`); a method call 
 argument (`$s.Split(' ')[0]`); a comma with a space before it (`a* , b*`).
 
 Fail path (Ruling 28) over the PowerShell rows of the corpus, parsed as `pwsh` on Windows:
-N = 28,516 rows, F = 112 refused (all parse errors; none over 64 KiB, none invalid UTF-8, no
+N = 28,516 rows, F = 113 refused (all parse errors; none over 64 KiB, none invalid UTF-8, no
 panic), H = 0 matching the harmless grammar, R = 86 that `ParseInput` also rejects. Remainder
-(F − H − R) / N = 26 / 28,516 = 0.091 %, budget 0.1 %. Over the `ok` rows alone: 20 / 25,004 =
+(F − H − R) / N = 27 / 28,516 = 0.095 %, budget 0.1 %. Over the `ok` rows alone: 20 / 25,004 =
 0.080 %.
 
-Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (65) hold
+Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (122) hold
 `ParseInput`'s answer; `tests/pwsh_rows.rs` checks the parser against them and
 `tests/pwsh_oracle.rs` (feature `oracle`) checks them against the real `ParseInput`.
 
@@ -453,18 +458,27 @@ listed mechanisms, which only split or join argument text or concern the oracle 
 
 - A comma, a comment and a line end continue a comma list: the next line's first word joins it.
 - A backtick after a leading digit escapes the line end (`1`<LF>`).
+- A backtick and a line end glued after a variable stay in the argument's text.
 - `ParseInput` lists a comment inside a word's `$(…)` only among that word's nested tokens, so
-  the reference shows no comment where the parser records one.
+  the reference shows no comment where the parser records one. The fuzz recognises this by its
+  shape (everything else agrees and each extra comment sits in a `$(` glued to its word).
 
 Mechanisms the fuzz found and the fork now reads as PowerShell does (each a mechanism row): a
 name starting with `>` or a stream redirection; a backtick before a line end inside a name; `--%`
 glued to text; `?.` member access; `$$` before `(` and an odd `$` run before `(`; a one-dash
 `-name=$` before `(`; a word or `(` glued after a closing quote (a new argument); a Unicode space
 after `--%`, inside a parameter value and between arguments; `#` at the start of a word; a
-backtick before a line end inside a parameter; a `|` ending the `--%` text.
+backtick before a line end inside a parameter; a `|` ending the `--%` text; `&&`, CR and LF
+ending it, with ASCII or typographic double quotes protecting `|` and `&&`; an escaped comma that
+ends a word; `$x` and `"$(…)"` in a parameter's attached value; an instance method call
+(`$x.Delete()`, `(Get-Item x).Delete()`, `.ForEach{…}`), also in argument mode.
 Mechanisms the parser refuses (fails closed) where PowerShell reads one word: a bare dash glued to
 a word (`git-`, `-5-`); text glued to a redirection target; a `>` glued to a word; a comment glued
 to a word; a `$(` glued to the command name; `$env::X` in an argument; a stream redirection or a
-word glued after a quoted redirection target. Of the 2,000 mutants, the parser refuses 301 that
-PowerShell accepts and accepts 19 that PowerShell rejects (PowerShell runs nothing of a script it
-cannot parse; the parser judges the commands).
+word glued after a quoted redirection target; a trailing `&` in `--%` text; a backtick in a
+one-dash parameter; text glued after a leading `$(…)`; a `$` inside a bare command name; `--%`
+glued after a closing quote; an escaped `--%`; a comment glued to a command's last redirection
+target; a `.ForEach` block after a space or line end; a comment glued to the command name; a
+redirection target starting with `;` (`ls 2>$null<;ri x` runs `ri`). Of the 2,003 mutants, the
+parser refuses 377 that PowerShell accepts and accepts 17 that PowerShell rejects (PowerShell runs nothing of a
+script it cannot parse; the parser judges the commands).

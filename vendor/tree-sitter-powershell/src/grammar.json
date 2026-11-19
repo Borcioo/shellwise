@@ -1805,7 +1805,7 @@
           "members": [
             {
               "type": "PATTERN",
-              "value": "[^\\(\\)\\$\\\"\\'\\-\\{\\}@\\|\\[`\\&\\s\\p{Zs}<>,#0-9*\\u2018-\\u201B\\u201C-\\u201E]([^\\&\\s\\p{Zs}\\(\\)\\}\\|;,\"'`\\u2018-\\u201B\\u201C-\\u201E]|`[\\s\\S]|[\"\\u201C-\\u201E]([^\"\\u201C-\\u201E`]|`[\\s\\S])*[\"\\u201C-\\u201E]|['\\u2018-\\u201B]([^'\\u2018-\\u201B]|['\\u2018-\\u201B]['\\u2018-\\u201B])*['\\u2018-\\u201B])*"
+              "value": "[^\\(\\)\\$;\\\"\\'\\-\\{\\}@\\|\\[`\\&\\s\\p{Zs}<>,#0-9*\\u2018-\\u201B\\u201C-\\u201E]([^\\&\\s\\p{Zs}\\(\\)\\}\\|;,\"'`\\u2018-\\u201B\\u201C-\\u201E]|`[\\s\\S]|[\"\\u201C-\\u201E]([^\"\\u201C-\\u201E`]|`[\\s\\S])*[\"\\u201C-\\u201E]|['\\u2018-\\u201B]([^'\\u2018-\\u201B]|['\\u2018-\\u201B]['\\u2018-\\u201B])*['\\u2018-\\u201B])*"
             },
             {
               "type": "PATTERN",
@@ -1836,11 +1836,15 @@
             "members": [
               {
                 "type": "PATTERN",
-                "value": "-+([a-zA-Z_?\\-]|`[\\s\\S])([a-zA-Z0-9_?\\-%]|`[\\s\\S])*"
+                "value": "-[a-zA-Z_?`][a-zA-Z0-9_?\\-`%]*"
               },
               {
                 "type": "PATTERN",
-                "value": "--?[a-zA-Z_][a-zA-Z0-9_\\-]*=([^\\s\\p{Zs}\"'`;|&(){}]|\"[^\"\\r\\n]*\"|'[^'\\r\\n]*')*"
+                "value": "--([a-zA-Z0-9_?\\-%]|`[\\s\\S])*"
+              },
+              {
+                "type": "PATTERN",
+                "value": "--?[a-zA-Z_][a-zA-Z0-9_\\-]*=([^\\s\\p{Zs}\"'`;|&(){}]|\"[^\"\\r\\n`$]*\"|'[^'\\r\\n]*')*"
               }
             ]
           }
@@ -4289,6 +4293,15 @@
                     },
                     "named": true,
                     "value": "expandable_string_literal"
+                  },
+                  {
+                    "type": "ALIAS",
+                    "content": {
+                      "type": "SYMBOL",
+                      "name": "_glued_expandable_string"
+                    },
+                    "named": true,
+                    "value": "expandable_string_literal"
                   }
                 ]
               }
@@ -4328,7 +4341,7 @@
     },
     "stop_parsing": {
       "type": "PATTERN",
-      "value": "--%([ \\t]([^\"\\|\\r\\n]|\"[^\"\\r\\n]*\")*)?"
+      "value": "--%([ \\t]([^\"\\u201C-\\u201E\\|&\\r\\n]|&[^\"\\u201C-\\u201E\\|&\\r\\n]|&?[\"\\u201C-\\u201E][^\"\\u201C-\\u201E\\r\\n]*[\"\\u201C-\\u201E])*(&?[\"\\u201C-\\u201E][^\"\\u201C-\\u201E\\r\\n]*)?)?"
     },
     "command_argument_sep": {
       "type": "PREC_RIGHT",
@@ -4570,6 +4583,83 @@
         {
           "type": "STRING",
           "value": ")"
+        }
+      ]
+    },
+    "_glued_expandable_string": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "IMMEDIATE_TOKEN",
+          "content": {
+            "type": "PATTERN",
+            "value": "[\"\\u201C-\\u201E](\\s*\\#*)*"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "_expandable_string_text"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "variable"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "sub_expression"
+              },
+              {
+                "type": "IMMEDIATE_TOKEN",
+                "content": {
+                  "type": "PATTERN",
+                  "value": "\\$(`.{1}|`\\r?\\n|[\\s\\\\])"
+                }
+              },
+              {
+                "type": "IMMEDIATE_TOKEN",
+                "content": {
+                  "type": "PATTERN",
+                  "value": "`.{1}|`\\r?\\n"
+                }
+              },
+              {
+                "type": "IMMEDIATE_TOKEN",
+                "content": {
+                  "type": "PATTERN",
+                  "value": "[\"\\u201C-\\u201E][\"\\u201C-\\u201E]"
+                }
+              },
+              {
+                "type": "IMMEDIATE_TOKEN",
+                "content": {
+                  "type": "STRING",
+                  "value": "$"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "IMMEDIATE_TOKEN",
+            "content": {
+              "type": "STRING",
+              "value": "$"
+            }
+          }
+        },
+        {
+          "type": "IMMEDIATE_TOKEN",
+          "content": {
+            "type": "PATTERN",
+            "value": "(\\s*\\#*)*[\"\\u201C-\\u201E]"
+          }
         }
       ]
     },

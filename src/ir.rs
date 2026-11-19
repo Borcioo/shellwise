@@ -83,7 +83,14 @@ pub struct SimpleCommand {
     pub opaque: bool,
 }
 
-/// A static .NET call such as `[IO.Directory]::Delete(...)`.
+/// A .NET method call.
+///
+/// - Static, `[IO.Directory]::Delete(...)`: `type_name` is the type as written (`IO.Directory`)
+///   and `args` are the call's arguments.
+/// - Static on an expression, `$t::Delete(...)`: `type_name` is the receiver's text and `args[0]`
+///   is the receiver.
+/// - Instance, `$x.Delete(...)` or `(Get-Item x).Delete(...)`: `type_name` is empty, since the
+///   type is known only at run time, and `args[0]` is the receiver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodCall {
     pub type_name: String,

@@ -152,7 +152,7 @@ command = "(Get-ChildItem).ForEach({ $_.Name })"
 error = false
 cmds = [["Get-ChildItem"]]
 comments = []
-methods = []
+methods = ["(Get-ChildItem).ForEach"]
 
 [[row]]
 id = "negative-number"
@@ -233,7 +233,7 @@ command = "Write-Output $x.Trim() 'b'"
 error = false
 cmds = [["Write-Output", "$x.Trim()", "'b'"]]
 comments = []
-methods = []
+methods = ["$x.Trim"]
 
 [[row]]
 id = "member-after-herestring"
@@ -242,7 +242,7 @@ command = "$s = @'\na\n'@.Trim(); git status"
 error = false
 cmds = [["git", "status"]]
 comments = []
-methods = []
+methods = ["@'\na\n'@.Trim"]
 
 [[row]]
 id = "subexpr-glued-end"
@@ -287,7 +287,7 @@ command = "Where-Object LastWriteTime -gt (Get-Date).AddDays(-5)"
 error = false
 cmds = [["Where-Object", "LastWriteTime", "-gt", "(Get-Date).AddDays(-5)"], ["Get-Date"]]
 comments = []
-methods = []
+methods = ["(Get-Date).AddDays"]
 
 [[row]]
 id = "comment-trailing"
@@ -596,4 +596,534 @@ command = "Write-Output --% x || git status"
 error = false
 cmds = [["Write-Output", "--%", "x "], ["git", "status"]]
 comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x && ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x "], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and-glued"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x&&ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and-quoted"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% \"a&&b\" && ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "\"a&&b\" "], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and-after-quote"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% \"a\"&&ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "\"a\""], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and-tab"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x\t&& ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x\t"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and-triple"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x &&& ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x "], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-and-backtick"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x `&& ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x `"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-pipe-backtick"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x `| ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x `"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-lf"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x\nri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-cr"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x\rri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-crlf"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x\r\nri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-unclosed-quote"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% \"a | ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "\"a | ri C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-unclosed-quote-lf"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% \"a\nri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "\"a"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-keeps-semicolon"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x; ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x; ri C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-keeps-amp"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x & ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x & ri C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-keeps-amp-amp-spaced"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x & & ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x & & ri C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-keeps-gt"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x > ri"
+error = false
+cmds = [["Write-Output", "--%", "x > ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-keeps-merge"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x 2>&1 ri"
+error = false
+cmds = [["Write-Output", "--%", "x 2>&1 ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-keeps-hash"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x # ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x # ri C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-trailing-amp"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+parser = "refuses"
+command = "Write-Output --% x &"
+error = false
+cmds = [["Write-Output", "--%", "x &"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-verbatim-trailing-amp-lf"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+parser = "refuses"
+command = "Write-Output --% x &\nri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x &"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-one-dash-backtick-lf"
+mechanism = "fix1: a one-dash parameter ends at the line end; a backtick in it fails closed"
+parser = "refuses"
+command = "Write-Output -a`\nri C:\\x"
+error = false
+cmds = [["Write-Output", "-a`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-one-dash-backtick-recurse"
+mechanism = "fix1: a one-dash parameter ends at the line end; a backtick in it fails closed"
+parser = "refuses"
+command = "Remove-Item -R`\necurse C:\\x"
+error = false
+cmds = [["Remove-Item", "-R`"], ["ecurse", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-two-dash-backtick-lf"
+mechanism = "fix1: a backtick-LF inside a two-dash word continues it (b179ed4)"
+command = "Write-Output --a`\nri C:\\x"
+error = false
+cmds = [["Write-Output", "--a`\nri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-two-dash-backtick-equals"
+mechanism = "fix1: a backtick-LF inside a two-dash word continues it (b179ed4)"
+parser = "refuses"
+command = "node --name`\n=a x.js"
+error = false
+cmds = [["node", "--name`\n=a", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-escaped-comma-ends-word"
+mechanism = "fix1: an escaped comma is text, so a space after it starts a new argument"
+command = "Remove-Item x`, C:\\ -Recurse"
+error = false
+cmds = [["Remove-Item", "x`,", "C:\\", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-escaped-comma-ab"
+mechanism = "fix1: an escaped comma is text, so a space after it starts a new argument"
+command = "Write-Output a`, b"
+error = false
+cmds = [["Write-Output", "a`,", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-subexpr-two-dash"
+mechanism = "fix1: a parameter value expands like any word"
+command = "Write-Output --a=\"$(ri C:\\x)\""
+error = false
+cmds = [["Write-Output", "--a=\"$(ri C:\\x)\""], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-subexpr-one-dash"
+mechanism = "fix1: a parameter value expands like any word"
+command = "Write-Output -a=\"$(ri C:\\x)\""
+error = false
+cmds = [["Write-Output", "-a=\"$(ri C:\\x)\""], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-var"
+mechanism = "fix1: a parameter value expands like any word"
+command = "git log --format=\"$x\""
+error = false
+cmds = [["git", "log", "--format=\"$x\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-bare-var"
+mechanism = "fix1: a parameter value expands like any word"
+command = "git log --format=$x"
+error = false
+cmds = [["git", "log", "--format=$x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-single"
+mechanism = "fix1: a parameter value expands like any word"
+command = "git log --format='$(x)'"
+error = false
+cmds = [["git", "log", "--format='$(x)'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-plain"
+mechanism = "fix1: a parameter value expands like any word"
+command = "git diff -M50% --pretty=format:\"%B\""
+error = false
+cmds = [["git", "diff", "-M50%", "--pretty=format:\"%B\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-param-value-backtick-quote"
+mechanism = "fix1: a parameter value expands like any word"
+command = "Write-Output --a=\"x`\" \"; ri C:\\x #\""
+error = false
+cmds = [["Write-Output", "--a=\"x`\" \""], ["ri", "C:\\x"]]
+comments = ["#\""]
+methods = []
+
+[[row]]
+id = "fix1-stmt-redirect-glued-comment"
+mechanism = "fix1: a comment glued to a statement-level redirect is word text (b179ed4)"
+parser = "refuses"
+command = "git status; 2>$null<#x#>"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-expr-redirect-glued-comment"
+mechanism = "fix1: a comment glued to a statement-level redirect is word text (b179ed4)"
+parser = "refuses"
+command = "(ls) 2>$null<#x#>"
+error = false
+cmds = [["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-expr-redirect-subst"
+mechanism = "fix1: an expression redirect target runs"
+command = "(ls) > $(ri C:\\x)"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-glued-stop-parsing"
+mechanism = "fix1: --% glued to a word is text"
+command = "Write-Output a--% x"
+error = false
+cmds = [["Write-Output", "a--%", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-subexpr-glued-text"
+mechanism = "fix1: text glued after $(...) starts a new argument"
+parser = "refuses"
+command = "ri $(echo a)C:\\ -Recurse"
+error = false
+cmds = [["ri", "$(echo a)", "C:\\", "-Recurse"], ["echo", "a"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-subexpr-glued-text-x"
+mechanism = "fix1: text glued after $(...) starts a new argument"
+parser = "refuses"
+command = "Remove-Item $(ls)x"
+error = false
+cmds = [["Remove-Item", "$(ls)", "x"], ["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-instance-call-paren"
+mechanism = "fix1: an instance method call is a method call"
+command = "(Get-Item C:\\x).Delete()"
+error = false
+cmds = [["Get-Item", "C:\\x"]]
+comments = []
+methods = ["(Get-Item C:\\x).Delete"]
+
+[[row]]
+id = "fix1-instance-call-var"
+mechanism = "fix1: an instance method call is a method call"
+command = "$x.Delete()"
+error = false
+cmds = []
+comments = []
+methods = ["$x.Delete"]
+
+[[row]]
+id = "fix1-static-call-assigned"
+mechanism = "fix1: an instance method call is a method call"
+command = "$null = [IO.Directory]::Delete('x')"
+error = false
+cmds = []
+comments = []
+methods = ["[IO.Directory]::Delete"]
+
+[[row]]
+id = "fix1-instance-call-argument"
+mechanism = "fix1: an instance method call is a method call"
+command = "Write-Output $x.Delete()"
+error = false
+cmds = [["Write-Output", "$x.Delete()"]]
+comments = []
+methods = ["$x.Delete"]
+
+[[row]]
+id = "fix1-instance-call-second-statement"
+mechanism = "fix1: an instance method call is a method call"
+command = "$d = Get-Item C:\\x; $d.Delete($true)"
+error = false
+cmds = [["Get-Item", "C:\\x"]]
+comments = []
+methods = ["$d.Delete"]
+
+[[row]]
+id = "fix1-instance-call-on-static"
+mechanism = "fix1: an instance method call is a method call"
+command = "[IO.DirectoryInfo]::new('x').Delete()"
+error = false
+cmds = []
+comments = []
+methods = ["[IO.DirectoryInfo]::new", "[IO.DirectoryInfo]::new('x').Delete"]
+
+[[row]]
+id = "fix1-verbatim-typographic-quotes"
+mechanism = "fix1: --% text ends where PowerShell ends it"
+command = "Write-Output --% x \u201Ca|b\u201D | ri C:\\x"
+error = false
+cmds = [["Write-Output", "--%", "x \u201Ca|b\u201D "], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-stop-parsing-after-quote"
+mechanism = "fix1: --% glued after a closing quote fails closed"
+parser = "refuses"
+command = "Write-Output 'a'--% x"
+error = false
+cmds = [["Write-Output", "'a'", "--%", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-instance-call-foreach-block"
+mechanism = "fix1: an instance method call is a method call"
+command = "(ls).ForEach{ ri $_ }"
+error = false
+cmds = [["ls"], ["ri", "$_"]]
+comments = []
+methods = ["(ls).ForEach"]
+
+[[row]]
+id = "fix1-name-subexpr-constant"
+mechanism = "fix1: a bare command name is constant text for PowerShell"
+parser = "refuses"
+command = "Write-Output` -a=\"$(ri C:\\x)\""
+error = false
+cmds = [["Write-Output` -a=\"$(ri C:\\x)\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-escaped-stop-parsing"
+mechanism = "fix1: an escaped --% still stops parsing"
+parser = "refuses"
+command = "Write-Output --`% x > ri"
+error = false
+cmds = [["Write-Output", "--`%", "x > ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-foreach-block-after-line-end"
+mechanism = "fix1: a block after a line end is not the ForEach argument"
+parser = "refuses"
+command = "(ls).ForEach\n{ ri $_ }"
+error = false
+cmds = [["ls"], ["ri", "$_"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-stop-parsing-after-double-quote"
+mechanism = "fix1: --% glued after a closing quote fails closed"
+parser = "refuses"
+command = "Write-Output \"a\"--%''; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "--%''", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-command-redirect-glued-comment"
+mechanism = "fix1: a comment glued to a redirect target is word text"
+parser = "refuses"
+command = ":(ls) 2>$null<#x#>"
+error = false
+cmds = [[":", "(ls)"], ["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-instance-call-assigned"
+mechanism = "fix1: an instance method call is a method call"
+command = "$y = 1 + $x.Delete()"
+error = false
+cmds = []
+comments = []
+methods = ["$x.Delete"]
+
+[[row]]
+id = "fix1-semicolon-after-redirect"
+mechanism = "fix1: a word never starts with a semicolon"
+parser = "refuses"
+command = "ls 2>$null<;ri C:\\x"
+error = false
+cmds = [["ls"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix1-comment-glued-to-name"
+mechanism = "fix1: a comment glued to the command name is name text"
+parser = "refuses"
+command = "git<#x\u00A0#> status"
+error = false
+cmds = [["git<#x"]]
+comments = ["#> status"]
 methods = []

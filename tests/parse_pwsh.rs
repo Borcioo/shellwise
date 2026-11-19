@@ -554,3 +554,18 @@ fn bash_is_not_a_powershell_dialect() {
     let e = parse("ls", Shell::Bash(shellwise::BashProfile::Posix), Os::Posix).unwrap_err();
     assert!(e.message.contains("not a PowerShell dialect"));
 }
+
+#[test]
+fn an_instance_call_at_a_pipeline_head_is_a_method_call_with_its_receiver() {
+    let s = win("$x.Delete($true)");
+    let [Stmt::Pipeline(p)] = s.stmts.as_slice() else {
+        panic!("{s:?}");
+    };
+    let [Elem::Method(m)] = p.elems.as_slice() else {
+        panic!("{p:?}");
+    };
+    assert_eq!(m.type_name, "");
+    assert_eq!(m.method, "Delete");
+    assert_eq!(m.args.len(), 2, "{m:?}");
+    assert_eq!(m.args[0].parts, vec![var("x")]);
+}
