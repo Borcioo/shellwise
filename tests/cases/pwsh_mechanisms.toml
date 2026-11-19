@@ -4008,3 +4008,30 @@ error = false
 cmds = [[".2x"]]
 comments = []
 methods = []
+
+[[row]]
+id = "word-star-dot-plain"
+mechanism = "a `*` word with a plain second character, then `;`: the next command runs"
+command = "ls *.txt;ri C:\\x"
+error = false
+cmds = [["ls", "*.txt"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-glued-paren"
+mechanism = "`-a=b:` glued to `(1)`: one argument, no gap after the colon"
+command = "Write-Output -a=b:(1)"
+error = false
+cmds = [["Write-Output", "-a=b:(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "name-dot-relative-script"
+mechanism = "`.\\x.ps1` is a command name: a dot, then no number"
+command = ".\\x.ps1"
+error = false
+cmds = [[".\\x.ps1"]]
+comments = []
+methods = []
