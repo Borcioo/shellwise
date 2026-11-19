@@ -3243,6 +3243,15 @@ comments = []
 methods = []
 
 [[row]]
+id = "glue-tail-two-dash-subexpr"
+mechanism = "`--name=$$$` glued after a quote is a parameter: `$(\U00002026)` joins it"
+command = "node ''--name=$$$($m.p) x.js"
+error = false
+cmds = [["node", "''", "--name=$$$($m.p)", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
 id = "glue-r-dot-dash"
 mechanism = "`.` glued to `-` is the command name `.-`, not the dot-source operator (not in the glue table)"
 parser = "refuses"
@@ -3283,11 +3292,222 @@ comments = []
 methods = []
 
 [[row]]
+id = "glue-r-tail-one-dash-dot"
+mechanism = "`-x.` glued after a quote: the parameter ends at the dot (argument-start check on the tail)"
+parser = "refuses"
+command = "Write-Output \"aa\"-x.(\"x\")"
+error = false
+cmds = [["Write-Output", "\"aa\"", "-x", ".", "(\"x\")"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-tail-one-dash-dot-plain"
+mechanism = "`-a.b` glued after a quote: the parameter ends at the dot (argument-start check on the tail)"
+parser = "refuses"
+command = "Write-Output ''-a.b"
+error = false
+cmds = [["Write-Output", "''", "-a", ".b"]]
+comments = []
+methods = []
+
+[[row]]
 id = "glue-r-call-op-dquote"
 mechanism = "`&` glued to a double-quoted name (not in the glue table)"
 parser = "refuses"
 command = "&\"x\""
 error = false
 cmds = [["\"x\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-subexpr-text"
+mechanism = "after a quote, text glued to a `$(\U00002026)` stays in its word (`b$(x)c$(y)d` is one argument)"
+command = "Write-Output ''b$(x)c$(y)d"
+error = false
+cmds = [["Write-Output", "''", "b$(x)c$(y)d"], ["x"], ["y"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-subexpr-text-dquote"
+mechanism = "after a double quote, text glued to a `$(\U00002026)` stays in its word"
+command = "Write-Output \"a\"b$(x)c"
+error = false
+cmds = [["Write-Output", "\"a\"", "b$(x)c"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-one-dash-subexpr"
+mechanism = "a one-dash parameter glued after a quote ends at `$`: the `(\U00002026)` is a new argument"
+command = "Write-Output ''-name=$(x)"
+error = false
+cmds = [["Write-Output", "''", "-name=$", "(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-variable-equals"
+mechanism = "`=` glued after a variable starts a new argument for PowerShell (argument-start check)"
+parser = "refuses"
+command = "Write-Output $a=b"
+error = false
+cmds = [["Write-Output", "$a", "=b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-quote-bracket"
+mechanism = "`]` glued after a quote is a token of its own for PowerShell (argument-start check)"
+parser = "refuses"
+command = "Write-Output 'a']b"
+error = false
+cmds = [["Write-Output", "'a'", "]", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-two-dash-colon-paren"
+mechanism = "a `(\U00002026)` glued after a two-dash word ending in `:` is a new argument (only `-name:` takes it as its value)"
+command = "node --name=$$:($m.p) x.js"
+error = false
+cmds = [["node", "--name=$$:", "($m.p)", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-dash-not-parameter"
+mechanism = "a word glued after a quote that starts `-#` is no parameter: `$$$(\U00002026)` joins it"
+command = "Write-Output ''-#-name=$$$(1) x"
+error = false
+cmds = [["Write-Output", "''", "-#-name=$$$(1)", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-at-paren"
+mechanism = "`@` glued after a quote, then `(\U00002026)`, is one array subexpression"
+command = "Write-Output \"a\"@(1)"
+error = false
+cmds = [["Write-Output", "\"a\"", "@(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-keyword-comment"
+mechanism = "a comment glued to `if` makes `if<#x#>` a command name for PowerShell"
+parser = "refuses"
+command = "if<#x#> ($a) { git status }"
+error = false
+cmds = [["if<#x#>", "($a)", "{ git status }"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-else-comment"
+mechanism = "a comment glued to `else` makes `else<#x#>` a command name for PowerShell"
+parser = "refuses"
+command = "if ($a) { git status } else<#x#> { ls }"
+error = false
+cmds = [["git", "status"], ["else<#x#>", "{ ls }"], ["ls"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-block-increment"
+mechanism = "`++` glued after a script block is an argument of its own for PowerShell"
+parser = "refuses"
+command = "git log {1}++ x"
+error = false
+cmds = [["git", "log", "{1}", "++", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-digit-backtick-line-end"
+mechanism = "a word starting with a digit and ending in a backtick before a line end: PowerShell escapes the line end"
+parser = "refuses"
+command = "Write-Output 1,2`\n"
+error = false
+cmds = [["Write-Output", "1,2`\n"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-escaped-dollar-paren"
+mechanism = "an escaped `$` does not open `$(\U00002026)`: the `(\U00002026)` after `$$`$` is a new argument"
+command = "node ''--name=$$`$($m.p) x.js"
+error = false
+cmds = [["node", "''", "--name=$$`$", "($m.p)", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-one-dash-colon-subexpr"
+mechanism = "a one-dash parameter with a `:` takes the glued `$(\U00002026)` as its value"
+command = "Write-Output -name=:$(x)"
+error = false
+cmds = [["Write-Output", "-name=:$(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-tail-one-dash-colon-subexpr"
+mechanism = "the same for a parameter glued after a quote"
+command = "Write-Output 'x'-name=:$(x)"
+error = false
+cmds = [["Write-Output", "'x'", "-name=:$(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-one-dash-bracket"
+mechanism = "a one-dash parameter ends at `[` for PowerShell"
+parser = "refuses"
+command = "Write-Output -a=[b]"
+error = false
+cmds = [["Write-Output", "-a=", "[b]"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-tail-one-dash-bracket"
+mechanism = "the same for a parameter glued after a quote"
+parser = "refuses"
+command = "Write-Output ''-name?[0]=$(x)"
+error = false
+cmds = [["Write-Output", "''", "-name?", "[0]=$(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-paren-comment-member"
+mechanism = "a comment between `)` and `.Name(\U00002026)`: PowerShell calls the method"
+parser = "refuses"
+command = "(Get-ChildItem)<#x#>.ForEach({ $_.Name })"
+error = false
+cmds = [["Get-ChildItem"]]
+comments = ["<#x#>"]
+methods = ["(Get-ChildItem).ForEach"]
+
+[[row]]
+id = "glue-r-path-name-space"
+mechanism = "a space inside a path command name ends the name for PowerShell"
+parser = "refuses"
+command = ". $dir\\\t.ps1"
+error = false
+cmds = [["$dir\\", ".ps1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-word-bracket"
+mechanism = "a `]` starting a word is a token of its own for PowerShell"
+parser = "refuses"
+command = "Write-Output 'a'  ]b"
+error = false
+cmds = [["Write-Output", "'a'", "]", "b"]]
 comments = []
 methods = []

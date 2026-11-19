@@ -360,6 +360,17 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                 ks.first()
                     .is_some_and(|r| matches!(r.kind(), "integer_literal" | "real_literal"))
                     || ks.windows(2).any(|w| w[0].end_byte() != w[1].start_byte())
+                    // `(ls)<#x#>.ForEach(…)`: what PowerShell names the member is not modelled.
+                    || ks.iter().any(|k| k.kind() == "comment")
+            }
+            "invokation_expression" | "invokation_foreach_expression" => {
+                kids(n).iter().any(|k| k.kind() == "comment")
+            }
+            // `1`⏎`: the tree ends a word at a backtick that escapes the line end after it.
+            "generic_token" | "command_parameter" => {
+                src[..n.end_byte()].ends_with('`')
+                    && (src[n.end_byte()..].starts_with('\n')
+                        || src[n.end_byte()..].starts_with('\r'))
             }
             "command_name" => {
                 let t = &src[n.start_byte()..n.end_byte()];
@@ -367,14 +378,26 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             }
             // `& $x.Name` is a member access for PowerShell too.
             "path_command_name" => kids(n).windows(2).any(|w| {
-                w[0].kind() == "variable"
-                    && src[w[1].start_byte()..]
-                        .strip_prefix('.')
-                        .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+                // `. $dir\<TAB>.ps1`: a space ends the name for PowerShell.
+                w[0].end_byte() != w[1].start_byte()
+                    || (w[0].kind() == "variable"
+                        && src[w[1].start_byte()..].strip_prefix('.').is_some_and(|r| {
+                            !r.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                        }))
             }),
             "post_increment_expression" | "post_decrement_expression" => named_kids(n)
                 .first()
-                .is_some_and(|r| r.kind() == "string_literal"),
+                .is_some_and(|r| matches!(r.kind(), "string_literal" | "script_block_expression")),
+            // `if<#x#> (…)`: a comment glued to a keyword makes the pair a command name.
+            "comment"
+                if n.prev_sibling().is_some_and(|k| {
+                    !k.is_named()
+                        && k.end_byte() == n.start_byte()
+                        && src[k.start_byte()..k.end_byte()].ends_with(|c: char| c.is_alphabetic())
+                }) =>
+            {
+                true
+            }
             "comment" => {
                 let before = src[..n.start_byte()].trim_end_matches([' ', '\t']);
                 let before = before
@@ -1426,8 +1449,6 @@ impl<'a> Lower<'a> {
         let mut args = Vec::new();
         for k in &ks {
             match k.kind() {
-                // `[IO.Directory]<#x#>::Delete()`: what PowerShell names the call is not modelled.
-                "comment" if is_static => return Err(self.unmodelled(*k)),
                 "::" | "." | "comment" => {}
                 "member_name" => method = self.text(*k).to_string(),
                 "script_block_expression" if receiver.is_some() => {
@@ -1652,19 +1673,20 @@ impl<'a> Lower<'a> {
         // End of the previous element node and whether it was a redirection.
         let mut last_end = after;
         let mut last_redirect = false;
-        // `"a"b`: a closing quote ends an argument, so each word glued after a string starts
-        // the next argument (`glued_string_argument` holds the string and those words).
-        let mut kids: Vec<(Node, bool)> = Vec::new();
+        // `"a"b`: a closing quote ends an argument, so the word glued after a string starts the
+        // next argument (`glued_string_argument` holds the string and the pieces glued after
+        // it); the pieces after that word group as any glued pieces do (`''--a=$$$(x)`).
+        let mut kids: Vec<(Node, bool, bool)> = Vec::new();
         for ch in named_kids(ce) {
             if ch.kind() == "glued_string_argument" {
                 for (i, k) in named_kids(ch).into_iter().enumerate() {
-                    kids.push((k, i > 0));
+                    kids.push((k, i == 1, i > 0));
                 }
             } else {
-                kids.push((ch, false));
+                kids.push((ch, false, false));
             }
         }
-        for (ch, new_arg) in kids {
+        for (ch, new_arg, in_tail) in kids {
             let glued_to_last = ch.start_byte() == last_end;
             match ch.kind() {
                 "comment" => {
@@ -1735,10 +1757,24 @@ impl<'a> Lower<'a> {
                             // holds a subexpression.
                             // (`$$(…)` is the variable `$$`, then a new argument; `$$$(…)` is
                             // `$$` and a subexpression: the `$` run before `(` is odd.)
-                            // A one-dash `-name=$` is a parameter: the `(` starts a new argument.
-                            (prev.iter().rev().take_while(|c| **c == b'$').count() % 2 == 1
-                                && !(last.kind() == "command_parameter" && !prev.starts_with(b"--"))
+                            // A one-dash `-name=$` is a parameter: the `(` starts a new argument,
+                            // unless a `:` gave the parameter its value (`-name=:$(x)`).
+                            (opens_subexpression(prev)
+                                && !((last.kind() == "command_parameter"
+                                    || (in_tail && starts_parameter(self.text(*last))))
+                                    && !prev.starts_with(b"--")
+                                    && !prev.contains(&b':'))
                                 && matches!(ch.kind(), "parenthesized_expression" | "argument_list"))
+                            // `''b$(x)c`: after a quote, text glued to a `$(…)` stays in its word.
+                            || (in_tail
+                                && ch.kind() == "generic_token"
+                                && last.kind() == "parenthesized_expression"
+                                && group.len() >= 2
+                                && opens_subexpression(self.text(group[group.len() - 2]).as_bytes()))
+                            // `"a"@(1)`: after a quote, `@(…)` is one array subexpression.
+                            || (in_tail
+                                && prev == b"@"
+                                && ch.kind() == "parenthesized_expression")
                             // `(Get-Date).AddDays(-5)`: a member call keeps its arguments.
                             || (ch.kind() == "argument_list"
                                 && last.kind() != "generic_token"
@@ -1754,7 +1790,11 @@ impl<'a> Lower<'a> {
                     glued
                         || gap.trim() == ","
                         || (gap == ":" && prev.starts_with(b"-"))
-                        || (gap.is_empty() && prev.starts_with(b"-") && prev.ends_with(b":"))
+                        // `-name:(…)` takes its value; `--name:(…)` is two arguments.
+                        || (gap.is_empty()
+                            && prev.starts_with(b"-")
+                            && !prev.starts_with(b"--")
+                            && prev.ends_with(b":"))
                 }
                 _ => false,
             };
@@ -1764,7 +1804,7 @@ impl<'a> Lower<'a> {
                 // `x :y` and friends: a colon PowerShell keeps as text that the grouping drops.
                 return Err(self.unmodelled(c));
             }
-            if new_arg {
+            if in_tail {
                 // `''2>$null`: a stream redirection glued after a string.
                 let t = self.text(ch).as_bytes();
                 // `"a"--%x`: what PowerShell stops parsing at is not modelled after a quote.
@@ -1781,9 +1821,11 @@ impl<'a> Lower<'a> {
                 if let Some(c) = colon.take() {
                     return Err(self.unmodelled(c));
                 }
-                out.push(Element::Arg(std::mem::take(&mut group)));
-                group.push(ch);
-                continue;
+                if new_arg {
+                    out.push(Element::Arg(std::mem::take(&mut group)));
+                    group.push(ch);
+                    continue;
+                }
             }
             // `git-`, `-5-`, `2>$null-`: text glued to the previous element that the tree
             // split off (a bare dash, `--%`) is one word for PowerShell.
@@ -1841,10 +1883,6 @@ impl<'a> Lower<'a> {
             if n.kind() == "generic_token" && dot_opens_expression(self.text(*n)) {
                 return Err(self.unmodelled(*n));
             }
-            // `2>$null<#x#>.$m`: a comment inside a word is word text for PowerShell.
-            if n.kind() == "member_access" && named_kids(*n).iter().any(|c| c.kind() == "comment") {
-                return Err(self.unmodelled(*n));
-            }
             if let Some(e) = prev_end {
                 let gap = &self.src[e..n.start_byte()];
                 if gap.is_empty()
@@ -1886,16 +1924,7 @@ impl<'a> Lower<'a> {
                     // the grammar can tell; what PowerShell names it is not proven, so it fails
                     // closed. A value (`--a=$x`) expands like any word.
                     let t = self.text(*n);
-                    // `--name=a, b`: PowerShell continues the comma list past the space.
-                    if t.ends_with(',') && !t.ends_with("`,") {
-                        return Err(self.unmodelled(*n));
-                    }
-                    // `-a=x.m`, `--a=.$m`: PowerShell ends the parameter at the dot.
-                    // `-name=a<#x#>b`: a comment inside the token.
-                    if param_value_splits_at_dot(t) || t.contains("<#") {
-                        return Err(self.unmodelled(*n));
-                    }
-                    if !t.starts_with("--") && t.contains('`') {
+                    if parameter_text_unproven(t) {
                         return Err(self.unmodelled(*n));
                     }
                     let w = self.decode(n.start_byte(), n.end_byte(), &[], Mode::Bare, cx)?;
@@ -1916,10 +1945,31 @@ impl<'a> Lower<'a> {
                 "generic_token" if self.text(*n).replace('`', "").starts_with("--%") => {
                     return Err(self.unmodelled(*n));
                 }
+                // `''-a.b`: a word glued after a quote that starts with a dash is a parameter
+                // for PowerShell, so the parameter checks apply to it.
+                "generic_token"
+                    if i == 0
+                        && starts_parameter(self.text(*n))
+                        && parameter_text_unproven(self.text(*n)) =>
+                {
+                    return Err(self.unmodelled(*n));
+                }
+                // `]b`: a `]` starting a word is a token of its own for PowerShell.
+                "generic_token" if i == 0 && self.text(*n).starts_with(']') => {
+                    return Err(self.unmodelled(*n));
+                }
                 "generic_token" => {
                     let w = self.token_word(*n, cx)?;
                     quotes.push(w.quote);
                     items.extend(w.parts.into_iter().map(Item::Part));
+                }
+                // `$a=b`: PowerShell ends the variable at `=`, which starts the next argument.
+                "glued_argument"
+                    if named_kids(*n)
+                        .first()
+                        .is_some_and(|v| self.src[v.end_byte()..n.end_byte()].starts_with('=')) =>
+                {
+                    return Err(self.unmodelled(*n));
                 }
                 // `$env::TEMP\a`: PowerShell ends the argument after the static member access.
                 "glued_argument" if static_member_on_variable(self.text(*n)) => {
@@ -2526,6 +2576,34 @@ fn param_value_splits_at_dot(t: &str) -> bool {
     }
     t.char_indices()
         .any(|(i, c)| c == '.' && dot_opens_expression(&t[i..]) && t[..i].ends_with(['=', ',']))
+}
+
+/// Text ending in a `$` that opens a `$(…)` glued after it: an odd run of unescaped `$`
+/// (`$$` is a variable; ``$$`$`` ends in an escaped `$`).
+fn opens_subexpression(t: &[u8]) -> bool {
+    let run = t.iter().rev().take_while(|c| **c == b'$').count();
+    let escaped = run > 0 && t.len() > run && t[t.len() - run - 1] == b'`';
+    (run - usize::from(escaped)) % 2 == 1
+}
+
+/// A word PowerShell reads as a parameter: a dash, then a letter, `_`, `?` or a second dash
+/// (`-5` is a number, `-#x` a word).
+fn starts_parameter(t: &str) -> bool {
+    t.strip_prefix('-')
+        .and_then(|r| r.chars().next())
+        .is_some_and(|c| c.is_alphabetic() || matches!(c, '_' | '?' | '-'))
+}
+
+/// Parameter text whose PowerShell reading is not proven: a comma list going on past a space
+/// (`--name=a, b`), a dot where PowerShell ends the parameter (`-a=x.m`, `--a=.$m`), a comment
+/// inside the token (`-name=a<#x#>b`), or a backtick or a `[` (where PowerShell ends it) in a
+/// one-dash parameter.
+fn parameter_text_unproven(t: &str) -> bool {
+    (t.ends_with(',') && !t.ends_with("`,"))
+        || param_value_splits_at_dot(t)
+        || t.contains("<#")
+        || (!t.starts_with("--") && t.contains('`'))
+        || (!t.starts_with("--") && t.contains('['))
 }
 
 /// `$x.Name`: a member access whose member is a plain name.
