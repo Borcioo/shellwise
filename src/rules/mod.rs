@@ -59,6 +59,7 @@ pub fn length_rules() -> Vec<Box<dyn Rule>> {
 pub fn all() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(parse_error::ParseErrorRule),
+        Box::new(parse_error::ParseErrorDestructiveRule),
         #[cfg(feature = "testhooks")]
         Box::new(testhooks::TestHook),
     ]
@@ -75,6 +76,11 @@ pub mod testhooks {
         std::env::var("SHELLWISE_TESTHOOK").unwrap_or_default()
     }
 
+    /// Whether `m` is one of the comma-separated modes, so two faults can be combined.
+    pub fn active(m: &str) -> bool {
+        mode().split(',').any(|x| x == m)
+    }
+
     pub struct TestHook;
 
     impl Rule for TestHook {
@@ -83,24 +89,22 @@ pub mod testhooks {
         }
 
         fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
-            match mode().as_str() {
-                "slow" => {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    out.push(Finding {
-                        rule: "testhook-done",
-                        level: crate::level::Level::Warn,
-                        message: "the analysis finished".to_string(),
-                        fix: None,
-                        span: crate::level::Span::default(),
-                    });
-                }
-                "panic" | "panic-scan-sleep" => panic!("testhook: panic inside a rule"),
-                "sleep" => std::thread::sleep(std::time::Duration::from_secs(60)),
-                "recurse" => {
-                    let depth = ctx.input.command.bytes().filter(|&b| b == b'(').count();
-                    std::hint::black_box(recurse(depth));
-                }
-                _ => {}
+            if active("slow") {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                out.push(Finding {
+                    rule: "testhook-done",
+                    level: crate::level::Level::Warn,
+                    message: "the analysis finished".to_string(),
+                    fix: None,
+                    span: crate::level::Span::default(),
+                });
+            } else if active("panic") || active("panic-scan-sleep") {
+                panic!("testhook: panic inside a rule");
+            } else if active("sleep") {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            } else if active("recurse") {
+                let depth = ctx.input.command.bytes().filter(|&b| b == b'(').count();
+                std::hint::black_box(recurse(depth));
             }
         }
     }
@@ -114,10 +118,10 @@ pub mod testhooks {
         }
 
         fn check(&self, _ctx: &Ctx, out: &mut Vec<Finding>) {
-            if mode() == "length-panic" {
+            if active("length-panic") {
                 panic!("testhook: panic inside a length rule");
             }
-            if mode() == "length" {
+            if active("length") {
                 out.push(Finding {
                     rule: "testhook-length",
                     level: crate::level::Level::Break,

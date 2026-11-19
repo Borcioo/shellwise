@@ -1,6 +1,6 @@
 //! Every path that cannot finish the analysis: `analysis-incomplete`, `danger` when the raw scan
-//! finds a destructive or unreadable command (named in the span) or does not finish, `warn`
-//! otherwise.
+//! finds a command of the destructive table (named in the span), `warn` otherwise, also when the
+//! scan does not finish. Input it cannot read at all is `danger`.
 
 mod common;
 
@@ -67,14 +67,14 @@ fn input_over_the_hard_cap_is_danger_without_scanning() {
 fn chained_env_split_strings_get_a_verdict() {
     // Each `env -S` link nests one more command. The invalid byte forces the fail path, where the
     // raw scan must still finish in time; past its depth limit the scan cannot read the tail, so
-    // both tails are danger, printed as JSON.
-    for tail in ["rm -rf x", "echo hi"] {
+    // only the tail that names a command of the destructive table is danger, printed as JSON.
+    for (tail, code) in [("rm -rf x", 2), ("echo hi", 0)] {
         let mut cmd = "env -S ".repeat(9000).into_bytes();
         cmd.extend_from_slice(tail.as_bytes());
         cmd.extend_from_slice(b" #\xff");
         let r = run(&["check", "--shell", "bash", "--json"], Some(&cmd), &[]);
         assert_eq!(
-            r.code, 2,
+            r.code, code,
             "{tail}: stdout {:?} stderr {:?}",
             r.stdout, r.stderr
         );
@@ -146,14 +146,25 @@ mod hooks {
     }
 
     #[test]
-    fn scan_that_misses_the_deadline_is_danger() {
-        // The rule panics and the raw-text scan is too slow: nothing shows the text holds no
-        // delete.
-        for cmd in [PLAIN, READ_ONLY] {
+    fn scan_that_misses_the_deadline_is_warn() {
+        // The rule panics and the raw-text scan is too slow: an internal failure with no
+        // destructive match is warn, and the reason says the scan did not finish.
+        for cmd in [PLAIN, READ_ONLY, DESTRUCTIVE] {
             let r = hook("panic-scan-sleep", cmd);
-            assert_failed(&r);
+            assert_incomplete_warn(&r);
+            let message = r.json()["findings"][0]["message"].to_string();
+            assert!(message.contains("the raw scan did not finish"), "{message}");
             assert!(r.elapsed < Duration::from_secs(5), "{cmd}: {:?}", r.elapsed);
         }
+    }
+
+    #[test]
+    fn an_analysis_that_finishes_runs_no_raw_scan() {
+        // `scan-abort` kills the process as soon as the raw scan starts.
+        assert_ok(&hook("scan-abort", PLAIN));
+        // On the failure path the scan runs.
+        let r = hook("scan-abort,panic", PLAIN);
+        assert_ne!(r.code, 0, "{r:?}", r = r.stdout);
     }
 
     #[test]

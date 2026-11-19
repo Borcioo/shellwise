@@ -1,7 +1,7 @@
-# The parse-error rule and its levels, through analyse. A deny kind (an unclosed quote) is break
-# and the only finding; any other kind is warn, or danger when the raw text holds a destructive
-# command. `oracle` says what the real shell's parser does with the text (pwsh ParseInput,
-# bash -n); every break row must say "refuses".
+# The parse-error rules and their levels, through analyse. A deny kind (an unclosed quote) is
+# break and the only finding; any other kind is warn, or danger from `parse-error-destructive`
+# when the raw text holds a command of the destructive table. `oracle` says what the real shell's
+# parser does with the text (pwsh ParseInput, bash -n); every break row must say "refuses".
 
 # --- PowerShell ---
 
@@ -71,7 +71,7 @@ os = "any"
 shell = "pwsh"
 command = "Get-Date ( ; rm -rf x"
 level = "danger"
-rules = ["parse-error"]
+rules = ["parse-error-destructive"]
 fix = "correct the syntax at column"
 oracle = "refuses"
 
@@ -126,6 +126,55 @@ id = "pwsh-double-quote-opener-keeps-an-unclosed-quote-warn"
 os = "any"
 shell = "pwsh"
 command = "Write-Output 'abc @\"\nx"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-quote-inside-a-subexpression-in-a-string-is-closed"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(\"it's\")\"; Get-Date ("
+level = "warn"
+rules = ["parse-error"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-string-left-open-after-a-subexpression-is-break"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date)"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 14'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-closed-subexpression-string-is-clean"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(\"it's\")\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# The PowerShell host ran corpus rows that ParseInput refuses as an unclosed quote, each holding a
+# backslash before a double quote: such a text is no proven refusal.
+[[row]]
+id = "pwsh-unclosed-quote-with-a-backslash-quote-is-warn"
+os = "any"
+shell = "pwsh"
+command = 'rg -n "\"x" notes.txt'
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-other-kind-with-an-encoded-body-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-Date ( ; Get-Content setup.ps1 | iex"
 level = "warn"
 rules = ["parse-error"]
 oracle = "refuses"
@@ -229,3 +278,41 @@ command = "echo \"`echo '`\""
 level = "warn"
 rules = ["parse-error"]
 oracle = "accepts"
+
+[[row]]
+id = "bash-a-here-string-opener-is-no-exception"
+os = "any"
+shell = "bash"
+command = "echo \"a @'b"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 6'
+oracle = "refuses"
+
+[[row]]
+id = "bash-other-kind-with-a-delete-is-danger"
+os = "any"
+shell = "bash"
+command = "if true; then rm -rf x"
+level = "danger"
+rules = ["parse-error-destructive"]
+fix = "correct the syntax at"
+oracle = "refuses"
+
+[[row]]
+id = "bash-other-kind-with-a-pipe-to-a-shell-is-warn"
+os = "any"
+shell = "bash"
+command = "if true; then cat setup.sh | bash"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-other-kind-with-an-unread-heredoc-delimiter-is-warn"
+os = "any"
+shell = "bash"
+command = "if true; then cat <<$'A'\nhello\nA"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"

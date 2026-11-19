@@ -3,19 +3,25 @@
 The analysis did not finish for a reason other than a parse error:
 
 - a panic inside the analysis;
+- a parser that failed itself (a panic, a thread that did not start, a grammar that did not load);
 - the deadline;
 - a worker that ended without a result or did not start;
 - invalid UTF-8;
 - input over 64 KiB (`MAX_INPUT_BYTES`);
-- a config that did not load.
+- a config that did not load (the length rules still run).
 
 | Case | Level |
 |---|---|
-| The raw-text scan names a command that deletes or discards data, or text it cannot read | `danger` |
-| The raw-text scan itself did not finish | `danger` |
+| The raw-text scan names a command of the destructive table | `danger` |
+| The raw-text scan finds only text it cannot read (a pipe into a shell, nesting past its depth limit, an encoded body) | `warn` |
+| The raw-text scan itself did not finish | `warn` |
 | Otherwise | `warn` |
 
-Input over 1 MiB (`MAX_READ_BYTES`), or stdin still open at the deadline, is `danger` unread.
+The raw-text scan runs only on this path. Started when the deadline has run out, it still gets
+500 ms (the deadline ends 1500 ms before the hook timeout).
+
+Input over 1 MiB (`MAX_READ_BYTES`), or stdin still open at the deadline, is `danger` unread: the
+text is unknown and cannot be scanned.
 
 The allow marker has no effect here: without a parse nothing shows that the marker is a comment.
 

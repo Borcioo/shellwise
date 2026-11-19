@@ -19,7 +19,7 @@ use brush_parser::word::{
 };
 use brush_parser::{ParserOptions, SourceSpan, Token, TokenizerError};
 
-use super::{ParseError, ParseKind, QuoteKind};
+use super::{Failure, ParseError, ParseKind, QuoteKind, internal};
 use crate::BashProfile;
 use crate::ir::{
     ChainOp, Comment, Elem, EnvView, MAX_NESTING, Pipeline, Quote, Redirect, Script, SimpleCommand,
@@ -82,6 +82,10 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
         .name("bash-parse".into())
         .stack_size(stack)
         .spawn(move || {
+            #[cfg(feature = "testhooks")]
+            if crate::rules::testhooks::active("parse-panic") {
+                panic!("testhook: panic in the bash parser");
+            }
             // The first pass finds the tainted names; only when there are some does a second pass
             // lower the script again, marking each arithmetic context that reads one.
             let first = Lower::new(profile, owned.len(), None);
@@ -92,14 +96,10 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
             }
         });
     match worker {
-        Err(_) => Err(error(
-            whole,
-            "the parser thread did not start",
-            ParseKind::Syntax,
-        )),
+        Err(_) => Err(internal(whole, Failure::BashThreadNotStarted)),
         Ok(handle) => handle
             .join()
-            .unwrap_or_else(|_| Err(error(whole, "the parser panicked", ParseKind::Syntax))),
+            .unwrap_or_else(|_| Err(internal(whole, Failure::BashPanicked))),
     }
 }
 

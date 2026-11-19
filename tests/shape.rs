@@ -5,37 +5,54 @@
 //! `^(-{1,2}[A-Za-z][A-Za-z0-9-]*|/[A-Za-z]{1,2})$`. Under `src/rules/`, a literal passed to
 //! `Regex::new` is flagged too. Literals inside macro calls count.
 //!
-//! Each file's count must equal its cap. Files that existed at acf4643 are counted against the
-//! name set frozen then (`tests/shape_names_acf4643.txt`), so a table that grows cannot raise
-//! their counts; every other file is counted against the live name sources and has cap 0 unless
-//! `NEW_FILES` records one. `src/programs.rs`, the reader of the table, is not counted.
+//! String and byte-string literals both count.
+//!
+//! Files that existed at acf4643 are counted against the name set frozen then
+//! (`tests/shape_names_acf4643.txt`), so a table that grows cannot raise their counts, and each
+//! must hold exactly the literals `tests/shape_legacy.txt` records for it, each as often: a
+//! literal swapped for another is seen, not only a count that grows. Every other file is counted
+//! against the live name sources and has cap 0 unless `NEW_FILES` records one.
+//! `src/programs.rs`, the reader of the table, is not counted.
+//!
+//! The name sources include the wrapper, shell, eval and echo tables of `src/scan.rs`, so a rule
+//! that names `sudo` or `bash` in code is seen. `cargo test --test shape -- --ignored
+//! --nocapture recount_legacy_literals` prints the current legacy literals in the record's format.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use syn::visit::{self, Visit};
 
-/// (file, program literals, option literals, `Regex::new` literals) for every file under `src/`
-/// at acf4643, from the counter's first run there. A cap only goes down, with the commit that
-/// removes the literals.
-const LEGACY: &[(&str, usize, usize, usize)] = &[
-    ("src/adapter/check_json.rs", 0, 0, 0),
-    ("src/adapter/mod.rs", 0, 0, 0),
-    ("src/config.rs", 0, 0, 0),
-    ("src/fs/cmdlet_table.rs", 1232, 0, 0),
-    ("src/fs/mod.rs", 0, 0, 0),
-    ("src/fs/resolve.rs", 161, 28, 0),
-    ("src/fs/walk.rs", 0, 0, 0),
-    ("src/fs/windows.rs", 0, 0, 0),
-    ("src/ir.rs", 0, 0, 0),
-    ("src/level.rs", 0, 0, 0),
-    ("src/lib.rs", 0, 0, 0),
-    ("src/main.rs", 0, 0, 0),
-    ("src/parse/bash.rs", 4, 10, 0),
-    ("src/parse/mod.rs", 0, 0, 0),
-    ("src/parse/pwsh.rs", 1, 0, 0),
-    ("src/rules/mod.rs", 1, 0, 0),
-    ("src/scan.rs", 16, 29, 0),
+/// Every file under `src/` at acf4643. Its literals are recorded in `tests/shape_legacy.txt`; a
+/// record only shrinks, with the commit that removes the literals.
+const LEGACY: &[&str] = &[
+    "src/adapter/check_json.rs",
+    "src/adapter/mod.rs",
+    "src/config.rs",
+    "src/fs/cmdlet_table.rs",
+    "src/fs/mod.rs",
+    "src/fs/resolve.rs",
+    "src/fs/walk.rs",
+    "src/fs/windows.rs",
+    "src/ir.rs",
+    "src/level.rs",
+    "src/lib.rs",
+    "src/main.rs",
+    "src/parse/bash.rs",
+    "src/parse/mod.rs",
+    "src/parse/pwsh.rs",
+    "src/rules/mod.rs",
+    "src/scan.rs",
+];
+
+/// The `src/scan.rs` constants whose names seed the name sources: the shells of the table, the
+/// wrappers, the code-running commands, the bash shells and the echo commands.
+const SCAN_TABLES: &[&str] = &[
+    "SHELLS",
+    "WRAPPERS",
+    "EVAL_NAMES",
+    "BASH_SHELLS",
+    "ECHO_NAMES",
 ];
 
 /// New files allowed host tool names that are not program names, with the reason. Their caps
@@ -63,13 +80,20 @@ struct Count {
     regexes: usize,
 }
 
+/// One flagged literal: its kind (`program`, `option` or `regex`) and its value.
+type Flagged = (&'static str, String);
+
+/// Each flagged literal of a file, with how often it occurs.
+type Literals = BTreeMap<Flagged, usize>;
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Every lowercased name the three sources hold: `data/destructive.toml` names (a name with
-/// spaces also gives its first word), `src/parse/pwsh_names.txt` aliases, targets and commands,
-/// and the `name`/`aliases` strings of `data/programs.toml` when it exists.
+/// Every lowercased name the sources hold: `data/destructive.toml` names (a name with spaces
+/// also gives its first word), `src/parse/pwsh_names.txt` aliases, targets and commands, the
+/// `SCAN_TABLES` of `src/scan.rs`, and the `name`/`aliases` strings of `data/programs.toml` when
+/// it exists.
 fn live_names() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let destructive = std::fs::read_to_string(root().join("data/destructive.toml")).unwrap();
@@ -96,11 +120,45 @@ fn live_names() -> BTreeSet<String> {
         }
     }
     assert!(out.len() > before + 500, "pwsh_names.txt: too few names");
+    let scan = std::fs::read_to_string(root().join("src/scan.rs")).unwrap();
+    out.extend(scan_table_names(&scan));
     let programs = root().join("data/programs.toml");
     if programs.exists() {
         let text = std::fs::read_to_string(&programs).unwrap();
         let table: toml::Table = toml::from_str(&text).unwrap();
         collect_program_names(&toml::Value::Table(table), &mut out);
+    }
+    out
+}
+
+/// The lowercased names in the `SCAN_TABLES` constants of `source` (`src/scan.rs`); option
+/// spellings in them (a wrapper's value options) are left out. Fails when a table is missing or
+/// names nothing.
+fn scan_table_names(source: &str) -> BTreeSet<String> {
+    struct Strings(Vec<String>);
+    impl<'ast> Visit<'ast> for Strings {
+        fn visit_lit_str(&mut self, s: &'ast syn::LitStr) {
+            self.0.push(s.value());
+        }
+    }
+    let file = syn::parse_file(source).expect("src/scan.rs parses");
+    let mut out = BTreeSet::new();
+    for table in SCAN_TABLES {
+        let item = file.items.iter().find_map(|i| match i {
+            syn::Item::Const(c) if c.ident == table => Some(c),
+            _ => None,
+        });
+        let item = item.unwrap_or_else(|| panic!("src/scan.rs: no const {table}"));
+        let mut strings = Strings(Vec::new());
+        strings.visit_expr(&item.expr);
+        let names: Vec<String> = strings
+            .0
+            .into_iter()
+            .filter(|s| !s.starts_with('-'))
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(!names.is_empty(), "src/scan.rs: {table} names nothing");
+        out.extend(names);
     }
     out
 }
@@ -154,10 +212,14 @@ struct Counter<'n> {
     names: &'n BTreeSet<String>,
     allowed: &'n [&'n str],
     in_rules: bool,
-    count: Count,
+    found: Literals,
 }
 
 impl Counter<'_> {
+    fn flag(&mut self, kind: &'static str, value: &str) {
+        *self.found.entry((kind, value.to_string())).or_insert(0) += 1;
+    }
+
     fn literal(&mut self, value: &str) {
         if self.allowed.contains(&value) {
             return;
@@ -165,22 +227,29 @@ impl Counter<'_> {
         let lower = value.to_lowercase();
         let name = lower.strip_suffix(".exe").unwrap_or(&lower);
         if self.names.contains(name) {
-            self.count.programs += 1;
+            self.flag("program", value);
         }
         if is_option(value) {
-            self.count.options += 1;
+            self.flag("option", value);
         }
     }
 
-    /// Every string literal in a macro's tokens, nested groups included.
+    /// A byte-string literal counts as its text.
+    fn byte_literal(&mut self, value: &[u8]) {
+        self.literal(&String::from_utf8_lossy(value));
+    }
+
+    /// Every string and byte-string literal in a macro's tokens, nested groups included.
     fn tokens(&mut self, mut cursor: syn::buffer::Cursor) {
         while !cursor.eof() {
             if let Some((inside, _, _, next)) = cursor.any_group() {
                 self.tokens(inside);
                 cursor = next;
             } else if let Some((lit, next)) = cursor.literal() {
-                if let syn::Lit::Str(s) = syn::Lit::new(lit) {
-                    self.literal(&s.value());
+                match syn::Lit::new(lit) {
+                    syn::Lit::Str(s) => self.literal(&s.value()),
+                    syn::Lit::ByteStr(s) => self.byte_literal(&s.value()),
+                    _ => {}
                 }
                 cursor = next;
             } else if let Some((_, next)) = cursor.token_tree() {
@@ -230,6 +299,10 @@ impl<'ast> Visit<'ast> for Counter<'_> {
         self.literal(&s.value());
     }
 
+    fn visit_lit_byte_str(&mut self, s: &'ast syn::LitByteStr) {
+        self.byte_literal(&s.value());
+    }
+
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         let buffer = syn::buffer::TokenBuffer::new2(m.tokens.clone());
         self.tokens(buffer.begin());
@@ -246,25 +319,84 @@ impl<'ast> Visit<'ast> for Counter<'_> {
                 .map(|s| s.ident.to_string())
                 .collect();
             if segs.ends_with(&["Regex".to_string(), "new".to_string()])
-                && matches!(c.args.first(), Some(syn::Expr::Lit(l)) if matches!(l.lit, syn::Lit::Str(_)))
+                && let Some(syn::Expr::Lit(l)) = c.args.first()
+                && let syn::Lit::Str(s) = &l.lit
             {
-                self.count.regexes += 1;
+                self.flag("regex", &s.value());
             }
         }
         visit::visit_expr_call(self, c);
     }
 }
 
-fn count(source: &str, rel: &str, names: &BTreeSet<String>, allowed: &[&str]) -> Count {
+fn literals(source: &str, rel: &str, names: &BTreeSet<String>, allowed: &[&str]) -> Literals {
     let file = syn::parse_file(source).unwrap_or_else(|e| panic!("{rel}: {e}"));
     let mut c = Counter {
         names,
         allowed,
         in_rules: rel.starts_with("src/rules/"),
-        count: Count::default(),
+        found: Literals::new(),
     };
     c.visit_file(&file);
-    c.count
+    c.found
+}
+
+fn count(source: &str, rel: &str, names: &BTreeSet<String>, allowed: &[&str]) -> Count {
+    let mut c = Count::default();
+    for ((kind, _), n) in literals(source, rel, names, allowed) {
+        match kind {
+            "program" => c.programs += n,
+            "option" => c.options += n,
+            _ => c.regexes += n,
+        }
+    }
+    c
+}
+
+/// `tests/shape_legacy.txt`: per legacy file, each recorded literal and how often it occurs. A
+/// line is `<file>\t<kind>\t<n>\t<literal>`; `#` lines are comments.
+fn legacy_record() -> BTreeMap<String, Literals> {
+    let text = std::fs::read_to_string(root().join("tests/shape_legacy.txt")).unwrap();
+    let mut out: BTreeMap<String, Literals> = BTreeMap::new();
+    for line in text
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        let [file, kind, n, literal] = parts[..] else {
+            panic!("shape_legacy.txt: not 4 fields: {line:?}");
+        };
+        let kind = ["program", "option", "regex"]
+            .into_iter()
+            .find(|k| *k == kind)
+            .unwrap_or_else(|| panic!("shape_legacy.txt: unknown kind {kind:?}"));
+        assert!(
+            LEGACY.contains(&file),
+            "shape_legacy.txt: {file} is not a legacy file"
+        );
+        let n: usize = n.parse().unwrap_or_else(|_| panic!("bad count: {line:?}"));
+        let previous = out
+            .entry(file.to_string())
+            .or_default()
+            .insert((kind, literal.to_string()), n);
+        assert!(previous.is_none(), "shape_legacy.txt: twice: {line:?}");
+    }
+    assert!(!out.is_empty(), "shape_legacy.txt records no literal");
+    out
+}
+
+/// The record's lines for `rel`'s literals.
+fn record_lines(rel: &str, found: &Literals) -> Vec<String> {
+    found
+        .iter()
+        .map(|((kind, literal), n)| {
+            assert!(
+                !literal.contains(['\t', '\n', '\r']),
+                "{rel}: a literal the record cannot hold: {literal:?}"
+            );
+            format!("{rel}\t{kind}\t{n}\t{literal}")
+        })
+        .collect()
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -299,52 +431,120 @@ fn the_fixture_is_caught() {
     );
 }
 
-#[test]
-fn every_file_holds_exactly_its_cap_of_literals() {
-    let frozen = frozen_names();
-    let live = live_names();
+/// What is wrong with one file's literals, or `None` when they match: a legacy file against its
+/// record, any other file against cap 0.
+fn file_mismatch(
+    rel: &str,
+    source: &str,
+    frozen: &BTreeSet<String>,
+    live: &BTreeSet<String>,
+    record: &BTreeMap<String, Literals>,
+) -> Option<String> {
+    if LEGACY.contains(&rel) {
+        let got = literals(source, rel, frozen, &[]);
+        let want = record.get(rel).cloned().unwrap_or_default();
+        if got == want {
+            return None;
+        }
+        let mut diff = Vec::new();
+        for key in got.keys().chain(want.keys()).collect::<BTreeSet<_>>() {
+            let (g, w) = (
+                got.get(key).copied().unwrap_or(0),
+                want.get(key).copied().unwrap_or(0),
+            );
+            if g != w {
+                diff.push(format!("  {} {:?}: {g} (recorded {w})", key.0, key.1));
+            }
+        }
+        return Some(format!("{rel}:\n{}", diff.join("\n")));
+    }
+    let allowed = NEW_FILES
+        .iter()
+        .find(|(f, ..)| *f == rel)
+        .map_or(&[][..], |(_, a, _)| *a);
+    let got = literals(source, rel, live, allowed);
+    (!got.is_empty()).then(|| format!("{rel}: cap 0, holds {got:?}"))
+}
+
+/// Every file under `src/` that the test reads, with its path relative to the root.
+fn source_files() -> Vec<(String, String)> {
     let mut files = Vec::new();
     rust_files(&root().join("src"), &mut files);
     assert!(!files.is_empty(), "read 0 files under src/");
+    let mut out: Vec<(String, String)> = files
+        .iter()
+        .map(|p| (rel(p), std::fs::read_to_string(p).unwrap()))
+        .filter(|(rel, _)| rel != TABLE_READER)
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn every_file_holds_exactly_its_cap_of_literals() {
+    let (frozen, live, record) = (frozen_names(), live_names(), legacy_record());
     let mut wrong = Vec::new();
-    let mut table = Vec::new();
-    for path in &files {
-        let rel = rel(path);
-        if rel == TABLE_READER {
+    for (rel, source) in source_files() {
+        wrong.extend(file_mismatch(&rel, &source, &frozen, &live, &record));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Prints the record of the legacy files' literals as they are now, with the totals per kind.
+#[test]
+#[ignore = "a recount command, run by hand"]
+fn recount_legacy_literals() {
+    let frozen = frozen_names();
+    let mut totals: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut lines = Vec::new();
+    for (rel, source) in source_files() {
+        if !LEGACY.contains(&rel.as_str()) {
             continue;
         }
-        let source = std::fs::read_to_string(path).unwrap();
-        let legacy = LEGACY.iter().find(|(f, ..)| *f == rel);
-        let (got, cap) = match legacy {
-            Some(&(_, p, o, r)) => (
-                count(&source, &rel, &frozen, &[]),
-                Count {
-                    programs: p,
-                    options: o,
-                    regexes: r,
-                },
-            ),
-            None => {
-                let allowed = NEW_FILES
-                    .iter()
-                    .find(|(f, ..)| *f == rel)
-                    .map_or(&[][..], |(_, a, _)| *a);
-                (count(&source, &rel, &live, allowed), Count::default())
-            }
-        };
-        table.push(format!(
-            "    (\"{rel}\", {}, {}, {}),",
-            got.programs, got.options, got.regexes
-        ));
-        if got != cap {
-            wrong.push(format!("{rel}: count {got:?}, cap {cap:?}"));
+        let found = literals(&source, &rel, &frozen, &[]);
+        for ((kind, _), n) in &found {
+            *totals.entry(kind).or_insert(0) += n;
         }
+        let c = count(&source, &rel, &frozen, &[]);
+        eprintln!(
+            "{rel}: programs {}, options {}, regexes {}",
+            c.programs, c.options, c.regexes
+        );
+        lines.extend(record_lines(&rel, &found));
     }
-    table.sort();
+    eprintln!("totals {totals:?}, {} record lines", lines.len());
+    println!("{}", lines.join("\n"));
+}
+
+/// A new rules file naming one entry of each `SCAN_TABLES` table that no other table or name
+/// source holds, a wrapper's value option, and programs in byte strings, in code and in a macro.
+const NEW_RULE_FILE: &str = r#"
+fn wrapped(name: &str, word: &[u8]) -> bool {
+    assert_ne!(word, b"del");
+    name == "cmd" || name == "sudo" || name == "eval" || name == "zsh" || name == "printf"
+        || name == "-u" || word == b"rm"
+}
+"#;
+
+#[test]
+fn a_new_file_naming_a_wrapper_shell_echo_or_byte_string_program_is_caught() {
+    let got = count(NEW_RULE_FILE, "src/rules/new.rs", &live_names(), &[]);
+    assert_eq!((got.programs, got.options), (7, 1), "{got:?}");
+}
+
+#[test]
+fn a_swapped_name_in_a_legacy_file_is_caught() {
+    let rel = "src/scan.rs";
+    let source = std::fs::read_to_string(root().join(rel)).unwrap();
+    let (frozen, live, record) = (frozen_names(), live_names(), legacy_record());
+    assert_eq!(file_mismatch(rel, &source, &frozen, &live, &record), None);
+    // `find` and `del` are both program names: the count stays, the literals do not.
+    let from = format!("{0}find{0}", '"');
+    let to = format!("{0}del{0}", '"');
+    assert!(source.contains(&from), "src/scan.rs holds no {from}");
+    let swapped = source.replacen(&from, &to, 1);
     assert!(
-        wrong.is_empty(),
-        "{}\ncounts:\n{}",
-        wrong.join("\n"),
-        table.join("\n")
+        file_mismatch(rel, &swapped, &frozen, &live, &record).is_some(),
+        "the swap {from} -> {to} went unseen"
     );
 }

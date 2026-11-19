@@ -19,8 +19,7 @@ use shellwise::config::Config;
 use shellwise::ir::EnvView;
 use shellwise::level::{Finding, Verdict, exit_code};
 use shellwise::{
-    AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse, incomplete,
-    unread,
+    AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse, unread,
 };
 
 /// Exit code for usage errors.
@@ -128,25 +127,19 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
         let words: Vec<&[u8]> = args.command.iter().map(|a| a.as_encoded_bytes()).collect();
         words.join(&b' ')
     };
-    let verdict = match cfg_problem {
-        Some(_) if bytes.len() > MAX_READ_BYTES => unread("input over the hard size cap"),
-        Some(reason) => {
-            eprintln!("shellwise: analysis incomplete ({reason})");
-            incomplete(&String::from_utf8_lossy(&bytes), reason)
-        }
-        None => {
-            let input = AnalyseInput {
-                bytes: &bytes,
-                shell: args.shell.shell(),
-                os: Os::host(),
-                cwd: args.cwd.clone(),
-                env: EnvView::new(),
-                origin: Origin::CommandLine,
-            };
-            analyse(&input, &cfg, &deadline)
-        }
+    if let Some(reason) = cfg_problem {
+        eprintln!("shellwise: analysis incomplete ({reason})");
+    }
+    let input = AnalyseInput {
+        bytes: &bytes,
+        shell: args.shell.shell(),
+        os: Os::host(),
+        cwd: args.cwd.clone(),
+        env: EnvView::new(),
+        origin: Origin::CommandLine,
+        problem: cfg_problem,
     };
-    finish(verdict, cfg_findings, &args)
+    finish(analyse(&input, &cfg, &deadline), cfg_findings, &args)
 }
 
 /// Load the config layers (`Config::discover`) on a worker thread, waiting at most
@@ -248,7 +241,7 @@ fn finish(verdict: Verdict, cfg_findings: Vec<Finding>, args: &CheckArgs) -> i32
 
 #[cfg(feature = "testhooks")]
 fn testhook_is(mode: &str) -> bool {
-    shellwise::rules::testhooks::mode() == mode
+    shellwise::rules::testhooks::active(mode)
 }
 
 #[cfg(not(feature = "testhooks"))]

@@ -77,6 +77,9 @@ pub struct AnalyseInput<'a> {
     pub cwd: Option<PathBuf>,
     pub env: EnvView,
     pub origin: Origin,
+    /// Why the parse and the rules must not run (a config that did not load): the length rules
+    /// still run, and the verdict is `incomplete` for this reason.
+    pub problem: Option<&'static str>,
 }
 
 /// What a rule sees of the command: the decoded text and its context.
@@ -121,9 +124,9 @@ impl Deadline {
 
 /// The whole pipeline for one text, in this order: the length rules on the raw text (before any
 /// size cap), the parse and the rules on a big-stack worker inside `catch_unwind` under the
-/// deadline, then the config levels. Input over `MAX_READ_BYTES` is `danger` unread; invalid
-/// UTF-8, input over `MAX_INPUT_BYTES`, a panic, a dead worker and the deadline make the analysis
-/// incomplete (`incomplete`).
+/// deadline, then the config levels. Input over `MAX_READ_BYTES` is `danger` unread; the input's
+/// `problem`, invalid UTF-8, input over `MAX_INPUT_BYTES`, a panic, a dead worker, a parser that
+/// failed itself and the deadline make the analysis incomplete (`incomplete`).
 pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdict {
     if input.bytes.len() > MAX_READ_BYTES {
         return unread("input over the hard size cap");
@@ -142,7 +145,9 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
         Ok(found) => found,
         Err(reason) => return levels(incomplete(&command, reason).findings, cfg),
     };
-    let problem = if invalid {
+    let problem = if let Some(reason) = input.problem {
+        Some(reason)
+    } else if invalid {
         Some("invalid UTF-8")
     } else if command.len() > MAX_INPUT_BYTES {
         Some("input over the size cap")
@@ -194,9 +199,9 @@ fn length_stage(
     .map_err(|_| "internal error in a length rule")
 }
 
-/// Parse and run the rules on a big-stack worker inside `catch_unwind`, and the raw-text scan on
-/// a second worker, both under the deadline. When the worker cannot finish, or `problem` says it
-/// must not run, the verdict is `incomplete` from the scan's answer.
+/// Parse and run the rules on a big-stack worker inside `catch_unwind` under the deadline. When
+/// the worker cannot finish, or `problem` says it must not run, the raw-text scan runs on a second
+/// worker and the verdict is `incomplete` from its answer.
 fn checked(
     input: &CheckInput,
     problem: Option<&'static str>,
@@ -204,17 +209,6 @@ fn checked(
     deadline: &Deadline,
 ) -> Verdict {
     let command = Arc::new(input.command.to_string());
-    let (scan_tx, scan_rx) = mpsc::channel();
-    let text = Arc::clone(&command);
-    let scan = thread::Builder::new()
-        .name("scan".into())
-        .stack_size(WORKER_STACK)
-        .spawn(move || {
-            if testhook_is("panic-scan-sleep") {
-                thread::sleep(Duration::from_secs(60));
-            }
-            let _ = scan_tx.send(panic::catch_unwind(|| scan::raw_destructive(&text)));
-        });
     let reason = match problem {
         Some(reason) => reason,
         None => match run_checker(Arc::clone(&command), input, cfg, *deadline) {
@@ -222,11 +216,43 @@ fn checked(
             Err(reason) => reason,
         },
     };
-    let hit = match (scan, scan_rx.recv_timeout(deadline.remaining())) {
-        (Ok(_), Ok(Ok(hit))) => Some(hit),
+    incomplete_from(
+        bounded_scan(Arc::clone(&command), deadline),
+        &command,
+        reason,
+    )
+}
+
+/// How long the raw scan may run past the deadline. The deadline ends 1500 ms before the hook
+/// timeout, and a scan started when the deadline ran out needs time of its own.
+const LATE_SCAN_MS: u64 = 500;
+
+/// The raw scan on a big-stack worker, waiting until the deadline or `LATE_SCAN_MS`, whichever is
+/// later; `None` when it gives no answer.
+fn bounded_scan(command: Arc<String>, deadline: &Deadline) -> Option<Option<Span>> {
+    let (tx, rx) = mpsc::channel();
+    let spawned = thread::Builder::new()
+        .name("scan".into())
+        .stack_size(WORKER_STACK)
+        .spawn(move || {
+            if testhook_is("panic-scan-sleep") {
+                thread::sleep(Duration::from_secs(60));
+            }
+            if testhook_is("scan-abort") {
+                std::process::abort();
+            }
+            let _ = tx.send(panic::catch_unwind(|| scan::destructive_row(&command)));
+        });
+    if spawned.is_err() {
+        return None;
+    }
+    let wait = deadline
+        .remaining()
+        .max(Duration::from_millis(LATE_SCAN_MS));
+    match rx.recv_timeout(wait) {
+        Ok(Ok(hit)) => Some(hit),
         _ => None,
-    };
-    incomplete_from(hit, &command, reason)
+    }
 }
 
 fn run_checker(
@@ -271,7 +297,7 @@ fn run_checker(
         return Err("the worker thread did not start");
     }
     match rx.recv_timeout(deadline.remaining()) {
-        Ok(Ok(verdict)) => Ok(verdict),
+        Ok(Ok(result)) => result,
         Ok(Err(_)) => Err("internal error"),
         Err(mpsc::RecvTimeoutError::Timeout) => Err("deadline"),
         Err(mpsc::RecvTimeoutError::Disconnected) => Err("the worker ended without a result"),
@@ -280,8 +306,8 @@ fn run_checker(
 
 /// Parse the command and run every rule whose scope covers its origin. On a parse error the
 /// rules see an empty script and the error. A deny kind is the only finding: the shell refuses
-/// the text, so nothing in it runs.
-fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
+/// the text, so nothing in it runs. A parser that failed itself is `Err` with its reason.
+fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdict, &'static str> {
     let parsed = match input.shell {
         Shell::Pwsh | Shell::Powershell5 => {
             parse::pwsh::parse(input.command, input.shell, input.os)
@@ -290,7 +316,10 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
     };
     let (script, parse_error) = match parsed {
         Ok(script) => (script, None),
-        Err(e) => (Script::default(), Some(e)),
+        Err(e) => match e.kind {
+            parse::ParseKind::Internal(failure) => return Err(failure.reason()),
+            _ => (Script::default(), Some(e)),
+        },
     };
     let fs: fs::SharedFs = Arc::new(fs::RealFs);
     let ctx = rules::Ctx {
@@ -309,16 +338,16 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Verdict {
     }
     if parse_error
         .as_ref()
-        .is_some_and(|e| rules::parse_error::is_deny_kind(&e.kind, input.command))
+        .is_some_and(|e| rules::parse_error::is_deny_kind(&e.kind, input.command, input.shell))
     {
         findings.retain(|f| f.rule == rules::parse_error::PARSE_ERROR);
     }
-    Verdict::new(findings)
+    Ok(Verdict::new(findings))
 }
 
 #[cfg(feature = "testhooks")]
 fn testhook_is(mode: &str) -> bool {
-    rules::testhooks::mode() == mode
+    rules::testhooks::active(mode)
 }
 
 #[cfg(not(feature = "testhooks"))]
@@ -332,10 +361,11 @@ const MAX_QUOTED: usize = 80;
 const SPLIT_FIX: &str = "split the command into simpler calls so each can be checked";
 
 /// The verdict when the analysis cannot finish for `reason`: `danger` when the raw-text scan
-/// flags a destructive or unreadable command, or when the scan itself does not finish, and `warn`
-/// otherwise. The allow marker has no effect here: without a parse nothing shows it is a comment.
+/// names a command of the destructive table, and `warn` otherwise, also when the scan finds only
+/// a region it cannot read or does not finish. The allow marker has no effect here: without a
+/// parse nothing shows it is a comment.
 pub fn incomplete(command: &str, reason: &str) -> Verdict {
-    incomplete_with(command, reason, scan::raw_destructive)
+    incomplete_with(command, reason, scan::destructive_row)
 }
 
 fn incomplete_with(
@@ -367,23 +397,21 @@ fn incomplete_from(hit: Option<Option<Span>>, command: &str, reason: &str) -> Ve
                 Level::Danger,
                 span,
                 format!(
-                    "the command could not be analysed ({reason}); the raw scan flags `{found}` as destructive or unreadable"
+                    "the command could not be analysed ({reason}); the raw scan flags `{found}` as destructive"
                 ),
             ),
             _ => (
                 Level::Danger,
                 span,
                 format!(
-                    "the command could not be analysed ({reason}); the raw scan flags part of it as destructive or unreadable"
+                    "the command could not be analysed ({reason}); the raw scan flags part of it as destructive"
                 ),
             ),
         },
         None => (
-            Level::Danger,
+            Level::Warn,
             whole,
-            format!(
-                "the command could not be analysed ({reason}) and the raw scan did not finish, so it may destroy data"
-            ),
+            format!("the command could not be analysed ({reason}) and the raw scan did not finish"),
         ),
     };
     Verdict::new(vec![Finding {
@@ -508,11 +536,18 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_is_danger_when_the_scan_itself_panics() {
-        // The scan gave no answer, so nothing shows the text holds no delete.
+    fn incomplete_is_warn_when_the_scan_itself_panics() {
+        // The scan gave no answer: an internal failure with no destructive match is warn.
         let v = incomplete_with("Get-Date", "test", |_| panic!("scan bug"));
-        assert_at(Level::Danger, &v, "Get-Date");
+        assert_at(Level::Warn, &v, "Get-Date");
         assert_eq!(v.findings[0].span, Span { start: 0, end: 8 });
+        assert!(
+            v.findings[0]
+                .message
+                .contains("the raw scan did not finish"),
+            "{}",
+            v.findings[0].message
+        );
     }
 
     /// The shapes the re-review found the raw scan missing (N1-N6). They are obfuscations

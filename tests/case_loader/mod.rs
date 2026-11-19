@@ -90,6 +90,7 @@ pub fn verdict(row: &Row) -> Verdict {
         cwd: None,
         env: EnvView::new(),
         origin: Origin::CommandLine,
+        problem: None,
     };
     analyse(
         &input,

@@ -522,6 +522,26 @@ fn check_applies_the_configured_levels() {
     assert_eq!(r.json()["level"], "warn", "{}", r.stdout);
 }
 
+#[test]
+fn lowering_parse_error_leaves_the_destructive_arm_at_danger() {
+    let d = scratch("cli_levels_destructive");
+    let lower = write(&d, "lower.toml", "[levels]\nparse-error = 'warn'\n");
+    let r = check(
+        &d,
+        &["--config", lower.to_str().unwrap()],
+        "Get-Date ( ; rm -rf x",
+        &[],
+    );
+    assert_eq!(r.code, 2, "{}", r.stdout);
+    assert_eq!(
+        finding_rules(&r),
+        ["parse-error-destructive"],
+        "{}",
+        r.stdout
+    );
+    assert_eq!(r.json()["level"], "danger", "{}", r.stdout);
+}
+
 /// The `slow` test hook sleeps 1 s inside the analysis; a 500 ms walk budget is the deadline, so
 /// the analysis fails closed instead of finishing.
 #[cfg(feature = "testhooks")]
@@ -589,6 +609,20 @@ fn check_fails_closed_when_the_config_load_breaks() {
         assert_eq!(r.code, 0, "{mode}: {}", r.stdout);
         assert!(r.stderr.contains("config"), "{mode}: {}", r.stderr);
     }
+    // The config failure goes through `analyse`: the length rules still run.
+    let r = check(
+        &d,
+        &[],
+        "echo hi",
+        &[("SHELLWISE_TESTHOOK", "config-panic,length")],
+    );
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert_eq!(
+        finding_rules(&r),
+        ["testhook-length", "analysis-incomplete"],
+        "{}",
+        r.stdout
+    );
     // Input over the hard cap is danger unread, on this path too.
     let big = vec![b'a'; 2 * 1024 * 1024];
     let r = common::run(

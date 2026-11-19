@@ -1,7 +1,8 @@
 //! The raw-text destructive scan used on every fail-closed path. It needs no parser: it splits the
 //! text into simple commands leniently, once in the bash and once in the PowerShell reading, and
 //! matches the names and flags of `data/destructive.toml` from every shell. On an incomplete
-//! analysis or a parse error a hit makes the verdict `danger` and names the command.
+//! analysis or a parse error a hit on a table row makes the verdict `danger` and names the
+//! command; a region the scan cannot read, with no row behind it, does not.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -158,10 +159,21 @@ pub fn hits(table: &[Entry], cmd: &str) -> Vec<Hit> {
     out
 }
 
-/// The span of the first simple command in `cmd` that the destructive table names.
+/// The span of the first hit in `cmd`, an unreadable region included. A verdict reads
+/// `destructive_row` instead.
 pub fn raw_destructive(cmd: &str) -> Option<Span> {
     hits(table(), cmd)
         .into_iter()
+        .map(|h| h.span)
+        .min_by_key(|s| (s.start, s.end))
+}
+
+/// The span of the first simple command in `cmd` that a row of the destructive table names. An
+/// unreadable region (a spent budget, nesting past `MAX_DEPTH`, a pipe into a shell) is no row.
+pub fn destructive_row(cmd: &str) -> Option<Span> {
+    hits(table(), cmd)
+        .into_iter()
+        .filter(|h| h.row.is_some())
         .map(|h| h.span)
         .min_by_key(|s| (s.start, s.end))
 }

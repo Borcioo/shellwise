@@ -54,6 +54,40 @@ mod hooks {
     }
 
     #[test]
+    fn a_scan_hit_with_no_destructive_row_is_warn() {
+        // Each text is opaque to the raw scan (a pipe into a shell, wrappers past its depth
+        // limit, a pipe into Invoke-Expression) and names no command of the destructive table.
+        for cmd in [
+            "cat setup.sh | bash",
+            "sudo sudo sudo sudo sudo echo hi",
+            "Get-Content setup.ps1 | iex",
+        ] {
+            // A panic in a rule, and one in a length rule (each path scans on its own).
+            for mode in ["panic", "length-panic"] {
+                assert_incomplete_warn(&hook(mode, cmd));
+            }
+        }
+    }
+
+    #[test]
+    fn a_parser_failure_is_incomplete() {
+        // The parser itself panics: no syntax error is known, so it is no parse-error finding.
+        for shell in ["bash", "pwsh"] {
+            let run_on = |cmd: &str| {
+                run(
+                    &["check", "--shell", shell, "--json", "--", cmd],
+                    None,
+                    &[("SHELLWISE_TESTHOOK", "parse-panic")],
+                )
+            };
+            let r = run_on(PLAIN);
+            assert_incomplete_warn(&r);
+            assert!(message(&r).contains("parser"), "{shell}: {}", r.stdout);
+            assert_failclosed_danger(&run_on(DESTRUCTIVE), DESTRUCTIVE, DESTRUCTIVE);
+        }
+    }
+
+    #[test]
     fn a_panic_in_a_length_rule_is_incomplete() {
         let r = hook("length-panic", PLAIN);
         assert_incomplete_warn(&r);
