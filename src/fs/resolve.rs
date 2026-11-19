@@ -628,8 +628,8 @@ struct Pushed {
 }
 
 /// Where the shell is while a command runs: tracks `cd`, `Set-Location`, `Push-Location`,
-/// `Pop-Location` (and `git -C` through `for_git`). Feed it every statement in order with
-/// `after`, after judging the statement's own commands; a nested statement's body starts from
+/// `Pop-Location` (and `git -C` through `for_git`). Feed it every statement of a script in order
+/// with `after_in` (it reads the statement's join), after judging the statement's own commands; a nested statement's body starts from
 /// `inner`; a script-block word's body (`WordPart::Block`) from `inner_block`, given the body as
 /// it stands in the pipeline that holds the word; a substitution starts from a clone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1058,6 +1058,16 @@ impl Location {
             prev: None,
             ..self.clone()
         }
+    }
+
+    /// Advance past `script.stmts[i]`, joined to the statement before it by `script.join(i)`.
+    /// A compound statement keeps no chain of its own (`after_nested` ends it with `;`), so
+    /// `{ a; } || cd x` only `joins` shows the `cd` may not run.
+    pub fn after_in(&mut self, script: &Script, i: usize, env: &EnvView) {
+        if let Some(op) = script.join(i) {
+            self.prev = Some(op);
+        }
+        self.after(&script.stmts[i], env);
     }
 
     /// Advance past `stmt`.
