@@ -1116,10 +1116,10 @@ impl Location {
     /// `body` is an argument of a command in `owner` that runs it at once, where the pipeline
     /// stands (fix8\spike-inplace.log, pwsh 7.7 and 5.1): `ForEach-Object` (`-Process`,
     /// `-Begin`, `-End`, `-RemainingScripts`), `Where-Object` (`-FilterScript`) or
-    /// `Invoke-Command` (`-ScriptBlock`, `-NoNewScope`), by name or shipped alias, the script
-    /// not defining it, every other argument a block or one of those parameters as written in
-    /// full; and nothing else in the pipeline may move (`Set-Location -PassThru | % { … }` runs
-    /// the block in the new folder).
+    /// `Invoke-Command` (`-ScriptBlock`, `-NoNewScope`), by name or shipped alias, every other
+    /// argument a block or one of those parameters as written in full; and nothing in the
+    /// pipeline may move (`Set-Location -PassThru | % { … }` runs the block in the new folder).
+    /// A defined owner counts as moving (`is_location_command`), so it is never in place.
     fn block_runs_in_place(&self, body: &Script, owner: &Pipeline) -> bool {
         let shell = self.shell;
         let is_body = |w: &Word| match w.parts.as_slice() {
@@ -1133,7 +1133,7 @@ impl Location {
             return false;
         };
         let raw = raw_name(c);
-        if literal(&c.name).is_none() || calls_defined(&raw, shell, &self.defined) {
+        if literal(&c.name).is_none() {
             return false;
         }
         let params: &[&str] = match table(shell).alias(&raw).unwrap_or(raw.as_str()) {
