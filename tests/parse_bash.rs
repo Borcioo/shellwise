@@ -846,6 +846,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}k=$(echo x); (( ${{!k}} ))"), "(("),
         (format!("{x}a=(1); (( ${{a[x]}} + 1 ))"), "(("),
         (format!("{x}(( ${{x:-1}} ))"), "(("),
+        // A subscripted expansion inside a static string bash evaluates: its subscript is read
+        // nowhere else.
+        (format!("{x}a=(1); b=(1); let 'b[${{a[x]}}]'"), "let"),
+        (format!("{x}a=(1); b=(1); unset 'b[${{a[x]}}]'"), "unset"),
+        (format!("{x}a=(1); b=(1); test -v 'b[${{a[x]}}]'"), "test"),
+        (format!("{x}a=(1); printf -v 'b[${{a[x]}}]' %s 1"), "printf"),
+        (format!("{x}a=(1); read 'b[${{a[x]}}]' <<< 1"), "read"),
+        (format!("{x}a=(1); declare 'b[${{a[x]}}]=1'"), "declare"),
         // Writes through a nameref, or a declaration whose options are not static: any name may
         // change, and any write may reach an integer name.
         (
@@ -1045,7 +1053,6 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "_x=1; (( $_x ))".to_string(),
         "set -- 1; n=1; (( ${n} + ${1} + ${#} + ${?} + ${$} + $! + ${@} + ${*} ))".to_string(),
         "n=1; (( $((n)) + 1 ))".to_string(),
-        "a=(1); i=0; (( ${a[i]} + 1 ))".to_string(),
         "a=(1); _x=1; (( (1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1) + a[0] ))".to_string(),
         "o=i; z=1; declare +$o z; (( z ))".to_string(),
         "z=1; declare nn=1; (( z ))".to_string(),

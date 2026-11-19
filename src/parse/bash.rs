@@ -1897,7 +1897,7 @@ fn is_identifier(name: &str) -> bool {
 /// splits the text, so each `$(…)` and backtick body ends where bash ends it; the body becomes a
 /// space (its output, run-time text), as does a nested `$((…))`, which is read as its own context.
 /// Plain pieces are those, unquoted text (the scanner reads every name in it), and
-/// `$name`/`${name}`/`${name[…]}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to
+/// `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to
 /// a name or another expansion forms a name at run time, so it is not plain; nor is any quote,
 /// escape or other expansion.
 fn plain_view(text: &str) -> Option<String> {
@@ -1921,14 +1921,14 @@ fn plain_view(text: &str) -> Option<String> {
                 parameter,
                 indirect: false,
             }) => {
-                // An element stands for its array: every value assigned to it is the array's, and
-                // the subscript is read as its own context.
+                // A subscript inside a static string is read nowhere else: an element is not plain.
                 let name = match parameter {
-                    Parameter::Named(name)
-                    | Parameter::NamedWithIndex { name, .. }
-                    | Parameter::NamedWithAllIndices { name, .. } => name.clone(),
+                    Parameter::Named(name) => name.clone(),
                     Parameter::Positional(n) => n.to_string(),
                     Parameter::Special(sp) => sp.to_string(),
+                    Parameter::NamedWithIndex { .. } | Parameter::NamedWithAllIndices { .. } => {
+                        return None;
+                    }
                 };
                 if !(is_identifier(&name)
                     || name.bytes().all(|c| c.is_ascii_digit())
