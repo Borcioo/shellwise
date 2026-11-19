@@ -388,6 +388,17 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
         ("declare 'a[$(rm -rf x)]=1'", &["declare", "rm"]),
         ("typeset 'a[`rm -rf x`]=1'", &["typeset", "rm"]),
         ("f() { local 'a[$(rm -rf x)]=1'; }", &["local", "rm"]),
+        // `unset` of an indexed array element (bash runs nothing when `a` is no array: lowered
+        // anyway, on the safe side).
+        (
+            "a=(1 2); unset 'a[$(rm -rf x)]'",
+            &["<none>", "unset", "rm"],
+        ),
+        // A nameref's target is a name: its subscript runs where `$r` expands.
+        (
+            "declare -n r='a[$(rm -rf x)]'; a=(1 2); echo \"$r\"",
+            &["declare", "rm", "<none>", "echo"],
+        ),
         // Parameter offsets and lengths are arithmetic.
         (
             "s=abc; echo ${s:0:'a[$(rm -rf x)]'}",
@@ -419,7 +430,6 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
     ];
     let no: &[(&str, &[&str])] = &[
         ("a=(1); let 'a[\"[\"]+$(rm -rf x)'", &["<none>", "let"]),
-        ("unset 'a[$(rm -rf x)]'", &["unset"]),
         ("export 'a[$(rm -rf x)]'=1", &["export"]),
         ("let '$(rm -rf x)'", &["let"]),
         ("echo 'a[$(rm -rf x)]'", &["echo"]),
@@ -717,6 +727,28 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
         (format!("{x}set -- \"$x\"; (( ${{1}} ))"), "(("),
         (format!("{x}let \"n=$x\""), "let"),
+        // A name operand whose text comes from a variable: bash evaluates its subscript.
+        ("a=(1 2); unset \"$k\"".to_string(), "unset"),
+        ("a=(1 2); test -v \"$k\"".to_string(), "test"),
+        ("a=(1 2); [[ -v $k ]]".to_string(), "[["),
+        (
+            "a=(1 2); declare -n r=\"$k\"; echo \"$r\"".to_string(),
+            "declare",
+        ),
+        ("declare -n r=\"$k\"; (( r ))".to_string(), "(("),
+        (
+            "a=(1 2); set -- 'a[$(rm -rf y)]'; unset \"$1\"".to_string(),
+            "unset",
+        ),
+        // By rule: an expansion with an operator is not judged.
+        ("a=(1 2); k=0; unset \"${k:-x}\"".to_string(), "unset"),
+        // `unset` evaluates the subscript of an indexed array.
+        (format!("a=(1 2); {x}unset 'a[x]'"), "unset"),
+        // A prefix assignment is a value of the name too.
+        (
+            "f() { (( x )); }; x=0; x='a[$(rm -rf y)]' f".to_string(),
+            "((",
+        ),
         (
             format!("{x}f() {{ declare -i n; n=\"$@\"; }}; f \"$x\""),
             "<none>",
@@ -809,7 +841,6 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "(( $(wc -l < f) > 1 ))".to_string(),
         "(( `wc -l < f` > 1 ))".to_string(),
         "(( 16#ff + 0x1F ))".to_string(),
-        format!("{x}unset 'a[x]'"),
         format!("{x}echo \"$x\""),
     ] {
         let s = ok(&src);

@@ -266,8 +266,8 @@ enum Value {
     Clean,
     /// Anything the allow-list does not name.
     Tainted,
-    /// One expansion of a variable with nothing around it (`n=$x`): a value bash gets at run time
-    /// unless the script itself assigns `x`, then as clean as `x`.
+    /// One expansion of a variable with nothing around it (`n=$x`): as clean as `x`, so tainted
+    /// when the script never assigns `x`.
     Copy(String),
     /// Arithmetic over these names (`n=5`, `n=x+1`), or the positional parameters (`n=$1`):
     /// clean when they all are.
@@ -799,7 +799,7 @@ impl Lower {
             E::UnaryTest(op, w) => {
                 let mut w = self.ast_word(t, w, span, cx)?;
                 if matches!(op, ast::UnaryPredicate::ShellVariableIsSetAndAssigned) {
-                    self.subscript_substs(&mut w, cx)?;
+                    self.name_operand(&mut w, cx)?;
                 }
                 out.push(w);
                 Ok(())
@@ -1160,19 +1160,32 @@ impl Lower {
     ) -> Result<(), ParseError> {
         let env = EnvView::new();
         let mut picked = Vec::new();
+        let mut names = Vec::new();
         if target == Some("let") {
             for w in cmd.args.iter().skip(first_arg) {
                 self.read_arith(&value_text(w));
             }
         }
+        // `declare -n r=v`: `v` is a name, its subscript evaluated where `$r` expands.
+        let nameref = matches!(target, Some("declare" | "typeset" | "local"))
+            && cmd.args.iter().skip(first_arg).any(|w| {
+                let v = value_text(w);
+                v.starts_with('-') && v.contains('n')
+            });
         match target {
+            Some("declare" | "typeset" | "local") if nameref => {
+                names.extend(first_arg..cmd.args.len())
+            }
             Some("let" | "read" | "declare" | "typeset" | "local") => {
                 picked.extend(first_arg..cmd.args.len())
             }
+            // `unset` evaluates the subscript of an indexed array.
+            Some("unset") => names.extend(first_arg..cmd.args.len()),
             Some("printf" | "test" | "[") => {
                 for i in first_arg..cmd.args.len() {
                     match cmd.args[i].static_value(&env).as_deref() {
-                        Some("-v") => picked.push(i + 1),
+                        Some("-v") if target == Some("printf") => picked.push(i + 1),
+                        Some("-v") => names.push(i + 1),
                         Some(v) if target == Some("printf") && v.starts_with("-v") => {
                             picked.push(i)
                         }
@@ -1187,7 +1200,36 @@ impl Lower {
                 self.subscript_substs(w, cx)?;
             }
         }
+        for i in names {
+            if let Some(w) = cmd.args.get_mut(i) {
+                self.name_operand(w, cx)?;
+            }
+        }
         Ok(())
+    }
+
+    /// A word bash takes as a variable name (`unset`, `test -v`, `[[ -v ]]`): its subscripts, and
+    /// the variables whose text forms the name, since bash evaluates a subscript in that text.
+    fn name_operand(&self, w: &mut Word, cx: Cx) -> Result<(), ParseError> {
+        for p in &w.parts {
+            let WordPart::Var(v) = p else { continue };
+            if v.starts_with("((") {
+                continue;
+            }
+            let plain = v.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let positional = v == "@" || v == "*" || v.bytes().all(|b| b.is_ascii_digit());
+            if plain {
+                self.read_arith(v);
+            } else if positional {
+                self.read_arith(&format!("${{{v}}}"));
+            } else {
+                // An operator (`${k:-…}`, `${k#…}`) can yield text the script holds: read `_`,
+                // which is never clean.
+                self.read_arith("_");
+            }
+        }
+        self.subscript_substs(w, cx)
     }
 
     /// Append the commands in the `[…]` subscripts of a static word that bash evaluates.
