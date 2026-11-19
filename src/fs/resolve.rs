@@ -1640,7 +1640,12 @@ enum PwshMove {
 /// `~`; a `<letter>:` goes to that drive's own current folder, a script run keeps its
 /// Set-Location, pwsh runs a name with a folder in it (`.\up`, `.\up.v2`) as a script, and a
 /// Verb-Noun name the shell does not ship may autoload a module that runs anything: unknown.
+/// So is a scope-qualified name (`global:cd..` runs a function) and a name past ASCII, which
+/// pwsh's case rules may match to any function (`ü` runs `Ü`; fix8\spike-routes.log).
 fn pwsh_move(c: &SimpleCommand, raw: &str, shell: Shell) -> PwshMove {
+    if strip_scope(raw) != raw || !raw.is_ascii() {
+        return PwshMove::Unknown;
+    }
     let t = table(shell);
     let shipped = t.alias(raw).is_some() || t.runs_blocks(raw).is_some();
     if shipped {
@@ -1691,14 +1696,22 @@ fn changes_location(s: &Script, shell: Shell, defined: &[String]) -> bool {
 }
 
 /// A call of `raw` (as written, lowercased) runs a command the script defines (`defined`, where
-/// `*` stands for any name): the name itself or, in pwsh, the command a shipped alias names and
-/// the Set-Location the shipped `cd..`, `cd\` and `cd~` run (fix7\spike-shadow.log).
+/// `*` stands for any name): the name itself or, in pwsh, the name under a scope prefix
+/// (`global:f`), the command a shipped alias names, the Set-Location the shipped `cd..`, `cd\` and
+/// `cd~` run (fix7\spike-shadow.log), and the `Get-` name pwsh retries a name it cannot find with
+/// (`up` runs `Get-Up`; fix8\spike-routes.log). A name past ASCII is left to `pwsh_move`.
 fn calls_defined(raw: &str, shell: Shell, defined: &[String]) -> bool {
     let pwsh = is_pwsh(shell);
+    let raw = if pwsh { strip_scope(raw) } else { raw };
     let target = pwsh.then(|| table(shell).alias(raw)).flatten();
     let runs_sl = pwsh && matches!(raw, "cd.." | "cd\\" | "cd~");
+    let retry = pwsh.then(|| format!("get-{raw}"));
     defined.iter().any(|d| {
-        d == "*" || d == raw || target == Some(d.as_str()) || (runs_sl && d == "set-location")
+        d == "*"
+            || d == raw
+            || target == Some(d.as_str())
+            || (runs_sl && d == "set-location")
+            || retry.as_deref() == Some(d.as_str())
     })
 }
 
@@ -1898,7 +1911,7 @@ fn read_as_written(c: &SimpleCommand, defined: &[String], shell: Shell) -> bool 
     if raw.is_empty() && name.is_empty() {
         return args.is_empty();
     }
-    if defined.contains(&name) {
+    if defined.contains(&name) || calls_defined(&raw, shell, defined) {
         return false;
     }
     let t = table(shell);

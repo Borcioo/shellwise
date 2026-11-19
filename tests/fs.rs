@@ -4643,6 +4643,149 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             MAY_BE_CRITICAL,
         ));
     }
+    // Ruling 57 I1: every route pwsh takes from a call's spelling to a defined function
+    // (fix8\spike-routes.log, both shells). Re-review 5 Q1–Q3: a scope prefix on the call.
+    let sl_up = || vec![stmt(lits("Set-Location", &[".."]), None)];
+    for call in ["global:f", "script:f", "local:f", "private:f"] {
+        rows.push((
+            call,
+            ps,
+            repo,
+            then_call(func("f", sl_up()), lits(call, &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ));
+    }
+    rows.extend([
+        // Q4: the prefix in another case.
+        (
+            "Q4 function global:f; GLOBAL:F",
+            ps,
+            repo,
+            then_call(func("global:f", sl_up()), lits("GLOBAL:F", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Q6: the shipped `cd..` under a scope prefix moves (spike-routes.log P6).
+        (
+            "Q6 global:cd.. (shipped)",
+            ps,
+            sub,
+            vec![one("global:cd..", and)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Q7 and R3: pwsh finds no command there and stays; the cost of reading every
+        // scope-qualified name as unknown.
+        (
+            "Q7 global:sl .. (cost: CommandNotFound)",
+            ps,
+            repo,
+            vec![cd_sub(), stmt(lits("global:sl", &[".."]), and)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "R3 function Get-Up; global:up (cost: CommandNotFound)",
+            ps,
+            repo,
+            then_call(func("Get-Up", sl_up()), lits("global:up", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // G1, G2: the `Get-` retry, of a function and of an alias; R5 through `&`.
+        (
+            "G1 function Get-Up; up",
+            ps,
+            repo,
+            then_call(func("Get-Up", sl_up()), lits("up", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "G2 Set-Alias Get-Up Set-Location; up ..",
+            ps,
+            repo,
+            then_call(
+                def(lits("Set-Alias", &["Get-Up", "Set-Location"])),
+                up_back(),
+            ),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "R5 function Get-Up; & up",
+            ps,
+            repo,
+            then_call(func("Get-Up", sl_up()), lits("&", &["up"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // U1: case folding past ASCII (`function Ü; ü` runs it).
+        (
+            "U1 function \u{dc}; \u{fc}",
+            ps,
+            repo,
+            then_call(func("\u{dc}", sl_up()), lits("\u{fc}", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Controls, each already unknown at head: `& global:f` (Q5), the same non-ASCII
+        // spelling (U2), `Get-Up` by its name (G3), a module-qualified call (M1: `M\f` runs the
+        // module's `f`), `. up`.
+        (
+            "Q5 & global:f (control)",
+            ps,
+            repo,
+            then_call(func("f", sl_up()), lits("&", &["global:f"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "U2 function \u{fc}; \u{fc} (control)",
+            ps,
+            repo,
+            then_call(func("\u{fc}", sl_up()), lits("\u{fc}", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "G3 function Get-Up; Get-Up (control)",
+            ps,
+            repo,
+            then_call(func("Get-Up", sl_up()), lits("Get-Up", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            r"M1 New-Module … | Import-Module; M\f (control)",
+            ps,
+            repo,
+            then_call(
+                def(cmd("New-Module", vec![lit("-Name"), lit("M")])),
+                lits(r"M\f", &[]),
+            ),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "function Get-Up; . up (control)",
+            ps,
+            repo,
+            then_call(func("Get-Up", sl_up()), lits(".", &["up"])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Control that stays: `up` with nothing defined (G4).
+        (
+            "G4 up, nothing defined (control)",
+            ps,
+            repo,
+            vec![cd_sub(), stmt(up_back(), and)],
+            ".",
+            paths(&[sub]),
+        ),
+    ]);
     let mut bad: Vec<String> = rows
         .into_iter()
         .filter_map(|(label, shell, cwd, before, word, want)| {
@@ -4712,6 +4855,22 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             bad.push(format!("POSIX bash {label}: got {got:?}"));
         }
     }
+    // Re-review 5 Q8: pwsh on POSIX, a scope prefix on the call (real target `/w/repo`).
+    let pp_env = env_view(ps, Os::Posix, [("HOME".to_string(), "/h/u".to_string())]);
+    let before = vec![
+        func("f", vec![stmt(lits("Set-Location", &[".."]), None)]),
+        stmt(lits("cd", &["/w/repo/sub"]), and),
+        one("global:f", and),
+    ];
+    let mut all = before.clone();
+    all.push(stmt(lits("rm", &["-rf", "."]), seq));
+    let mut loc = Location::new(ps, Os::Posix, Some(Path::new("/w/repo")));
+    loc.read_script(&script(all));
+    after_all(&mut loc, &script(before), &pp_env);
+    let got = resolve(&lit("."), &loc, &pp_env);
+    if got != MAY_BE_CRITICAL {
+        bad.push(format!("Q8 POSIX pwsh function f; global:f: got {got:?}"));
+    }
     // A loop body that calls a defined name starts each pass somewhere unknown (`inner`).
     let (_, env) = win(ps);
     let lp = Stmt::Loop {
@@ -4736,6 +4895,28 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
     let got = target(&lit(r"Proj:\x"), &loc, &env, by, &real(), &far());
     if got != unproven_unread("Proj") {
         bad.push(format!("function global:f; f; ri Proj:\\x: got {got:?}"));
+    }
+    // Ruling 57 I1: the unread rule reaches a definition by the same routes (`calls_defined`):
+    // the `Get-` retry and a shipped alias's target. `global:f` is a pin (no plain token).
+    for (label, def_name, call) in [
+        ("function Get-Up; up; ri Proj:\\x", "Get-Up", "up"),
+        (
+            "function Get-ChildItem; ls; ri Proj:\\x",
+            "Get-ChildItem",
+            "ls",
+        ),
+        ("function f; global:f; ri Proj:\\x (pin)", "f", "global:f"),
+    ] {
+        let mut loc = Location::new(ps, Os::Windows, Some(Path::new(repo)));
+        loc.read_script(&script(vec![
+            func(def_name, vec![]),
+            one(call, seq),
+            stmt(lits("Remove-Item", &[r"Proj:\x"]), seq),
+        ]));
+        let got = target(&lit(r"Proj:\x"), &loc, &env, by, &real(), &far());
+        if got != unproven_unread("Proj") {
+            bad.push(format!("{label}: got {got:?}"));
+        }
     }
     assert!(
         bad.is_empty(),
