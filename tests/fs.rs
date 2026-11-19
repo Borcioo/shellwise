@@ -1640,7 +1640,13 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
     ] {
         // Ruling 33: not proven, but no remap in sight; Ruling 36: unless a part is not read
         // as written.
-        let unread = ["function: assignment", "Invoke-Command $sb", "opaque echo"];
+        let unread = [
+            "function: assignment",
+            "Invoke-Command $sb",
+            "opaque echo",
+            "scriptblock::Create",
+            "path-qualified Get-",
+        ];
         let want = if unread.contains(&label) {
             MAY_BE_CRITICAL
         } else {
@@ -1837,6 +1843,14 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
         "nested New-PSDrive",
     ];
     let unread = [
+        "psm1",
+        "bare ps1",
+        "dot-source",
+        "script call",
+        "Drive method",
+        "SessionState method",
+        "slash path",
+        "expression",
         "Start-Process",
         "Invoke-Expression",
         "iex",
@@ -2129,6 +2143,43 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             ],
         ),
         ("icm $sb", vec![stmt(cmd("icm", vec![var("sb")]), seq)]),
+        // Ruling 37: `&`/`.` read only a literal cmdlet name; a script runs unseen code.
+        ("& ./x.ps1", vec![stmt(lits("&", &["./x.ps1"]), seq)]),
+        (
+            "& C:\\x\\run.ps1",
+            vec![stmt(lits("&", &[r"C:\x\run.ps1"]), seq)],
+        ),
+        (". .\\x.ps1", vec![stmt(lits(".", &[r".\x.ps1"]), seq)]),
+        (". m.psm1", vec![stmt(lits(".", &["m.psm1"]), seq)]),
+        ("& run", vec![stmt(lits("&", &["run"]), seq)]),
+        (
+            "& New-PSDrive",
+            vec![stmt(
+                lits("&", &["New-PSDrive", "Proj", "FileSystem", r"C:\x"]),
+                seq,
+            )],
+        ),
+        (
+            "function Get-Thing; & Get-Thing",
+            vec![
+                Stmt::Func {
+                    name: "Get-Thing".to_string(),
+                    body: script(vec![git()]),
+                },
+                stmt(lits("&", &["Get-Thing"]), seq),
+            ],
+        ),
+        (
+            "Set-Alias G x; g",
+            vec![
+                stmt(lits("Set-Alias", &["G", "x"]), seq),
+                stmt(lits("g", &[]), seq),
+            ],
+        ),
+        // The same for a script called by its path.
+        ("setup.ps1", vec![stmt(lits("setup.ps1", &[]), seq)]),
+        (".\\x.ps1", vec![stmt(lits(r".\x.ps1", &[]), seq)]),
+        ("m.psm1", vec![stmt(lits("m.psm1", &[]), seq)]),
         (
             "Set-Alias $n x",
             vec![stmt(cmd("Set-Alias", vec![var("n"), lit("x")]), seq)],
@@ -2191,7 +2242,8 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     // A literal operand and a plain command are read; a defined name not called is no call.
     let in_block = word_at(vec![WordPart::Block(Box::new(script(vec![git()])))], 0);
     for (label, before) in [
-        ("& literal", stmt(lits("&", &[r"C:\x\run.ps1"]), seq)),
+        ("& Get-Date", stmt(lits("&", &["Get-Date"]), seq)),
+        ("wrapper alone", stmt(lits("command", &[]), seq)),
         (
             "Set-Alias g; git",
             stmt(lits("Set-Alias", &["g", "x"]), seq),
@@ -2328,6 +2380,7 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         r"Microsoft.PowerShell.Core\Variable::__sw_File",
         "Variable:__s*",
         "Variable:__sw_?ile",
+        "Variable:?_sw_File",
         "Variable:[_]_sw_File",
         // `-Include __sw*` widens any wildcard and the root (step0-varfilter.log).
         "Variable:fo*",
@@ -2363,10 +2416,26 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             &MAY_BE_CRITICAL,
             &format!("{label}; Z:\\u"),
         );
+        // Ruling 37: a method call may make the drive unseen; `git` is read as written.
+        let want = if label == "git" {
+            unproven("Proj")
+        } else {
+            MAY_BE_CRITICAL
+        };
         expect(
-            judge(vec![before], ri(r"Proj:\u")),
-            &unproven("Proj"),
+            judge(vec![before.clone()], ri(r"Proj:\u")),
+            &want,
             &format!("{label}; Proj:\\u"),
+        );
+        let want = if label == "git" {
+            Target::SessionCommand
+        } else {
+            MAY_BE_CRITICAL
+        };
+        expect(
+            judge(vec![before], ri(r"Function:\y")),
+            &want,
+            &format!("{label}; Function:\\y"),
         );
     }
     expect(
