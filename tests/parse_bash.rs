@@ -826,6 +826,8 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "a=(1 2); (( a ))".to_string(),
         "RANDOM=5; (( RANDOM ))".to_string(),
         "declare -i n; n=5; for n in 1 2; do :; done".to_string(),
+        // A name operand built from `$((…))` is an integer.
+        "a=(1 2); unset \"a[$((1))]\"".to_string(),
         // Arithmetic assigns integers.
         "(( n = 1 )); (( n ))".to_string(),
         "(( n += 1 )); (( n ))".to_string(),
