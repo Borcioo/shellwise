@@ -1168,8 +1168,9 @@ impl Lower {
                 Some(n) => (n, true),
                 None => (name, false),
             };
-            // Declared with or without a value: `local PATH` leaves it unset.
-            if REBINDING_NAMES.contains(&name) || !is_identifier(name) {
+            // Declared with or without a value: `local PATH` leaves it unset. (An operand that
+            // is not literal text is an unknown write: `name_writer_words`.)
+            if REBINDING_NAMES.contains(&name) {
                 self.rebinds.set(true);
             }
             if integer {
@@ -1365,7 +1366,7 @@ impl Lower {
     }
 
     /// `unset` of a variable in `REBINDING_NAMES`, or of a name that is not static, may rebind a
-    /// command name; `unset -f` removes functions only.
+    /// command name; with `-f` it removes functions only (with `-v` or `-n` too, bash refuses).
     fn unset_rebinds(&self, args: &[Word]) {
         let mut options = true;
         let mut functions = false;
@@ -1374,7 +1375,7 @@ impl Lower {
             match text.as_deref() {
                 Some("--") if options => options = false,
                 Some(v) if options && v.len() > 1 && v.starts_with('-') => {
-                    functions = v[1..].bytes().all(|b| b == b'f');
+                    functions |= v[1..].contains('f');
                 }
                 _ => {
                     options = false;

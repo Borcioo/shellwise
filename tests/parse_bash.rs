@@ -1147,6 +1147,19 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             "((",
         ),
         (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset 'PATH[0]'; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        // After `--` or an operand, `-f` is an operand.
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -- -f PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset x -f PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
             r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { local PATH; (( $(date +%s) )); }; f"#.into(),
             "((",
         ),
@@ -1319,6 +1332,13 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"z=1; o='1 z=a[$(>y)]'; declare x={a}$o; (( z ))"#.into(),
         r#"z=1; o='1 z=a[$(>y)]'; declare x=${o}; (( z ))"#.into(),
         r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f x PATH; (( $(date +%s) ))"#
+            .into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f -- PATH; (( $(date +%s) ))"#
+            .into(),
+        // `-f` with `-v` or `-n`: bash refuses and unsets nothing.
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -fv PATH; (( $(date +%s) ))"#
+            .into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f -v PATH; (( $(date +%s) ))"#
             .into(),
         r#"declare -a a; unset "a[$(date +%s)]""#.into(),
         r#"declare -i n; n=$(date +%s)"#.into(),
