@@ -25,7 +25,8 @@ Without `-- COMMAND` the command is read from stdin. Exit codes: 0 ok/warn, 1 br
   run time.
 - Bash: command output that arithmetic reads directly (`(( $(cmd) ))`, `$(( $(cmd) ))`,
   `[[ $(cmd) -eq 1 ]]`, `${s:$(cmd)}`, `${a[$(cmd)]}`, `a[$(cmd)]=1`, `a=([$(cmd)]=1)`,
-  `unset "a[$(cmd)]"`, `[[ -v a[$(cmd)] ]]`, `declare -i n; n=$(cmd)`) makes the command opaque,
+  `unset "a[$(cmd)]"`, `[[ -v a[$(cmd)] ]]`, `exec {a[$(cmd)]}>f`, `declare -i n; n=$(cmd)`) makes
+  the command opaque,
   unless the command is `date +%s`, `date +%s%N`, `id -u` or `wc -l < FILE` with a literal path,
   written with spaces (a tab between the words of a `$(…)` counts as one; other tabs make the
   command opaque), and the script defines no function of that name or `command_not_found_handle`,

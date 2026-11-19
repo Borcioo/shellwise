@@ -1242,6 +1242,9 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc "PATH" { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
         (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH (:); wait; (( $(date +%s) ))"#.into(), "(("),
         (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; x=PATH; coproc $x { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        // The parser reads `coproc NAME [[ … ]]` as a command NAME.
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH [[ 1 ]]; wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc "PATH" [[ 1 ]]; wait; (( $(date +%s) ))"#.into(), "(("),
         // `{x}>&-` writes nothing: `x` keeps its value from the environment.
         (r#"exec {x}>&-; (( x ))"#.into(), "(("),
         // By rule: with a space bash reads `{PATH}` as a word.
@@ -1386,6 +1389,7 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {PA\TH}>f; (( $(date +%s) ))"#.into(),
         r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {a,b}>f; (( $(date +%s) ))"#.into(),
         r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc C { :; }; wait; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH echo [[ 1 ]]; wait; (( $(date +%s) ))"#.into(),
         r#"command_not_found() { echo 'a[$(>y)]'; }; EXECIGNOR='*date*'; (( $(date +%s) ))"#.into(),
     ] {
         let s = ok(&src);

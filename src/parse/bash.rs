@@ -971,8 +971,17 @@ impl Lower {
                 chain: None,
             })],
             C::Coprocess(c) => {
-                // `coproc NAME` writes NAME (bash expands the word).
-                if let Some(name) = &c.name {
+                // `coproc NAME` writes NAME (bash expands the word). The parser reads
+                // `coproc NAME [[ … ]]` as a command NAME, which bash takes as the name.
+                let test_first = |s: &ast::SimpleCommand| {
+                    let w0 = s.suffix.as_ref().and_then(|x| x.0.first());
+                    matches!(w0, Some(ast::CommandPrefixOrSuffixItem::Word(w)) if w.value == "[[")
+                };
+                let name = c.name.as_ref().or(match c.body.as_ref() {
+                    ast::Command::Simple(s) if test_first(s) => s.word_or_name.as_ref(),
+                    _ => None,
+                });
+                if let Some(name) = name {
                     let w = self.ast_word(t, name, span, cx)?;
                     self.runtime_target(Some(&w));
                 }
