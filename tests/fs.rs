@@ -7565,12 +7565,12 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             mbc.clone(),
         ),
         (
-            "LG5 pwsh Set-Alias ni Invoke-Expression; ni 'x' read as New-Item (the name as typed)",
+            "LG5 pwsh Set-Alias ni Invoke-Expression; NI 'x' read as New-Item (the name as typed)",
             ps,
             vec![
                 st(lits("Set-Alias", &["ni", "Invoke-Expression"])),
                 st({
-                    let mut c = lits("ni", &["x"]);
+                    let mut c = lits("NI", &["x"]);
                     c.canonical = Some("New-Item".to_string());
                     c
                 }),
@@ -7600,6 +7600,16 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ],
             ri(r"Proj:\y"),
             mbc.clone(),
+        ),
+        (
+            "C24 pwsh Set-Alias -Name e Get-Date; e 'x' (a positional after -Name, control)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["-Name", "e", "Get-Date"])),
+                st(lits("e", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            proj(true),
         ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
@@ -8256,14 +8266,14 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             true,
         ),
         (
-            "VP3 pwsh New-Item -Name e -Path Alias: -Value Invoke-Expression; e 'x'",
+            "VP3 pwsh New-Item -Name E -Path Alias: -Value Invoke-Expression; e 'x'",
             ps,
             vec![
                 st(lits(
                     "New-Item",
                     &[
                         "-Name",
-                        "e",
+                        "E",
                         "-Path",
                         "Alias:",
                         "-Value",
