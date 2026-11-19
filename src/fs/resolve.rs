@@ -1016,9 +1016,12 @@ impl Location {
         match stmt {
             Stmt::Pipeline(p) => self.after_pipeline(p, env),
             Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
-                self.after_nested(changes_location(body))
+                self.after_nested(changes_location(body, self.shell))
             }
-            Stmt::Cond { branches, .. } => self.after_nested(branches.iter().any(changes_location)),
+            Stmt::Cond { branches, .. } => {
+                let shell = self.shell;
+                self.after_nested(branches.iter().any(|b| changes_location(b, shell)))
+            }
         }
     }
 
@@ -1049,7 +1052,10 @@ impl Location {
                 changed.get_or_insert_with(Dirs::default).union(&d);
             }
         }
-        if p.elems.iter().any(elem_nests_location_change) {
+        if p.elems
+            .iter()
+            .any(|e| elem_nests_location_change(e, self.shell))
+        {
             changed = Some(Dirs::unknown(UnknownKind::MayBeCritical));
         }
         if let Some(new) = changed {
@@ -1070,7 +1076,7 @@ impl Location {
     pub fn inner(&self, stmt: &Stmt) -> Location {
         let mut loc = match stmt {
             Stmt::Func { .. } => self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical)),
-            Stmt::Loop { body, .. } if changes_location(body) => {
+            Stmt::Loop { body, .. } if changes_location(body, self.shell) => {
                 self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
             }
             _ => self.with_dirs(self.dirs.clone()),
@@ -1186,26 +1192,14 @@ impl Location {
         }
     }
 
-    /// The folders after a pwsh command outside `LOCATION_COMMANDS` (`raw` as written,
-    /// lowercased) that still moves the shell, else `None`: the shipped `cd..`, `cd\` and `cd~`
-    /// (Set-Location to `..`, `\` and `~`); a `<letter>:` (that drive's own current folder); a
-    /// script run, whose Set-Location stays in effect; a name with a folder in it (pwsh runs
-    /// `.\up` and `.\up.v2` as `up.ps1` and `up.v2.ps1`); a Verb-Noun name the shell does not
-    /// ship (a module it autoloads may run anything).
+    /// The folders after a pwsh command outside `LOCATION_COMMANDS` that still moves the shell
+    /// (`pwsh_move`), else `None`.
     fn pwsh_mover(&self, c: &SimpleCommand, raw: &str, env: &EnvView) -> Option<Dirs> {
-        let t = table(self.shell);
-        let shipped = t.alias(raw).is_some() || t.runs_blocks(raw).is_some();
-        if let Some(to) = raw.strip_prefix("cd")
-            && matches!(to, ".." | "\\" | "~")
-            && shipped
-        {
-            return Some(self.dir_from_segs(&[Seg::lit(to)], env, DeleteBy::Provider));
+        match pwsh_move(c, raw, self.shell) {
+            PwshMove::Stays => None,
+            PwshMove::To(to) => Some(self.dir_from_segs(&[Seg::lit(to)], env, DeleteBy::Provider)),
+            PwshMove::Unknown => Some(Dirs::unknown(UnknownKind::MayBeCritical)),
         }
-        let b = raw.as_bytes();
-        let letter = b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
-        let unshipped_cmdlet = !shipped && plain_command(raw) && cmdlet_name(raw);
-        (letter || runs_script(c, self.shell) || raw.contains(['\\', '/']) || unshipped_cmdlet)
-            .then(|| Dirs::unknown(UnknownKind::MayBeCritical))
     }
 
     fn set_location(&self, name: &str, args: &[Word], env: &EnvView, push: bool) -> Dirs {
@@ -1609,22 +1603,69 @@ const LOCATION_COMMANDS: [&str; 13] = [
     "iex",
 ];
 
-fn is_location_command(c: &SimpleCommand) -> bool {
-    c.opaque || unwrap(c).may_be(&LOCATION_COMMANDS)
+/// How a pwsh command outside `LOCATION_COMMANDS` moves the shell.
+enum PwshMove {
+    Stays,
+    /// Set-Location to this text.
+    To(&'static str),
+    Unknown,
+}
+
+/// How pwsh command `c` (`raw` as written, lowercased), outside `LOCATION_COMMANDS` and with no
+/// wrapper in front, moves the shell: the shipped `cd..`, `cd\` and `cd~` go to `..`, `\` and
+/// `~`; a `<letter>:` goes to that drive's own current folder, a script run keeps its
+/// Set-Location, pwsh runs a name with a folder in it (`.\up`, `.\up.v2`) as a script, and a
+/// Verb-Noun name the shell does not ship may autoload a module that runs anything: unknown.
+fn pwsh_move(c: &SimpleCommand, raw: &str, shell: Shell) -> PwshMove {
+    let t = table(shell);
+    let shipped = t.alias(raw).is_some() || t.runs_blocks(raw).is_some();
+    if shipped {
+        match raw {
+            "cd.." => return PwshMove::To(".."),
+            "cd\\" => return PwshMove::To("\\"),
+            "cd~" => return PwshMove::To("~"),
+            _ => {}
+        }
+    }
+    let b = raw.as_bytes();
+    let letter = b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let unshipped_cmdlet = !shipped && plain_command(raw) && cmdlet_name(raw);
+    if letter || runs_script(c, shell) || raw.contains(['\\', '/']) || unshipped_cmdlet {
+        PwshMove::Unknown
+    } else {
+        PwshMove::Stays
+    }
+}
+
+fn is_location_command(c: &SimpleCommand, shell: Shell) -> bool {
+    if c.opaque {
+        return true;
+    }
+    match unwrap(c) {
+        Run::Cmd {
+            name,
+            raw,
+            wrapped: false,
+            ..
+        } if is_pwsh(shell) && !LOCATION_COMMANDS.contains(&name.as_str()) => {
+            !matches!(pwsh_move(c, &raw, shell), PwshMove::Stays)
+        }
+        run => run.may_be(&LOCATION_COMMANDS),
+    }
 }
 
 /// True when anything in `s` (nested bodies and substitutions included) may move.
-fn changes_location(s: &Script) -> bool {
+fn changes_location(s: &Script, shell: Shell) -> bool {
     let mut hit = false;
     visit_script(s, &mut |n| {
         if let Node::Cmd(c) = n {
-            hit |= is_location_command(c);
+            hit |= is_location_command(c, shell);
         }
     });
     hit
 }
 
-fn elem_nests_location_change(e: &Elem) -> bool {
+fn elem_nests_location_change(e: &Elem, shell: Shell) -> bool {
     let words: Vec<&Word> = match e {
         Elem::Cmd(c) => cmd_words(c),
         Elem::Method(m) => m.args.iter().collect(),
@@ -1633,7 +1674,7 @@ fn elem_nests_location_change(e: &Elem) -> bool {
     words
         .iter()
         .flat_map(|w| word_scripts(w))
-        .any(changes_location)
+        .any(|s| changes_location(s, shell))
 }
 
 // ------------------------------------------------------------------ IR visiting
@@ -2438,16 +2479,7 @@ fn absolutize(
         let sep = if os == Os::Windows { '\\' } else { '/' };
         Ok(canonical(&format!("{b}{sep}{rel}"), os))
     };
-    // A provider cmdlet in pwsh on POSIX reads any `name:` as a PowerShell drive: there are no
-    // letter drives and no `Temp:` shortcut (it follows the drive, which may be remapped). A
-    // native program gets the literal text, a relative file name.
-    if os == Os::Posix
-        && pwsh
-        && by == DeleteBy::Provider
-        && let Some((drive, rest)) = s.split_once(':')
-        && !drive.is_empty()
-        && drive.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if let Some(rest) = posix_drive_rest(&s, shell, os, by) {
         return Err(if plain_drive_rest(rest) {
             Fail::Drive
         } else {
@@ -2508,6 +2540,19 @@ fn absolutize(
         return Err(Fail::Unknown);
     }
     join(base, &s)
+}
+
+/// The text after the drive when a provider cmdlet in pwsh on POSIX reads `s` (its
+/// `FileSystem::` prefix stripped) as a PowerShell drive path: any `name:` with a name of
+/// `[A-Za-z0-9_]`. There are no letter drives and no `Temp:` shortcut (it follows the drive,
+/// which may be remapped). A native program gets the literal text, a relative file name.
+fn posix_drive_rest(s: &str, shell: Shell, os: Os, by: DeleteBy) -> Option<&str> {
+    if os != Os::Posix || !is_pwsh(shell) || by != DeleteBy::Provider {
+        return None;
+    }
+    let (drive, rest) = s.split_once(':')?;
+    (!drive.is_empty() && drive.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .then_some(rest)
 }
 
 /// What is left to do on the file system for one candidate.
@@ -2617,6 +2662,10 @@ fn plan(
             comps: Vec::new(),
             link_free,
         });
+    }
+    // A wildcard on a POSIX PowerShell drive (`Proj:*`): the drive is read before the folder.
+    if posix_drive_rest(strip_fs_provider(&text), loc.shell, loc.os, by).is_some() {
+        return Err(Fail::Unknown);
     }
     // The literal text before the component holding the first glob is resolved as a path.
     let comps = split_comps(segs, loc.os);

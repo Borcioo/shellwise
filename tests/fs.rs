@@ -2739,6 +2739,28 @@ fn pwsh_on_posix_reads_a_drive_path_as_powershell_does() {
         ),
         // pwsh reads `:x` as a relative item (fix6\probe: ItemNotFound, not DriveNotFound).
         ("git; :x", ps, vec![git()], ri(":x"), paths(&["/w/repo/:x"])),
+        // A wildcard in the drive's own component: the drive is still read first.
+        (
+            "New-PSDrive Proj /h/u; Proj:*",
+            ps,
+            vec![to_home("Proj")],
+            rr("Proj:*"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "git; Proj:x*",
+            ps,
+            vec![git()],
+            ri("Proj:x*"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "rm -rf a:b* (native glob)",
+            ps,
+            vec![git()],
+            lits("rm", &["-rf", "a:b*"]),
+            paths(&[]),
+        ),
         (
             "bash rm -rf Proj:/x",
             Shell::Bash(BashProfile::Posix),
@@ -3784,6 +3806,57 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
             ".",
             MAY_BE_CRITICAL,
         ),
+        // The same movers inside a branch, a block and a substitution.
+        (
+            "if { cd.. }; .",
+            ps,
+            sub,
+            vec![Stmt::Cond {
+                branches: vec![script(vec![one("cd..", None)])],
+                span: Span::default(),
+            }],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            r"{ .\up.ps1 }; .",
+            ps,
+            sub,
+            vec![Stmt::Block(script(vec![one(r".\up.ps1", None)]))],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "echo $(Invoke-Psake); .",
+            ps,
+            sub,
+            vec![stmt(
+                cmd(
+                    "echo",
+                    vec![word_at(
+                        vec![WordPart::Subst(Box::new(script(vec![one(
+                            "Invoke-Psake",
+                            None,
+                        )])))],
+                        0,
+                    )],
+                ),
+                seq,
+            )],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "if { Get-ChildItem }; . (control)",
+            ps,
+            sub,
+            vec![Stmt::Cond {
+                branches: vec![script(vec![one("Get-ChildItem", None)])],
+                span: Span::default(),
+            }],
+            ".",
+            paths(&[sub]),
+        ),
         // A wrapper runs a program, which cannot move this shell.
         (
             r"sudo .\up.ps1; .",
@@ -3838,13 +3911,27 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
             paths(&[sub]),
         ),
     ];
-    let bad: Vec<String> = rows
+    let mut bad: Vec<String> = rows
         .into_iter()
         .filter_map(|(label, shell, cwd, stmts, word, want)| {
             let got = run(shell, cwd, stmts, word);
             (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
         })
         .collect();
+    // A loop whose body moves starts each pass where the last one ended.
+    let (_, env) = win(ps);
+    let lp = Stmt::Loop {
+        body: script(vec![one("cd..", seq), one("x", seq)]),
+        span: Span::default(),
+    };
+    let got = resolve(
+        &lit("."),
+        &Location::new(ps, Os::Windows, Some(Path::new(sub))).inner(&lp),
+        &env,
+    );
+    if got != MAY_BE_CRITICAL {
+        bad.push(format!("foreach {{ cd..; . }} from inner: got {got:?}"));
+    }
     assert!(
         bad.is_empty(),
         "{} rows failed:\n{}",
