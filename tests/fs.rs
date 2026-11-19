@@ -3567,7 +3567,9 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
     let ps = Shell::Pwsh;
     let one = |name: &str, chain| stmt(lits(name, &[]), chain);
     let (sub, deep, repo) = (r"C:\w\repo\sub", r"C:\w\repo\sub\deep", r"C:\w\repo");
-    let rows: Vec<(&str, Shell, &str, Vec<Stmt>, &str, Target)> = vec![
+    /// Label, shell, starting folder, statements before the delete, the delete's word, result.
+    type Row<'a> = (&'a str, Shell, &'a str, Vec<Stmt>, &'a str, Target);
+    let rows: Vec<Row> = vec![
         // pwsh ships `cd..`, `cd\` and `cd~` as functions that run Set-Location.
         (
             "cd..; .",
