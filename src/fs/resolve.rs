@@ -1141,7 +1141,12 @@ impl Location {
                 in_shell,
             } => {
                 if !LOCATION_COMMANDS.contains(&name.as_str()) {
-                    return None;
+                    // A wrapper in front runs a program, which cannot move this shell.
+                    return if is_pwsh(self.shell) && !wrapped {
+                        self.pwsh_mover(c, &raw, env)
+                    } else {
+                        None
+                    };
                 }
                 let pwsh = matches!(self.shell, Shell::Pwsh | Shell::Powershell5);
                 // `.\cd.exe`, `/usr/bin/cd`, `env cd`: not the builtin, but nothing proves
@@ -1179,6 +1184,28 @@ impl Location {
             }
             _ => None,
         }
+    }
+
+    /// The folders after a pwsh command outside `LOCATION_COMMANDS` (`raw` as written,
+    /// lowercased) that still moves the shell, else `None`: the shipped `cd..`, `cd\` and `cd~`
+    /// (Set-Location to `..`, `\` and `~`); a `<letter>:` (that drive's own current folder); a
+    /// script run, whose Set-Location stays in effect; a name with a folder in it (pwsh runs
+    /// `.\up` and `.\up.v2` as `up.ps1` and `up.v2.ps1`); a Verb-Noun name the shell does not
+    /// ship (a module it autoloads may run anything).
+    fn pwsh_mover(&self, c: &SimpleCommand, raw: &str, env: &EnvView) -> Option<Dirs> {
+        let t = table(self.shell);
+        let shipped = t.alias(raw).is_some() || t.runs_blocks(raw).is_some();
+        if let Some(to) = raw.strip_prefix("cd")
+            && matches!(to, ".." | "\\" | "~")
+            && shipped
+        {
+            return Some(self.dir_from_segs(&[Seg::lit(to)], env));
+        }
+        let b = raw.as_bytes();
+        let letter = b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+        let unshipped_cmdlet = !shipped && plain_command(raw) && cmdlet_name(raw);
+        (letter || runs_script(c, self.shell) || raw.contains(['\\', '/']) || unshipped_cmdlet)
+            .then(|| Dirs::unknown(UnknownKind::MayBeCritical))
     }
 
     fn set_location(&self, name: &str, args: &[Word], env: &EnvView, push: bool) -> Dirs {

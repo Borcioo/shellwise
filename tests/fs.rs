@@ -3554,6 +3554,149 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
 }
 
 #[test]
+fn pwsh_location_functions_and_script_runs_move_the_shell() {
+    let seq = Some(ChainOp::Seq);
+    let and = Some(ChainOp::And);
+    // `<stmts>; rm -rf <word>` from `cwd`, in `shell`.
+    let run = |shell: Shell, cwd: &str, stmts: Vec<Stmt>, word: &str| {
+        let (_, env) = win(shell);
+        let mut loc = Location::new(shell, Os::Windows, Some(Path::new(cwd)));
+        after_all(&mut loc, &script(stmts), &env);
+        resolve(&lit(word), &loc, &env)
+    };
+    let ps = Shell::Pwsh;
+    let one = |name: &str, chain| stmt(lits(name, &[]), chain);
+    let (sub, deep, repo) = (r"C:\w\repo\sub", r"C:\w\repo\sub\deep", r"C:\w\repo");
+    let rows: Vec<(&str, Shell, &str, Vec<Stmt>, &str, Target)> = vec![
+        // pwsh ships `cd..`, `cd\` and `cd~` as functions that run Set-Location.
+        (
+            "cd..; .",
+            ps,
+            sub,
+            vec![one("cd..", seq)],
+            ".",
+            paths(&[repo, sub]),
+        ),
+        (
+            "cd.. && cd.. && .",
+            ps,
+            deep,
+            vec![one("cd..", and), one("cd..", and)],
+            ".",
+            paths(&[repo]),
+        ),
+        (
+            r"cd\ && w\repo",
+            ps,
+            repo,
+            vec![one(r"cd\", and)],
+            r"w\repo",
+            paths(&[repo]),
+        ),
+        (
+            r"cd~ && ..\u",
+            ps,
+            repo,
+            vec![one("cd~", and)],
+            r"..\u",
+            paths(&[r"C:\Profiles\u"]),
+        ),
+        // `X:` is a shipped function: that drive's current folder.
+        (
+            "X:; .",
+            ps,
+            repo,
+            vec![one("X:", seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // A script's Set-Location stays in effect after it ends; pwsh runs `.\up` and `.\up.v2`
+        // as `up.ps1` and `up.v2.ps1` (fix6\spike-dot.ps1).
+        (
+            r".\up.ps1; .",
+            ps,
+            sub,
+            vec![one(r".\up.ps1", seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            r".\up; .",
+            ps,
+            sub,
+            vec![one(r".\up", seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            r".\up.v2; .",
+            ps,
+            sub,
+            vec![one(r".\up.v2", seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // A Verb-Noun name pwsh does not ship may load a module that runs anything.
+        (
+            "Invoke-Psake; .",
+            ps,
+            sub,
+            vec![one("Invoke-Psake", seq)],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: a shipped cmdlet, a shipped alias, a native program; Windows PowerShell 5.1
+        // ships no `cd~`; Git Bash has no such functions.
+        (
+            "Get-ChildItem; .",
+            ps,
+            sub,
+            vec![one("Get-ChildItem", seq)],
+            ".",
+            paths(&[sub]),
+        ),
+        ("ls; .", ps, sub, vec![one("ls", seq)], ".", paths(&[sub])),
+        (
+            "git status; .",
+            ps,
+            sub,
+            vec![stmt(lits("git", &["status"]), seq)],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "5.1 cd~; .",
+            Shell::Powershell5,
+            sub,
+            vec![one("cd~", seq)],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "Git Bash cd..; .",
+            Shell::Bash(BashProfile::GitBash),
+            sub,
+            vec![one("cd..", seq)],
+            ".",
+            paths(&[sub]),
+        ),
+    ];
+    let bad: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(label, shell, cwd, stmts, word, want)| {
+            let got = run(shell, cwd, stmts, word);
+            (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
 fn a_wrapper_in_front_of_a_command_is_read_through() {
     let bash = Shell::Bash(BashProfile::GitBash);
     let (base, env) = win(bash);
