@@ -1849,8 +1849,14 @@ impl<'a> Lower<'a> {
             if in_tail {
                 // `''2>$null`: a stream redirection glued after a string.
                 let t = self.text(ch).as_bytes();
-                // `"a"--%x`: what PowerShell stops parsing at is not modelled after a quote.
-                if t.starts_with(b"--%") {
+                // `"a"--%x`, `"a"--''%`: what PowerShell stops parsing at is not modelled after
+                // a quote, whatever quotes spell the `--%` (a backtick in it is refused where the
+                // dash word is lowered).
+                let bare: String = String::from_utf8_lossy(t)
+                    .chars()
+                    .filter(|c| !(is_single_quote(*c) || is_double_quote(*c)))
+                    .collect();
+                if bare.starts_with("--%") {
                     return Err(self.unmodelled(ch));
                 }
                 // `'a'?[0]`, `"a"?.Length`: an index or a member of the string for PowerShell.

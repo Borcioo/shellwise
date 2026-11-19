@@ -4618,3 +4618,52 @@ error = false
 cmds = [["0xg#x", "a"]]
 comments = []
 methods = []
+
+[[row]]
+id = "stop-r-quoted-after-double-quote"
+mechanism = "a `--%` spelled with quotes or backticks after a quote still stops parsing for PowerShell"
+parser = "refuses"
+command = "Write-Output \"a\"--''%; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "--''%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-r-quoted-between-dashes"
+mechanism = "a `--%` spelled with quotes or backticks after a quote still stops parsing for PowerShell"
+parser = "refuses"
+command = "Write-Output 'a'-''-%; git status"
+error = false
+cmds = [["Write-Output", "'a'", "-''-%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-r-double-quoted-between-dashes"
+mechanism = "a `--%` spelled with quotes or backticks after a quote still stops parsing for PowerShell"
+parser = "refuses"
+command = "Write-Output 'a'-\"\"-%; git status"
+error = false
+cmds = [["Write-Output", "'a'", "-\"\"-%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-r-typographic-quoted"
+mechanism = "a `--%` spelled with quotes or backticks after a quote still stops parsing for PowerShell"
+parser = "refuses"
+command = "Write-Output 'a'--\U00002018\U00002019%; git status"
+error = false
+cmds = [["Write-Output", "'a'", "--\U00002018\U00002019%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-quoted-string-is-text"
+mechanism = "a `--%` inside a string is text"
+command = "Write-Output \"--%\"; git status"
+error = false
+cmds = [["Write-Output", "\"--%\""], ["git", "status"]]
+comments = []
+methods = []

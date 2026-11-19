@@ -71,7 +71,7 @@ fn gap_rows_read_as_powershell_reads_them() {
 
 #[test]
 fn mechanism_rows_read_as_powershell_reads_them() {
-    check("pwsh_mechanisms.toml", 486);
+    check("pwsh_mechanisms.toml", 491);
 }
 
 /// Each glued pair the parser accepts cites a row that holds it and that the parser reads as
@@ -79,7 +79,7 @@ fn mechanism_rows_read_as_powershell_reads_them() {
 #[test]
 fn every_glue_table_entry_cites_a_kept_row_holding_its_pair() {
     let mut all = rows("pwsh_gaps.toml", 29);
-    all.extend(rows("pwsh_mechanisms.toml", 486));
+    all.extend(rows("pwsh_mechanisms.toml", 491));
     let table = pwsh::glue_table();
     assert!(table.len() >= 50, "glue table has {} entries", table.len());
     let mut bad = Vec::new();
