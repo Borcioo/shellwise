@@ -374,13 +374,9 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             "invokation_expression" | "invokation_foreach_expression" => {
                 kids(n).iter().any(|k| k.kind() == "comment")
             }
-            // A word the tree ends at a backtick that escapes the line end after it.
             "generic_token" | "command_parameter" => {
-                (escaped_at(src.as_bytes(), n.end_byte())
-                    && (src[n.end_byte()..].starts_with('\n')
-                        || src[n.end_byte()..].starts_with('\r')))
-                    // `-a=b: x`: PowerShell takes the next argument as the parameter's value.
-                    || (n.kind() == "command_parameter" && {
+                // `-a=b: x`: PowerShell takes the next argument as the parameter's value.
+                (n.kind() == "command_parameter" && {
                         let t = &src[n.start_byte()..n.end_byte()];
                         !t.starts_with("--")
                             && t.ends_with(':')
