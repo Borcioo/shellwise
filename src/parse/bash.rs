@@ -1896,10 +1896,10 @@ fn is_identifier(name: &str) -> bool {
 /// Arithmetic text as the name scanner reads it, or `None` when it is not plain. The parser
 /// splits the text, so each `$(…)` and backtick body ends where bash ends it; the body becomes a
 /// space (its output, run-time text), as does a nested `$((…))`, which is read as its own context.
-/// Plain pieces are those, text of identifiers, numbers, operators and spaces, and
-/// `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to a name or
-/// another expansion forms a name at run time, so it is not plain; nor is any quote, escape or
-/// other expansion.
+/// Plain pieces are those, unquoted text (the scanner reads every name in it), and
+/// `$name`/`${name}`/`${name[…]}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to
+/// a name or another expansion forms a name at run time, so it is not plain; nor is any quote,
+/// escape or other expansion.
 fn plain_view(text: &str) -> Option<String> {
     let pieces = word::parse(text, &ParserOptions::default()).ok()?;
     let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -1909,13 +1909,7 @@ fn plain_view(text: &str) -> Option<String> {
     for p in &pieces {
         match &p.piece {
             WordPiece::Text(t) => {
-                let plain = t.bytes().all(|c| {
-                    c.is_ascii_alphanumeric()
-                        || c == b'_'
-                        || c.is_ascii_whitespace()
-                        || b"+-*/%<>=!&|^~?:,()[]#".contains(&c)
-                });
-                if !plain || (joins && t.starts_with(word_char)) {
+                if joins && t.starts_with(word_char) {
                     return None;
                 }
                 out.push_str(t);
@@ -1927,11 +1921,14 @@ fn plain_view(text: &str) -> Option<String> {
                 parameter,
                 indirect: false,
             }) => {
+                // An element stands for its array: every value assigned to it is the array's, and
+                // the subscript is read as its own context.
                 let name = match parameter {
-                    Parameter::Named(n) => n.clone(),
+                    Parameter::Named(name)
+                    | Parameter::NamedWithIndex { name, .. }
+                    | Parameter::NamedWithAllIndices { name, .. } => name.clone(),
                     Parameter::Positional(n) => n.to_string(),
                     Parameter::Special(sp) => sp.to_string(),
-                    _ => return None,
                 };
                 if !(is_identifier(&name)
                     || name.bytes().all(|c| c.is_ascii_digit())

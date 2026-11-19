@@ -767,6 +767,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ),
         ("declare -n r=\"$k\"; (( r ))".to_string(), "(("),
         (
+            "k='a[$(rm -rf y)]'; a=(1 2); f() { local -n r=\"$k\"; echo \"$r\"; }; f".to_string(),
+            "local",
+        ),
+        (
+            "k='a[$(rm -rf y)]'; a=(1 2); typeset -n r=\"$k\"; echo \"$r\"".to_string(),
+            "typeset",
+        ),
+        (
             "a=(1 2); set -- 'a[$(rm -rf y)]'; unset \"$1\"".to_string(),
             "unset",
         ),
@@ -823,6 +831,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ),
         (
             "a=1; b=1; ab='a[$(rm -rf y)]'; x=a; y=b; (( $x$y ))".to_string(),
+            "((",
+        ),
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; x=a; (( ${x}b ))".to_string(),
             "((",
         ),
         // By rule: `$-` is text.
@@ -1030,6 +1042,7 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "_x=1; (( $_x ))".to_string(),
         "set -- 1; n=1; (( ${n} + ${1} + ${#} + ${?} + ${$} + $! + ${@} + ${*} ))".to_string(),
         "n=1; (( $((n)) + 1 ))".to_string(),
+        "a=(1); i=0; (( ${a[i]} + 1 ))".to_string(),
         "a=(1); _x=1; (( (1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1) + a[0] ))".to_string(),
         "o=i; z=1; declare +$o z; (( z ))".to_string(),
         "z=1; declare nn=1; (( z ))".to_string(),
