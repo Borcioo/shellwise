@@ -3521,3 +3521,71 @@ error = false
 cmds = [["Write-Output", "(1)", "\U0000200B", "(2)"]]
 comments = []
 methods = []
+
+[[row]]
+id = "glue-r-comma-space-comment"
+mechanism = "a comma, a space and a comment: PowerShell continues the list into the next word"
+parser = "refuses"
+command = "Write-Output a, <#c#>b"
+error = false
+cmds = [["Write-Output", "a, <#c#>b"]]
+comments = ["<#c#>"]
+methods = []
+
+[[row]]
+id = "glue-tail-underscore-param"
+mechanism = "`-_x` glued after a quote is a parameter for PowerShell, which ends it at `$`"
+command = "Write-Output 'a'-_x=$(x)"
+error = false
+cmds = [["Write-Output", "'a'", "-_x=$", "(x)"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-number-dot-name-error"
+mechanism = "a number glued to a dot at a statement start is a member access with no name"
+command = "5GB."
+error = true
+cmds = []
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-member-dot-space"
+mechanism = "a space after the dot of `$a.` ends the word for PowerShell"
+parser = "refuses"
+command = "Write-Output $a. b"
+error = false
+cmds = [["Write-Output", "$a", ".", "b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-variable-question-kept"
+mechanism = "`$m?` names the variable `m?` for PowerShell: kept refused"
+parser = "refuses"
+command = "$m?.x"
+error = false
+cmds = []
+comments = []
+methods = []
+
+[[row]]
+id = "glue-r-member-comment-kept"
+mechanism = "a comment inside a member access: kept refused"
+parser = "refuses"
+command = "$a<#x#>.b"
+error = false
+cmds = []
+comments = ["<#x#>"]
+methods = []
+
+[[row]]
+id = "glue-r-one-dash-backtick-kept"
+mechanism = "a backtick in a one-dash parameter: kept refused"
+parser = "refuses"
+command = "Write-Output -a`b"
+error = false
+cmds = [["Write-Output", "-a`b"]]
+comments = []
+methods = []
