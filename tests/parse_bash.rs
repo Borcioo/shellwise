@@ -355,8 +355,10 @@ fn hidden_commands_inside_words_are_found() {
         ("echo $((1 + $(rm x)))", &["echo", "rm"]),
         ("[[ -n $(rm x) ]]", &["[[", "rm"]),
         ("(( $(rm x) ))", &["((", "rm"]),
-        // A substitution the taint scan skips is still lowered.
+        // A substitution the taint scan skips is still lowered, wherever the parser ends it.
         ("(( $(rm -rf /tmp/x) + 1 ))", &["((", "rm"]),
+        ("(( $(rm -rf /tmp/x <<< a) + 1 ))", &["((", "rm"]),
+        ("(( $(\nrm -rf /tmp/x\n) + 1 ))", &["((", "rm"]),
         (
             "t=1; echo $(( $(rm -rf /tmp/x) - t ))",
             &["<none>", "echo", "rm"],
@@ -372,6 +374,14 @@ fn hidden_commands_inside_words_are_found() {
     ];
     for (src, want) in cases {
         assert_eq!(names(&ok(src)), *want, "{src}");
+    }
+    // The parser cannot end a `case` pattern inside `$(…)` in arithmetic: an error, which fails
+    // closed, never a script without the command.
+    for src in [
+        "(( $(case x in a) rm -rf /tmp/x;; esac) + 1 ))",
+        "x=1; (( $(case a in a) : ;; esac) + x ))",
+    ] {
+        assert!(parse(src, BashProfile::GitBash).is_err(), "{src}");
     }
 }
 
@@ -441,6 +451,11 @@ fn subscripts_bash_evaluates_run_their_substitutions() {
         (
             "a=(1 2); typeset -n r='a[$(rm -rf x)]'; echo \"$r\"",
             &["<none>", "typeset", "rm", "echo"],
+        ),
+        // A write through a nameref to an integer name is arithmetic.
+        (
+            "declare -i n; declare -n r=n; r='a[$(rm -rf x)]'",
+            &["declare", "declare", "<none>", "rm"],
         ),
     ];
     let no: &[(&str, &[&str])] = &[
@@ -794,8 +809,24 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (format!("{x}echo $(( $(: \"(\") + x ))"), "echo"),
         (format!("{x}a=(1); echo ${{a[$(: \"(\") + x]}}"), "echo"),
         (format!("{x}s=abc; echo ${{s:$(: \"(\") + x}}"), "echo"),
-        // By rule: bash runs nothing here, but the body's parentheses do not balance.
         (format!("{x}(( $(echo \")\") + x ))"), "(("),
+        // A body the parser ends where a counter would not: a here-string, a newline, a backtick
+        // body with a quote or a `case`.
+        (format!("{x}(( $(cat <<< a) + x ))"), "(("),
+        (format!("{x}(( $(\n:\n) + x ))"), "(("),
+        (format!("{x}(( `echo '1'` + x ))"), "(("),
+        (format!("{x}(( `case a in a) echo 1;; esac` + x ))"), "(("),
+        // An expansion glued to a name forms a name at run time.
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; (( a$(echo b) ))".to_string(),
+            "((",
+        ),
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; x=a; y=b; (( $x$y ))".to_string(),
+            "((",
+        ),
+        // By rule: `$-` is text.
+        (format!("{x}(( $- ))"), "(("),
         // Writes through a nameref, or a declaration whose options are not static: any name may
         // change, and any write may reach an integer name.
         (
@@ -817,6 +848,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (
             "o=-i; declare $o n; n='a[$(rm -rf y)]'".to_string(),
             "<none>",
+        ),
+        (
+            "o=-n; x=1; declare ''$o r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "o=n; x=1; declare -$o r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
         ),
         (
             "r=x; x=1; declare -n r; r='a[$(rm -rf y)]'; (( x ))".to_string(),
@@ -889,6 +928,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (
             "x='a[$(rm -rf y)]'; eval 'declare -i n'; n=x".to_string(),
             "<none>",
+        ),
+        (
+            "c=\"x='a[\\$(rm -rf y)]'\"; x=1; eval \"$c\"; (( x ))".to_string(),
+            "((",
         ),
         (
             "declare -i n; x=1; eval \"x='a[\\$(rm -rf y)]'\"; n=$x".to_string(),
@@ -977,7 +1020,14 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         // A balanced substitution without quotes is skipped; options read in full; an operator
         // that assigns nothing; a static `eval` with no arithmetic; a subscripted run-time target.
         "t=1; n=$(( $(date +%s) - t )); (( n ))".to_string(),
-        "z=1; read -rs -p p n < f; (( z ))".to_string(),
+        "z=1; read -ers -a b -d x -i y -n 1 -N 1 -p p -t 1 -u 0 n < f; (( z ))".to_string(),
+        "z=1; mapfile -t -d x -n 1 -O 0 -s 0 -u 0 -C cb -c 1 a < f; (( z ))".to_string(),
+        "z=1; readarray -t a < f; (( z ))".to_string(),
+        "_x=1; (( $_x ))".to_string(),
+        "set -- 1; n=1; (( ${n} + ${1} + ${#} + ${?} + ${$} + $! + ${@} + ${*} ))".to_string(),
+        "n=1; (( $((n)) + 1 ))".to_string(),
+        "o=i; z=1; declare +$o z; (( z ))".to_string(),
+        "z=1; declare nn=1; (( z ))".to_string(),
         "z=1; : ${z:-1}; (( z ))".to_string(),
         "eval 'echo hi'; echo z".to_string(),
         "a=1; z=1; read 'a[0]' < f; (( z ))".to_string(),

@@ -319,10 +319,10 @@ impl Taint {
 
     /// Whether arithmetic over `text` reads a tainted name; text that is not plain does.
     fn reads(&self, text: &str) -> bool {
-        if !plain_arith(text) {
+        let Some(view) = plain_view(text) else {
             return true;
-        }
-        let (names, positional) = arith_refs(text);
+        };
+        let (names, positional) = arith_refs(&view);
         self.all || names.iter().any(|n| !self.is_clean(n)) || (positional && self.positional)
     }
 
@@ -1032,8 +1032,8 @@ impl Lower {
             _ => false,
         };
         let runs_dynamic_text = runs_text && cmd.args.iter().skip(first_arg).any(Word::is_dynamic);
-        // A static `eval` body is not lowered here: it may write any name.
-        if target.as_deref() == Some("eval") && !runs_dynamic_text {
+        // An `eval` body is not lowered here: it may write any name.
+        if target.as_deref() == Some("eval") {
             self.unknown_write();
         }
         self.calls(&cmd, target.as_deref(), first_arg, has_glob);
@@ -1058,14 +1058,15 @@ impl Lower {
             return;
         }
         // A nameref (`-n` in a cluster) writes its target's name, and an option word that is not
-        // static may be `-n` or `-i`: the collector follows neither.
+        // static may be `-n` or `-i`: the collector follows neither. (A `+` word only removes an
+        // attribute.)
         if matches!(target, Some("declare" | "typeset" | "local")) {
             let env = EnvView::new();
             for w in cmd.args.iter().skip(first_arg) {
                 let unknown = match w.static_value(&env) {
                     Some(v) => v.starts_with('-') && v[1..].contains('n'),
                     None => !matches!(w.parts.first(), Some(WordPart::Literal(l))
-                        if !(l.is_empty() || l.starts_with('-') || l.starts_with('+'))),
+                        if !(l.is_empty() || l.starts_with('-'))),
                 };
                 if unknown {
                     self.unknown_write();
@@ -1892,88 +1893,68 @@ fn is_identifier(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Arithmetic text the scanner reads names from: identifiers, numbers, operators, spaces,
-/// `$name`, `${name}`, `$((…))` (also as `value_text` writes it, `${((…))}`), and a `$(…)` or
-/// backtick body whose parentheses balance and which holds no quote, `\`, `#` or nested
-/// backtick. In any other text the scanner may miss where run-time text ends, so it is read as
-/// tainted.
-fn plain_arith(text: &str) -> bool {
-    let b = text.as_bytes();
-    let (mut i, mut braces) = (0usize, 0usize);
-    let hides = |c: u8| matches!(c, b'\'' | b'"' | b'\\' | b'#' | b'`');
-    while i < b.len() {
-        match b[i] {
-            b'$' => match b.get(i + 1) {
-                Some(&d) if d.is_ascii_alphanumeric() || b"_@*#?$!".contains(&d) => i += 2,
-                Some(b'(') if b.get(i + 2) == Some(&b'(') => i += 3,
-                Some(b'(') => {
-                    let mut level = 0usize;
-                    let mut j = i + 1;
-                    loop {
-                        match b.get(j) {
-                            None => return false,
-                            Some(b'(') => level += 1,
-                            Some(b')') => {
-                                level -= 1;
-                                if level == 0 {
-                                    break;
-                                }
-                            }
-                            Some(&c) if hides(c) => return false,
-                            Some(_) => {}
-                        }
-                        j += 1;
-                    }
-                    i = j + 1;
+/// Arithmetic text as the name scanner reads it, or `None` when it is not plain. The parser
+/// splits the text, so each `$(…)` and backtick body ends where bash ends it; the body becomes a
+/// space (its output, run-time text). Plain pieces are text of identifiers, numbers, operators and
+/// spaces, `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`), and a nested `$((…))` that
+/// is plain itself. An expansion glued to a name or another expansion forms a name at run time,
+/// so it is not plain; nor is any quote, escape or other expansion.
+fn plain_view(text: &str) -> Option<String> {
+    let pieces = word::parse(text, &ParserOptions::default()).ok()?;
+    let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::new();
+    // The text so far ends in a name character or an expansion.
+    let mut joins = false;
+    for p in &pieces {
+        match &p.piece {
+            WordPiece::Text(t) => {
+                let plain = t.bytes().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || c == b'_'
+                        || c.is_ascii_whitespace()
+                        || b"+-*/%<>=!&|^~?:,()[]#".contains(&c)
+                });
+                if !plain || (joins && t.starts_with(word_char)) {
+                    return None;
                 }
-                Some(b'{') if b.get(i + 2..i + 4) == Some(b"((") => {
-                    braces += 1;
-                    i += 4;
-                }
-                Some(b'{') => {
-                    let rest = &text[i + 2..];
-                    let Some(end) = rest.find('}') else {
-                        return false;
-                    };
-                    let name = &rest[..end];
-                    let parameter = is_identifier(name)
-                        || (!name.is_empty() && name.bytes().all(|c| c.is_ascii_digit()))
-                        || matches!(name, "@" | "*" | "#" | "?" | "$" | "!");
-                    if !parameter {
-                        return false;
-                    }
-                    i += 2 + end + 1;
-                }
-                _ => return false,
-            },
-            b'`' => {
-                let mut j = i + 1;
-                loop {
-                    match b.get(j) {
-                        None => return false,
-                        Some(b'`') => break,
-                        Some(&c) if hides(c) || c == b'(' || c == b')' => return false,
-                        Some(_) => {}
-                    }
-                    j += 1;
-                }
-                i = j + 1;
+                out.push_str(t);
+                joins = t.ends_with(word_char);
+                continue;
             }
-            b'}' if braces > 0 => {
-                braces -= 1;
-                i += 1;
+            _ if joins => return None,
+            WordPiece::ParameterExpansion(ParameterExpr::Parameter {
+                parameter,
+                indirect: false,
+            }) => {
+                let name = match parameter {
+                    Parameter::Named(n) => n.clone(),
+                    Parameter::Positional(n) => n.to_string(),
+                    Parameter::Special(sp) => sp.to_string(),
+                    _ => return None,
+                };
+                if !(is_identifier(&name)
+                    || name.bytes().all(|c| c.is_ascii_digit())
+                    || matches!(name.as_str(), "#" | "?" | "$" | "!" | "@" | "*"))
+                {
+                    return None;
+                }
+                out.push_str("${");
+                out.push_str(&name);
+                out.push('}');
             }
-            c if c.is_ascii_alphanumeric()
-                || c == b'_'
-                || c.is_ascii_whitespace()
-                || b"+-*/%<>=!&|^~?:,()[]#".contains(&c) =>
-            {
-                i += 1
+            WordPiece::CommandSubstitution(_) | WordPiece::BackquotedCommandSubstitution(_) => {
+                out.push(' ')
             }
-            _ => return false,
+            WordPiece::ArithmeticExpression(e) => {
+                out.push('(');
+                out.push_str(&plain_view(&e.value)?);
+                out.push(')');
+            }
+            _ => return None,
         }
+        joins = true;
     }
-    true
+    Some(out)
 }
 
 /// The byte ranges of the names arithmetic text reads (`a[x+$y]` → `a`, `x`, `y`), and whether
@@ -2092,13 +2073,17 @@ fn arith_targets(text: &str) -> Vec<&str> {
     out
 }
 
-/// A word as the text bash evaluates: literals as written, each variable as `${name}`, each
-/// substitution's output left out.
+/// A word as the text bash evaluates: literals as written, each variable as `${name}`, an
+/// arithmetic expansion as `$((…))`, each substitution's output left out.
 fn value_text(w: &Word) -> String {
     let mut out = String::new();
     for p in &w.parts {
         match p {
             WordPart::Literal(s) | WordPart::Glob(s) => out.push_str(s),
+            WordPart::Var(v) if v.starts_with("((") => {
+                out.push('$');
+                out.push_str(v);
+            }
             WordPart::Var(v) => {
                 out.push_str("${");
                 out.push_str(v);
