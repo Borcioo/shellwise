@@ -1975,9 +1975,11 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
     );
 }
 
+/// A named-drive delete after commands that are all read as written.
 fn unproven(drive: &str) -> Target {
     Target::DriveUnproven {
         drive: drive.to_string(),
+        unread_before: false,
     }
 }
 

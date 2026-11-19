@@ -2016,8 +2016,9 @@ pub enum Target {
     /// A plain path on a named PowerShell drive (`Env:FOO`, `Proj:\x`) that the command does not
     /// visibly remap, deleted by `DeleteBy::Provider` in a command not proven harmless: the hook
     /// cannot prove the drive is no file system, but the provider decides at run time. `drive`
-    /// is the name as written.
-    DriveUnproven { drive: String },
+    /// is the name as written; `unread_before`: some command anywhere in the command is not read
+    /// as written (`all_read`), so code the hook cannot see may have made the drive.
+    DriveUnproven { drive: String, unread_before: bool },
     /// A path on `Function:` or `Alias:`, or a `Variable:` path that may name a `__sw*`
     /// variable, deleted by `DeleteBy::Provider`: it can remove a command definition, the
     /// shim's own included.
@@ -2588,6 +2589,7 @@ pub fn target(
             Err(Fail::Drive) if loc.commands_read && !loc.remapped => {
                 return Target::DriveUnproven {
                     drive: drive_name(&text),
+                    unread_before: false,
                 };
             }
             Err(f) => return Target::UnknownLocation(loc.kind_of(f)),
