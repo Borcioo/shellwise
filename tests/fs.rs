@@ -5552,8 +5552,8 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
             MAY_BE_CRITICAL,
         ),
         (
-            "B4 & { Proj:\\x }; New-PSDrive Proj",
-            vec![st(cmd("&", vec![block(vec![ri(r"Proj:\x")])])), remap()],
+            "B4 % { Proj:\\x }; New-PSDrive Proj",
+            vec![each(vec![ri(r"Proj:\x")]), remap()],
             r"Proj:\x",
             MAY_BE_CRITICAL,
         ),
@@ -5653,6 +5653,13 @@ fn a_script_block_starts_where_its_owner_runs_it_or_unknown() {
     ] {
         rows.push((label, vec![one(c)], 0, here.clone()));
     }
+    // Re-review 5 C3b: an in-place block judged after an earlier `cd ..` that may fail.
+    rows.push((
+        "C3b cd ..; % { } (control)",
+        vec![up(), one(cmd("%", vec![rr()]))],
+        1,
+        paths(&[r"C:\w\repo", sub]),
+    ));
     let expr_invoke = word_at(
         vec![
             WordPart::Block(Box::new(script(vec![stmt(

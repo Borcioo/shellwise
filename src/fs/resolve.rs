@@ -1099,7 +1099,8 @@ impl Location {
     /// starts from the current folders only when its owner runs it there and nothing in the
     /// pipeline, the body included, may move (`block_runs_in_place`); else unknown: a stored
     /// `$sb = { … }` runs wherever it is run later, a job or a remote session elsewhere (Ruling
-    /// 57). It sees every remap and script run in the command.
+    /// 57); a child shell's script lowered as a block (`bash -c '…'`) is no owner on the list
+    /// either. It sees every remap and script run in the command.
     pub fn inner_block(&self, body: &Script, owner: &Pipeline) -> Location {
         let mut loc = if !self.block_runs_in_place(body, owner) {
             self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
