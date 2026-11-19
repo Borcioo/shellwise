@@ -3969,6 +3969,437 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
     );
 }
 
+/// Ruling 49 (I1): a call to any command the script defines, by any definer spelling, makes the
+/// location unknown; only a command the script does not define keeps its table meaning.
+#[test]
+fn a_command_the_script_defines_makes_the_location_unknown() {
+    let seq = Some(ChainOp::Seq);
+    let and = Some(ChainOp::And);
+    let gb = Shell::Bash(BashProfile::GitBash);
+    let ps = Shell::Pwsh;
+    // The whole command read first, then `<before>; rm -rf <word>` from `cwd` in `shell`.
+    let judge = |shell: Shell, cwd: &str, before: Vec<Stmt>, word: &str| {
+        let (_, env) = win(shell);
+        let mut all = before.clone();
+        all.push(stmt(lits("rm", &["-rf", word]), seq));
+        let mut loc = Location::new(shell, Os::Windows, Some(Path::new(cwd)));
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &env);
+        resolve(&lit(word), &loc, &env)
+    };
+    let func = |name: &str, body: Vec<Stmt>| Stmt::Func {
+        name: name.to_string(),
+        body: script(body),
+    };
+    let one = |name: &str, chain| stmt(lits(name, &[]), chain);
+    let (repo, sub) = (r"C:\w\repo", r"C:\w\repo\sub");
+    let cd_sub = || stmt(lits("cd", &[sub]), and);
+    // `<definition>; cd sub && <call> && rm -rf .`
+    let then_call = |def: Stmt, call: SimpleCommand| vec![def, cd_sub(), stmt(call, and)];
+    let up_back = || lits("up", &[".."]);
+    let def = |c: SimpleCommand| stmt(c, seq);
+    let assigned = |name: &str| def(assign(name, "x"));
+    type Row<'a> = (&'a str, Shell, &'a str, Vec<Stmt>, &'a str, Target);
+    let mut rows: Vec<Row> = vec![
+        // Re-review 4 N6j, N6k, N6l: a helper that moves.
+        (
+            "N6j function f { Set-Location .. }",
+            ps,
+            repo,
+            then_call(
+                func("f", vec![stmt(lits("Set-Location", &[".."]), None)]),
+                lits("f", &[]),
+            ),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "N6k Git Bash f() { cd ..; }",
+            gb,
+            repo,
+            vec![
+                func("f", vec![stmt(lits("cd", &[".."]), None)]),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("f", and),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "N6l Set-Alias up Set-Location",
+            ps,
+            repo,
+            then_call(def(lits("Set-Alias", &["up", "Set-Location"])), up_back()),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // N6g, N6f, N6h, N6d: a redefined shipped `cd..` (note 6). Ruling 49 makes every call
+        // of a defined name unknown, also one whose definition stays (N6f, N6h, N6d).
+        (
+            r"N6g function cd.. { sl \ }",
+            ps,
+            repo,
+            vec![
+                func("cd..", vec![stmt(lits("sl", &[r"\"]), None)]),
+                stmt(lits("cd", &[repo]), and),
+                one("cd..", and),
+            ],
+            r"w\repo",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "N6f function cd.. {}",
+            ps,
+            repo,
+            vec![func("cd..", vec![]), one("cd..", and)],
+            r"..\repo",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "N6h Set-Alias cd.. Get-Date",
+            ps,
+            repo,
+            vec![
+                def(lits("Set-Alias", &["cd..", "Get-Date"])),
+                one("cd..", and),
+            ],
+            r"..\repo",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "N6d function global:cd.. {}",
+            ps,
+            repo,
+            vec![func("global:cd..", vec![]), one("cd..", and)],
+            r"..\repo",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "function f { git status } (Ruling 49)",
+            ps,
+            repo,
+            then_call(
+                func("f", vec![stmt(lits("git", &["status"]), None)]),
+                lits("f", &[]),
+            ),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Each definer spelling (fix7\spike-defnames.log: each defines the bare name).
+        (
+            "$function:f = …",
+            ps,
+            repo,
+            then_call(assigned("function:f"), lits("f", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "${function:global:f} = …",
+            ps,
+            repo,
+            then_call(assigned("function:global:f"), lits("f", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "$alias:up = …",
+            ps,
+            repo,
+            then_call(assigned("alias:up"), up_back()),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Set-Item Function:f",
+            ps,
+            repo,
+            then_call(def(lits("Set-Item", &["Function:f", "x"])), lits("f", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "New-Item Function:f",
+            ps,
+            repo,
+            then_call(def(lits("New-Item", &["Function:f"])), lits("f", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Set-Alias $n $v: any name, so any call",
+            ps,
+            repo,
+            then_call(
+                def(cmd("Set-Alias", vec![var("n"), var("v")])),
+                lits("git", &["status"]),
+            ),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Git Bash alias up='cd ..'",
+            gb,
+            repo,
+            vec![
+                def(lits("alias", &["up=cd .."])),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("up", and),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Git Bash alias $a: any name, so any call",
+            gb,
+            repo,
+            vec![
+                def(cmd("alias", vec![var("a")])),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                stmt(lits("git", &["status"]), and),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // A script run in this shell may define any name (Step 0 variant i1s).
+        (
+            r". .\h.ps1",
+            ps,
+            repo,
+            then_call(def(lits(".", &[r".\h.ps1"])), up_back()),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Invoke-Expression $x",
+            ps,
+            repo,
+            then_call(def(cmd("Invoke-Expression", vec![var("x")])), up_back()),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Git Bash source h.sh",
+            gb,
+            repo,
+            vec![
+                def(lits("source", &["h.sh"])),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("up", and),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Git Bash eval x",
+            gb,
+            repo,
+            vec![
+                def(lits("eval", &["up() { cd ..; }"])),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("up", and),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // The call inside a block, a branch, a substitution.
+        (
+            "{ f }",
+            ps,
+            repo,
+            vec![
+                func("f", vec![]),
+                cd_sub(),
+                Stmt::Block(script(vec![one("f", None)])),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "if { f }",
+            ps,
+            repo,
+            vec![
+                func("f", vec![]),
+                cd_sub(),
+                Stmt::Cond {
+                    branches: vec![script(vec![one("f", None)])],
+                    span: Span::default(),
+                },
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "echo $(f)",
+            ps,
+            repo,
+            vec![
+                func("f", vec![]),
+                cd_sub(),
+                stmt(
+                    cmd(
+                        "echo",
+                        vec![word_at(
+                            vec![WordPart::Subst(Box::new(script(vec![one("f", None)])))],
+                            0,
+                        )],
+                    ),
+                    and,
+                ),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: an undefined plain name, another defined name, the shipped `cd..` (N6i),
+        // a function named `Function:f` (it defines no `f`: spike-defnames.log), `alias -p`.
+        (
+            "f not defined (control)",
+            ps,
+            repo,
+            vec![cd_sub(), one("f", and)],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "g defined, f called (control)",
+            ps,
+            repo,
+            then_call(func("g", vec![]), lits("f", &[])),
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "N6i shipped cd.. (control)",
+            ps,
+            sub,
+            vec![one("cd..", and)],
+            r"..\repo",
+            paths(&[repo]),
+        ),
+        (
+            "function Function:f, f called (control)",
+            ps,
+            repo,
+            then_call(func("Function:f", vec![]), lits("f", &[])),
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "Git Bash g defined, f called (control)",
+            gb,
+            repo,
+            vec![
+                func("g", vec![]),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("f", and),
+            ],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "Git Bash alias -p (control)",
+            gb,
+            repo,
+            vec![
+                def(lits("alias", &["-p"])),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("up", and),
+            ],
+            ".",
+            paths(&[sub]),
+        ),
+    ];
+    for definer in ["sal", "New-Alias", "nal"] {
+        rows.push((
+            definer,
+            ps,
+            repo,
+            then_call(def(lits(definer, &["up", "sl"])), up_back()),
+            ".",
+            MAY_BE_CRITICAL,
+        ));
+    }
+    for scope in ["global", "script", "local", "private"] {
+        rows.push((
+            scope,
+            ps,
+            repo,
+            then_call(func(&format!("{scope}:f"), vec![]), lits("f", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ));
+    }
+    let mut bad: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(label, shell, cwd, before, word, want)| {
+            let got = judge(shell, cwd, before, word);
+            (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
+        })
+        .collect();
+    // Bash on POSIX, where an opaque command is no remap, may define any name too. (`. h.sh` and
+    // `command $x` are unread, which the link rule already makes MayBeCritical.)
+    let px = Shell::Bash(BashProfile::Posix);
+    let px_env = env_view(px, Os::Posix, [("HOME".to_string(), "/h/u".to_string())]);
+    let mut opaque = lits("x", &[]);
+    opaque.opaque = true;
+    let posix_rows: Vec<(&str, SimpleCommand, Target)> = vec![
+        ("opaque", opaque, MAY_BE_CRITICAL),
+        (
+            "git status (control)",
+            lits("git", &["status"]),
+            paths(&["/w/sub"]),
+        ),
+    ];
+    for (label, first, want) in posix_rows {
+        let before = vec![
+            stmt(first, seq),
+            stmt(lits("cd", &["/w/sub"]), and),
+            one("up", and),
+        ];
+        let mut all = before.clone();
+        all.push(stmt(lits("rm", &["-rf", "."]), seq));
+        let mut loc = Location::new(px, Os::Posix, Some(Path::new("/w")));
+        loc.read_script(&script(all));
+        after_all(&mut loc, &script(before), &px_env);
+        let got = resolve(&lit("."), &loc, &px_env);
+        if got != want {
+            bad.push(format!("POSIX bash {label}: got {got:?}, want {want:?}"));
+        }
+    }
+    // A loop body that calls a defined name starts each pass somewhere unknown (`inner`).
+    let (_, env) = win(ps);
+    let lp = Stmt::Loop {
+        body: script(vec![one("f", seq)]),
+        span: Span::default(),
+    };
+    let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
+    loc.read_script(&script(vec![func("f", vec![]), lp.clone()]));
+    let got = resolve(&lit("."), &loc.inner(&lp), &env);
+    if got != MAY_BE_CRITICAL {
+        bad.push(format!("foreach {{ f }} from inner: got {got:?}"));
+    }
+    // A scope prefix names the same function for the unread rule: `function global:f; f` does
+    // not read `f` as written.
+    let mut loc = Location::new(ps, Os::Windows, Some(Path::new(repo)));
+    loc.read_script(&script(vec![
+        func("global:f", vec![]),
+        one("f", seq),
+        stmt(lits("Remove-Item", &[r"Proj:\x"]), seq),
+    ]));
+    let by = delete_by(&lits("Remove-Item", &[]), ps, Os::Windows);
+    let got = target(&lit(r"Proj:\x"), &loc, &env, by, &real(), &far());
+    if got != unproven_unread("Proj") {
+        bad.push(format!("function global:f; f; ri Proj:\\x: got {got:?}"));
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
 #[test]
 fn a_wrapper_in_front_of_a_command_is_read_through() {
     let bash = Shell::Bash(BashProfile::GitBash);

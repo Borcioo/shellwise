@@ -595,6 +595,9 @@ pub struct Location {
     /// `read_script` ran and read every command as written (`all_read`): without it any part
     /// may define a drive unseen.
     commands_read: bool,
+    /// The command names the whole command defines (`defined_names`): a call of one may move
+    /// the shell.
+    defined: Vec<String>,
 }
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
@@ -924,6 +927,7 @@ impl Location {
             new_link_unknown: false,
             names_fixed: false,
             commands_read: false,
+            defined: Vec::new(),
         }
     }
 
@@ -938,6 +942,7 @@ impl Location {
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
+        self.defined = defined_names(script, self.shell);
         let shell = self.shell;
         let (mut remap, mut run) = (false, false);
         visit_script(script, &mut |n| {
@@ -1016,11 +1021,13 @@ impl Location {
         match stmt {
             Stmt::Pipeline(p) => self.after_pipeline(p, env),
             Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
-                self.after_nested(changes_location(body, self.shell))
+                self.after_nested(changes_location(body, self.shell, &self.defined))
             }
             Stmt::Cond { branches, .. } => {
-                let shell = self.shell;
-                self.after_nested(branches.iter().any(|b| changes_location(b, shell)))
+                let moves = branches
+                    .iter()
+                    .any(|b| changes_location(b, self.shell, &self.defined));
+                self.after_nested(moves)
             }
         }
     }
@@ -1054,7 +1061,7 @@ impl Location {
         }
         if p.elems
             .iter()
-            .any(|e| elem_nests_location_change(e, self.shell))
+            .any(|e| elem_nests_location_change(e, self.shell, &self.defined))
         {
             changed = Some(Dirs::unknown(UnknownKind::MayBeCritical));
         }
@@ -1076,7 +1083,7 @@ impl Location {
     pub fn inner(&self, stmt: &Stmt) -> Location {
         let mut loc = match stmt {
             Stmt::Func { .. } => self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical)),
-            Stmt::Loop { body, .. } if changes_location(body, self.shell) => {
+            Stmt::Loop { body, .. } if changes_location(body, self.shell, &self.defined) => {
                 self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
             }
             _ => self.with_dirs(self.dirs.clone()),
@@ -1146,6 +1153,10 @@ impl Location {
                 wrapped,
                 in_shell,
             } => {
+                // Ruling 49: a command the script defines may do anything.
+                if calls_defined(&raw, &self.defined) {
+                    return unknown;
+                }
                 if !LOCATION_COMMANDS.contains(&name.as_str()) {
                     // A wrapper in front runs a program, which cannot move this shell.
                     return if is_pwsh(self.shell) && !wrapped {
@@ -1637,11 +1648,12 @@ fn pwsh_move(c: &SimpleCommand, raw: &str, shell: Shell) -> PwshMove {
     }
 }
 
-fn is_location_command(c: &SimpleCommand, shell: Shell) -> bool {
+fn is_location_command(c: &SimpleCommand, shell: Shell, defined: &[String]) -> bool {
     if c.opaque {
         return true;
     }
     match unwrap(c) {
+        Run::Cmd { raw, .. } if calls_defined(&raw, defined) => true,
         Run::Cmd {
             name,
             raw,
@@ -1655,17 +1667,71 @@ fn is_location_command(c: &SimpleCommand, shell: Shell) -> bool {
 }
 
 /// True when anything in `s` (nested bodies and substitutions included) may move.
-fn changes_location(s: &Script, shell: Shell) -> bool {
+fn changes_location(s: &Script, shell: Shell, defined: &[String]) -> bool {
     let mut hit = false;
     visit_script(s, &mut |n| {
         if let Node::Cmd(c) = n {
-            hit |= is_location_command(c, shell);
+            hit |= is_location_command(c, shell, defined);
         }
     });
     hit
 }
 
-fn elem_nests_location_change(e: &Elem, shell: Shell) -> bool {
+/// A call of `raw` (as written, lowercased) runs a command the script defines (`defined`, where
+/// `*` stands for any name).
+fn calls_defined(raw: &str, defined: &[String]) -> bool {
+    defined.iter().any(|d| d == "*" || d == raw)
+}
+
+/// The command names `s` defines anywhere, lowercased, without a scope prefix (Ruling 49):
+/// every function or filter; every alias (`defined_by` in pwsh, `alias name=…` in bash); `*`
+/// for a name the hook cannot read, and for a script or code text run in this shell (pwsh
+/// `runs_script`; bash `source`, `eval`, an opaque command), which may define any name.
+fn defined_names(s: &Script, shell: Shell) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    visit_script(s, &mut |n| match n {
+        Node::Func(name) => out.push(name.to_ascii_lowercase()),
+        Node::Cmd(c) if is_pwsh(shell) => {
+            out.extend(defined_by(c, shell));
+            if runs_script(c, shell) {
+                out.push("*".to_string());
+            }
+        }
+        Node::Cmd(c) => out.extend(bash_defined(c)),
+        _ => {}
+    });
+    out.iter().map(|n| strip_scope(n).to_string()).collect()
+}
+
+/// `name` (lowercased) without a leading pwsh scope (`global:f` defines `f`).
+fn strip_scope(name: &str) -> &str {
+    ["global:", "script:", "local:", "private:"]
+        .iter()
+        .find_map(|p| name.strip_prefix(p))
+        .unwrap_or(name)
+}
+
+/// The names a bash command defines: the aliases of `alias name=value …` (`*` for a word that is
+/// not a literal), and `*` for `source`, `eval` or an opaque command. An unread command needs no
+/// entry: it may make a link, which makes every later target MayBeCritical.
+fn bash_defined(c: &SimpleCommand) -> Vec<String> {
+    if c.opaque {
+        return vec!["*".to_string()];
+    }
+    match unwrap(c) {
+        Run::Cmd { name, args, .. } if name == "alias" => args
+            .iter()
+            .filter_map(|w| match literal(w) {
+                Some(t) => t.split_once('=').map(|(n, _)| n.to_ascii_lowercase()),
+                None => Some("*".to_string()),
+            })
+            .collect(),
+        Run::Cmd { name, .. } if name == "source" || name == "eval" => vec!["*".to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn elem_nests_location_change(e: &Elem, shell: Shell, defined: &[String]) -> bool {
     let words: Vec<&Word> = match e {
         Elem::Cmd(c) => cmd_words(c),
         Elem::Method(m) => m.args.iter().collect(),
@@ -1674,7 +1740,7 @@ fn elem_nests_location_change(e: &Elem, shell: Shell) -> bool {
     words
         .iter()
         .flat_map(|w| word_scripts(w))
-        .any(|s| changes_location(s, shell))
+        .any(|s| changes_location(s, shell, defined))
 }
 
 // ------------------------------------------------------------------ IR visiting
@@ -1779,6 +1845,8 @@ fn all_read(s: &Script, shell: Shell) -> bool {
         Node::Cmd(c) => defined.extend(defined_by(c, shell)),
         _ => {}
     });
+    // `global:f` defines `f` (Ruling 49).
+    let defined: Vec<String> = defined.iter().map(|d| strip_scope(d).to_string()).collect();
     let mut ok = !defined.iter().any(|d| d == "*");
     // Ruling 37: an allow-list over the node kinds; a method call or an expression may make a
     // drive (`$ExecutionContext.SessionState.Drive.New(…)`).
