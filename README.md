@@ -36,6 +36,7 @@ Without `-- COMMAND` the command is read from stdin. Exit codes: 0 ok/warn, 1 br
   `BASH_ALIASES`, `BASH_CMDS` and `EXECIGNORE`, and runs no `hash`, `alias`, `enable`, `source`,
   `.` or command whose name is not static. A `PATH`, `EXECIGNORE` or function inherited from the
   environment that finds another such command is not seen.
+- `CDPATH` set by a shell profile the hook cannot see is not modelled.
 
 ## Develop
 

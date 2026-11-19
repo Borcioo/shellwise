@@ -1,7 +1,7 @@
 //! Rules run over the IR of one command.
 
 use crate::config::Config;
-use crate::fs::Fs;
+use crate::fs::SharedFs;
 use crate::ir::Script;
 use crate::level::Finding;
 use crate::{CheckInput, Deadline};
@@ -10,7 +10,8 @@ pub struct Ctx<'a> {
     pub input: &'a CheckInput<'a>,
     pub script: &'a Script,
     pub cfg: &'a Config,
-    pub fs: &'a dyn Fs,
+    /// Shared so a bounded call can hand it to a worker thread that may outlive the check.
+    pub fs: &'a SharedFs,
     pub deadline: &'a Deadline,
 }
 
