@@ -9,6 +9,8 @@ yanked = "deny"
 version = 2
 allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
 confidence-threshold = 0.9
+# tree-sitter (through serde_json's hash map) pulls foldhash, licensed Zlib (permissive, OSI).
+exceptions = [{ crate = "foldhash", allow = ["Zlib"] }]
 
 [bans]
 multiple-versions = "warn"

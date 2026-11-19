@@ -1,0 +1,3 @@
+grammar.js sha256 41a660de2fa6edcf95820448661989d7efd234c9cee7912795d5cec47fe9fa23
+src/grammar.json sha256 67d6b1133c6d123adeb7f06d7007923384ea92c28a00536af61ed8a0a96eafd1
+tree-sitter-cli 0.27.2

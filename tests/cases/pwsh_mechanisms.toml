@@ -1,0 +1,572 @@
+# One synthetic row (or more) per mechanism the parser spike measured (docs/spikes.md), and one per mechanism the differential fuzz found. `parser = "refuses"`: the parser fails closed on a command PowerShell accepts.
+# Expected values are PowerShell 7.7.0's Parser::ParseInput answer (tests/pwsh_oracle.rs checks them).
+
+[[row]]
+id = "var-glued-path"
+mechanism = "a variable glued to a path"
+command = "Remove-Item -Recurse $d\\sub"
+error = false
+cmds = [["Remove-Item", "-Recurse", "$d\\sub"]]
+comments = []
+methods = []
+
+[[row]]
+id = "env-glued-path"
+mechanism = "a variable glued to a path"
+command = "Get-ChildItem $env:TEMP/x"
+error = false
+cmds = [["Get-ChildItem", "$env:TEMP/x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "comma-glued-vars"
+mechanism = "a variable glued to a path"
+command = "Remove-Item $env:TEMP\\a,$env:TEMP\\b"
+error = false
+cmds = [["Remove-Item", "$env:TEMP\\a,$env:TEMP\\b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "multiplier"
+mechanism = "a numeric multiplier suffix"
+command = "Get-ChildItem | Where-Object Length -gt 1MB"
+error = false
+cmds = [["Get-ChildItem"], ["Where-Object", "Length", "-gt", "1MB"]]
+comments = []
+methods = []
+
+[[row]]
+id = "multiplier-upper"
+mechanism = "a numeric multiplier suffix"
+command = "$n = 5GB; git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "at-word"
+mechanism = "a bare word starting with @"
+command = "npm view @scope/pkg version"
+error = false
+cmds = [["npm", "view", "@scope/pkg", "version"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-glued-quote"
+mechanism = "a parameter glued to a quoted value"
+command = "git commit -m'msg'"
+error = false
+cmds = [["git", "commit", "-m'msg'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-glued-dquote"
+mechanism = "a parameter glued to a quoted value"
+command = "git log -S\"text\" --oneline"
+error = false
+cmds = [["git", "log", "-S\"text\"", "--oneline"]]
+comments = []
+methods = []
+
+[[row]]
+id = "null-coalescing"
+mechanism = "?? and ?."
+command = "$v = $a ?? 'b'; git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "null-coalescing-assign"
+mechanism = "?? and ?."
+command = "$v ??= 'b'; git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "null-conditional-member"
+mechanism = "?? and ?."
+command = "$n = ${a}?.Name; git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "ternary"
+mechanism = "the ternary operator"
+command = "$v = $a ? 'x' : 'y'; git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "switch-one-line"
+mechanism = "the switch clause form"
+command = "switch -Regex ($x) { 'a' { git status } 'b' { git log } }"
+error = false
+cmds = [["git", "status"], ["git", "log"]]
+comments = []
+methods = []
+
+[[row]]
+id = "escaped-quotes"
+mechanism = "escaped quotes inside a double-quoted string"
+command = "rg -n \"a\\\"b\" src"
+error = true
+cmds = [["rg", "-n", "\"a\\\"", "b\" src"]]
+comments = []
+methods = []
+
+[[row]]
+id = "hash-after-escape"
+mechanism = "escaped quotes inside a double-quoted string"
+command = "Add-Content f \"`n## head`n\"; git status"
+error = false
+cmds = [["Add-Content", "f", "\"`n## head`n\""], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "early-error-delete"
+mechanism = "an early error followed by a delete"
+command = "Write-Output (; Remove-Item -Recurse $p"
+error = true
+cmds = [["Write-Output", "("], ["Remove-Item", "-Recurse", "$p"]]
+comments = []
+methods = []
+
+[[row]]
+id = "foreach-method"
+mechanism = "other shapes"
+command = "(Get-ChildItem).ForEach({ $_.Name })"
+error = false
+cmds = [["Get-ChildItem"]]
+comments = []
+methods = []
+
+[[row]]
+id = "negative-number"
+mechanism = "other shapes"
+command = "git log --oneline -5"
+error = false
+cmds = [["git", "log", "--oneline", "-5"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glued-redirect"
+mechanism = "a glued redirection"
+command = "git status 2>$null"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "merge-redirect"
+mechanism = "a numbered stream redirect"
+command = "cmd /c x 2>&1"
+error = false
+cmds = [["cmd", "/c", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "all-redirect"
+mechanism = "a numbered stream redirect"
+command = "git status *> out.txt"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "lone-redirect"
+mechanism = "a lone 1> then its target"
+command = "git status 1> out.txt"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "redirect-char-in-word"
+mechanism = "a glued redirection"
+command = "Write-Output a>b"
+error = false
+cmds = [["Write-Output", "a>b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "paren-range"
+mechanism = "a range in parentheses"
+command = "(1..5) | ForEach-Object { git status }"
+error = false
+cmds = [["ForEach-Object", "{ git status }"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "paren-range-var"
+mechanism = "a range in parentheses"
+command = "foreach ($i in (1..$n)) { git status }"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-call"
+mechanism = "a member call kept with its argument list"
+command = "Write-Output $x.Trim() 'b'"
+error = false
+cmds = [["Write-Output", "$x.Trim()", "'b'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "member-after-herestring"
+mechanism = "a member call kept with its argument list"
+command = "$s = @'\na\n'@.Trim(); git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "subexpr-glued-end"
+mechanism = "a $(...) glued to the end of a word"
+command = "git worktree remove --force F:\\w\\$($p[0])"
+error = false
+cmds = [["git", "worktree", "remove", "--force", "F:\\w\\$($p[0])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "subexpr-in-param"
+mechanism = "a $(...) glued to the end of a word"
+command = "node --test --name=$($m.p) x.js"
+error = false
+cmds = [["node", "--test", "--name=$($m.p)", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "braced-colon"
+mechanism = "${name}: keeps its colon"
+command = "Write-Output ${name}:"
+error = false
+cmds = [["Write-Output", "${name}:"]]
+comments = []
+methods = []
+
+[[row]]
+id = "split-operator"
+mechanism = "-split '\\s+' two elements"
+command = "Write-Output -split '\\s+'"
+error = false
+cmds = [["Write-Output", "-split", "'\\s+'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "date-call"
+mechanism = "(Get-Date).AddDays(-5) one element"
+command = "Where-Object LastWriteTime -gt (Get-Date).AddDays(-5)"
+error = false
+cmds = [["Where-Object", "LastWriteTime", "-gt", "(Get-Date).AddDays(-5)"], ["Get-Date"]]
+comments = []
+methods = []
+
+[[row]]
+id = "comment-trailing"
+mechanism = "comment placement"
+command = "git status # trailing"
+error = false
+cmds = [["git", "status"]]
+comments = ["# trailing"]
+methods = []
+
+[[row]]
+id = "comment-own-line"
+mechanism = "comment placement"
+command = "# own line\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["# own line"]
+methods = []
+
+[[row]]
+id = "comment-after-pipe"
+mechanism = "comment placement"
+command = "Get-ChildItem | # note\nSelect-Object -First 1"
+error = false
+cmds = [["Get-ChildItem"], ["Select-Object", "-First", "1"]]
+comments = ["# note"]
+methods = []
+
+[[row]]
+id = "comment-in-block"
+mechanism = "comment placement"
+command = "if ($a) { # inside\ngit status }"
+error = false
+cmds = [["git", "status"]]
+comments = ["# inside"]
+methods = []
+
+[[row]]
+id = "comment-after-semicolon"
+mechanism = "comment placement"
+command = "git status;# after\ngit log"
+error = false
+cmds = [["git", "status"], ["git", "log"]]
+comments = ["# after"]
+methods = []
+
+[[row]]
+id = "comment-block-multiline"
+mechanism = "comment placement"
+command = "<# one\ntwo #>\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["<# one\ntwo #>"]
+methods = []
+
+[[row]]
+id = "comment-hash-in-strings"
+mechanism = "comment placement"
+command = "Write-Output 'a # b' \"c # d\" e#f"
+error = false
+cmds = [["Write-Output", "'a # b'", "\"c # d\"", "e#f"]]
+comments = []
+methods = []
+
+[[row]]
+id = "comment-in-param-block"
+mechanism = "comment placement"
+command = "& { param($x # p\n) git status }"
+error = false
+cmds = [["{ param($x # p\n) git status }"], ["git", "status"]]
+comments = ["# p"]
+methods = []
+
+[[row]]
+id = "fuzz-bare-dash-glued-to-name"
+mechanism = "fuzz: a bare dash glued to the name"
+parser = "refuses"
+command = "git- status"
+error = false
+cmds = [["git-", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-stop-parsing-glued"
+mechanism = "fuzz: --% glued to text is a word"
+command = "Write-Output --%x; git status"
+error = false
+cmds = [["Write-Output", "--%x"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-stop-parsing-after-quote"
+mechanism = "fuzz: --% glued to text is a word"
+parser = "refuses"
+command = "Write-Output \"a\"--%; git status"
+error = false
+cmds = [["Write-Output", "\"a\"", "--%", "; git status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-backtick-line-end-in-name"
+mechanism = "fuzz: a backtick before a line end continues the name"
+command = "git`\n status"
+error = false
+cmds = [["git`\n", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-redirect-first"
+mechanism = "fuzz: a redirection before the command name"
+parser = "refuses"
+command = ">git status"
+error = false
+cmds = [[">", "git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-glued-comment-param"
+mechanism = "fuzz: a comment glued to a word is word text"
+parser = "refuses"
+command = "git commit -m'msg'<#x#>"
+error = false
+cmds = [["git", "commit", "-m'msg'<#x#>"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-glued-comment-redirect"
+mechanism = "fuzz: a comment glued to a word is word text"
+parser = "refuses"
+command = "git status 2>$null<#x#>"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-comment-after-quote"
+mechanism = "fuzz: a comment glued to a word is word text"
+command = "Write-Output 'a'#x"
+error = false
+cmds = [["Write-Output", "'a'"]]
+comments = ["#x"]
+methods = []
+
+[[row]]
+id = "fuzz-dollar-dollar-subexpr"
+mechanism = "fuzz: $$ is a variable, ( starts a new argument"
+command = "node --name=$$($m.p) x.js"
+error = false
+cmds = [["node", "--name=$$", "($m.p)", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-subexpr-glued-to-name"
+mechanism = "fuzz: a $( glued to the name"
+parser = "refuses"
+command = "\\$($p[0])"
+error = false
+cmds = [["\\$($p[0])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-bare-dash-glued-to-word"
+mechanism = "fuzz: a bare dash glued to a word"
+parser = "refuses"
+command = "git log -5- x"
+error = false
+cmds = [["git", "log", "-5-", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-glued-comment-inside"
+mechanism = "fuzz: a comment glued to a word is word text"
+parser = "refuses"
+command = "Select-Object -First<#x#> 1"
+error = false
+cmds = [["Select-Object", "-First<#x#>", "1"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-odd-dollar-run-subexpr"
+mechanism = "fuzz: $$ is a variable, ( starts a new argument"
+command = "node --name=$$$($m.p) x.js"
+error = false
+cmds = [["node", "--name=$$$($m.p)", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-stop-parsing-nbsp"
+mechanism = "fuzz: Unicode space after --%"
+command = "Write-Output --% \u00A0x\ngit status"
+error = false
+cmds = [["Write-Output", "--%", "x"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-redirect-glued-to-param"
+mechanism = "fuzz: > glued to a word is word text"
+parser = "refuses"
+command = "git commit -m>'msg'"
+error = false
+cmds = [["git", "commit", "-m>'msg'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-param-value-unicode-space"
+mechanism = "fuzz: a Unicode space ends a parameter value"
+command = "node --name=a\u3000b x.js"
+error = false
+cmds = [["node", "--name=a", "b", "x.js"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-redirect-target-glued-word"
+mechanism = "fuzz: a word glued after a quoted redirect target"
+parser = "refuses"
+command = "git status *> 'x'out.txt"
+error = false
+cmds = [["git", "status", "out.txt"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-hash-starts-comment"
+mechanism = "fuzz: # at the start of a word is a comment"
+command = "Write-Output a #>`\n; git status"
+error = false
+cmds = [["Write-Output", "a"], ["git", "status"]]
+comments = ["#>`"]
+methods = []
+
+[[row]]
+id = "fuzz-unicode-space-between-args"
+mechanism = "fuzz: a Unicode space separates arguments"
+command = "git\u3000status\u00A0--short"
+error = false
+cmds = [["git", "status", "--short"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-static-member-on-variable"
+mechanism = "fuzz: $env::X ends the argument"
+parser = "refuses"
+command = "Get-ChildItem $env::TEMP/x"
+error = false
+cmds = [["Get-ChildItem", "$env::TEMP", "/x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-redirect-after-string"
+mechanism = "fuzz: a stream redirection glued after a string"
+parser = "refuses"
+command = "git status ''2>$null"
+error = false
+cmds = [["git", "status", "''"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fuzz-one-dash-param-subexpr"
+mechanism = "fuzz: after a one-dash -name=$ a ( starts a new argument"
+command = "node -name=$($m.p) x.js"
+error = false
+cmds = [["node", "-name=$", "($m.p)", "x.js"]]
+comments = []
+methods = []

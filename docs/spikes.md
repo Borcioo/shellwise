@@ -404,3 +404,66 @@ Cost: under fine-grained allow rules such a command asks (refused in `-p`) inste
 
 An interactive terminal session; the Monitor tool (arrives as a Bash event) with `updatedInput`;
 the sandbox mode, whose environment filters name `BASH_ENV` and `PSModulePath`.
+
+## PowerShell grammar fork
+
+Task 5 vendors tree-sitter-powershell 0.26.6 as `vendor/tree-sitter-powershell` (changes in its
+`NOTICE.md`) and lowers it to the IR in `src/parse/pwsh.rs`. Measured with
+`cargo run --release --example pwsh_dump` over the parser spike's PowerShell snapshot, against the
+same `ParseInput` reference (PowerShell 7.7.0) and comparison script as the PowerShell spike above.
+The baseline is the unchanged grammar regenerated with tree-sitter-cli 0.27.2 and lowered by
+`parse::pwsh`: it reproduces the spike's variant (a) exactly.
+
+| Measure | Baseline (unchanged fork) | Fork | Threshold |
+|---|---:|---:|---|
+| Equal error status | 96.80 % (27,542 of 28,453) | 99.85 % (28,409) | ≥ 99 % |
+| Errors only the parser reports | 886 | 26 | — |
+| Errors only `ParseInput` reports | 25 | 18 | — |
+| Silent mismatches (both parse, commands differ) | 3.94 % (1,120) | 0.028 % (8) | ≤ 0.5 % |
+| Mismatches on destructive rows | 77 of 1,058 | 1 of 1,058 (listed) | 0 unlisted |
+| Gap rows correct | 22 of 29 | 29 of 29 | all |
+
+Listed destructive row: both `ParseInput` and the parser report a syntax error, so the row fails
+closed either way; the mismatch is only in the commands the comparison reads from an error row.
+
+Error status here is the tree's (an ERROR or MISSING node). The lowering refuses more: a
+construct it does not model, or glued text PowerShell reads as one word (see the fuzz below).
+Those refusals count in the fail-path measurement, not in this table.
+
+Open mechanisms (errors only the parser reports, so they fail closed): a member call or an index
+on a string in argument mode (`'a'.Replace(…)` after a here-string with arguments); string
+concatenation glued to a quote (`'"'+$r`); `*>` right after a `}`; a range on a parenthesized
+expression (`(…)..HEAD`); braces in a revision (`v1^{commit}`); a method call with an index in an
+argument (`$s.Split(' ')[0]`); a comma with a space before it (`a* , b*`).
+
+Fail path (Ruling 28) over the PowerShell rows of the corpus, parsed as `pwsh` on Windows:
+N = 28,516 rows, F = 112 refused (all parse errors; none over 64 KiB, none invalid UTF-8, no
+panic), H = 0 matching the harmless grammar, R = 86 that `ParseInput` also rejects. Remainder
+(F − H − R) / N = 26 / 28,516 = 0.091 %, budget 0.1 %. Over the `ok` rows alone: 20 / 25,004 =
+0.080 %.
+
+Rows: `tests/cases/pwsh_gaps.toml` (29) and `tests/cases/pwsh_mechanisms.toml` (62) hold
+`ParseInput`'s answer; `tests/pwsh_rows.rs` checks the parser against them and
+`tests/pwsh_oracle.rs` (feature `oracle`) checks them against the real `ParseInput`.
+
+Differential fuzz (`tests/pwsh_oracle.rs`, seed `0x5EED0005`): 2,000 mutants of those rows
+(insertions of comment, quote, escape, whitespace and operator text at token boundaries, deletions
+and doublings). The parser must never read a mutant PowerShell accepts differently, except these
+listed mechanisms, which only split or join argument text or concern the oracle itself:
+
+- A comma, a comment and a line end continue a comma list: the next line's first word joins it.
+- A backtick after a leading digit escapes the line end (`1`<LF>`).
+- `ParseInput` lists a comment inside a word's `$(…)` only among that word's nested tokens, so
+  the reference shows no comment where the parser records one.
+
+Mechanisms the fuzz found and the fork now reads as PowerShell does (each a mechanism row): a
+name starting with `>` or a stream redirection; a backtick before a line end inside a name; `--%`
+glued to text; `?.` member access; `$$` before `(` and an odd `$` run before `(`; a one-dash
+`-name=$` before `(`; a word or `(` glued after a closing quote (a new argument); a Unicode space
+after `--%`, inside a parameter value and between arguments; `#` at the start of a word.
+Mechanisms the parser refuses (fails closed) where PowerShell reads one word: a bare dash glued to
+a word (`git-`, `-5-`); text glued to a redirection target; a `>` glued to a word; a comment glued
+to a word; a `$(` glued to the command name; `$env::X` in an argument; a stream redirection or a
+word glued after a quoted redirection target. Of the 2,000 mutants, the parser refuses 335 that
+PowerShell accepts and accepts 17 that PowerShell rejects (PowerShell runs nothing of a script it
+cannot parse; the parser judges the commands).
