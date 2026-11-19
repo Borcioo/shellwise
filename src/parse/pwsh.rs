@@ -388,6 +388,8 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                         let t = &src[n.start_byte()..n.end_byte()];
                         t.len() > 1 && t.starts_with(']')
                     })
+                    || (n.kind() == "generic_token"
+                        && colon_word_backtick(&src[n.start_byte()..n.end_byte()]))
             }
             "command_name" => {
                 let t = &src[n.start_byte()..n.end_byte()];
@@ -396,6 +398,7 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                     || t.strip_prefix('.').is_some_and(|r| {
                         r.starts_with(|c: char| c.is_ascii_digit()) && r.contains(['#', '.'])
                     })
+                    || colon_word_backtick(t)
             }
             // `& $x.Name` is a member access for PowerShell too.
             "path_command_name" => kids(n).windows(2).any(|w| {
@@ -2618,6 +2621,12 @@ fn opens_subexpression(t: &[u8]) -> bool {
 /// (``a``$`` ends in an escaped backtick and a plain `$`).
 fn escaped_at(t: &[u8], at: usize) -> bool {
     t[..at].iter().rev().take_while(|c| **c == b'`').count() % 2 == 1
+}
+
+/// `:x`;ri`: after `:` and a letter or `_` PowerShell keeps a backtick as a plain character.
+fn colon_word_backtick(t: &str) -> bool {
+    t.strip_prefix(':')
+        .is_some_and(|r| r.starts_with(|c: char| c.is_alphabetic() || c == '_') && r.contains('`'))
 }
 
 /// `$p[0]`, `$m.p`: a variable with member names and indexes only, on one line.

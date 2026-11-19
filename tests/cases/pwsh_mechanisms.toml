@@ -4286,3 +4286,91 @@ error = false
 cmds = [["node", "--name=$($1)", "a"]]
 comments = []
 methods = []
+
+[[row]]
+id = "colon-word-r-backtick-semicolon"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell"
+parser = "refuses"
+command = "Remove-Item :x`;ri C:\\x"
+error = false
+cmds = [["Remove-Item", ":x`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-r-backtick-pipe"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell"
+parser = "refuses"
+command = "Remove-Item :x`|ri C:\\x"
+error = false
+cmds = [["Remove-Item", ":x`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-r-backtick-amp"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell"
+parser = "refuses"
+command = "Remove-Item :x`&ri C:\\x"
+error = false
+cmds = [["Remove-Item", ":x`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-r-backtick-line-end"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell"
+parser = "refuses"
+command = "Remove-Item :x`\nri C:\\x"
+error = false
+cmds = [["Remove-Item", ":x`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-r-backtick-comma"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell"
+parser = "refuses"
+command = "Remove-Item :x`, C:\\ -Recurse"
+error = false
+cmds = [["Remove-Item", ":x`, C:\\", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-r-backtick-underscore"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell"
+parser = "refuses"
+command = "Remove-Item :_`;ri C:\\x"
+error = false
+cmds = [["Remove-Item", ":_`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-r-name-after-amp"
+mechanism = "a word starting with `:` and a name character keeps a backtick as a plain character for PowerShell (a command name after `&`)"
+parser = "refuses"
+command = "& :x`;ri C:\\x"
+error = false
+cmds = [[":x`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-digit-backtick"
+mechanism = "after `:` a digit is no name character: the backtick escapes"
+command = "Remove-Item :1`;ri C:\\x"
+error = false
+cmds = [["Remove-Item", ":1`;ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-word-inner-backtick"
+mechanism = "a `:` inside a word: the backtick escapes"
+command = "Remove-Item a:x`;ri"
+error = false
+cmds = [["Remove-Item", "a:x`;ri"]]
+comments = []
+methods = []
