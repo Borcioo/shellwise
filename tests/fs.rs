@@ -2428,6 +2428,14 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         &MAY_BE_CRITICAL,
         ". x; Env:FOO",
     );
+    // Not a `Verb-Noun` cmdlet name: a script name.
+    for name in ["-Date", "Get-", "Get1-Date", "Get-a.b"] {
+        expect(
+            judge(vec![stmt(lits(".", &[name]), seq)], ri(r"Proj:\y")),
+            &MAY_BE_CRITICAL,
+            &format!(". {name}; Proj:\\y"),
+        );
+    }
     expect(
         judge(vec![stmt(lits(".", &["Get-Date"]), seq)], ri("Env:FOO")),
         &Target::NotAFile,
