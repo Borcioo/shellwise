@@ -7627,6 +7627,26 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ri(r"Proj:\y"),
             proj(true),
         ),
+        (
+            "LU11 Git Bash alias mk=\"ln -s $T\"; mk t/j (a word that is not one literal)",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    vec![Word {
+                        parts: vec![
+                            WordPart::Literal("mk=ln -s ".to_string()),
+                            WordPart::Var("T".to_string()),
+                        ],
+                        span: Span::default(),
+                        quote: Quote::Double,
+                    }],
+                ),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
@@ -8299,6 +8319,26 @@ fn a_script_alias_is_read_as_the_command_it_names() {
                 st(lits("e", &["x"])),
             ],
             "env:TEMP",
+            true,
+        ),
+        (
+            "V6 Git Bash alias x=\"export $Y\"; x TEMP=/ (a word that is not one literal)",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    vec![Word {
+                        parts: vec![
+                            WordPart::Literal("x=export ".to_string()),
+                            WordPart::Var("Y".to_string()),
+                        ],
+                        span: Span::default(),
+                        quote: Quote::Double,
+                    }],
+                ),
+                st(lits("x", &["TEMP=/"])),
+            ],
+            "TEMP",
             true,
         ),
         (

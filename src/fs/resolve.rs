@@ -1917,9 +1917,19 @@ fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
     // The parameters a positional value binds to, in order.
     let slots: &[&str] = match name.as_str() {
         "alias" => {
-            out.extend(args.iter().filter_map(literal).filter_map(|t| {
-                let (n, v) = t.split_once('=')?;
-                Some((n.to_ascii_lowercase(), bash_alias_value(v)))
+            out.extend(args.iter().filter_map(|w| match literal(w) {
+                Some(t) => {
+                    let (n, v) = t.split_once('=')?;
+                    Some((n.to_ascii_lowercase(), bash_alias_value(v)))
+                }
+                // `alias mk="ln -s $T"`: the name is read, the value is not.
+                None => match w.parts.first() {
+                    Some(WordPart::Literal(t)) => {
+                        let (n, _) = t.split_once('=')?;
+                        Some((n.to_ascii_lowercase(), None))
+                    }
+                    _ => None,
+                },
             }));
             return out;
         }
