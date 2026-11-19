@@ -7031,6 +7031,149 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             rmrf("/c/w/repo/t/j/x"),
             mbc.clone(),
         ),
+        // ---- each spelling of the pwsh definers, and the definitions' own edges.
+        (
+            "LF13 pwsh sal mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("sal", &["mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF14 pwsh nal mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("nal", &["mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF15 pwsh si Alias:mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("si", &["Alias:mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF16 pwsh ni Alias:mk -Value New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("ni", &["Alias:mk", "-Value", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LF17 pwsh New-Item -Path Alias:mk -Value New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits(
+                    "New-Item",
+                    &["-Path", "Alias:mk", "-Value", "New-Item"],
+                )),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LU7 Git Bash alias mk=; mk t/j (an empty value runs the next word)",
+            gb,
+            vec![
+                st(lits("alias", &["mk="])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU8 Git Bash alias mk=echo; alias x=y; alias mk='ln -s /c/x'; mk t/j (two values apart)",
+            gb,
+            vec![
+                st(lits("alias", &["mk=echo"])),
+                st(lits("alias", &["x=y"])),
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        // ---- an alias call in a nested body or a substitution.
+        (
+            "LN1 Git Bash alias mk='ln -s /c/x'; echo $(mk t/j)",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                with(
+                    "echo",
+                    vec![Word {
+                        parts: vec![WordPart::Subst(Box::new(script(vec![st(lits(
+                            "mk",
+                            &["/c/w/repo/t/j"],
+                        ))])))],
+                        span: Span::default(),
+                        quote: Quote::None,
+                    }],
+                ),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LN2 Git Bash alias mk='ln -s /c/x'; for …; do mk t/j; done",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                Stmt::Loop {
+                    body: script(vec![st(lits("mk", &["/c/w/repo/t/j"]))]),
+                    span: Span::default(),
+                },
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LN3 Git Bash alias mk='ln -s /c/x'; if …; then mk t/j; fi",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                Stmt::Cond {
+                    branches: vec![script(vec![st(lits("mk", &["/c/w/repo/t/j"]))])],
+                    span: Span::default(),
+                },
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LN4 Git Bash alias mk='ln -s /c/x'; f() { mk t/j; }",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                func("f", vec![st(lits("mk", &["/c/w/repo/t/j"]))]),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LN5 Git Bash alias mk='ln -s /c/x'; { mk t/j; }",
+            gb,
+            vec![
+                st(lits("alias", &["mk=ln -s /c/x"])),
+                Stmt::Block(script(vec![st(lits("mk", &["/c/w/repo/t/j"]))])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
