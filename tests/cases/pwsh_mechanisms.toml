@@ -4019,8 +4019,9 @@ comments = []
 methods = []
 
 [[row]]
-id = "param-one-dash-colon-glued-paren"
-mechanism = "`-a=b:` glued to `(1)`: one argument, no gap after the colon"
+id = "param-r-one-dash-colon-glued-paren"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
 command = "Write-Output -a=b:(1)"
 error = false
 cmds = [["Write-Output", "-a=b:(1)"]]
@@ -4665,5 +4666,120 @@ mechanism = "a `--%` inside a string is text"
 command = "Write-Output \"--%\"; git status"
 error = false
 cmds = [["Write-Output", "\"--%\""], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-double-colon-glued-paren"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
+command = "Write-Output -a=b::(1)"
+error = false
+cmds = [["Write-Output", "-a=b::", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-quote-colon-glued-paren"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
+command = "Write-Output -a=''b:(1)"
+error = false
+cmds = [["Write-Output", "-a=''b:", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-colon-colon-glued-paren"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
+command = "Write-Output -a:b:(1)"
+error = false
+cmds = [["Write-Output", "-a:b:", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-colon-glued-array"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
+command = "Write-Output -a=b:@(1)"
+error = false
+cmds = [["Write-Output", "-a=b:@(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-equals-colon-glued-array"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
+command = "Write-Output -a=:@(1)"
+error = false
+cmds = [["Write-Output", "-a=:@(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-colon-glued-subexpr"
+mechanism = "a one-dash parameter with two colons glued to `$(\U00002026)`: one argument"
+command = "Write-Output -a:b:$($x)"
+error = false
+cmds = [["Write-Output", "-a:b:$($x)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-at-glued-paren"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere"
+parser = "refuses"
+command = "Write-Output -a=b@(1)"
+error = false
+cmds = [["Write-Output", "-a=b@", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-r-colon-glued-paren"
+mechanism = "a one-dash parameter ending in `:` or `@` glued to a group: PowerShell splits it elsewhere (a word ending in `:`)"
+parser = "refuses"
+command = "Write-Output a:b:(1)"
+error = false
+cmds = [["Write-Output", "a:b:", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-glued-variable"
+mechanism = "a one-dash parameter ending in `:` takes a glued variable as its value"
+command = "Write-Output -a:$x"
+error = false
+cmds = [["Write-Output", "-a:$x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-two-colons-glued-variable"
+mechanism = "the same with a second `:`"
+command = "Write-Output -a:b:$x"
+error = false
+cmds = [["Write-Output", "-a:b:$x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-two-dash-colon-glued-paren"
+mechanism = "a two-dash word ending in `:` before `(1)`: two arguments"
+command = "Write-Output --a=b:(1)"
+error = false
+cmds = [["Write-Output", "--a=b:", "(1)"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-colon-gap-paren"
+mechanism = "a word ending in `:`, a space, then `(1)`: two arguments"
+command = "Write-Output a:b: (1)"
+error = false
+cmds = [["Write-Output", "a:b:", "(1)"]]
 comments = []
 methods = []

@@ -383,6 +383,18 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                             && t.ends_with(':')
                             && src[n.end_byte()..].starts_with(char::is_whitespace)
                     })
+                    // `-a:b:(1)`, `-a=b@(1)`, `a:b:(1)`: a one-dash parameter ending in `:` or
+                    // `@`, or a word ending in `:`, glued to a group: PowerShell splits it
+                    // elsewhere.
+                    || (n.next_sibling().is_some_and(|x| {
+                        x.start_byte() == n.end_byte() && src[x.start_byte()..].starts_with(['(', '@'])
+                    }) && {
+                        let t = &src[n.start_byte()..n.end_byte()];
+                        (n.kind() == "command_parameter"
+                            && !t.starts_with("--")
+                            && t.ends_with([':', '@']))
+                            || (n.kind() == "generic_token" && t.ends_with(':'))
+                    })
                     // `a,]b`: a `]` starting a word is a token of its own for PowerShell.
                     || (n.kind() == "generic_token" && {
                         let t = &src[n.start_byte()..n.end_byte()];
