@@ -761,6 +761,9 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ("a=(1 2); unset \"$k\"".to_string(), "unset"),
         ("a=(1 2); test -v \"$k\"".to_string(), "test"),
         ("a=(1 2); [[ -v $k ]]".to_string(), "[["),
+        // By rule (bash refuses such a nameref name): a `local`/`typeset` nameref operand.
+        ("a=(1 2); f() { local -n \"$k\"; }; f".to_string(), "local"),
+        ("a=(1 2); typeset -n \"$k\"".to_string(), "typeset"),
         (
             "a=(1 2); declare -n r=\"$k\"; echo \"$r\"".to_string(),
             "declare",
