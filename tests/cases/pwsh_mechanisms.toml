@@ -3835,3 +3835,70 @@ error = false
 cmds = [["Write-Output", "$x.{x}?.Delete()"], ["x"]]
 comments = []
 methods = ["$x.{x}.Delete"]
+
+[[row]]
+id = "param-r-one-dash-colon-gap-subexpression"
+mechanism = "a one-dash value ending in `:`, then spaces: PowerShell takes the next argument as its value"
+parser = "refuses"
+command = "Write-Output -name=:  $(xx)"
+error = false
+cmds = [["Write-Output", "-name=:  $(xx)"], ["xx"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-value-colon-gap"
+mechanism = "`-a=b:` then a space: PowerShell takes `x` as the value"
+parser = "refuses"
+command = "Write-Output -a=b: x"
+error = false
+cmds = [["Write-Output", "-a=b: x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-value-colon-tab"
+mechanism = "`-a=b:` then a tab: PowerShell takes `x` as the value"
+parser = "refuses"
+command = "Write-Output -a=b:\tx"
+error = false
+cmds = [["Write-Output", "-a=b:\tx"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-line-end-error"
+mechanism = "a one-dash value ending in `:` before a line end: PowerShell wants an argument"
+command = "Write-Output -a=:\nri C:\\x"
+error = true
+cmds = [["Write-Output", "-a=:"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-r-one-dash-colon-node-gap"
+mechanism = "`-a:` then a space, the `:` its own node: kept refused"
+parser = "refuses"
+command = "Write-Output -a: x"
+error = false
+cmds = [["Write-Output", "-a: x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-two-dash-colon-gap"
+mechanism = "a two-dash word ending in `:`: the next word is its own argument"
+command = "Write-Output --a=: x"
+error = false
+cmds = [["Write-Output", "--a=:", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-glued-value"
+mechanism = "`-a=:x`: the value is glued, one word"
+command = "Write-Output -a=:x"
+error = false
+cmds = [["Write-Output", "-a=:x"]]
+comments = []
+methods = []
