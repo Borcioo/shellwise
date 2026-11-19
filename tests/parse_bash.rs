@@ -1012,6 +1012,13 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         (r#"y=1; o='1 y=a[$(>y)]'; \declare x=$o; (( y ))"#.into(), "(("),
         (r#"y=1; o='1 y=a[$(>y)]'; 'export' x=$o; (( y ))"#.into(), "(("),
         (r#"y=1; o='1 y=a[$(>y)]'; "declare" x=$o; (( y ))"#.into(), "(("),
+        // Nor when the `name=` is quoted or escaped: the word is no assignment.
+        (r#"y=1; o='1 y=a[$(>y)]'; declare "x="$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; declare 'x'=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; export x\=$o; (( y ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; typeset $o; (( x ))"#.into(), "(("),
+        (r#"y=0; o='1 y'; mapfile -n $o <<< 'a[$(>y)]'; (( y ))"#.into(), "(("),
+        (r#"y=0; o='1 y'; readarray -n $o <<< 'a[$(>y)]'; (( y ))"#.into(), "(("),
         // A glob is an expansion (a file name picks the name or the option); an option argument
         // is a word too; `let` reads command output.
         (
@@ -1182,6 +1189,7 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"y=1; o='1 y=a[$(>y)]'; export x=$o; (( y ))"#.into(),
         r#"y=1; o='1 y=a[$(>y)]'; readonly x=$o; (( y ))"#.into(),
         r#"y=1; o='1 y=a[$(>y)]'; f() { local x=$o; (( y )); }; f"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; declare x+=$o; (( y ))"#.into(),
         r#"z=1; set -- -a; getopts a o "$@"; (( z ))"#.into(),
         // The digits-only list: spaces and a backtick body, `wc -l` from a literal path.
         r#"x='a[$(>y)]'; (( $(date +%s) - 1 ))"#.into(),

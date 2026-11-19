@@ -1004,11 +1004,14 @@ impl Lower {
             cmd.name = self.ast_word(t, name, span, cx)?;
             cmd.typed = name.value.clone();
         }
+        // The arguments the parser reads as `name=value` (an unquoted name and `=`).
+        let mut assignment_args = Vec::new();
         for item in s.suffix.iter().flat_map(|p| p.0.iter()) {
             match item {
                 I::IoRedirect(r) => cmd.redirects.push(self.redirect(t, r, cx)?),
                 // `export x=$(…)`: an argument of the builtin that also assigns `x`.
                 I::AssignmentWord(a, w) => {
+                    assignment_args.push(cmd.args.len());
                     cmd.args.push(self.ast_word(t, w, span, cx)?);
                     // The argument already holds the substitutions; the assignment keeps the
                     // value's shape without them, so each command is found once.
@@ -1042,7 +1045,9 @@ impl Lower {
         if named && target.as_deref().is_none_or(|t| REBINDING.contains(&t)) {
             self.rebinds.set(true);
         }
-        self.name_writer_words(&cmd, target.as_deref(), first_arg, wrapped);
+        let bare = !wrapped && target.as_deref() == Some(cmd.typed.as_str());
+        let assignments: &[usize] = if bare { &assignment_args } else { &[] };
+        self.name_writer_words(&cmd, target.as_deref(), first_arg, assignments);
         let runs_text = match target.as_deref() {
             Some("eval") => true,
             Some("source" | ".") => wrapped,
@@ -1067,20 +1072,22 @@ impl Lower {
 
     /// A builtin that writes a name is read exactly only when each word that may be an option, an
     /// option argument or a name is literal text: an expansion (a variable, a glob, a brace) may
-    /// name another option or target. Bash does not split or glob `name=…` with a literal `name=`
-    /// on the bare builtin, but does behind `command`/`builtin` or a quoted command word.
+    /// name another option or target. Bash does not split or glob a `name=…` argument (an
+    /// unquoted name and `=`) of the bare builtin, but does behind `command`/`builtin` or a quoted
+    /// command word: `assignments` holds the indices of those arguments when the builtin is bare.
     fn name_writer_words(
         &self,
         cmd: &SimpleCommand,
         target: Option<&str>,
         first_arg: usize,
-        wrapped: bool,
+        assignments: &[usize],
     ) {
         let declaration = matches!(
             target,
             Some("declare" | "typeset" | "local" | "export" | "readonly")
         );
-        let words = &cmd.args[first_arg.min(cmd.args.len())..];
+        let first = first_arg.min(cmd.args.len());
+        let words = &cmd.args[first..];
         let words = match target {
             _ if declaration => words,
             Some("read" | "mapfile" | "readarray" | "let") => words,
@@ -1089,14 +1096,8 @@ impl Lower {
             Some("printf") => &words[..printf_option_words(words)],
             _ => return,
         };
-        let bare = !wrapped && target == Some(cmd.typed.as_str());
-        for w in words {
-            let assignment = declaration
-                && bare
-                && matches!(w.parts.first(), Some(WordPart::Literal(l))
-                if l.split_once('=').is_some_and(|(n, _)| {
-                    is_identifier(n.strip_suffix('+').unwrap_or(n))
-                }));
+        for (i, w) in words.iter().enumerate() {
+            let assignment = declaration && assignments.contains(&(first + i));
             if exact(w).is_none() && !assignment {
                 if matches!(target, Some("declare" | "typeset" | "local")) {
                     self.unknown_write();
