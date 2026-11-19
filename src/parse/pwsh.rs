@@ -366,9 +366,9 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             "invokation_expression" | "invokation_foreach_expression" => {
                 kids(n).iter().any(|k| k.kind() == "comment")
             }
-            // `1`⏎`: the tree ends a word at a backtick that escapes the line end after it.
+            // A word the tree ends at a backtick that escapes the line end after it.
             "generic_token" | "command_parameter" => {
-                src[..n.end_byte()].ends_with('`')
+                escaped_at(src.as_bytes(), n.end_byte())
                     && (src[n.end_byte()..].starts_with('\n')
                         || src[n.end_byte()..].starts_with('\r'))
             }
@@ -2581,8 +2581,14 @@ fn param_value_splits_at_dot(t: &str) -> bool {
 /// (`$$` is a variable; ``$$`$`` ends in an escaped `$`).
 fn opens_subexpression(t: &[u8]) -> bool {
     let run = t.iter().rev().take_while(|c| **c == b'$').count();
-    let escaped = run > 0 && t.len() > run && t[t.len() - run - 1] == b'`';
+    let escaped = run > 0 && escaped_at(t, t.len() - run);
     (run - usize::from(escaped)) % 2 == 1
+}
+
+/// The character at byte `at` of `t` is escaped: the run of backticks right before it is odd
+/// (``a``$`` ends in an escaped backtick and a plain `$`).
+fn escaped_at(t: &[u8], at: usize) -> bool {
+    t[..at].iter().rev().take_while(|c| **c == b'`').count() % 2 == 1
 }
 
 /// A word PowerShell reads as a parameter: a dash, then a letter, `_`, `?` or a second dash

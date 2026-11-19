@@ -3642,3 +3642,84 @@ error = true
 cmds = [["Write-Output", "2``"], ["ri", "C:\\x"]]
 comments = []
 methods = []
+
+[[row]]
+id = "word-list-digit-two-backticks-line-end"
+mechanism = "an escaped backtick ends the last list item before a line end: the next command runs"
+command = "Write-Output 1,2``\nri C:\\x"
+error = false
+cmds = [["Write-Output", "1,2``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-list-digit-two-backticks-cr"
+mechanism = "an escaped backtick ends the last list item before a CR: the next command runs"
+command = "Write-Output 1,2``\rri C:\\x"
+error = false
+cmds = [["Write-Output", "1,2``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-list-quote-digit-two-backticks-line-end"
+mechanism = "a quoted item, then a digit word ending in an escaped backtick before a line end"
+command = "Write-Output 'a',2``\nri C:\\x"
+error = false
+cmds = [["Write-Output", "'a',2``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-list-variable-digit-two-backticks-line-end"
+mechanism = "a variable item, then a digit word ending in an escaped backtick before a line end"
+command = "Write-Output $a,2``\nri C:\\x"
+error = false
+cmds = [["Write-Output", "$a,2``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-two-backticks-line-end"
+mechanism = "a word ending in an escaped backtick before a line end: the next command runs"
+command = "Write-Output a``\nri C:\\x"
+error = false
+cmds = [["Write-Output", "a``"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "word-four-backticks-line-end"
+mechanism = "a word ending in two escaped backticks before a line end: the next command runs"
+command = "Write-Output a````\nri C:\\x"
+error = false
+cmds = [["Write-Output", "a````"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "tail-two-backticks-subexpression"
+mechanism = "after a quote, an escaped backtick leaves the `$` unescaped: `$(\U00002026)` stays in the word"
+command = "Write-Output ''a``$(ri C:\\x)"
+error = false
+cmds = [["Write-Output", "''", "a``$(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "tail-three-backticks-subexpression"
+mechanism = "after a quote, three backticks escape the `$`: `(\U00002026)` is not a subexpression"
+command = "Write-Output ''a```$(ri C:\\x)"
+error = false
+cmds = [["Write-Output", "''", "a```$", "(ri C:\\x)"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-two-dash-two-backticks-subexpression"
+mechanism = "an escaped backtick before `$` in a two-dash value: `$(\U00002026)` stays in the word"
+command = "node ''--name=$$``$($m.p) x.js"
+error = false
+cmds = [["node", "''", "--name=$$``$($m.p)", "x.js"]]
+comments = []
+methods = []
