@@ -3964,6 +3964,133 @@ fn bodies_that_run_later_or_repeatedly_start_at_an_unknown_location() {
 }
 
 #[test]
+fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
+    let seq = Some(ChainOp::Seq);
+    let (base, env) = win(Shell::Pwsh);
+    // Drives C: and X: exist on this machine.
+    let machine = FakeFs::default()
+        .dir(r"C:\Profiles\u")
+        .dir(r"X:\Documents")
+        .shared();
+    let by = delete_by(&lits("Remove-Item", &[]), Shell::Pwsh, Os::Windows);
+    // The whole command read first; `word` judged at the start of the first statement's body,
+    // from `inner` as the `Location` doc prescribes (or from the command's start for a row
+    // whose first statement is the delete itself).
+    let judge = |whole: Vec<Stmt>, word: &str, from_inner: bool| {
+        let s = script(whole);
+        let mut loc = base.clone();
+        loc.read_script(&s);
+        let loc = if from_inner {
+            loc.inner(&s.stmts[0])
+        } else {
+            loc
+        };
+        sorted(target(&lit(word), &loc, &env, by, &machine, &far()))
+    };
+    let st = |c: SimpleCommand| stmt(c, seq);
+    let ri = |text: &str| st(lits("Remove-Item", &[text]));
+    let remap = || st(lits("New-PSDrive", &["Proj", "FileSystem", r"C:\Profiles"]));
+    let lp = |body: Vec<Stmt>| Stmt::Loop {
+        body: script(body),
+        span: Span::default(),
+    };
+    let drive_new = || method("ExecutionContext.SessionState.Drive", "New", vec![lit("x")]);
+    let rows: Vec<(&str, Vec<Stmt>, &str, bool, Target)> = vec![
+        (
+            "function Clean { Proj:\\x }; New-PSDrive Proj; Clean",
+            vec![
+                Stmt::Func {
+                    name: "Clean".to_string(),
+                    body: script(vec![ri(r"Proj:\x")]),
+                },
+                remap(),
+                st(lits("Clean", &[])),
+            ],
+            r"Proj:\x",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "foreach { Proj:\\x; New-PSDrive Proj }",
+            vec![lp(vec![ri(r"Proj:\x"), remap()])],
+            r"Proj:\x",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "foreach { X:\\Documents; subst X: }",
+            vec![lp(vec![
+                st(lits("Remove-Item", &["-Recurse", r"X:\Documents"])),
+                st(lits("subst", &["X:", r"C:\Profiles"])),
+            ])],
+            r"X:\Documents",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "foreach { Proj:\\x; .\\setup.ps1 }",
+            vec![lp(vec![ri(r"Proj:\x"), st(lits(r".\setup.ps1", &[]))])],
+            r"Proj:\x",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "foreach { Proj:\\x; Drive.New }",
+            vec![lp(vec![ri(r"Proj:\x"), drive_new()])],
+            r"Proj:\x",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "foreach { Function:y; New-PSDrive Function }",
+            vec![lp(vec![
+                ri("Function:y"),
+                st(lits("New-PSDrive", &["Function", "FileSystem", r"C:\x"])),
+            ])],
+            "Function:y",
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        // Controls: a straight-line delete before the remap, a loop with no remap, and a block,
+        // which runs once and in order.
+        (
+            "Proj:\\x; New-PSDrive Proj (straight line)",
+            vec![ri(r"Proj:\x"), remap()],
+            r"Proj:\x",
+            false,
+            unproven("Proj"),
+        ),
+        (
+            "foreach { Proj:\\x; git status }",
+            vec![lp(vec![ri(r"Proj:\x"), st(lits("git", &["status"]))])],
+            r"Proj:\x",
+            true,
+            unproven("Proj"),
+        ),
+        (
+            "{ Proj:\\x; New-PSDrive Proj } (a block)",
+            vec![Stmt::Block(script(vec![ri(r"Proj:\x"), remap()]))],
+            r"Proj:\x",
+            true,
+            unproven("Proj"),
+        ),
+    ];
+    let bad: Vec<String> = rows
+        .into_iter()
+        .filter_map(|(label, whole, word, from_inner, want)| {
+            let got = judge(whole, word, from_inner);
+            (got != want).then(|| format!("{label}: got {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
 fn git_dash_c_moves_the_location_for_that_command_only() {
     let (base, env) = win(Shell::Pwsh);
     let y = lit("y");

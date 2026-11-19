@@ -581,6 +581,10 @@ pub struct Location {
     runs_script: bool,
     /// `read_script` ran: without it nothing proves a named drive (fail closed).
     script_read: bool,
+    /// Some statement anywhere in the command may map a drive, or runs a script: a body that
+    /// runs later or more than once (`inner`) sees it whatever its place.
+    remaps_anywhere: bool,
+    script_runs_anywhere: bool,
     /// Links an earlier statement creates: the walk cannot see them before the command runs.
     new_links: Vec<String>,
     /// An earlier statement creates a link at a place the hook cannot tell.
@@ -829,6 +833,22 @@ fn runs_script(c: &SimpleCommand, shell: Shell) -> bool {
     }
 }
 
+/// Whether node `n` may map a drive (`remaps_drives`; I5: `$ExecutionContext.SessionState.
+/// Drive.New(…)`, a remap in sight) and whether it runs a script in this session (`runs_script`).
+fn remap_facts(n: &Node, shell: Shell) -> (bool, bool) {
+    match n {
+        Node::Cmd(c) => (remaps_drives(c, shell), runs_script(c, shell)),
+        Node::Method(m) => (
+            m.method.eq_ignore_ascii_case("new")
+                && m.type_name
+                    .to_ascii_lowercase()
+                    .ends_with("sessionstate.drive"),
+            false,
+        ),
+        Node::Loop(_) | Node::Func(_) | Node::Expr => (false, false),
+    }
+}
+
 /// The commands `shell` ships.
 fn table(shell: Shell) -> &'static Table {
     match shell {
@@ -898,6 +918,8 @@ impl Location {
             remapped: false,
             runs_script: false,
             script_read: false,
+            remaps_anywhere: false,
+            script_runs_anywhere: false,
             new_links: Vec::new(),
             new_link_unknown: false,
             names_fixed: false,
@@ -916,6 +938,15 @@ impl Location {
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
+        let shell = self.shell;
+        let (mut remap, mut run) = (false, false);
+        visit_script(script, &mut |n| {
+            let (r, s) = remap_facts(&n, shell);
+            remap |= r;
+            run |= s;
+        });
+        self.remaps_anywhere = remap;
+        self.script_runs_anywhere = run;
     }
 
     pub fn os(&self) -> Os {
@@ -957,24 +988,20 @@ impl Location {
         let mut script = false;
         let mut links: Vec<Option<Word>> = Vec::new();
         let shell = self.shell;
-        visit_stmt(stmt, &mut |n| match n {
-            Node::Cmd(c) => {
-                remap |= remaps_drives(c, shell);
-                script |= runs_script(c, shell);
-                links.extend(created_links(c, shell));
-            }
-            Node::Method(m) => {
-                let method = m.method.to_ascii_lowercase();
-                if method.starts_with("createsymboliclink") || method == "createjunction" {
-                    links.push(None);
+        visit_stmt(stmt, &mut |n| {
+            let (r, s) = remap_facts(&n, shell);
+            remap |= r;
+            script |= s;
+            match n {
+                Node::Cmd(c) => links.extend(created_links(c, shell)),
+                Node::Method(m) => {
+                    let method = m.method.to_ascii_lowercase();
+                    if method.starts_with("createsymboliclink") || method == "createjunction" {
+                        links.push(None);
+                    }
                 }
-                // I5: `$ExecutionContext.SessionState.Drive.New(…)` is a remap in sight.
-                remap |= method == "new"
-                    && m.type_name
-                        .to_ascii_lowercase()
-                        .ends_with("sessionstate.drive");
+                Node::Loop(_) | Node::Func(_) | Node::Expr => {}
             }
-            Node::Loop(_) | Node::Func(_) | Node::Expr => {}
         });
         self.remapped |= remap;
         self.runs_script |= script;
@@ -1038,15 +1065,21 @@ impl Location {
     }
 
     /// The location a nested body starts at: unknown for a function (it runs later) and for
-    /// a loop whose body moves (the next pass starts where the last one ended).
+    /// a loop whose body moves (the next pass starts where the last one ended). A function or
+    /// loop body sees every remap and script run in the command, wherever it stands.
     pub fn inner(&self, stmt: &Stmt) -> Location {
-        match stmt {
+        let mut loc = match stmt {
             Stmt::Func { .. } => self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical)),
             Stmt::Loop { body, .. } if changes_location(body) => {
                 self.with_dirs(Dirs::unknown(UnknownKind::MayBeCritical))
             }
             _ => self.with_dirs(self.dirs.clone()),
+        };
+        if matches!(stmt, Stmt::Func { .. } | Stmt::Loop { .. }) {
+            loc.remapped |= self.remaps_anywhere;
+            loc.runs_script |= self.script_runs_anywhere;
         }
+        loc
     }
 
     /// The location `git` runs in, after its `-C` options.
