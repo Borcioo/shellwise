@@ -125,6 +125,10 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
             Err((partial, e)) => (partial, Some(e)),
         }
     };
+    let lower_error = match tree_error {
+        None => unproven_special_char(src, root).or(lower_error),
+        Some(_) => lower_error,
+    };
     Lossy {
         script,
         tree_error,
@@ -284,6 +288,59 @@ fn is_single_quote(c: char) -> bool {
 
 fn is_double_quote(c: char) -> bool {
     matches!(c, '"' | '\u{201c}' | '\u{201d}' | '\u{201e}')
+}
+
+fn is_dash(c: char) -> bool {
+    matches!(c, '-' | '\u{2013}' | '\u{2014}' | '\u{2015}')
+}
+
+/// A space PowerShell splits words on that the grammar's `\p{Zs}` does not hold.
+fn is_unlisted_space(c: char) -> bool {
+    matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}')
+}
+
+/// The first non-ASCII character PowerShell's tokenizer reads as an ASCII dash or quote, or
+/// splits words on (`CharExtensions` in pwsh 7.7.0: `IsDash`, `IsSingleQuote`,
+/// `IsDoubleQuote`, `IsWhitespace`), that sits where the grammar is not proven to read it the
+/// same way: anywhere but text in a string, a comment or a here-string body.
+fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
+    for (i, c) in src.char_indices() {
+        let dash = c != '-' && is_dash(c);
+        let single = c != '\'' && is_single_quote(c);
+        let double = c != '"' && is_double_quote(c);
+        if !(dash || single || double || is_unlisted_space(c)) {
+            continue;
+        }
+        let end = i + c.len_utf8();
+        let proven = root
+            .named_descendant_for_byte_range(i, end)
+            .is_some_and(|n| match n.kind() {
+                // `--%` text: `verbatim_end` checks where it ends, typographic quotes included.
+                "comment" | "stop_parsing" | "verbatim_command_argument" => true,
+                // A same-kind quote inside a string ends it for PowerShell; its delimiters are
+                // the node's first and last characters.
+                "verbatim_string_characters" => {
+                    !single || i == n.start_byte() || end == n.end_byte()
+                }
+                "expandable_string_literal" => {
+                    !double || i == n.start_byte() || end == n.end_byte()
+                }
+                // The header's and the footer's quote are not body text.
+                "verbatim_here_string_characters" | "expandable_here_string_literal" => {
+                    i != n.start_byte() + 1
+                        && !(end + 1 == n.end_byte() && src[end..].starts_with('@'))
+                }
+                _ => false,
+            });
+        if !proven {
+            return Some(error(
+                Span { start: i, end },
+                "PowerShell reads this character as an ASCII dash, quote or space here",
+                None,
+            ));
+        }
+    }
+    None
 }
 
 /// A lowering error, with the statements lowered so far (the dump shows them).

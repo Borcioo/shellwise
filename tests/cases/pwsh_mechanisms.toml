@@ -1127,3 +1127,319 @@ error = false
 cmds = [["git<#x"]]
 comments = ["#> status"]
 methods = []
+
+[[row]]
+id = "fix2-r1-en-dash-param-backtick-lf"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Remove-Item \U00002013Recurse`\nri C:\\x"
+error = false
+cmds = [["Remove-Item", "\U00002013Recurse`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-em-dash-param-backtick-lf"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output \U00002014a`\nri C:\\x"
+error = false
+cmds = [["Write-Output", "\U00002014a`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-bar-dash-param-backtick-lf"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output \U00002015a`\nri C:\\x"
+error = false
+cmds = [["Write-Output", "\U00002015a`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-en-dash-param-backtick-semicolon"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output \U00002013a`; ri C:\\x"
+error = false
+cmds = [["Write-Output", "\U00002013a`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-en-dash-param-value-lf"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output \U00002013a=x`\nri C:\\x"
+error = false
+cmds = [["Write-Output", "\U00002013a=x`"], ["ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-rdq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "git commit --message=\"x\U0000201D; Remove-Item -Recurse C:\\ #\""
+error = false
+cmds = [["git", "commit", "--message=\"x\U0000201D"], ["Remove-Item", "-Recurse", "C:\\"]]
+comments = ["#\""]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-ldq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a=\"x\U0000201C; ri C:\\x #\""
+error = false
+cmds = [["Write-Output", "--a=\"x\U0000201C"], ["ri", "C:\\x"]]
+comments = ["#\""]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-bdq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a=\"x\U0000201E; ri C:\\x #\""
+error = false
+cmds = [["Write-Output", "--a=\"x\U0000201E"], ["ri", "C:\\x"]]
+comments = ["#\""]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-rsq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a='x\U00002019; ri C:\\x #'"
+error = false
+cmds = [["Write-Output", "--a='x\U00002019"], ["ri", "C:\\x"]]
+comments = ["#'"]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-lsq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a='x\U00002018; ri C:\\x #'"
+error = false
+cmds = [["Write-Output", "--a='x\U00002018"], ["ri", "C:\\x"]]
+comments = ["#'"]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-bsq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a='x\U0000201A; ri C:\\x #'"
+error = false
+cmds = [["Write-Output", "--a='x\U0000201A"], ["ri", "C:\\x"]]
+comments = ["#'"]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-revsq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a='x\U0000201B; ri C:\\x #'"
+error = false
+cmds = [["Write-Output", "--a='x\U0000201B"], ["ri", "C:\\x"]]
+comments = ["#'"]
+methods = []
+
+[[row]]
+id = "fix2-r1-one-dash-param-value-rdq"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output -a=\"x\U0000201D; ri C:\\x #\""
+error = false
+cmds = [["Write-Output", "-a=\"x\U0000201D"], ["ri", "C:\\x"]]
+comments = ["#\""]
+methods = []
+
+[[row]]
+id = "fix2-r1-param-value-rdq-pipe"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output --a=\"x\U0000201D| ri C:\\x #\""
+error = false
+cmds = [["Write-Output", "--a=\"x\U0000201D"], ["ri", "C:\\x"]]
+comments = ["#\""]
+methods = []
+
+[[row]]
+id = "fix2-r1-nel-splits"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Remove-Item x\U00000085-Recurse"
+error = false
+cmds = [["Remove-Item", "x", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-line-separator-splits"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Remove-Item x\U00002028-Recurse"
+error = false
+cmds = [["Remove-Item", "x", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-paragraph-separator-splits"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Remove-Item x\U00002029-Recurse"
+error = false
+cmds = [["Remove-Item", "x", "-Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-line-separator-after-name"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "ls\U00002028ri C:\\x"
+error = false
+cmds = [["ls", "ri", "C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-dash-param-in-subexpr"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output \"$(Remove-Item \U00002013Recurse`\nC:\\x)\""
+error = false
+cmds = [["Write-Output", "\"$(Remove-Item \U00002013Recurse`\nC:\\x)\""], ["Remove-Item", "\U00002013Recurse`"], ["C:\\x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-en-dash-in-single"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output 'a \U00002013 b'"
+error = false
+cmds = [["Write-Output", "'a \U00002013 b'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-em-dash-in-double"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output \"a \U00002014 b\""
+error = false
+cmds = [["Write-Output", "\"a \U00002014 b\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-bar-in-single"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output 'a \U00002015 b'"
+error = false
+cmds = [["Write-Output", "'a \U00002015 b'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-lsq-in-double"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output \"it\U00002018s\""
+error = false
+cmds = [["Write-Output", "\"it\U00002018s\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-rsq-in-double"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output \"it\U00002019s\""
+error = false
+cmds = [["Write-Output", "\"it\U00002019s\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-bsq-revsq-in-double"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output \"\U0000201Aa\U0000201B\""
+error = false
+cmds = [["Write-Output", "\"\U0000201Aa\U0000201B\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-ldq-rdq-in-single"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output 'say \U0000201Cx\U0000201D'"
+error = false
+cmds = [["Write-Output", "'say \U0000201Cx\U0000201D'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-bdq-in-single"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output 'say \U0000201Ex'"
+error = false
+cmds = [["Write-Output", "'say \U0000201Ex'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-line-separator-in-single"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output 'a\U00002028b'"
+error = false
+cmds = [["Write-Output", "'a\U00002028b'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-nel-in-double"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output \"a\U00000085b\""
+error = false
+cmds = [["Write-Output", "\"a\U00000085b\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-in-comment"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output a # \U00002019 \U00002013 \U0000201D \U00002029"
+error = false
+cmds = [["Write-Output", "a"]]
+comments = ["# \U00002019 \U00002013 \U0000201D \U00002029"]
+methods = []
+
+[[row]]
+id = "fix2-r1-in-block-comment"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output a <# \U00002018\U0000201E \U00002014 #> b"
+error = false
+cmds = [["Write-Output", "a", "b"]]
+comments = ["<# \U00002018\U0000201E \U00002014 #>"]
+methods = []
+
+[[row]]
+id = "fix2-r1-in-here-string"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output @'\nit\U00002019s \U00002013 \U0000201Cx\U0000201D\n'@"
+error = false
+cmds = [["Write-Output", "@'\nit\U00002019s \U00002013 \U0000201Cx\U0000201D\n'@"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-in-expandable-here-string"
+mechanism = "fix2: a special character inside a string, a comment or a here-string body is text PowerShell keeps"
+command = "Write-Output @\"\nit\U00002019s \U00002015 \U0000201Ex \U00002028\n\"@"
+error = false
+cmds = [["Write-Output", "@\"\nit\U00002019s \U00002015 \U0000201Ex \U00002028\n\"@"]]
+comments = []
+methods = []
