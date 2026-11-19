@@ -7779,6 +7779,27 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             rmrf("/c/w/repo/t/j/x"),
             mbc.clone(),
         ),
+        (
+            "UN11 Git Bash alias mk$n='ln -s /c/x'; mkx t/j (a name with a variable)",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    vec![Word {
+                        parts: vec![
+                            WordPart::Literal("mk".to_string()),
+                            WordPart::Var("n".to_string()),
+                            WordPart::Literal("=ln -s /c/x".to_string()),
+                        ],
+                        span: Span::default(),
+                        quote: Quote::None,
+                    }],
+                ),
+                st(lits("mkx", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
