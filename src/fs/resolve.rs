@@ -581,8 +581,9 @@ pub struct Location {
     /// `read_script` found only harmless commands: nothing defines or redefines a drive or a
     /// command.
     names_fixed: bool,
-    /// `read_script` ran: without it nothing about the command is proven.
-    script_read: bool,
+    /// `read_script` ran and read every command as written (`all_read`): without it any part
+    /// may define a drive unseen.
+    commands_read: bool,
 }
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
@@ -768,7 +769,8 @@ fn is_folder_or_file_type(t: &str) -> bool {
     !t.is_empty() && ("directory".starts_with(t) || "file".starts_with(t))
 }
 
-/// `subst`, `New-PSDrive`, `net use`: after them a drive letter may name another folder.
+/// `subst`, `New-PSDrive`, `Remove-PSDrive`, `net use`: after them a drive letter or name may
+/// name another folder.
 fn remaps_drives(c: &SimpleCommand) -> bool {
     let (name, args) = match unwrap(c) {
         Run::Cmd { name, args, .. } => (name, args),
@@ -785,10 +787,12 @@ fn remaps_drives(c: &SimpleCommand) -> bool {
 }
 
 /// The commands that map a drive letter (`net` and `net1` only with `use`).
-const REMAP_COMMANDS: [&str; 9] = [
+const REMAP_COMMANDS: [&str; 11] = [
     "subst",
     "new-psdrive",
     "ndr",
+    "remove-psdrive",
+    "rdr",
     "mount",
     "mountvol",
     "new-smbmapping",
@@ -817,7 +821,7 @@ impl Location {
             new_links: Vec::new(),
             new_link_unknown: false,
             names_fixed: false,
-            script_read: false,
+            commands_read: false,
         }
     }
 
@@ -830,7 +834,7 @@ impl Location {
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
         self.names_fixed = only_harmless(script, self.shell, self.os);
-        self.script_read = true;
+        self.commands_read = all_read(script);
     }
 
     pub fn os(&self) -> Os {
@@ -881,7 +885,7 @@ impl Location {
                     links.push(None);
                 }
             }
-            Node::Loop(_) | Node::Func | Node::Expr => {}
+            Node::Loop(_) | Node::Func(_) | Node::Expr => {}
         });
         self.remapped |= remap;
         for l in links {
@@ -1438,8 +1442,8 @@ enum Node<'a> {
     Cmd(&'a SimpleCommand),
     Method(&'a crate::ir::MethodCall),
     Loop(Span),
-    /// A function definition (its body is visited after it).
-    Func,
+    /// A function definition, by name (its body is visited after it).
+    Func(&'a str),
     /// An expression the IR does not split into commands.
     Expr,
 }
@@ -1499,8 +1503,8 @@ fn visit_stmt<'a>(st: &'a Stmt, f: &mut dyn FnMut(Node<'a>)) {
                 visit_script(b, f);
             }
         }
-        Stmt::Func { body, .. } => {
-            f(Node::Func);
+        Stmt::Func { name, body } => {
+            f(Node::Func(name));
             visit_script(body, f);
         }
         Stmt::Block(body) => visit_script(body, f),
@@ -1517,10 +1521,117 @@ fn only_harmless(s: &Script, shell: Shell, os: Os) -> bool {
         ok &= match n {
             Node::Cmd(c) => harmless(c, shell, os),
             Node::Loop(_) => true,
-            Node::Method(_) | Node::Func | Node::Expr => false,
+            Node::Method(_) | Node::Func(_) | Node::Expr => false,
         }
     });
     ok
+}
+
+/// Every command in `s` is read as written (Ruling 36), so a drive it makes is in sight: none is
+/// opaque, named by a variable or unread (`unwrap`), runs text as code (`Invoke-Expression`,
+/// `Invoke-Command` on a variable, `&` or `.` on a non-literal), or calls a function or alias
+/// `s` defines; and every definition in `s` names what it defines.
+fn all_read(s: &Script) -> bool {
+    let mut defined: Vec<String> = Vec::new();
+    visit_script(s, &mut |n| match n {
+        Node::Func(name) => defined.push(name.to_ascii_lowercase()),
+        Node::Cmd(c) => defined.extend(defined_by(c)),
+        _ => {}
+    });
+    let mut ok = !defined.iter().any(|d| d == "*");
+    visit_script(s, &mut |n| {
+        if let Node::Cmd(c) = n {
+            ok &= read_as_written(c, &defined);
+        }
+    });
+    ok
+}
+
+fn read_as_written(c: &SimpleCommand, defined: &[String]) -> bool {
+    if c.opaque || literal(&c.name).is_none() {
+        return false;
+    }
+    let (name, args) = match unwrap(c) {
+        Run::Cmd { name, args, .. } => (name, args),
+        Run::Nothing => return true,
+        Run::Unread { .. } => return false,
+    };
+    let called = |n: &str| !defined.iter().any(|d| d == n);
+    match name.as_str() {
+        "invoke-expression" | "iex" => false,
+        "invoke-command" | "icm" => args.iter().all(|w| {
+            literal(w).is_some() || w.parts.iter().all(|p| matches!(p, WordPart::Block(_)))
+        }),
+        "&" | "." => args
+            .first()
+            .and_then(literal)
+            .is_some_and(|o| called(&base_name(&o.to_ascii_lowercase()))),
+        n => called(n),
+    }
+}
+
+/// The command names `c` defines, lowercased: an alias by `Set-Alias`/`New-Alias`, an item on
+/// `Function:` or `Alias:` by `Set-Item`/`New-Item`, an assignment to `$function:x` or
+/// `$alias:x`. `*` when the names cannot be read, and for a command that imports definitions.
+fn defined_by(c: &SimpleCommand) -> Vec<String> {
+    let mut out: Vec<String> = c
+        .assigns
+        .iter()
+        .filter_map(|(n, _)| command_item(n))
+        .collect();
+    let Run::Cmd { name, args, .. } = unwrap(c) else {
+        return out;
+    };
+    let any = || "*".to_string();
+    match name.as_str() {
+        "set-alias" | "sal" | "new-alias" | "nal" => {
+            // `[-Name] <name> [-Value] <value>` only; any other form may name anything.
+            let words: Vec<Option<String>> = args.iter().map(literal).collect();
+            let named = words
+                .first()
+                .and_then(|w| w.as_deref())
+                .is_some_and(|w| w.len() > 1 && "-name".starts_with(&w.to_ascii_lowercase()));
+            let rest = &words[usize::from(named)..];
+            let plain = rest
+                .iter()
+                .all(|w| w.as_deref().is_some_and(|t| !t.starts_with('-')));
+            out.push(match rest.first() {
+                Some(Some(n)) if plain => n.to_ascii_lowercase(),
+                _ => any(),
+            });
+        }
+        "set-item" | "si" | "new-item" | "ni" => {
+            for w in args {
+                match literal(w) {
+                    Some(t) => out.extend(command_item(&t)),
+                    None => out.push(any()),
+                }
+            }
+        }
+        "import-module" | "ipmo" | "import-alias" | "ipal" | "new-module" | "nmo"
+        | "import-pssession" | "ipsn" => out.push(any()),
+        _ => {}
+    }
+    out
+}
+
+/// The command a `Function:` or `Alias:` path names (`Function:\f` gives `f`); `*` for the
+/// root or a wildcard.
+fn command_item(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    let s = lower
+        .strip_prefix("microsoft.powershell.core\\")
+        .unwrap_or(&lower);
+    let (drive, rest) = s.split_once(':')?;
+    if drive != "function" && drive != "alias" {
+        return None;
+    }
+    let name = rest.trim_start_matches(':').trim_start_matches(['\\', '/']);
+    Some(if name.is_empty() || name.contains(['*', '?', '[']) {
+        "*".to_string()
+    } else {
+        name.to_string()
+    })
 }
 
 /// `c` is the Remove-Item family on literal paths outside `Alias:` and `Function:`, a `Get-*` or
@@ -1717,7 +1828,7 @@ pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
             }
             _ => env.mark_all_dynamic(),
         },
-        Node::Func | Node::Expr => {}
+        Node::Func(_) | Node::Expr => {}
     });
 }
 
@@ -2412,7 +2523,12 @@ pub fn target(
         let text: String = segs.iter().map(|s| s.text.as_str()).collect();
         let provider = by == DeleteBy::Provider && pwsh;
         if provider && session_command(&text) {
-            return Target::SessionCommand;
+            // Ruling 36: after a remap `Function:` may be a file-system drive.
+            return if loc.commands_read && !loc.remapped {
+                Target::SessionCommand
+            } else {
+                Target::UnknownLocation(UnknownKind::MayBeCritical)
+            };
         }
         // `New-PSDrive Env -PSProvider FileSystem` anywhere may map the name to a folder.
         if provider && loc.names_fixed && on_non_fs_drive(&text) {
@@ -2422,7 +2538,7 @@ pub fn target(
             Ok(p) => plans.push(p),
             Err(Fail::Dynamic) => return Target::Dynamic(word.span),
             // I1: a drive the command maps (or may map) keeps MayBeCritical.
-            Err(Fail::Drive) if loc.script_read && !loc.remapped => {
+            Err(Fail::Drive) if loc.commands_read && !loc.remapped => {
                 return Target::DriveUnproven {
                     drive: drive_name(&text),
                 };
