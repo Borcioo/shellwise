@@ -4859,3 +4859,21 @@ error = false
 cmds = [["Write-Output", "-a:b:"], ["ri"]]
 comments = []
 methods = []
+
+[[row]]
+id = "param-one-dash-colon-semicolon-error"
+mechanism = "a one-dash value ending in `:` before `;`: PowerShell wants an argument"
+command = "Write-Output -a=b:;ri"
+error = true
+cmds = [["Write-Output", "-a=b:"], ["ri"]]
+comments = []
+methods = []
+
+[[row]]
+id = "param-one-dash-colon-end-error"
+mechanism = "a one-dash value ending in `:` at the end of the input: PowerShell wants an argument"
+command = "Write-Output -a=b:"
+error = true
+cmds = [["Write-Output", "-a=b:"]]
+comments = []
+methods = []

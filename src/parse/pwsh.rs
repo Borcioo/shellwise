@@ -375,23 +375,20 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
                 kids(n).iter().any(|k| k.kind() == "comment")
             }
             "generic_token" | "command_parameter" => {
-                // `-a=b: x`: PowerShell takes the next argument as the parameter's value.
+                // `-a=b: x`: PowerShell takes the next argument as the parameter's value, and
+                // with no argument (`-a=b:;`) it is an error.
                 (n.kind() == "command_parameter" && {
                         let t = &src[n.start_byte()..n.end_byte()];
-                        !t.starts_with("--")
-                            && t.ends_with(':')
-                            && src[n.end_byte()..].starts_with(char::is_whitespace)
+                        !t.starts_with("--") && t.ends_with(':')
                     })
-                    // `-a:b:(1)`, `-a=b@(1)`, `a:b:(1)`: a one-dash parameter ending in `:` or
-                    // `@`, or a word ending in `:`, glued to a group: PowerShell splits it
-                    // elsewhere.
+                    // `-a=b@(1)`, `a:b:(1)`: a one-dash parameter ending in `@`, or a word ending
+                    // in `:`, glued to a group: PowerShell splits it elsewhere (a one-dash
+                    // parameter ending in `:` is refused above).
                     || (n.next_sibling().is_some_and(|x| {
                         x.start_byte() == n.end_byte() && src[x.start_byte()..].starts_with(['(', '@'])
                     }) && {
                         let t = &src[n.start_byte()..n.end_byte()];
-                        (n.kind() == "command_parameter"
-                            && !t.starts_with("--")
-                            && t.ends_with([':', '@']))
+                        (n.kind() == "command_parameter" && !t.starts_with("--") && t.ends_with('@'))
                             || (n.kind() == "generic_token" && t.ends_with(':'))
                     })
                     // `a,]b`: a `]` starting a word is a token of its own for PowerShell.
