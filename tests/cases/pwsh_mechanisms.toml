@@ -3426,7 +3426,7 @@ comments = []
 methods = []
 
 [[row]]
-id = "glue-r-digit-backtick-line-end"
+id = "glue-digit-backtick-line-end"
 mechanism = "a word starting with a digit and ending in a backtick before a line end: PowerShell escapes the line end"
 command = "Write-Output 1,2`\n"
 error = false
