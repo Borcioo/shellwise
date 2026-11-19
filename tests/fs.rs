@@ -8977,6 +8977,34 @@ fn pwsh_list_rows_through_the_real_parser_keep_their_verdict() {
             ),
             MAY_BE_CRITICAL,
         ),
+        // A list holding the only `Alias:` path (the list word is no literal).
+        (
+            format!(r"Set-Content Alias:a,Alias:mk New-Item; {mk}; {del}"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            format!(r"Set-Item Alias:a,Alias:mk New-Item; {mk}; {del}"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            format!(r"New-Item Alias:a,Alias:mk -Value New-Item; {mk}; {del}"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            format!(r"Copy-Item Alias:ni,Alias:x Alias:mk; {mk}; {del}"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            format!(r"Publish-Thing x,Alias:mk New-Item; {mk}; {del}"),
+            MAY_BE_CRITICAL,
+        ),
+        // The colon-glued parameter form of a link list.
+        (
+            format!(
+                r"New-Item -ItemType Junction -Path:C:\w\repo\a,C:\w\repo\t\j -Target C:\x; {del}"
+            ),
+            MAY_BE_CRITICAL,
+        ),
         // Control: folders, no link.
         (
             format!(r"New-Item -ItemType Directory -Path C:\w\repo\a,C:\w\repo\b; {del}"),
