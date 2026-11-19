@@ -1443,3 +1443,149 @@ error = false
 cmds = [["Write-Output", "@\"\nit\U00002019s \U00002015 \U0000201Ex \U00002028\n\"@"]]
 comments = []
 methods = []
+
+[[row]]
+id = "fix2-r1-doubled-rdq-in-double"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output \"a\U0000201D\U0000201Db\""
+error = false
+cmds = [["Write-Output", "\"a\U0000201D\U0000201Db\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-doubled-rsq-in-single"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output 'a\U00002019\U00002019b'"
+error = false
+cmds = [["Write-Output", "'a\U00002019\U00002019b'"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-closing-quote-then-word"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output \"Fix \U0000201Ex\U0000201D probe\""
+error = false
+cmds = [["Write-Output", "\"Fix \U0000201E", "x\U0000201D probe\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-word-section-lsq-rsq"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output x\U00002018a b\U00002019"
+error = false
+cmds = [["Write-Output", "x\U00002018a b\U00002019"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-word-section-bsq-revsq"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output x\U0000201Aa b\U0000201B"
+error = false
+cmds = [["Write-Output", "x\U0000201Aa b\U0000201B"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-word-section-ldq-rdq"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output x\U0000201Ca b\U0000201D"
+error = false
+cmds = [["Write-Output", "x\U0000201Ca b\U0000201D"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-word-section-bdq"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output x\U0000201Ea b\""
+error = false
+cmds = [["Write-Output", "x\U0000201Ea b\""]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-word-section-hides-no-separator"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output a\U0000201Cb; ri C:\\x\U0000201D"
+error = false
+cmds = [["Write-Output", "a\U0000201Cb; ri C:\\x\U0000201D"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-mid-word-en-dash"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Remove-Item x a\U00002013Recurse"
+error = false
+cmds = [["Remove-Item", "x", "a\U00002013Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-mid-word-em-dash"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output a\U00002014b"
+error = false
+cmds = [["Write-Output", "a\U00002014b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-mid-word-bar"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output a\U00002015b"
+error = false
+cmds = [["Write-Output", "a\U00002015b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-in-subexpr"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output \"$(Write-Output \U00002018a\U00002019 a\U00002013b)\""
+error = false
+cmds = [["Write-Output", "\"$(Write-Output \U00002018a\U00002019 a\U00002013b)\""], ["Write-Output", "\U00002018a\U00002019", "a\U00002013b"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-here-string-typographic-delimiters"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output @\U0000201C\nx\n\U0000201D@"
+error = false
+cmds = [["Write-Output", "@\U0000201C\nx\n\U0000201D@"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-verbatim-here-string-typographic-delimiters"
+mechanism = "fix2: a typographic quote or dash where the grammar reads it as PowerShell does lowers"
+command = "Write-Output @\U0000201A\nx\n\U0000201B@"
+error = false
+cmds = [["Write-Output", "@\U0000201A\nx\n\U0000201B@"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-word-start-dash-after-comma"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output a,\U00002013Recurse"
+error = false
+cmds = [["Write-Output", "a,\U00002013Recurse"]]
+comments = []
+methods = []
+
+[[row]]
+id = "fix2-r1-line-separator-in-word-section"
+mechanism = "fix2: a character PowerShell reads as an ASCII dash, quote or space fails closed outside a proven node"
+parser = "refuses"
+command = "Write-Output x\"a\U00002028b\""
+error = false
+cmds = [["Write-Output", "x\"a\U00002028b\""]]
+comments = []
+methods = []

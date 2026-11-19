@@ -302,7 +302,10 @@ fn is_unlisted_space(c: char) -> bool {
 /// The first non-ASCII character PowerShell's tokenizer reads as an ASCII dash or quote, or
 /// splits words on (`CharExtensions` in pwsh 7.7.0: `IsDash`, `IsSingleQuote`,
 /// `IsDoubleQuote`, `IsWhitespace`), that sits where the grammar is not proven to read it the
-/// same way: anywhere but text in a string, a comment or a here-string body.
+/// same way. Proven: a comment, the `--%` text, and every string and here-string token, whose
+/// delimiters and doubled escapes take each quote class whole (grammar.js, scanner.c); in a bare
+/// word, a quote (its quoted sections take the classes whole) and a dash after the first
+/// character (text for PowerShell, as `-` is).
 fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
     for (i, c) in src.char_indices() {
         let dash = c != '-' && is_dash(c);
@@ -316,20 +319,15 @@ fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
             .named_descendant_for_byte_range(i, end)
             .is_some_and(|n| match n.kind() {
                 // `--%` text: `verbatim_end` checks where it ends, typographic quotes included.
-                "comment" | "stop_parsing" | "verbatim_command_argument" => true,
-                // A same-kind quote inside a string ends it for PowerShell; its delimiters are
-                // the node's first and last characters.
-                "verbatim_string_characters" => {
-                    !single || i == n.start_byte() || end == n.end_byte()
-                }
-                "expandable_string_literal" => {
-                    !double || i == n.start_byte() || end == n.end_byte()
-                }
-                // The header's and the footer's quote are not body text.
-                "verbatim_here_string_characters" | "expandable_here_string_literal" => {
-                    i != n.start_byte() + 1
-                        && !(end + 1 == n.end_byte() && src[end..].starts_with('@'))
-                }
+                "comment"
+                | "stop_parsing"
+                | "verbatim_command_argument"
+                | "verbatim_string_characters"
+                | "expandable_string_literal"
+                | "verbatim_here_string_characters"
+                | "expandable_here_string_literal" => true,
+                // A word-start dash is a parameter (`–Recurse`).
+                "generic_token" => single || double || (dash && i != n.start_byte()),
                 _ => false,
             });
         if !proven {
