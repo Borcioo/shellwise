@@ -529,7 +529,6 @@ enum Piece<'t> {
 
 /// Nodes whose children are the pieces of a command element.
 const PIECE_HOLDERS: &[&str] = &[
-    "command",               // holds: the invocation operator, the name, the elements
     "command_name",          // holds: a comment inside a bare name
     "command_name_expr",     // holds: the name after `&` or `.`
     "path_command_name",     // holds: a variable and path text in a name
@@ -537,7 +536,6 @@ const PIECE_HOLDERS: &[&str] = &[
     "glued_string_argument", // holds: a string and the words glued after it
     "glued_argument",        // holds: a variable and the text glued after it
     "string_literal",        // holds: the string token
-    "redirections",          // holds: a statement's redirections
     "redirection",           // holds: a redirect operator and its target
     "redirected_file_name",  // holds: a redirect target's pieces
 ];
