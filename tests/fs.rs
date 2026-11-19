@@ -2399,17 +2399,51 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         &MAY_BE_CRITICAL,
         "unread; build",
     );
-    // Ruling 38: a script run by `&` and a source by `.` may move the shell.
+    // Ruling 38: a script run by `&` and a source by `.` may move the shell; Ruling 39: `.` of a
+    // cmdlet is `&` of it.
     for (label, before) in [
         ("& ./x.ps1", stmt(lits("&", &["./x.ps1"]), seq)),
-        (". Get-Date", stmt(lits(".", &["Get-Date"]), seq)),
+        (". x", stmt(lits(".", &["x"]), seq)),
     ] {
         expect(
-            judge(vec![before], ri("build")),
+            judge(vec![before], lits("Remove-Item", &["-Recurse", "build"])),
             &MAY_BE_CRITICAL,
-            &format!("{label}; build"),
+            &format!("{label}; -Recurse build"),
         );
     }
+    expect(
+        judge(vec![stmt(lits(".", &["Get-Date"]), seq)], ri("build")),
+        &paths(&[r"C:\w\repo\build"]),
+        ". Get-Date; build",
+    );
+    // Ruling 39: a source is never harmless and never read, unless it names a cmdlet.
+    let dot_x = || stmt(lits(".", &["x"]), seq);
+    expect(
+        judge(vec![dot_x()], ri(r"Proj:\y")),
+        &MAY_BE_CRITICAL,
+        ". x; Proj:\\y",
+    );
+    expect(
+        judge(vec![dot_x()], ri("Env:FOO")),
+        &MAY_BE_CRITICAL,
+        ". x; Env:FOO",
+    );
+    expect(
+        judge(vec![stmt(lits(".", &["Get-Date"]), seq)], ri("Env:FOO")),
+        &Target::NotAFile,
+        ". Get-Date; Env:FOO",
+    );
+    // `&` of a plain name that may be a script on PATH: read (Ruling 38), never harmless.
+    expect(
+        judge(vec![stmt(lits("&", &["x"]), seq)], ri("Env:FOO")),
+        &unproven("Env"),
+        "& x; Env:FOO",
+    );
+    expect(
+        judge(vec![stmt(lits("&", &["Get-Date"]), seq)], ri("Env:FOO")),
+        &Target::NotAFile,
+        "& Get-Date; Env:FOO",
+    );
     // I3 + Ruling 35: a command definition, or a variable that may be the shim's.
     for text in [
         "Function:x",
