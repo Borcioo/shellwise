@@ -72,6 +72,15 @@ fn var(s: &str) -> WordPart {
 }
 
 #[test]
+fn a_parameter_value_expands_like_any_word() {
+    for src in ["git log --format=\"$x\"", "git log --format=$x"] {
+        let c = only(src);
+        assert_eq!(c.args[1].parts, vec![lit("--format="), var("x")], "{src:?}");
+        assert!(c.args[1].is_dynamic(), "{src:?}");
+    }
+}
+
+#[test]
 fn remove_item_resolves_and_keeps_a_static_target() {
     let c = only(r"Remove-Item -Recurse -Force 'C:\x'");
     assert_eq!(c.canonical.as_deref(), Some("remove-item"));
