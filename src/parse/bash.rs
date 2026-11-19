@@ -1952,7 +1952,7 @@ fn is_identifier(name: &str) -> bool {
 }
 
 /// Commands whose output is digits and white space only, as words: unquoted literal text, split
-/// at spaces and tabs (a newline ends the command). A last `<` is a redirect from a literal path.
+/// at blanks (a newline ends the command). A last `<` is a redirect from a literal path.
 const DIGIT_COMMANDS: &[&[&str]] = &[
     &["date", "+%s"],
     &["date", "+%s%N"],
@@ -1981,7 +1981,8 @@ fn digits_only(words: &[&str]) -> bool {
 /// Whether a `$(…)` or backtick body is a command of `DIGIT_COMMANDS`.
 fn listed_text(body: &str) -> bool {
     let mut words = Vec::new();
-    for w in body.split([' ', '\t']).filter(|w| !w.is_empty()) {
+    // brush renders arithmetic text with a tab as a space; a newline it keeps.
+    for w in body.split(' ').filter(|w| !w.is_empty()) {
         match w.strip_prefix('<') {
             Some(path) if !path.is_empty() => words.extend(["<", path]),
             _ => words.push(w),
