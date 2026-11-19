@@ -1109,6 +1109,98 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
             r#"printf 'a\nb\n' > 'a[$(>y)]'; (( $(wc -l < 'a[$(>y)]') ))"#.into(),
             "((",
         ),
+        // By rule: a listed command with other words prints other text (`id -u -n`, a name).
+        (r#"x='a[$(>y)]'; (( $(id -u -n) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; (( $(date +%s x) ))"#.into(), "(("),
+        // `for NAME` without `in` assigns the positional parameters.
+        (r#"set -- 'a[$(>y)]'; x=1; for x; do (( x )); done"#.into(), "(("),
+        (r#"set -- 'a[$(>y)]'; x=1; for x do (( x )); done"#.into(), "(("),
+        (r#"x=1; f() { for x; do (( x )); done; }; f 'a[$(>y)]'"#.into(), "(("),
+        (r#"f() { local n=0; for n; do (( n + 1 )); done; }; f 'a[$(>y)]'"#.into(), "(("),
+        // Bash brace-expands a `name=` word of the bare builtin, then splits it.
+        (r#"z=1; o='1 z=a[$(>y)]'; declare x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; declare x=$o{,}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; export x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; readonly x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; typeset x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; f() { local x={$o,2}; (( z )); }; f"#.into(), "(("),
+        // Rebinding: `PATH`, `BASH_CMDS` or `BASH_ALIASES` unset, declared without a value,
+        // or written, also by an operand that is not static.
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -v PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset "PATH"; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; command unset PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; k=PATH; unset $k; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { local PATH; (( $(date +%s) )); }; f"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { local PATH; [[ $(date +%s) -eq 1 ]]; }; f"#.into(),
+            "[[",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { declare PATH; echo $(( $(date +%s) )); }; f"#.into(),
+            "echo",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { typeset PATH; (( $(date +%s) )); }; f"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset PATH; a=([$(date +%s)]=1)"#.into(),
+            "<none>",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > wc; chmod +x wc; echo 1 > f; unset PATH; (( $(wc -l < f) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; BASH_CMDS[date]=$PWD/d; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; BASH_CMDS=([date]=$PWD/d); (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            "shopt -s expand_aliases\ndate=1; BASH_ALIASES[date]='echo \"a[\\$(>y)]\"; :'\n(( $(date +%s) ))".into(),
+            "((",
+        ),
+        // A name operand's subscript: command output, a glob (a file name) or `~` is text.
+        (r#"x='b[$(>y)]'; declare -a a; unset "a[$(echo x)]""#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; unset a[$(echo x)]"#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; [ -v "a[$(echo x)]" ]"#.into(), "["),
+        (r#"x='b[$(>y)]'; declare -a a; test -v "a[$(echo x)]""#.into(), "test"),
+        (r#"x='b[$(>y)]'; declare -a a; [[ -v a[$(echo x)] ]]"#.into(), "[["),
+        (r#"x='b[$(>y)]'; declare -a a; unset -v "a[`echo x`]""#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; [[ -v a[`echo x`] ]]"#.into(), "[["),
+        (r#"declare -a a; unset "a[$(echo 'b[$(>y)]')]""#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; : > 'a[x]'; unset a*"#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; : > 'a[x]'; test -v a*"#.into(), "test"),
+        (r#"x='b[$(>y)]'; declare -a a; HOME='a[x]'; unset ~"#.into(), "unset"),
+        // Command output assigned to an integer name is read as arithmetic.
+        (r#"declare -i n; n=$(echo 'a[$(>y)]')"#.into(), "<none>"),
+        (r#"declare -i n; n=`echo 'a[$(>y)]'`"#.into(), "<none>"),
+        (r#"declare -i n=$(echo 'a[$(>y)]')"#.into(), "declare"),
+        (r#"declare -i n; n=($(echo 'a[$(>y)]'))"#.into(), "<none>"),
+        (r#"declare -i n; for n in $(echo 'a[$(>y)]'); do :; done"#.into(), "(("),
+        (r#"f() { local -i n=$(echo 'a[$(>y)]'); }; f"#.into(), "local"),
     ];
     // Every failing row is listed, not only the first.
     let mut bad = Vec::new();
@@ -1220,6 +1312,17 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         r#"printf 'a\nb\n' > f; x='a[$(>y)]'; [[ $(wc -l < f) -eq 2 ]]"#.into(),
         r#"printf 'a\nb\n' > f; x='a[$(>y)]'; (( $(wc -l <f) ))"#.into(),
         r#"x='a[$(>y)]'; a=([$(date +%s)]=1)"#.into(),
+        // A word list after `in`; a brace that bash does not expand; `unset -f`; a listed
+        // command in a name operand or assigned to an integer name; the via-name limit.
+        r#"set -- 'a[$(>y)]'; x=1; for x in 1 2; do (( x )); done"#.into(),
+        r#"z=1; o='1 z=a[$(>y)]'; declare x='{a,b}'$o; (( z ))"#.into(),
+        r#"z=1; o='1 z=a[$(>y)]'; declare x={a}$o; (( z ))"#.into(),
+        r#"z=1; o='1 z=a[$(>y)]'; declare x=${o}; (( z ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f x PATH; (( $(date +%s) ))"#
+            .into(),
+        r#"declare -a a; unset "a[$(date +%s)]""#.into(),
+        r#"declare -i n; n=$(date +%s)"#.into(),
+        r#"n=$(echo 'a[$(>y)]'); echo $n"#.into(),
     ] {
         let s = ok(&src);
         if commands(&s).iter().any(|c| c.opaque) {

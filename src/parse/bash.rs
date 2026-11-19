@@ -263,7 +263,8 @@ const SHELL_TEXT_VARIABLES: &[&str] = &[
 /// A value assigned to a name, as the taint rule reads it.
 enum Value {
     /// An integer from `$((…))`. Also one substitution's output (`n=$(cmd)`), which may be any
-    /// text the command prints: a limit the README states.
+    /// text the command prints: a limit the README states. (Assigned to an integer name, the
+    /// output is read as arithmetic at once: `assigned` judges it.)
     Clean,
     /// Anything the allow-list does not name.
     Tainted,
@@ -469,7 +470,8 @@ struct Lower {
     unknown_target: Cell<bool>,
     /// See `Taint::any_integer`.
     any_integer: Cell<bool>,
-    /// A command that may bind a name to other code ran: `REBINDING`, or a name not static.
+    /// A command that may bind a name to other code ran: `REBINDING`, a name not static, or an
+    /// `unset` or declaration of a `REBINDING_NAMES` variable or of a name not static.
     rebinds: Cell<bool>,
 }
 
@@ -513,7 +515,9 @@ impl Lower {
         taint.all |= self.unknown_target.get();
         taint.any_integer = self.any_integer.get();
         taint.shadowed = self.rebinds.get()
-            || assigned.iter().any(|(n, _)| n == "PATH")
+            || assigned
+                .iter()
+                .any(|(n, _)| REBINDING_NAMES.contains(&n.as_str()))
             || DIGIT_COMMANDS.iter().any(|c| functions.contains(c[0]));
         let needed = taint.all
             || self.arith_texts.into_inner().iter().any(|t| taint.reads(t))
@@ -548,13 +552,19 @@ impl Lower {
             .is_some_and(|t| t.any_integer || t.integers.contains(name))
     }
 
-    /// Record a value assigned to `name`; `append` for `name+=value`, which is never clean.
+    /// Record a value assigned to `name`; `append` for `name+=value`, which is never clean. Bash
+    /// evaluates command output assigned to an integer name as arithmetic, there and then.
     fn assigned(&self, name: &str, parts: &[WordPart], append: bool) {
         let value = if append {
             Value::Tainted
         } else {
             classify(parts)
         };
+        if let [WordPart::Subst(s) | WordPart::Block(s)] = parts
+            && self.is_integer(name)
+        {
+            self.read_arith(&subst_text(s));
+        }
         self.record(name, value);
     }
 
@@ -881,6 +891,10 @@ impl Lower {
             C::Subshell(s) => vec![Stmt::Block(self.body(t, &s.list, cx)?)],
             C::ForClause(f) => {
                 let mut words = Vec::new();
+                // `for NAME` without `in` assigns the positional parameters.
+                if f.values.is_none() {
+                    self.record(&f.variable_name, Value::Tainted);
+                }
                 for w in f.values.iter().flatten() {
                     let w = self.ast_word(t, w, span, cx)?;
                     self.assigned(&f.variable_name, &w.parts, false);
@@ -1004,14 +1018,17 @@ impl Lower {
             cmd.name = self.ast_word(t, name, span, cx)?;
             cmd.typed = name.value.clone();
         }
-        // The arguments the parser reads as `name=value` (an unquoted name and `=`).
+        // The arguments the parser reads as `name=value` (an unquoted name and `=`) that bash
+        // does not brace-expand.
         let mut assignment_args = Vec::new();
         for item in s.suffix.iter().flat_map(|p| p.0.iter()) {
             match item {
                 I::IoRedirect(r) => cmd.redirects.push(self.redirect(t, r, cx)?),
                 // `export x=$(…)`: an argument of the builtin that also assigns `x`.
                 I::AssignmentWord(a, w) => {
-                    assignment_args.push(cmd.args.len());
+                    if !brace_expands(&w.value, &self.opts) {
+                        assignment_args.push(cmd.args.len());
+                    }
                     cmd.args.push(self.ast_word(t, w, span, cx)?);
                     // The argument already holds the substitutions; the assignment keeps the
                     // value's shape without them, so each command is found once.
@@ -1074,8 +1091,9 @@ impl Lower {
     /// A builtin that writes a name is read exactly only when each word that may be an option, an
     /// option argument or a name is literal text: an expansion (a variable, a glob, a brace) may
     /// name another option or target. Bash does not split or glob a `name=…` argument (an
-    /// unquoted name and `=`) of the bare builtin, but does behind `command`/`builtin` or a quoted
-    /// command word: `assignments` holds the indices of those arguments when the builtin is bare.
+    /// unquoted name and `=`) of the bare builtin, unless it brace-expands it, but does behind
+    /// `command`/`builtin` or a quoted command word: `assignments` holds the indices of those
+    /// arguments when the builtin is bare.
     fn name_writer_words(
         &self,
         cmd: &SimpleCommand,
@@ -1150,6 +1168,10 @@ impl Lower {
                 Some(n) => (n, true),
                 None => (name, false),
             };
+            // Declared with or without a value: `local PATH` leaves it unset.
+            if REBINDING_NAMES.contains(&name) || !is_identifier(name) {
+                self.rebinds.set(true);
+            }
             if integer {
                 self.integers.borrow_mut().insert(name.to_string());
             }
@@ -1311,7 +1333,10 @@ impl Lower {
                 picked.extend(first_arg..cmd.args.len())
             }
             // `unset` evaluates the subscript of an indexed array.
-            Some("unset") => names.extend(first_arg..cmd.args.len()),
+            Some("unset") => {
+                self.unset_rebinds(&cmd.args[first_arg.min(cmd.args.len())..]);
+                names.extend(first_arg..cmd.args.len())
+            }
             Some("printf" | "test" | "[") => {
                 for i in first_arg..cmd.args.len() {
                     match cmd.args[i].static_value(&env).as_deref() {
@@ -1339,11 +1364,53 @@ impl Lower {
         Ok(())
     }
 
+    /// `unset` of a variable in `REBINDING_NAMES`, or of a name that is not static, may rebind a
+    /// command name; `unset -f` removes functions only.
+    fn unset_rebinds(&self, args: &[Word]) {
+        let mut options = true;
+        let mut functions = false;
+        for w in args {
+            let text = exact(w);
+            match text.as_deref() {
+                Some("--") if options => options = false,
+                Some(v) if options && v.len() > 1 && v.starts_with('-') => {
+                    functions = v[1..].bytes().all(|b| b == b'f');
+                }
+                _ => {
+                    options = false;
+                    if functions {
+                        return;
+                    }
+                    if static_name(w).is_none_or(|n| REBINDING_NAMES.contains(&n.as_str())) {
+                        self.rebinds.set(true);
+                    }
+                }
+            }
+        }
+    }
+
     /// A word bash takes as a variable name (`unset`, `test -v`, `[[ -v ]]`): its subscripts, and
-    /// the variables whose text forms the name, since bash evaluates a subscript in that text.
+    /// the variables, command output, file names (a glob) and `~` whose text forms the name, since
+    /// bash evaluates a subscript in that text.
     fn name_operand(&self, w: &mut Word, cx: Cx) -> Result<(), ParseError> {
         for p in &w.parts {
-            let WordPart::Var(v) = p else { continue };
+            let v = match p {
+                WordPart::Var(v) => v,
+                WordPart::Literal(_) => continue,
+                WordPart::Subst(s) | WordPart::Block(s) => {
+                    self.read_arith(&subst_text(s));
+                    continue;
+                }
+                // A file name is text the script does not hold: read `_`, which is never clean.
+                WordPart::Glob(_) => {
+                    self.read_arith("_");
+                    continue;
+                }
+                WordPart::Tilde => {
+                    self.read_arith("HOME");
+                    continue;
+                }
+            };
             if v.starts_with("((") {
                 continue;
             }
@@ -1964,6 +2031,10 @@ const DIGIT_COMMANDS: &[&[&str]] = &[
 /// the functions of a sourced file.
 const REBINDING: &[&str] = &["hash", "alias", "enable", "source", "."];
 
+/// Variables that bind command names: a write of any kind to one (a value, `unset`, a
+/// declaration with or without a value) may rebind a command of `DIGIT_COMMANDS`.
+const REBINDING_NAMES: &[&str] = &["PATH", "BASH_ALIASES", "BASH_CMDS"];
+
 /// Whether `words` are a command of `DIGIT_COMMANDS`.
 fn digits_only(words: &[&str]) -> bool {
     DIGIT_COMMANDS.iter().any(|c| match c.split_last() {
@@ -1981,7 +2052,8 @@ fn digits_only(words: &[&str]) -> bool {
 /// Whether a `$(…)` or backtick body is a command of `DIGIT_COMMANDS`.
 fn listed_text(body: &str) -> bool {
     let mut words = Vec::new();
-    // brush renders arithmetic text with a tab as a space; a newline it keeps.
+    // brush renders a `$(…)` body without a redirect with a tab as a space; a backtick body or
+    // a redirect keeps its tab, and such a body is not listed. A newline it keeps.
     for w in body.split(' ').filter(|w| !w.is_empty()) {
         match w.strip_prefix('<') {
             Some(path) if !path.is_empty() => words.extend(["<", path]),
@@ -2029,6 +2101,37 @@ fn exact(w: &Word) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// The variable a name operand names (`a` of `a[$(…)]`) when the text before its subscript is
+/// literal.
+fn static_name(w: &Word) -> Option<String> {
+    let mut out = String::new();
+    for p in &w.parts {
+        match p {
+            WordPart::Literal(s) => match s.split_once('[') {
+                Some((name, _)) => {
+                    out.push_str(name);
+                    return Some(out);
+                }
+                None => out.push_str(s),
+            },
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Whether bash brace-expands the word `raw` (`x={$o,2}`, `x=$o{,}`), as the parser splits it;
+/// text it cannot split counts as expanded.
+fn brace_expands(raw: &str, opts: &ParserOptions) -> bool {
+    match word::parse_brace_expansions(raw, opts) {
+        Ok(pieces) => pieces
+            .iter()
+            .flatten()
+            .any(|p| matches!(p, word::BraceExpressionOrText::Expr(_))),
+        Err(_) => true,
+    }
 }
 
 /// How many leading words of `printf` may be an option or its target: up to the first word that
@@ -2236,10 +2339,14 @@ fn value_text(w: &Word) -> String {
 /// A word as arithmetic reads it: as `value_text`, with each substitution as `$(…)`, holding its
 /// command when that is on `DIGIT_COMMANDS` (`plain_view` judges it again).
 fn arith_text(w: &Word) -> String {
-    rendered(w, |s| {
-        let words = listed_words(s).map(|w| w.join(" "));
-        format!("$({})", words.as_deref().unwrap_or("…"))
-    })
+    rendered(w, subst_text)
+}
+
+/// A substitution as arithmetic reads it: `$(…)`, holding its command when that is on
+/// `DIGIT_COMMANDS`.
+fn subst_text(s: &Script) -> String {
+    let words = listed_words(s).map(|w| w.join(" "));
+    format!("$({})", words.as_deref().unwrap_or("…"))
 }
 
 fn rendered(w: &Word, subst: impl Fn(&Script) -> String) -> String {
