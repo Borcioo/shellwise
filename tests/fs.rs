@@ -7174,6 +7174,49 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             rmrf("/c/w/repo/t/j/x"),
             mbc.clone(),
         ),
+        // ---- an alias defined through an alias call, then called (the table's fixed point).
+        (
+            "LF18 pwsh Set-Alias sa Set-Alias; sa mk New-Item; mk t\\j …",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["sa", "Set-Alias"])),
+                st(lits("sa", &["mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LB5 Git Bash alias defalias=alias; defalias mk='ln -s /c/x'; mk t/j",
+            gb,
+            vec![
+                st(lits("alias", &["defalias=alias"])),
+                st(lits("defalias", &["mk=ln -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU9 Git Bash alias mk='true;ln -s /c/x'; mk t/j (an operator)",
+            gb,
+            vec![
+                st(lits("alias", &["mk=true;ln -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
+        (
+            "LU10 Git Bash alias mk='$L -s /c/x'; mk t/j (a variable)",
+            gb,
+            vec![
+                st(lits("alias", &["mk=$L -s /c/x"])),
+                st(lits("mk", &["/c/w/repo/t/j"])),
+            ],
+            rmrf("/c/w/repo/t/j/x"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
