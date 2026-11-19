@@ -589,6 +589,16 @@ fn check_fails_closed_when_the_config_load_breaks() {
         assert_eq!(r.code, 0, "{mode}: {}", r.stdout);
         assert!(r.stderr.contains("config"), "{mode}: {}", r.stderr);
     }
+    // Input over the hard cap is danger unread, on this path too.
+    let big = vec![b'a'; 2 * 1024 * 1024];
+    let r = common::run(
+        &["check", "--shell", "pwsh", "--json"],
+        Some(&big),
+        &[("SHELLWISE_TESTHOOK", "config-panic")],
+    );
+    assert_eq!(r.code, 2, "{}", r.stdout);
+    let message = r.json()["findings"][0]["message"].to_string();
+    assert!(message.contains("could not be read"), "{message}");
 }
 
 /// Linux: `$XDG_CONFIG_HOME` when it is absolute, else `~/.config`.

@@ -56,3 +56,20 @@ fn text_form_names_the_level() {
     assert_eq!(r.code, 0);
     assert_eq!(r.stdout, "ok\n");
 }
+
+#[test]
+fn text_form_prints_the_fix_line() {
+    let r = run(&["check", "--shell", "bash"], Some(b"echo 'abc"), &[]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{}", r.stdout);
+    assert!(
+        lines[0].starts_with("break parse-error [5..9]: "),
+        "{}",
+        r.stdout
+    );
+    assert_eq!(
+        lines[1],
+        "  Fix: close the ' opened at column 6, or write the text to a file and pass the file"
+    );
+}

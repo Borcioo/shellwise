@@ -165,6 +165,36 @@ fix = "close the ` opened at column 6"
 oracle = "refuses"
 
 [[row]]
+id = "bash-unclosed-inside-a-quoted-substitution"
+os = "any"
+shell = "bash"
+command = "echo \"$(echo ')\""
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 14"
+oracle = "refuses"
+
+[[row]]
+id = "bash-unclosed-inside-a-substitution"
+os = "any"
+shell = "bash"
+command = "echo $(echo \"a)"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 13'
+oracle = "refuses"
+
+[[row]]
+id = "bash-unclosed-inside-an-assigned-substitution"
+os = "any"
+shell = "bash"
+command = "x=$(echo 'a)"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 10"
+oracle = "refuses"
+
+[[row]]
 id = "bash-unterminated-heredoc-is-warn"
 os = "any"
 shell = "bash"
