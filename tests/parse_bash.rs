@@ -1,0 +1,1952 @@
+//! Bash lowering: the shapes the rules rely on, comments, heredocs, errors, nesting and the gap table.
+
+mod bash_util;
+
+use bash_util::{command_shape, commands, names};
+use shellwise::BashProfile;
+use shellwise::ir::{ChainOp, EnvView, MAX_NESTING, Quote, Redirect, Script, Stmt, WordPart};
+use shellwise::parse::QuoteKind;
+use shellwise::parse::bash::parse;
+
+fn ok(src: &str) -> Script {
+    parse(src, BashProfile::GitBash).unwrap_or_else(|e| panic!("{src:?}: {e:?}"))
+}
+
+fn env() -> EnvView {
+    EnvView::new()
+}
+
+#[test]
+fn quoted_variable_target_is_dynamic() {
+    let s = ok(r#"rm -rf "$d"/x"#);
+    let c = commands(&s);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].canonical.as_deref(), Some("rm"));
+    assert_eq!(c[0].args[0].static_value(&env()).as_deref(), Some("-rf"));
+    let target = &c[0].args[1];
+    assert!(target.is_dynamic());
+    assert_eq!(target.static_value(&env()), None);
+    assert_eq!(target.quote, Quote::Mixed);
+    let mut e = env();
+    e.set("d", "/tmp");
+    assert_eq!(target.static_value(&e).as_deref(), Some("/tmp/x"));
+}
+
+#[test]
+fn and_list_is_two_commands_joined_by_and() {
+    let s = ok("cd /x && git checkout -- f");
+    assert_eq!(s.stmts.len(), 2);
+    match &s.stmts[0] {
+        Stmt::Pipeline(p) => assert_eq!(p.chain, Some(ChainOp::And)),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(names(&s), ["cd", "git"]);
+    let s = ok("a || b; c & d");
+    let chains: Vec<_> = s
+        .stmts
+        .iter()
+        .map(|st| match st {
+            Stmt::Pipeline(p) => p.chain,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        chains,
+        [
+            Some(ChainOp::Or),
+            Some(ChainOp::Seq),
+            Some(ChainOp::Background),
+            None
+        ]
+    );
+}
+
+#[test]
+fn every_statement_keeps_the_operator_before_it() {
+    use ChainOp::{And, Background, Or, Seq};
+    let cases: &[(&str, &[Option<ChainOp>])] = &[
+        (
+            "[[ -d y ]] || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        (
+            "( true ) || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        (
+            "{ true; } || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        (
+            "if true; then :; fi || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+        ("for f in a; do :; done && rm x", &[None, Some(And)]),
+        ("a; b & c", &[None, Some(Seq), Some(Background)]),
+        ("a\nb", &[None, Some(Seq)]),
+        // The word-list substitution and the loop are one statement of the chain.
+        (
+            "true || for f in $(ls); do :; done",
+            &[None, Some(Or), Some(Or)],
+        ),
+        (
+            "(( x )) || cd /tmp/x && rm -rf .",
+            &[None, Some(Or), Some(And)],
+        ),
+    ];
+    for (src, want) in cases {
+        let s = ok(src);
+        let got: Vec<_> = (0..s.stmts.len()).map(|i| s.join(i)).collect();
+        assert_eq!(got, *want, "{src}");
+    }
+    // Every pipeline followed by `&&`/`||` carries that operator, in every nested list too.
+    let mut bad = Vec::new();
+    for src in [
+        "(( x )) || cd /tmp/x && rm -rf .",
+        "[[ -d y ]] && cd /tmp/x || rm -rf .",
+        "echo $( (( x )) || cd /tmp/x && rm -rf . )",
+        "cat <<EOF\n$( (( x )) && rm -rf . )\nEOF",
+        "if (( x )) || cd /tmp/x; then rm -rf .; fi",
+        "f() { (( x )) && rm -rf .; }",
+        "while (( x )) && cd y; do rm -rf .; done",
+    ] {
+        chains_agree(&ok(src), src, &mut bad);
+    }
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+    let chains: Vec<_> = [
+        "[[ -d y ]] || cd x",
+        "(( x )) || cd x",
+        "(( x )) > f || cd x",
+    ]
+    .iter()
+    .map(|src| match &ok(src).stmts[0] {
+        Stmt::Pipeline(p) => p.chain,
+        other => panic!("{src}: {other:?}"),
+    })
+    .collect();
+    assert_eq!(chains, [Some(Or); 3], "each keeps its pipeline chain");
+    let s = ok("while cd x; do rm -rf .; done");
+    match &s.stmts[..] {
+        [Stmt::Loop { body, .. }] => assert_eq!(body.join(1), Some(Seq), "body after condition"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Each pipeline whose next statement is joined by `&&` or `||` has that operator as its chain,
+/// in `s` and in every list nested in it.
+fn chains_agree(s: &Script, src: &str, bad: &mut Vec<String>) {
+    for (i, st) in s.stmts.iter().enumerate() {
+        let next = s.join(i + 1);
+        if let Stmt::Pipeline(p) = st
+            && matches!(next, Some(ChainOp::And | ChainOp::Or))
+            && p.chain != next
+        {
+            bad.push(format!(
+                "{src}: statement {i} chain {:?}, next {next:?}",
+                p.chain
+            ));
+        }
+        match st {
+            Stmt::Pipeline(p) => {
+                for e in &p.elems {
+                    let words: Vec<&shellwise::ir::Word> = match e {
+                        shellwise::ir::Elem::Cmd(c) => c
+                            .args
+                            .iter()
+                            .chain(c.redirects.iter().map(|r| match r {
+                                Redirect::File { target, .. } => target,
+                                Redirect::Heredoc { body, .. } => body,
+                            }))
+                            .collect(),
+                        shellwise::ir::Elem::Expr(w) => vec![w],
+                        shellwise::ir::Elem::Method(_) => Vec::new(),
+                    };
+                    for w in words {
+                        for part in &w.parts {
+                            if let WordPart::Subst(inner) = part {
+                                chains_agree(inner, src, bad);
+                            }
+                        }
+                    }
+                }
+            }
+            Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
+                chains_agree(body, src, bad)
+            }
+            Stmt::Cond { branches, .. } => branches.iter().for_each(|b| chains_agree(b, src, bad)),
+        }
+    }
+}
+
+#[test]
+fn loops_mark_their_commands() {
+    for src in [
+        "for w in a b; do rm \"$w\"; done",
+        "while read -r w; do rm \"$w\"; done",
+        "until false; do rm x; done",
+        "for ((i=0; i<3; i++)); do rm x; done",
+    ] {
+        let s = ok(src);
+        // `for (( … ))` puts its header first, as a `((` command.
+        let body = match &s.stmts[..] {
+            [Stmt::Loop { body, .. }] | [_, Stmt::Loop { body, .. }] => body,
+            other => panic!("{src}: {other:?}"),
+        };
+        let inner = commands(body);
+        assert!(
+            inner.iter().any(|c| c.canonical.as_deref() == Some("rm")),
+            "{src}"
+        );
+        assert!(inner.iter().all(|c| c.in_loop), "{src}");
+    }
+    assert!(commands(&ok("rm x")).iter().all(|c| !c.in_loop));
+    // The `for (( … ))` header runs before its loop: `;` joins them.
+    match &ok("true || for ((i=0; i<3; i++)); do rm x; done").stmts[..] {
+        [_, Stmt::Pipeline(header), Stmt::Loop { .. }] => {
+            assert_eq!(header.chain, Some(ChainOp::Seq))
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn loop_word_list_substitution_is_visible() {
+    let s = ok("for f in $(git ls-files); do rm \"$f\"; done");
+    assert_eq!(names(&s), ["git", "rm"]);
+}
+
+#[test]
+fn process_substitution_holds_its_command() {
+    for src in ["cat <(git status)", "diff <(git show a) <(git show b)"] {
+        let s = ok(src);
+        assert_eq!(names(&s)[0], src.split(' ').next().unwrap(), "{src}");
+        assert!(names(&s)[1..].iter().all(|n| n == "git"), "{src}");
+        assert!(names(&s).len() >= 2, "{src}");
+    }
+    assert_eq!(names(&ok("tee >(git apply) < f")), ["tee", "git"]);
+    assert_eq!(
+        names(&ok("while read l; do rm \"$l\"; done < <(git ls-files)")),
+        ["git", "read", "rm"]
+    );
+}
+
+#[test]
+fn assignment_substitution_holds_its_command() {
+    let s = ok("x=$(git rev-parse HEAD)");
+    let c = commands(&s);
+    assert_eq!(c[0].name.parts, vec![]);
+    assert_eq!(c[0].assigns.len(), 1);
+    assert_eq!(c[0].assigns[0].0, "x");
+    match &c[0].assigns[0].1.parts[..] {
+        [WordPart::Subst(inner)] => assert_eq!(names(inner), ["git"]),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(names(&s), ["<none>", "git"]);
+    assert_eq!(names(&ok("X=1 git status")), ["git"]);
+    let s = ok("export D=/tmp/x; rm -rf \"$D\"");
+    let assigned: Vec<_> = commands(&s)[0]
+        .assigns
+        .iter()
+        .map(|(n, w)| (n.as_str(), w.static_value(&env())))
+        .collect();
+    assert_eq!(
+        assigned,
+        [("D", Some("/tmp/x".to_string()))],
+        "a declaration builtin assigns"
+    );
+    assert_eq!(
+        names(&ok("export X=$(git rev-parse HEAD)")),
+        ["export", "git"]
+    );
+}
+
+#[test]
+fn dynamic_execution_is_opaque_and_xargs_shows_its_command() {
+    for src in [
+        r#"eval "$c""#,
+        "$cmd -rf x",
+        "\"$(which rm)\" x",
+        "${RM:-rm} x",
+        "r? -rf x",
+        "~ x",
+        r#"builtin eval "$c""#,
+        r#"command eval "$c""#,
+        r#"exec eval "$c""#,
+        r#"command -p eval "$c""#,
+        r#"exec -a name eval "$c""#,
+        r#"builtin source "$f""#,
+        r#"command . "$f""#,
+        r#"exec source "$f""#,
+    ] {
+        let c = commands(&ok(src))[0].clone();
+        assert!(c.opaque, "{src}");
+    }
+    for src in [
+        "builtin eval 'echo hi'",
+        r#"command ls "$d""#,
+        "exec git status",
+    ] {
+        let c = commands(&ok(src))[0].clone();
+        assert!(!c.opaque, "{src}");
+    }
+    let c = commands(&ok("eval 'echo hi'"))[0].clone();
+    assert!(!c.opaque, "static eval text is a nested script, not opaque");
+    let c = commands(&ok("find . -name x | xargs rm -rf"))[1].clone();
+    assert_eq!(c.canonical.as_deref(), Some("xargs"));
+    assert!(!c.opaque);
+    assert_eq!(c.args[0].static_value(&env()).as_deref(), Some("rm"));
+}
+
+#[test]
+fn unterminated_quotes_name_the_quote() {
+    let cases = [
+        ("echo 'abc", Some(QuoteKind::Single)),
+        ("echo $'abc", Some(QuoteKind::Single)),
+        ("echo \"abc", Some(QuoteKind::Double)),
+        ("echo `abc", Some(QuoteKind::Backtick)),
+        ("echo $(abc", None),
+        ("if true; then", None),
+    ];
+    for (src, want) in cases {
+        let e = parse(src, BashProfile::Posix).expect_err(src);
+        assert_eq!(e.unclosed, want, "{src}: {e:?}");
+        assert!(e.span.end <= src.len(), "{src}: {e:?}");
+    }
+}
+
+#[test]
+fn heredoc_body_expands_only_with_an_unquoted_delimiter() {
+    let s = ok("cat <<EOF\nhi $(rm -rf x)\nEOF");
+    let c = commands(&s);
+    match &c[0].redirects[..] {
+        [Redirect::Heredoc { body, expands, .. }] => {
+            assert!(expands);
+            assert!(body.parts.iter().any(|p| matches!(p, WordPart::Subst(_))));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(names(&s), ["cat", "rm"]);
+    for src in [
+        "cat <<'EOF'\nhi $(rm -rf x)\nEOF",
+        "cat <<\"EOF\"\n$(rm x)\nEOF",
+        "cat <<\\EOF\n`rm x`\nEOF",
+    ] {
+        let s = ok(src);
+        match &commands(&s)[0].redirects[..] {
+            [Redirect::Heredoc { body, expands, .. }] => {
+                assert!(!expands, "{src}");
+                assert!(!body.is_dynamic(), "{src}");
+            }
+            other => panic!("{src}: {other:?}"),
+        }
+        assert_eq!(names(&s), ["cat"], "{src}");
+    }
+    let s = ok("cat <<-EOF > f && rm y\n\t$(git status)\n\tEOF\n");
+    assert_eq!(names(&s), ["cat", "git", "rm"]);
+}
+
+#[test]
+fn hidden_commands_inside_words_are_found() {
+    let cases: &[(&str, &[&str])] = &[
+        ("echo ${x:-$(git status)}", &["echo", "git"]),
+        ("echo \"${x/$(rm -rf a)/b}\"", &["echo", "rm"]),
+        ("echo `git status`", &["echo", "git"]),
+        ("echo \"a `rm x` b\"", &["echo", "rm"]),
+        ("echo $((1 + $(rm x)))", &["echo", "rm"]),
+        ("[[ -n $(rm x) ]]", &["[[", "rm"]),
+        ("(( $(rm x) ))", &["((", "rm"]),
+        // A substitution the taint scan skips is still lowered, wherever the parser ends it.
+        ("(( $(rm -rf /tmp/x) + 1 ))", &["((", "rm"]),
+        ("(( $(rm -rf /tmp/x <<< a) + 1 ))", &["((", "rm"]),
+        ("(( $(\nrm -rf /tmp/x\n) + 1 ))", &["((", "rm"]),
+        (
+            "t=1; echo $(( $(rm -rf /tmp/x) - t ))",
+            &["<none>", "echo", "rm"],
+        ),
+        ("(( x )) > $(rm x)", &["((", "rm"]),
+        ("case $(git branch) in main) rm x;; esac", &["git", "rm"]),
+        (
+            "echo $(echo $(echo $(git status)))",
+            &["echo", "echo", "echo", "git"],
+        ),
+        ("f() { rm -rf x; }; f", &["rm", "f"]),
+        ("{ git status; } > >(rm x)", &["rm", "git"]),
+    ];
+    for (src, want) in cases {
+        assert_eq!(names(&ok(src)), *want, "{src}");
+    }
+    // The parser cannot end a `case` pattern inside `$(…)` in arithmetic: an error, which fails
+    // closed, never a script without the command.
+    for src in [
+        "(( $(case x in a) rm -rf /tmp/x;; esac) + 1 ))",
+        "x=1; (( $(case a in a) : ;; esac) + x ))",
+    ] {
+        assert!(parse(src, BashProfile::GitBash).is_err(), "{src}");
+    }
+}
+
+/// Each row checked in Git Bash 5.2 with a canary file: a "runs" row created it, a "no" row did not.
+#[test]
+fn subscripts_bash_evaluates_run_their_substitutions() {
+    let runs: &[(&str, &[&str])] = &[
+        ("let 'a[$(rm -rf x)]'", &["let", "rm"]),
+        ("builtin let 'a[$(rm -rf x)]'", &["builtin", "rm"]),
+        ("printf -v 'a[$(rm -rf x)]' %s 1", &["printf", "rm"]),
+        ("printf -v'a[$(rm -rf x)]' x", &["printf", "rm"]),
+        ("read 'a[$(rm -rf x)]' < f", &["read", "rm"]),
+        ("read -r 'a[$(rm -rf x)]' < f", &["read", "rm"]),
+        ("test -v 'a[$(rm -rf x)]'", &["test", "rm"]),
+        ("[ -v 'a[$(rm -rf x)]' ]", &["[", "rm"]),
+        ("[[ -v 'a[$(rm -rf x)]' ]]", &["[[", "rm"]),
+        ("[[ 1 -eq 'a[$(rm -rf x)]' ]]", &["[[", "rm"]),
+        ("[[ 'a[$(rm -rf x)]' -lt 1 ]]", &["[[", "rm"]),
+        ("x['$(rm -rf x)']=1", &["<none>", "rm"]),
+        ("declare 'a[$(rm -rf x)]=1'", &["declare", "rm"]),
+        ("typeset 'a[`rm -rf x`]=1'", &["typeset", "rm"]),
+        ("f() { local 'a[$(rm -rf x)]=1'; }", &["local", "rm"]),
+        // `unset` of an indexed array element (bash runs nothing when `a` is no array: lowered
+        // anyway, on the safe side).
+        (
+            "a=(1 2); unset 'a[$(rm -rf x)]'",
+            &["<none>", "unset", "rm"],
+        ),
+        // A nameref's target is a name: its subscript runs where `$r` expands.
+        (
+            "declare -n r='a[$(rm -rf x)]'; a=(1 2); echo \"$r\"",
+            &["declare", "rm", "<none>", "echo"],
+        ),
+        // Parameter offsets and lengths are arithmetic.
+        (
+            "s=abc; echo ${s:0:'a[$(rm -rf x)]'}",
+            &["<none>", "echo", "rm"],
+        ),
+        (
+            "s=abc; echo ${s:'a[$(rm -rf x)]'}",
+            &["<none>", "echo", "rm"],
+        ),
+        (
+            "s=abc; echo ${s:'a[$(rm -rf x)]':1}",
+            &["<none>", "echo", "rm"],
+        ),
+        // A subscript ends at its own `]`, not at one inside quotes or a substitution.
+        ("let 'a[\"]\"+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[$(echo \"]\")+$(rm -rf x)]'", &["let", "echo", "rm"]),
+        ("let 'a[b[1]+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[$(echo ])+$(rm -rf x)]'", &["let", "echo", "rm"]),
+        ("let 'a[${y:-]}+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[\\]+$(rm -rf x)]'", &["let", "rm"]),
+        ("let 'a[\"\\\"]\"+$(rm -rf x)]'", &["let", "rm"]),
+        // The value assigned to an integer name is arithmetic.
+        (
+            "declare -i n; n='a[$(rm -rf x)]'",
+            &["declare", "<none>", "rm"],
+        ),
+        // bash refuses an unclosed subscript; it is read to the end, on the safe side.
+        ("let 'a[$(rm -rf x)'", &["let", "rm"]),
+        // A nameref declared by `local` or `typeset`: its target's subscript runs.
+        (
+            "f() { local -n r='a[$(rm -rf x)]'; echo \"$r\"; }; a=(1 2); f",
+            &["local", "rm", "echo", "<none>", "f"],
+        ),
+        (
+            "a=(1 2); typeset -n r='a[$(rm -rf x)]'; echo \"$r\"",
+            &["<none>", "typeset", "rm", "echo"],
+        ),
+        // A write through a nameref to an integer name is arithmetic.
+        (
+            "declare -i n; declare -n r=n; r='a[$(rm -rf x)]'",
+            &["declare", "declare", "<none>", "rm"],
+        ),
+        // Before the command word, after a `{NAME}>f`, an assignment is bash's.
+        (
+            "declare -i n; {x}>f n='a[$(>y)]'",
+            &["declare", "<none>", "<none>"],
+        ),
+        // `wait -p NAME` assigns NAME.
+        (
+            "sleep 0 & wait -n -p 'a[$(>y)]'",
+            &["sleep", "wait", "<none>"],
+        ),
+        (
+            "sleep 0 & wait -n -p'a[$(>y)]'",
+            &["sleep", "wait", "<none>"],
+        ),
+        (
+            "declare -a a; sleep 0 & wait -n -p 'a[$(>y)]'",
+            &["declare", "sleep", "wait", "<none>"],
+        ),
+    ];
+    let no: &[(&str, &[&str])] = &[
+        ("a=(1); let 'a[\"[\"]+$(rm -rf x)'", &["<none>", "let"]),
+        ("export 'a[$(rm -rf x)]'=1", &["export"]),
+        ("let '$(rm -rf x)'", &["let"]),
+        ("echo 'a[$(rm -rf x)]'", &["echo"]),
+        ("[[ -n 'a[$(rm -rf x)]' ]]", &["[["]),
+    ];
+    // Every failing row is listed, not only the first.
+    let bad: Vec<String> = runs
+        .iter()
+        .chain(no)
+        .filter_map(|(src, want)| {
+            let got = parse(src, BashProfile::GitBash).map(|s| names(&s));
+            let pass = got.as_ref().is_ok_and(|g| g == want);
+            (!pass).then(|| format!("{src}: {got:?}"))
+        })
+        .collect();
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+}
+
+#[test]
+fn arithmetic_on_a_variable_holding_a_substitution_is_opaque() {
+    let set = "x='a[$(rm -rf y)]'; ";
+    for (cmd, name) in [
+        ("(( x ))", "(("),
+        ("(( $x ))", "(("),
+        ("echo $(( x + 1 ))", "echo"),
+        ("let x", "let"),
+        ("[[ x -eq 1 ]]", "[["),
+        ("echo \"${!x}\"", "echo"),
+    ] {
+        let src = format!("{set}{cmd}");
+        let s = ok(&src);
+        let c = commands(&s);
+        let c = c.iter().find(|c| bash_util::name_of(c) == name).unwrap();
+        assert!(c.opaque, "{src}");
+    }
+    // `declare -n r='a[$(…)]'`: the operand's subscript is lowered like `declare 'a[…]=1'`.
+    assert_eq!(
+        names(&ok("declare -n r='a[$(rm -rf y)]'; echo $r")),
+        ["declare", "rm", "echo"]
+    );
+    for src in [
+        "x='a[$(rm -rf y)]'; echo x",
+        "y=1; (( y ))",
+        "x=1; (( x ))",
+        "declare n; n='a[$(rm -rf y)]'",
+        "y=1; echo \"${!y}\"",
+    ] {
+        let s = ok(src);
+        assert!(commands(&s).iter().all(|c| !c.opaque), "{src}");
+    }
+}
+
+/// A name is tainted when a static value assigned to it holds `$(…)` or a backtick inside `[…]`,
+/// or names a tainted name; every arithmetic context that reads one is opaque. Each row checked in
+/// Git Bash 5.2 with a canary file.
+#[test]
+fn arithmetic_reading_a_tainted_name_is_opaque() {
+    let x = "x='a[$(rm -rf y)]'; ";
+    // (row, the command that must be opaque: the last one with this name)
+    let runs: &[(String, &str)] = &[
+        // integer assignment
+        (format!("{x}declare -i n; n=x"), "<none>"),
+        (format!("{x}declare -i n; n+=x"), "<none>"),
+        (format!("{x}declare -i n=x"), "declare"),
+        (format!("{x}typeset -i n=x"), "typeset"),
+        (format!("f() {{ {x}local -i n=x; }}"), "local"),
+        (format!("{x}declare -i n; n=\"$x\""), "<none>"),
+        // copies
+        (format!("{x}y=x; (( y ))"), "(("),
+        (format!("{x}y=x+1; (( y ))"), "(("),
+        (format!("{x}y=$x; (( y ))"), "(("),
+        (format!("{x}y=\"$x\"; (( y ))"), "(("),
+        (format!("{x}declare -n r=x; (( r ))"), "(("),
+        (format!("{x}b=(x); (( b ))"), "(("),
+        // order does not matter: bash evaluates the copy when it reads it
+        ("y=x; x='a[$(rm -rf y)]'; (( y ))".to_string(), "(("),
+        (
+            "f() { (( y )); }; y=x; x='a[$(rm -rf y)]'; f".to_string(),
+            "((",
+        ),
+        // declaration builtins, quoted operands, arrays, loop variables, positionals
+        ("declare x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("typeset x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("export x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("readonly x='a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        (
+            "f() { local x='a[$(rm -rf y)]'; (( x )); }".to_string(),
+            "((",
+        ),
+        ("declare 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("a=('a[$(rm -rf y)]'); (( a ))".to_string(), "(("),
+        ("a=(1 'a[$(rm -rf y)]'); (( a[1] ))".to_string(), "(("),
+        ("a[1]='a[$(rm -rf y)]'; (( a[1] ))".to_string(), "(("),
+        ("a=([2]='a[$(rm -rf y)]'); (( a[2] ))".to_string(), "(("),
+        (
+            "for v in 'a[$(rm -rf y)]'; do (( v )); done".to_string(),
+            "((",
+        ),
+        (
+            "set -- 'a[$(rm -rf y)]'; declare -i n; n=\"$1\"".to_string(),
+            "<none>",
+        ),
+        (
+            "f() { declare -i n; n=\"$1\"; }; f 'a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        // arithmetic contexts
+        (format!("{x}let n=x"), "let"),
+        (format!("{x}echo ${{a[x]}}"), "echo"),
+        (format!("{x}echo ${{#a[x]}}"), "echo"),
+        (format!("{x}echo ${{a[x]:-d}}"), "echo"),
+        (format!("{x}echo ${{!a[x]}}"), "echo"),
+        (format!("{x}echo ${{a[x]#1}}"), "echo"),
+        (format!("{x}s=abc; echo ${{s:x}}"), "echo"),
+        (format!("{x}s=abc; echo ${{s:0:x}}"), "echo"),
+        (format!("{x}a[x]=1"), "<none>"),
+        (format!("{x}printf -v 'a[x]' %s 1"), "printf"),
+        (format!("{x}read 'a[x]' <<< 1"), "read"),
+        (format!("{x}test -v 'a[x]'"), "test"),
+        (format!("{x}[[ -v a[x] ]]"), "[["),
+        (format!("{x}declare 'a[x]=1'"), "declare"),
+        (format!("{x}for (( i = x; i < 0; i++ )); do :; done"), "(("),
+        (format!("{x}while (( x )); do break; done"), "(("),
+        (format!("{x}(( x )) || true"), "(("),
+        (format!("{x}a=([x]=1)"), "<none>"),
+        (format!("{x}declare 'n+=x'; (( n ))"), "(("),
+        ("export 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        ("readonly 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        (
+            "f() { declare -i n; n=\"$*\"; }; f 'a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "f() { declare -i n; n=\"$@\"; }; f 'a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        // Fragments joined into a subscript: by expansion, by `+=`, or with a value bash reads at
+        // run time.
+        (
+            "a='a['; b='$(rm -rf y)]'; n=$a$b; (( n ))".to_string(),
+            "((",
+        ),
+        ("n='a['; n+='$(rm -rf y)]'; (( n ))".to_string(), "(("),
+        ("read b < f; a='a['; n=$a$b; (( n ))".to_string(), "(("),
+        ("read b < f; n='a['; n+=$b; (( n ))".to_string(), "(("),
+        (
+            "read b < f; c=$b; a='a['; n=$a$c; (( n ))".to_string(),
+            "((",
+        ),
+        ("a='a['; n=$a$(cat f); (( n ))".to_string(), "(("),
+        (
+            "read b < f; n='a['; declare \"n+=$b\"; (( n ))".to_string(),
+            "((",
+        ),
+        (
+            "declare 'a[1]=a[$(rm -rf y)]'; (( a[1] ))".to_string(),
+            "((",
+        ),
+        ("my_x='a[$(rm -rf y)]'; (( my_x ))".to_string(), "(("),
+        // One row per automated note on the earlier rule: static fragments, a function name as
+        // typed (case, a path), a self-reference, a literal around one run-time expansion.
+        (
+            "a='a[$'; b='(rm -rf y)]'; n=$a$b; (( n ))".to_string(),
+            "((",
+        ),
+        (format!("{x}RM() {{ (( $1 )); }}; RM \"$x\""), "(("),
+        (format!("{x}my/f() {{ (( $1 )); }}; my/f \"$x\""), "(("),
+        ("n='a[$'; n=$n'(rm -rf y)]'; (( n ))".to_string(), "(("),
+        ("read b < f; n=\"a[$b\"; (( n ))".to_string(), "(("),
+        // A name the script never assigns comes from the environment.
+        ("(( x ))".to_string(), "(("),
+        // An expansion with an operator, a local copy of a tainted parameter, a call through a
+        // variable, `set` options before `--`, a nested `$((…))`.
+        (format!("{x}n=${{x:-1}}; (( n ))"), "(("),
+        (format!("{x}f() {{ local n=$1; (( n )); }}; f \"$x\""), "(("),
+        (format!("{x}g() {{ (( $1 )); }}; c=g; $c \"$x\""), "(("),
+        ("set -- '-a[$(rm -rf y)]'; (( $1 ))".to_string(), "(("),
+        (format!("{x}(( $((x)) ))"), "(("),
+        // A later tainted value spoils an earlier clean one: an array, a loop variable, a
+        // quoted `export`/`readonly` operand, a quoted `declare -i` operand.
+        ("a=0; a=('a[$(rm -rf y)]'); (( a ))".to_string(), "(("),
+        (
+            "v=0; for v in 'a[$(rm -rf y)]'; do (( v )); done".to_string(),
+            "((",
+        ),
+        ("x=0; export 'x=a[$(rm -rf y)]'; (( x ))".to_string(), "(("),
+        (
+            "x=0; readonly 'x=a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (format!("{x}declare -i 'n=x'"), "declare"),
+        // Every way a value reaches an integer name evaluates it: a loop variable, an array,
+        // `printf -v`, `read`, a quoted operand, a copy; the shell's own integer names too.
+        (
+            "declare -i n; for n in 'a[$(rm -rf y)]'; do :; done".to_string(),
+            "((",
+        ),
+        ("declare -i n; n=('a[$(rm -rf y)]')".to_string(), "<none>"),
+        (
+            "declare -i n; printf -v n %s 'a[$(rm -rf y)]'".to_string(),
+            "printf",
+        ),
+        (
+            "declare -i n; read n <<< 'a[$(rm -rf y)]'".to_string(),
+            "read",
+        ),
+        (
+            "declare -i n; export 'n=a[$(rm -rf y)]'".to_string(),
+            "export",
+        ),
+        (format!("{x}declare -i n; for n in x; do :; done"), "(("),
+        ("OPTIND='a[$(rm -rf y)]'".to_string(), "<none>"),
+        ("RANDOM='a[$(rm -rf y)]'".to_string(), "<none>"),
+        ("SRANDOM='a[$(rm -rf y)]'".to_string(), "<none>"),
+        ("HISTCMD='a[$(rm -rf y)]'".to_string(), "<none>"),
+        // An integer shell variable the script assigns is as clean as its values.
+        (
+            "unset RANDOM; RANDOM='a[$(rm -rf y)]'; (( RANDOM ))".to_string(),
+            "((",
+        ),
+        (
+            "unset RANDOM; RANDOM='a[$(rm -rf y)]'; n=$RANDOM; (( n ))".to_string(),
+            "((",
+        ),
+        // Text the shell keeps from the script itself, and the default targets of `read` and
+        // `mapfile`; the obsolete `$[…]`.
+        (": 'a[$(rm -rf y)]'; n=$_; (( n ))".to_string(), "(("),
+        (
+            "[[ 'a[$(rm -rf y)]' =~ .* ]]; n=$BASH_REMATCH; (( n ))".to_string(),
+            "((",
+        ),
+        // By rule (script text or arguments): bash runs nothing in these shapes.
+        ("n=$BASH_COMMAND; (( n ))".to_string(), "(("),
+        ("n=$BASH_ARGV; (( n ))".to_string(), "(("),
+        ("n=$BASH_EXECUTION_STRING; (( n ))".to_string(), "(("),
+        // The shell overwrites these with text also when the script assigns them an integer,
+        // read directly or through a copy.
+        ("_=0; : 'a[$(rm -rf y)]'; (( _ ))".to_string(), "(("),
+        ("_=0; : 'a[$(rm -rf y)]'; n=$_; (( n ))".to_string(), "(("),
+        (
+            "BASH_REMATCH=0; [[ 'a[$(rm -rf y)]' =~ .* ]]; (( BASH_REMATCH ))".to_string(),
+            "((",
+        ),
+        (
+            "BASH_REMATCH=0; [[ 'a[$(rm -rf y)]' =~ .* ]]; n=$BASH_REMATCH; (( n ))".to_string(),
+            "((",
+        ),
+        (
+            "OPTARG=0; set -- -x 'a[$(rm -rf y)]'; getopts x: o; (( OPTARG ))".to_string(),
+            "((",
+        ),
+        // By rule, as above.
+        ("BASH_COMMAND=0; n=$BASH_COMMAND; (( n ))".to_string(), "(("),
+        ("BASH_ARGV=0; n=$BASH_ARGV; (( n ))".to_string(), "(("),
+        (
+            "BASH_EXECUTION_STRING=0; n=$BASH_EXECUTION_STRING; (( n ))".to_string(),
+            "((",
+        ),
+        ("REPLY=0; read < f; (( REPLY ))".to_string(), "(("),
+        ("MAPFILE=0; mapfile < f; (( MAPFILE ))".to_string(), "(("),
+        (format!("{x}echo $[x]"), "echo"),
+        // `+=` joins two clean names into the name of a tainted one.
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; n=a; n+=b; (( n ))".to_string(),
+            "((",
+        ),
+        // Names that get a value at run time, also when the script assigns them an integer.
+        ("n=0; read n < f; (( n ))".to_string(), "(("),
+        ("n=0; read -r n < f; (( n ))".to_string(), "(("),
+        ("n=0; read -p p n < f; (( n ))".to_string(), "(("),
+        ("a=0; mapfile -t a < f; (( a ))".to_string(), "(("),
+        ("a=0; readarray -t a < f; (( a ))".to_string(), "(("),
+        ("n=0; printf -v n %s 1; (( n ))".to_string(), "(("),
+        ("n=0; printf -vn %s 1; (( n ))".to_string(), "(("),
+        // bash runs nothing in these, but the value is not on the allow-list: a split read, a
+        // `getopts` letter, a glob, a name only compared, a target that is not static.
+        ("a=0; read -ra a < f; (( a ))".to_string(), "(("),
+        ("o=0; getopts ab o; (( o ))".to_string(), "(("),
+        ("n=*; (( n ))".to_string(), "(("),
+        ("(( n == 1 )); (( n ))".to_string(), "(("),
+        ("z=1; v=n; declare \"$v=1\"; (( z ))".to_string(), "(("),
+        ("z=1; read \"$v\" < f; (( z ))".to_string(), "(("),
+        // The target may be an integer name: the read evaluates what it reads.
+        ("read \"$v\" <<< 1".to_string(), "read"),
+        // A copy of a name the script never assigns, also into an integer name; a declaration
+        // whose target is not static.
+        ("n=$HOME_UNSET; (( n ))".to_string(), "(("),
+        ("declare -i n; n=$y; (( n ))".to_string(), "(("),
+        ("declare -i n; n=$y".to_string(), "<none>"),
+        ("declare -i \"$k=1\"; (( a ))".to_string(), "(("),
+        ("declare -i \"$k=1\"".to_string(), "declare"),
+        ("declare \"$k=1\"".to_string(), "declare"),
+        // A function call or `set` carries a tainted argument into `$1`, `$@`.
+        (format!("{x}f() {{ (( $1 )); }}; f \"$x\""), "(("),
+        (format!("{x}set -- \"$x\"; (( $1 ))"), "(("),
+        (format!("{x}set -- \"$x\"; (( ${{1}} ))"), "(("),
+        (format!("{x}let \"n=$x\""), "let"),
+        // A name operand whose text comes from a variable: bash evaluates its subscript.
+        ("a=(1 2); unset \"$k\"".to_string(), "unset"),
+        ("a=(1 2); test -v \"$k\"".to_string(), "test"),
+        ("a=(1 2); [[ -v $k ]]".to_string(), "[["),
+        // By rule (bash refuses such a nameref name): a `local`/`typeset` nameref operand.
+        ("a=(1 2); f() { local -n \"$k\"; }; f".to_string(), "local"),
+        ("a=(1 2); typeset -n \"$k\"".to_string(), "typeset"),
+        (
+            "a=(1 2); declare -n r=\"$k\"; echo \"$r\"".to_string(),
+            "declare",
+        ),
+        ("declare -n r=\"$k\"; (( r ))".to_string(), "(("),
+        (
+            "k='a[$(rm -rf y)]'; a=(1 2); f() { local -n r=\"$k\"; echo \"$r\"; }; f".to_string(),
+            "local",
+        ),
+        (
+            "k='a[$(rm -rf y)]'; a=(1 2); typeset -n r=\"$k\"; echo \"$r\"".to_string(),
+            "typeset",
+        ),
+        (
+            "a=(1 2); set -- 'a[$(rm -rf y)]'; unset \"$1\"".to_string(),
+            "unset",
+        ),
+        // By rule: an expansion with an operator is not judged.
+        ("a=(1 2); k=0; unset \"${k:-x}\"".to_string(), "unset"),
+        // `unset` evaluates the subscript of an indexed array.
+        (format!("a=(1 2); {x}unset 'a[x]'"), "unset"),
+        // A prefix assignment is a value of the name too.
+        (
+            "f() { (( x )); }; x=0; x='a[$(rm -rf y)]' f".to_string(),
+            "((",
+        ),
+        (
+            format!("{x}f() {{ declare -i n; n=\"$@\"; }}; f \"$x\""),
+            "<none>",
+        ),
+        // A substitution after the read does not hide it.
+        (format!("{x}echo ${{a[x]}} $(true)"), "echo"),
+        // Every parameter operator keeps the subscript arithmetic.
+        (format!("{x}echo \"${{a[x]:=d}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]=}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]:?e}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]:+d}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]##1}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]%1}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]%%1}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]@Q}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]^}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]^^}}\""), "echo"),
+        (format!("{x}echo \"${{a[x],}}\""), "echo"),
+        (format!("{x}echo \"${{a[x],,}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]/1/2}}\""), "echo"),
+        (format!("{x}echo \"${{a[x]:0}}\""), "echo"),
+        // A `$(…)` in arithmetic is skipped only when its parentheses balance and it holds no
+        // quote, backslash, `#` or backtick: a quoted or commented `(` hides no name.
+        (format!("{x}(( $(: \"(\") + x ))"), "(("),
+        (format!("{x}(( $(: '(') + x ))"), "(("),
+        (format!("{x}(( $(: \\() + x ))"), "(("),
+        (format!("{x}(( $(: # (\n) + x ))"), "(("),
+        (format!("{x}echo $(( $(: \"(\") + x ))"), "echo"),
+        (format!("{x}a=(1); echo ${{a[$(: \"(\") + x]}}"), "echo"),
+        (format!("{x}s=abc; echo ${{s:$(: \"(\") + x}}"), "echo"),
+        (format!("{x}(( $(echo \")\") + x ))"), "(("),
+        // A body the parser ends where a counter would not: a here-string, a newline, a backtick
+        // body with a quote or a `case`.
+        (format!("{x}(( $(cat <<< a) + x ))"), "(("),
+        (format!("{x}(( $(\n:\n) + x ))"), "(("),
+        (format!("{x}(( `echo '1'` + x ))"), "(("),
+        (format!("{x}(( `case a in a) echo 1;; esac` + x ))"), "(("),
+        // An expansion glued to a name forms a name at run time.
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; (( a$(echo b) ))".to_string(),
+            "((",
+        ),
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; x=a; y=b; (( $x$y ))".to_string(),
+            "((",
+        ),
+        (
+            "a=1; b=1; ab='a[$(rm -rf y)]'; x=a; (( ${x}b ))".to_string(),
+            "((",
+        ),
+        // By rule: `$-` is text.
+        (format!("{x}(( $- ))"), "(("),
+        // By rule (bash runs nothing here): an expansion the word parser leaves as text.
+        (format!("{x}(( ${{!}} ))"), "(("),
+        // Expansions other than a plain name: indirect, subscripted, with an operator.
+        (format!("{x}k=$(echo x); (( ${{!k}} ))"), "(("),
+        (format!("{x}a=(1); (( ${{a[x]}} + 1 ))"), "(("),
+        (format!("{x}(( ${{x:-1}} ))"), "(("),
+        // A subscripted expansion inside a static string bash evaluates: its subscript is read
+        // nowhere else.
+        (format!("{x}a=(1); b=(1); let 'b[${{a[x]}}]'"), "let"),
+        (format!("{x}a=(1); b=(1); unset 'b[${{a[x]}}]'"), "unset"),
+        (format!("{x}a=(1); b=(1); test -v 'b[${{a[x]}}]'"), "test"),
+        (format!("{x}a=(1); printf -v 'b[${{a[x]}}]' %s 1"), "printf"),
+        (format!("{x}a=(1); read 'b[${{a[x]}}]' <<< 1"), "read"),
+        (format!("{x}a=(1); declare 'b[${{a[x]}}]=1'"), "declare"),
+        // Writes through a nameref, or a declaration whose options are not static: any name may
+        // change, and any write may reach an integer name.
+        (
+            "x=1; declare -n r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "declare -i n; declare -n r=n; r='a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "declare -n r=RANDOM; r='a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "o=-n; x=1; declare $o r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "o=-i; declare $o n; n='a[$(rm -rf y)]'".to_string(),
+            "<none>",
+        ),
+        (
+            "o=-n; x=1; declare ''$o r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "o=n; x=1; declare -$o r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "r=x; x=1; declare -n r; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r; r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "f() { local -n r=$1; r='a[$(rm -rf y)]'; }; x=1; f x; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; typeset -n r=x; r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; read r <<< 'a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; printf -v r %s 'a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; declare r='a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x=1; declare -n r=x; mapfile r <<< 'a[$(rm -rf y)]'; (( x ))".to_string(),
+            "((",
+        ),
+        // `${x:=…}` and `${x=…}` assign a name.
+        ("x=; : ${x:='a[$(rm -rf y)]'}; (( x ))".to_string(), "(("),
+        (
+            "x=1; unset x; : ${x='a[$(rm -rf y)]'}; (( x ))".to_string(),
+            "((",
+        ),
+        ("declare -i n; : ${n:='a[$(rm -rf y)]'}".to_string(), ":"),
+        (
+            "unset SECONDS; : ${SECONDS:='a[$(rm -rf y)]'}; (( SECONDS ))".to_string(),
+            "((",
+        ),
+        ("x=; y=${x:='a[$(rm -rf y)]'}; (( x ))".to_string(), "(("),
+        (
+            "a=(1); a=(); : ${a[0]:='a[$(rm -rf y)]'}; (( a ))".to_string(),
+            "((",
+        ),
+        // A declaration operand bash refuses assigns nothing, and names no clean variable.
+        (
+            "declare 'x:-y=1' 2>/dev/null; x='a[$(rm -rf y)]'; n=${x:-y}; (( n ))".to_string(),
+            "((",
+        ),
+        (
+            "export 'x:-y=1' 2>/dev/null; x='a[$(rm -rf y)]'; n=${x:-y}; (( n ))".to_string(),
+            "((",
+        ),
+        // `read` options as getopts reads them: a target glued to `-a`, `-a` taking the next
+        // letter (a payload without a space, which `read` would split); by rule, a letter the
+        // collector does not know.
+        ("x=0; read -ax <<< 'a[$(>y)]'; (( x ))".to_string(), "(("),
+        ("r=0; read -ar x <<< 'a[$(>y)]'; (( r ))".to_string(), "(("),
+        ("z=1; read -Z x < f; (( z ))".to_string(), "(("),
+        // A static `eval` body is not lowered: any name may change in it, an integer one too.
+        (
+            "x=1; eval \"x='a[\\$(rm -rf y)]'\"; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "x='a[$(rm -rf y)]'; eval 'declare -i n'; n=x".to_string(),
+            "<none>",
+        ),
+        (
+            "c=\"x='a[\\$(rm -rf y)]'\"; x=1; eval \"$c\"; (( x ))".to_string(),
+            "((",
+        ),
+        (
+            "declare -i n; x=1; eval \"x='a[\\$(rm -rf y)]'\"; n=$x".to_string(),
+            "<none>",
+        ),
+        // An integer declared in an option cluster; a run-time target is its base name.
+        ("declare -ai n; n='a[$(rm -rf y)]'".to_string(), "<none>"),
+        (
+            "a=1; read 'a[0]' <<< 'a[$(rm -rf y)]'; (( a ))".to_string(),
+            "((",
+        ),
+        // A builtin that writes a name is read only when every word is literal text: an option
+        // word of `printf` that is not (up to the format), directly or through a wrapper, or a
+        // brace expansion, may be `-v NAME`.
+        (r#"o=-v; n=0; printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; printf "$o" n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-vn; n=0; printf $o %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o='-v n'; n=0; printf $o %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; declare -i n; printf $o n %s 'a[$(>y)]'"#.into(), "printf"),
+        (r#"o=-v; n=0; command printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; builtin printf $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"n=0; printf {-v,n} %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; m=0; printf -v m $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        (r#"o=-v; n=0; m=0; printf -vm $o n %s 'a[$(>y)]'; (( n ))"#.into(), "(("),
+        // By rule (bash refuses it): `-v` with no name.
+        ("printf -v".into(), "printf"),
+        // A declaration word that is not literal text: split, glued to a literal or a `+`, quoted,
+        // a brace expansion.
+        (r#"x=1; o='x=a[$(>y)]'; export $o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; readonly $o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; export "$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; readonly "$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o=' x=a[$(>y)]'; declare y$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o=' x=a[$(>y)]'; export y$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; declare x$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; export x$o; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; f() { local x$o; (( x )); }; f"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; declare "x$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; export "x$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='=a[$(>y)]'; readonly "x$o"; (( x ))"#.into(), "(("),
+        (r#"x=1; o='i -n'; declare +$o r=x; r='a[$(>y)]'; (( x ))"#.into(), "(("),
+        (
+            r#"x=1; o='i -n'; f() { local +$o r=x; r='a[$(>y)]'; (( x )); }; f"#.into(),
+            "((",
+        ),
+        (r#"o='x -i'; declare +$o n; n='a[$(:>y)]'"#.into(), "<none>"),
+        (r#"declare {-i,n}; n='a[$(:>y)]'"#.into(), "<none>"),
+        // `name=$v` splits unless the command word is the bare builtin: through a wrapper, or
+        // with a quoted or escaped command word.
+        (r#"y=1; o='1 y=a[$(>y)]'; command declare x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; builtin declare x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; command export x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; \declare x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; 'export' x=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; "declare" x=$o; (( y ))"#.into(), "(("),
+        // Nor when the `name=` is quoted or escaped: the word is no assignment.
+        (r#"y=1; o='1 y=a[$(>y)]'; declare "x="$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; declare 'x'=$o; (( y ))"#.into(), "(("),
+        (r#"y=1; o='1 y=a[$(>y)]'; export x\=$o; (( y ))"#.into(), "(("),
+        (r#"x=1; o='x=a[$(>y)]'; typeset $o; (( x ))"#.into(), "(("),
+        (r#"y=0; o='1 y'; mapfile -n $o <<< 'a[$(>y)]'; (( y ))"#.into(), "(("),
+        (r#"y=0; o='1 y'; readarray -n $o <<< 'a[$(>y)]'; (( y ))"#.into(), "(("),
+        // A glob is an expansion (a file name picks the name or the option); an option argument
+        // is a word too; `let` reads command output.
+        (
+            r#"touch x1; x1=0; read x[1] <<< 'a[$(>y)]'; (( x1 )); rm -f x1"#.into(),
+            "((",
+        ),
+        (
+            r#"touch -- -n; x=1; declare -* r=x; r='a[$(>y)]'; (( x )); rm -f -- -n"#.into(),
+            "((",
+        ),
+        (r#"b=0; p='a b'; read -p $p x <<< 'a[$(>y)]'; (( b ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; let "$(echo x)""#.into(), "let"),
+        // By rule (bash runs nothing here): a `+` word and a `getopts` option string that are not
+        // literal text.
+        (r#"o=i; z=1; declare +$o z; (( z ))"#.into(), "(("),
+        (r#"z=1; s=ab; getopts $s o; (( z ))"#.into(), "(("),
+        // Command output read as arithmetic is text the script may print; only a command on the
+        // digits-only list prints none.
+        (r#"(( $(echo 'a[$(>y)]') ))"#.into(), "(("),
+        (r#"echo $(( $(printf %s 'a[$(>y)]') ))"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; (( $(echo x) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; echo $(( `printf x` ))"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; s=abc; echo ${s:$(printf x)}"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; [[ $(echo x) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; a=(1 2); echo ${a[$(printf x)]}"#.into(), "echo"),
+        (r#"x='a[$(>y)]'; (( $(printf x) ))"#.into(), "(("),
+        (r#"echo 'a[$(>y)]' > f.txt; (( $(cat f.txt) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; a=([$(echo x)]=1)"#.into(), "<none>"),
+        (r#"x='a[$(>y)]'; a[$(echo x)]=1"#.into(), "<none>"),
+        (r#"touch 'a[$(>y)]'; (( $(wc -l 'a[$(>y)]') ))"#.into(), "(("),
+        (r#"echo 'a[$(>y)]' > f; (( $(cat - < f) ))"#.into(), "(("),
+        (
+            r#"touch 'a[$(>y)]'; : > f; (( $(wc -l < f 'a[$(>y)]') ))"#.into(),
+            "((",
+        ),
+        (r#"x='a[$(>y)]'; [[ $(date +%s; echo x) -eq 1 ]]"#.into(), "[["),
+        // By rule (bash runs nothing here): a listed command quoted, with another redirect, or in
+        // a pipeline.
+        (r#"x='a[$(>y)]'; [[ $('date' +%s) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; [[ $(wc -l >f) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; [[ $(date +%s >f) -eq 1 ]]"#.into(), "[["),
+        (r#"x='a[$(>y)]'; [[ $(date +%s | cat) -eq 1 ]]"#.into(), "[["),
+        // The list holds only while the script cannot rebind a listed name: a function, a PATH
+        // write, `hash`, a sourced file, an alias; by rule `enable`.
+        (r#"date() { echo 'a[$(>y)]'; }; (( $(date +%s) ))"#.into(), "(("),
+        (r#"id() { echo 'a[$(>y)]'; }; (( $(id -u) ))"#.into(), "(("),
+        (r#": > f; wc() { echo 'a[$(>y)]'; }; (( $(wc -l < f) ))"#.into(), "(("),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; PATH=$PWD/b:$PATH; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; export PATH=$PWD/b:$PATH; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; hash -p $PWD/b/date date; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (
+            r#"echo 'date() { echo "a[\$(>y)]"; }' > f.sh; . ./f.sh; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'date() { echo "a[\$(>y)]"; }' > f.sh; source ./f.sh; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            "shopt -s expand_aliases\nalias date='echo \"a[\\$(>y)]\"'\n(( $(date +%s) ))".into(),
+            "((",
+        ),
+        (
+            r##"mkdir -p b; printf '#!/bin/sh\necho "a[\\$(>y)]"\n' > b/date; chmod +x b/date; c=hash; $c -p $PWD/b/date date; (( $(date +%s) ))"##.into(),
+            "((",
+        ),
+        (r#"enable -f ./none.so date 2>/dev/null; (( $(date +%s) ))"#.into(), "(("),
+        // A newline ends the command: `date` alone prints the day's name.
+        (
+            "Mon='a[$(>y)]'; Tue=$Mon; Wed=$Mon; Thu=$Mon; Fri=$Mon; Sat=$Mon; Sun=$Mon; (( $(date\n+%s) ))".into(),
+            "((",
+        ),
+        // By rule (bash runs nothing here): `wc` reads a path that is not literal text.
+        (
+            r#"printf 'a\nb\n' > 'a[$(>y)]'; (( $(wc -l < 'a[$(>y)]') ))"#.into(),
+            "((",
+        ),
+        // By rule: a listed command with other words prints other text (`id -u -n`, a name).
+        (r#"x='a[$(>y)]'; (( $(id -u -n) ))"#.into(), "(("),
+        (r#"x='a[$(>y)]'; (( $(date +%s x) ))"#.into(), "(("),
+        // `for NAME` without `in` assigns the positional parameters.
+        (r#"set -- 'a[$(>y)]'; x=1; for x; do (( x )); done"#.into(), "(("),
+        (r#"set -- 'a[$(>y)]'; x=1; for x do (( x )); done"#.into(), "(("),
+        (r#"x=1; f() { for x; do (( x )); done; }; f 'a[$(>y)]'"#.into(), "(("),
+        (r#"f() { local n=0; for n; do (( n + 1 )); done; }; f 'a[$(>y)]'"#.into(), "(("),
+        // Bash brace-expands a `name=` word of the bare builtin, then splits it.
+        (r#"z=1; o='1 z=a[$(>y)]'; declare x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; declare x=$o{,}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; export x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; readonly x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; typeset x={$o,2}; (( z ))"#.into(), "(("),
+        (r#"z=1; o='1 z=a[$(>y)]'; f() { local x={$o,2}; (( z )); }; f"#.into(), "(("),
+        // Rebinding: `PATH`, `BASH_CMDS` or `BASH_ALIASES` unset, declared without a value,
+        // or written, also by an operand that is not static.
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -v PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset "PATH"; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; command unset PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; k=PATH; unset $k; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset 'PATH[0]'; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        // After `--` or an operand, `-f` is an operand.
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -- -f PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset x -f PATH; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { local PATH; (( $(date +%s) )); }; f"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { local PATH; [[ $(date +%s) -eq 1 ]]; }; f"#.into(),
+            "[[",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { declare PATH; echo $(( $(date +%s) )); }; f"#.into(),
+            "echo",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f() { typeset PATH; (( $(date +%s) )); }; f"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset PATH; a=([$(date +%s)]=1)"#.into(),
+            "<none>",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > wc; chmod +x wc; echo 1 > f; unset PATH; (( $(wc -l < f) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; BASH_CMDS[date]=$PWD/d; (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; BASH_CMDS=([date]=$PWD/d); (( $(date +%s) ))"#.into(),
+            "((",
+        ),
+        (
+            "shopt -s expand_aliases\ndate=1; BASH_ALIASES[date]='echo \"a[\\$(>y)]\"; :'\n(( $(date +%s) ))".into(),
+            "((",
+        ),
+        // A name operand's subscript: command output, a glob (a file name) or `~` is text.
+        (r#"x='b[$(>y)]'; declare -a a; unset "a[$(echo x)]""#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; unset a[$(echo x)]"#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; [ -v "a[$(echo x)]" ]"#.into(), "["),
+        (r#"x='b[$(>y)]'; declare -a a; test -v "a[$(echo x)]""#.into(), "test"),
+        (r#"x='b[$(>y)]'; declare -a a; [[ -v a[$(echo x)] ]]"#.into(), "[["),
+        (r#"x='b[$(>y)]'; declare -a a; unset -v "a[`echo x`]""#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; [[ -v a[`echo x`] ]]"#.into(), "[["),
+        (r#"declare -a a; unset "a[$(echo 'b[$(>y)]')]""#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; : > 'a[x]'; unset a*"#.into(), "unset"),
+        (r#"x='b[$(>y)]'; declare -a a; : > 'a[x]'; test -v a*"#.into(), "test"),
+        (r#"x='b[$(>y)]'; declare -a a; HOME='a[x]'; unset ~"#.into(), "unset"),
+        // Command output assigned to an integer name is read as arithmetic.
+        (r#"declare -i n; n=$(echo 'a[$(>y)]')"#.into(), "<none>"),
+        (r#"declare -i n; n=`echo 'a[$(>y)]'`"#.into(), "<none>"),
+        (r#"declare -i n=$(echo 'a[$(>y)]')"#.into(), "declare"),
+        (r#"declare -i n; n=($(echo 'a[$(>y)]'))"#.into(), "<none>"),
+        (r#"declare -i n; for n in $(echo 'a[$(>y)]'); do :; done"#.into(), "(("),
+        (r#"f() { local -i n=$(echo 'a[$(>y)]'); }; f"#.into(), "local"),
+        // A backtick body lowers as `$(…)` does.
+        (r#"f() { local -i n=`echo 'a[$(>y)]'`; }; f"#.into(), "local"),
+        // `EXECIGNORE` hides a command from the `PATH` search, and a script-defined
+        // `command_not_found_handle` then prints its text.
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; read EXECIGNORE <<< '*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; declare EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*wc*'; echo 1 > f; (( $(wc -l <f) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*'; (( $(id -u) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; EXECIGNORE='*date*'; declare -i n; n=$(date +%s)"#.into(), "<none>"),
+        (r#"function command_not_found_handle { echo 'a[$(>y)]'; }; EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"f() { command_not_found_handle() { echo 'a[$(>y)]'; }; }; f; EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        // By rule (bash runs nothing here): the handler alone, and `EXECIGNORE` alone, which
+        // moves the search to a later `PATH` entry.
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; (( $(date +%s) ))"#.into(), "(("),
+        (r#"EXECIGNORE='*date*'; (( $(date +%s) ))"#.into(), "(("),
+        // `{NAME}>f` stores a descriptor number in NAME and evaluates its subscript; `coproc
+        // NAME` writes NAME, and unsets it when the coprocess ends.
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {PATH}>f; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {PATH}>f; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec 3>f {PATH}>&3; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {PATH}>f echo; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {PATH}<<<x; (( $(date +%s) ))"#.into(), "(("),
+        (r#"declare -a a; exec {a[$(echo 'b[$(>y)]')]}>f"#.into(), "exec"),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc "PATH" { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH (:); wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; x=PATH; coproc $x { :; }; wait; (( $(date +%s) ))"#.into(), "(("),
+        // The parser reads `coproc NAME [[ … ]]` as a command NAME.
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH [[ 1 ]]; wait; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc "PATH" [[ 1 ]]; wait; (( $(date +%s) ))"#.into(), "(("),
+        // `{x}>&-` writes nothing: `x` keeps its value from the environment.
+        (r#"exec {x}>&-; (( x ))"#.into(), "(("),
+        // By rule: with a space bash reads `{PATH}` as a word.
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {PATH} >f; (( $(date +%s) ))"#.into(), "(("),
+        // A brace-expanded operand of `unset` or `local` is not static.
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset {PATH,x}; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset P{A,}TH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; f(){ local {PATH,x}; (( $(date +%s) )); }; f"#.into(), "(("),
+        // A `{NAME}` word that touches a redirect operator is part of the redirect: the command
+        // bash runs is the next word, with its own wrapper target and operands.
+        (r#"y='>y'; {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; a=1 {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; >g {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>f {z}>g eval "$y""#.into(), "eval"),
+        (r#"y='>y'; command {x}>f eval "$y""#.into(), "command"),
+        (r#"y='>y'; builtin {x}>f eval "$y""#.into(), "builtin"),
+        (r#"y='>y'; ! {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; time {x}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; coproc {x}>f eval "$y"; wait"#.into(), "eval"),
+        (r#"y='>y'; {x}>f eval "$y" | cat"#.into(), "eval"),
+        (r#"y='>y'; f() { {x}>f eval "$y"; }; f"#.into(), "eval"),
+        (r#"y='>y'; {a[0]}>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}<<<z eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}<>f eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>|f eval "$y""#.into(), "eval"),
+        ("y='>y'; {x}<<E eval \"$y\"\nE".into(), "eval"),
+        (r#"y='>y'; exec 3>f; {x}>&3 eval "$y""#.into(), "eval"),
+        (r#"y='>y'; {x}>f eval "$y" {z}>g"#.into(), "eval"),
+        (r#"y='>y'; if :; then {x}>f eval "$y"; fi"#.into(), "eval"),
+        (r#"y='>y'; {x}>f eval "$y" && :"#.into(), "eval"),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f read PATH <<< 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f printf -v PATH 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f export PATH=10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f declare PATH=10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; printf {x}>f -v PATH 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir a; echo 'echo "a[\$(>y)]"' > a/date; chmod +x a/date; getopts {x}>f a PATH -a; (( $(date +%s) ))"#.into(), "(("),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; read {x}>f PATH <<< 10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"declare -i n; {x}>f read n <<< 'a[$(>y)]'"#.into(), "read"),
+        (r#"declare -i n; read {x}>f n <<< 'a[$(>y)]'"#.into(), "read"),
+        (r#"declare -i n; {x}>f printf -v n %s 'a[$(>y)]'"#.into(), "printf"),
+        (r#"declare -i n; printf {x}>f -v n %s 'a[$(>y)]'"#.into(), "printf"),
+        (r#"declare -i n; {x}>f declare n='a[$(>y)]'"#.into(), "declare"),
+        (r#"y='>y'; {x}>f command eval "$y""#.into(), "command"),
+        (r#"y='>y'; {x}>f builtin eval "$y""#.into(), "builtin"),
+        (r#"y='>y'; {x}>f eval {z}>g "$y""#.into(), "eval"),
+        (r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; {x}>f hash -p "$PWD/d" date; (( $(date +%s) ))"#.into(), "(("),
+        (r#"f() { (( $1 )); }; {x}>f f 'a[$(>y)]'"#.into(), "(("),
+        (r#"y='>y'; {x}>f eval "$y"; {x}>f :"#.into(), "eval"),
+        (r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; {x}>f PATH=10; (( $(date +%s) ))"#.into(), "(("),
+        (r#"y='>y'; : > f; {x}<f eval "$y""#.into(), "eval"),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; {x}>f unset PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"y='>y'; {x}>f a=1 eval "$y""#.into(), "eval"),
+        // A wrapper whose one word may split into a rebinding command.
+        (r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; c="hash -p $PWD/d date"; command $c; (( $(date +%s) ))"#.into(), "(("),
+        // A location that does not hold the word's text (a line continuation): which word bash
+        // runs is not known.
+        ("y='>y'; {x\\\n}>f eval \"$y\"".into(), "{x}"),
+        // `wait -p NAME` assigns NAME, in every option spelling.
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -p PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -p PATH "$p"; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -np PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -pPATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; command wait -n -p PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > d; chmod +x d; sleep 0 & p=$!; mv d "$p"; wait -n -p 'BASH_CMDS[date]'; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; v=PATH; wait -n -p "$v"; (( $(date +%s) ))"#.into(), "(("),
+        (r#"command_not_found_handle() { echo 'a[$(>y)]'; }; sleep 0 & wait -n -p EXECIGNORE; EXECIGNORE="*"; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; o=-p; wait -n $o PATH; (( $(date +%s) ))"#.into(), "(("),
+        (r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; o=-pPATH; wait -n -p x $o; (( $(date +%s) ))"#.into(), "(("),
+        // The parser misreads `coproc NAME [[ … ]]` (and splits the test at `||`): fail closed.
+        (r#"x='a[$(>y)]'; coproc C [[ x -eq 1 ]]; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc PATH [[ x -eq 1 ]]; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc C [[ 1 -eq x ]]; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc C [[ x -eq 1 ]] && :; wait"#.into(), "[["),
+        (r#"x='a[$(>y)]'; coproc C [[ x == 1 || x -lt 2 ]]; wait"#.into(), "[["),
+        (r#"y='>y'; coproc C [[ 1 ]]; eval "$y"; wait"#.into(), "[["),
+    ];
+    // Every failing row is listed, not only the first.
+    let mut bad = Vec::new();
+    for (src, name) in runs {
+        let s = ok(src);
+        let c = commands(&s);
+        match c.iter().rev().find(|c| bash_util::name_of(c) == *name) {
+            None => bad.push(format!("no {name}: {src}")),
+            Some(c) if !c.opaque => bad.push(format!("not opaque: {src}")),
+            Some(_) => {}
+        }
+    }
+    // Contexts outside any command: the script gets an opaque `((` command, also when a command
+    // (simple, `((`, `[[`) is lowered after the read.
+    for src in [
+        format!("{x}case ${{a[x]}} in *) ;; esac"),
+        format!("{x}case ${{a[x]}} in *) echo ;; esac"),
+        format!("{x}for f in ${{a[x]}}; do (( 1 )); done"),
+        format!("{x}{{ [[ 1 ]]; }} > \"${{a[x]}}\""),
+    ] {
+        let s = ok(&src);
+        if !commands(&s)
+            .iter()
+            .any(|c| c.opaque && bash_util::name_of(c) == "((")
+        {
+            bad.push(format!("no opaque ((: {src}"));
+        }
+    }
+    // Clean: bash runs nothing here. No arithmetic, `unset`, an argument of a command that is not
+    // a function, and names whose every value is an integer, arithmetic over clean names or one
+    // run-time expansion.
+    for src in [
+        format!("{x}echo ${{x:-d}}"),
+        format!("{x}echo \"$x\"; (( $1 ))"),
+        "a=1; n=$a; (( n ))".to_string(),
+        "n=5; m=n+1; (( m ))".to_string(),
+        "n=$(wc -l < f); (( n ))".to_string(),
+        "i=0; (( i++ ))".to_string(),
+        "for ((i=0; i<3; i++)); do :; done".to_string(),
+        "for i in 1 2; do (( i )); done".to_string(),
+        "set -euo pipefail; (( $# ))".to_string(),
+        "f() { local n=$1; (( n > 0 )); }; f 3".to_string(),
+        "(( RANDOM % 2 ))".to_string(),
+        "n=$((1 + 2)); (( n ))".to_string(),
+        "n=$(( $(wc -l < f) + 1 )); (( n ))".to_string(),
+        "n=$#; m=$?; p=$$; (( n + m + p ))".to_string(),
+        "(( RANDOM + LINENO + SECONDS + BASHPID + PPID + UID + EUID ))".to_string(),
+        "_x=1; n='(1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1)'; (( n ))".to_string(),
+        "x=; (( x ))".to_string(),
+        "set -o pipefail; (( $1 ))".to_string(),
+        "declare 'n=5'; (( n ))".to_string(),
+        "export 'n=5'; (( n ))".to_string(),
+        "readonly 'n=5'; (( n ))".to_string(),
+        "a=(1 2); (( a ))".to_string(),
+        "RANDOM=5; (( RANDOM ))".to_string(),
+        "declare -i n; n=5; for n in 1 2; do :; done".to_string(),
+        // A name operand built from `$((…))` is an integer.
+        "a=(1 2); unset \"a[$((1))]\"".to_string(),
+        // Arithmetic assigns integers.
+        "(( n = 1 )); (( n ))".to_string(),
+        "(( n += 1 )); (( n ))".to_string(),
+        "(( n++ )); (( n ))".to_string(),
+        "(( --n )); (( n ))".to_string(),
+        "(( ++n )); (( n ))".to_string(),
+        "(( n-- )); (( n ))".to_string(),
+        "(( n <<= 1 )); (( n ))".to_string(),
+        "(( n >>= 1 )); (( n ))".to_string(),
+        "(( a[0] = 1 )); (( a[0] ))".to_string(),
+        "let n=1; (( n ))".to_string(),
+        // Run-time output, quoted text and numbers name nothing.
+        "(( $(wc -l < f) > 1 ))".to_string(),
+        "(( `wc -l < f` > 1 ))".to_string(),
+        "(( 16#ff + 0x1F ))".to_string(),
+        format!("{x}echo \"$x\""),
+        // A balanced substitution without quotes is skipped; options read in full; an operator
+        // that assigns nothing; a static `eval` with no arithmetic; a subscripted run-time target.
+        "t=1; n=$(( $(date +%s) - t )); (( n ))".to_string(),
+        "z=1; read -ers -a b -d x -i y -n 1 -N 1 -p p -t 1 -u 0 n < f; (( z ))".to_string(),
+        "z=1; mapfile -t -d x -n 1 -O 0 -s 0 -u 0 -C cb -c 1 a < f; (( z ))".to_string(),
+        "z=1; readarray -t a < f; (( z ))".to_string(),
+        "_x=1; (( $_x ))".to_string(),
+        "set -- 1; n=1; (( ${n} + ${1} + ${#} + ${?} + ${$} + $! + ${@} + ${*} ))".to_string(),
+        "n=1; (( $((n)) + 1 ))".to_string(),
+        "a=(1); _x=1; (( (1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1) + a[0] ))".to_string(),
+        "z=1; declare nn=1; (( z ))".to_string(),
+        "z=1; : ${z:-1}; (( z ))".to_string(),
+        "eval 'echo hi'; echo z".to_string(),
+        "a=1; z=1; read 'a[0]' < f; (( z ))".to_string(),
+        // `printf` words after `--` or the format; `name=$v` on the bare builtin, which does not
+        // split it; `getopts` operands after the name.
+        r#"o=-v; n=0; printf -- $o n %s 'a[$(>y)]'; (( n ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; declare x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; typeset x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; export x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; readonly x=$o; (( y ))"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; f() { local x=$o; (( y )); }; f"#.into(),
+        r#"y=1; o='1 y=a[$(>y)]'; declare x+=$o; (( y ))"#.into(),
+        r#"z=1; set -- -a; getopts a o "$@"; (( z ))"#.into(),
+        // The digits-only list: spaces and a backtick body, `wc -l` from a literal path.
+        r#"x='a[$(>y)]'; (( $(date +%s) - 1 ))"#.into(),
+        r#"x='a[$(>y)]'; (( $( date +%s ) + 0 ))"#.into(),
+        "x='a[$(>y)]'; (( $(date\t+%s) ))".into(),
+        "x='a[$(>y)]'; s=abc; echo ${s:$(date\t+%s)}".into(),
+        "x='a[$(>y)]'; echo $(( $(date\t+%s) ))".into(),
+        r#"x='a[$(>y)]'; (( `date +%s` ))"#.into(),
+        r#"x='a[$(>y)]'; (( $(id -u) ))"#.into(),
+        r#"x='a[$(>y)]'; (( $(date +%s%N) ))"#.into(),
+        r#"printf 'a\nb\n' > f; x='a[$(>y)]'; (( $(wc -l < f) ))"#.into(),
+        r#"printf 'a\nb\n' > f; x='a[$(>y)]'; [[ $(wc -l < f) -eq 2 ]]"#.into(),
+        r#"printf 'a\nb\n' > f; x='a[$(>y)]'; (( $(wc -l <f) ))"#.into(),
+        r#"x='a[$(>y)]'; a=([$(date +%s)]=1)"#.into(),
+        // A word list after `in`; a brace that bash does not expand; `unset -f`; a listed
+        // command in a name operand or assigned to an integer name; the via-name limit.
+        r#"set -- 'a[$(>y)]'; x=1; for x in 1 2; do (( x )); done"#.into(),
+        r#"z=1; o='1 z=a[$(>y)]'; declare x='{a,b}'$o; (( z ))"#.into(),
+        r#"z=1; o='1 z=a[$(>y)]'; declare x={a}$o; (( z ))"#.into(),
+        r#"z=1; o='1 z=a[$(>y)]'; declare x=${o}; (( z ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f x PATH; (( $(date +%s) ))"#
+            .into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f -- PATH; (( $(date +%s) ))"#
+            .into(),
+        // `-f` with `-v` or `-n`: bash refuses and unsets nothing.
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -fv PATH; (( $(date +%s) ))"#
+            .into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; unset -f -v PATH; (( $(date +%s) ))"#
+            .into(),
+        r#"declare -a a; unset "a[$(date +%s)]""#.into(),
+        r#"declare -i n; n=$(date +%s)"#.into(),
+        r#"n=$(echo 'a[$(>y)]'); echo $n"#.into(),
+        // Not a descriptor name (bash writes nothing), another function, another coprocess.
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; exec {x}>f; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; echo {PATH}; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; echo {PATH} x; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {PA\TH}>f; (( $(date +%s) ))"#.into(),
+        r#"mkdir 10; echo 'echo "a[\$(>y)]"' > 10/date; chmod +x 10/date; : {a,b}>f; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc C { :; }; wait; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; coproc PATH echo [[ 1 ]]; wait; (( $(date +%s) ))"#.into(),
+        r#"command_not_found() { echo 'a[$(>y)]'; }; EXECIGNOR='*date*'; (( $(date +%s) ))"#.into(),
+        // A descriptor name that runs nothing; with a space bash runs `{x}` as a word; `wait`
+        // into another name, or with a literal pid.
+        r#"y='>y'; {x}>f echo hi"#.into(),
+        r#"y='>y'; exec {x}>f"#.into(),
+        r#"y='>y'; echo {x}"#.into(),
+        r#"y='>y'; {x}>f exec bash -c"#.into(),
+        r#"y='>y'; {x} >f eval "$y""#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -p x; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n 1; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -n -- "$p"; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; o=-pPATH; wait -n 1 $o; (( $(date +%s) ))"#.into(),
+        r#"echo 'echo "a[\$(>y)]"' > date; chmod +x date; sleep 0 & p=$!; mkdir "$p"; mv date "$p"/; wait -f -n -p x; (( $(date +%s) ))"#.into(),
+        // Bash reads `{x}<(:)` as one word, the command name.
+        r#"y='>y'; {x}<(:) eval "$y""#.into(),
+    ] {
+        let s = ok(&src);
+        if commands(&s).iter().any(|c| c.opaque) {
+            bad.push(format!("opaque: {src}"));
+        }
+    }
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+}
+
+/// A clean `z`, then a chain of `n` copies, written last link first:
+/// `z=1; x<n>=x<n-1>; …; x0='a[$(…)]'`.
+fn copy_chain(n: usize) -> String {
+    let mut s = "z=1; ".to_string();
+    s.extend((1..=n).rev().map(|i| format!("x{i}=x{}; ", i - 1)));
+    s.push_str("x0='a[$(rm -rf y)]'; ");
+    s
+}
+
+#[test]
+fn taint_propagation_stops_at_64_steps_and_then_every_arithmetic_is_opaque() {
+    let last = |src: String| commands(&ok(&src)).last().unwrap().opaque;
+    let got = [
+        last(format!("{}(( x64 ))", copy_chain(64))),
+        last(format!("{}(( z ))", copy_chain(64))),
+        last(format!("{}(( z ))", copy_chain(65))),
+        last(format!("{}echo z", copy_chain(65))),
+    ];
+    // 64 steps: the copy is tracked and an untainted name stays plain; at 65 every arithmetic
+    // context is opaque, a command without arithmetic is not.
+    assert_eq!(got, [true, false, true, false]);
+}
+
+#[test]
+fn compound_statements_keep_their_kind() {
+    let s = ok("if git diff --quiet; then rm x; elif true; then a; else b; fi");
+    match &s.stmts[..] {
+        [Stmt::Cond { branches, .. }] => assert_eq!(branches.len(), 3),
+        other => panic!("{other:?}"),
+    }
+    match &ok("f() { rm -rf x; }").stmts[..] {
+        [Stmt::Func { name, body }] => {
+            assert_eq!(name, "f");
+            assert_eq!(names(body), ["rm"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(&ok("{ a; b; }").stmts[..], [Stmt::Block(_)]));
+    assert!(matches!(&ok("(cd x && rm y)").stmts[..], [Stmt::Block(_)]));
+    let s = ok("{ cd x; rm y; } | head");
+    assert!(
+        matches!(&s.stmts[..], [Stmt::Block(_)]),
+        "a pipeline with a compound stage"
+    );
+    assert_eq!(names(&s), ["cd", "rm", "head"]);
+}
+
+#[test]
+fn word_parts_follow_bash_quoting() {
+    let c = commands(&ok(
+        r#"rm -rf *.tmp ~/x 'a b' $'\x2drf' \-f "q"z {a,b} @(a|b) "*""#,
+    ))[0]
+        .clone();
+    let shapes: Vec<_> = c.args.iter().map(bash_util::shape).collect();
+    assert_eq!(
+        shapes,
+        [
+            "-rf", "*.tmp", "~/x", "a b", "-rf", "-f", "qz", "{a,b}", "@(a|b)", "*"
+        ]
+    );
+    assert!(
+        matches!(c.args[8].parts[..], [WordPart::Glob(_)]),
+        "extglob"
+    );
+    assert!(
+        matches!(c.args[9].parts[..], [WordPart::Literal(_)]),
+        "quoted * is literal"
+    );
+    assert!(matches!(c.args[1].parts[..], [WordPart::Glob(_)]));
+    assert!(matches!(c.args[2].parts[0], WordPart::Tilde));
+    assert_eq!(c.args[3].quote, Quote::Single);
+    assert!(
+        matches!(c.args[7].parts[..], [WordPart::Glob(_)]),
+        "brace expansion is not a literal"
+    );
+    assert_eq!(c.args[6].quote, Quote::Mixed);
+}
+
+#[test]
+fn canonical_name_per_profile() {
+    let cases = [
+        ("RM.exe -rf x", BashProfile::GitBash, Some("rm")),
+        ("/usr/bin/rm x", BashProfile::GitBash, Some("rm")),
+        ("/usr/bin/rm x", BashProfile::Posix, Some("rm")),
+        ("RM x", BashProfile::Posix, Some("RM")),
+        ("\\rm x", BashProfile::Posix, Some("rm")),
+        ("'git' status", BashProfile::Posix, Some("git")),
+        ("'C:\\x\\rm.exe' -rf x", BashProfile::GitBash, Some("rm")),
+        ("'C:\\x\\rm' -rf x", BashProfile::Posix, Some("C:\\x\\rm")),
+        ("$x status", BashProfile::Posix, None),
+        ("~/bin/rm -rf x", BashProfile::Posix, Some("rm")),
+        (
+            "~/bin/GIT.exe clean -fdx",
+            BashProfile::GitBash,
+            Some("git"),
+        ),
+    ];
+    for (src, profile, want) in cases {
+        let s = parse(src, profile).unwrap();
+        assert_eq!(commands(&s)[0].canonical.as_deref(), want, "{src}");
+        assert_eq!(
+            commands(&s)[0].typed,
+            src.split(' ').next().unwrap(),
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn spans_are_byte_offsets_into_the_original() {
+    let cases = [
+        ("echo hi; rm -rf x", "rm -rf x"),
+        ("echo é; rm -rf x", "rm -rf x"),
+        ("echo \"é $(rm -rf x)\"", "rm -rf x"),
+        ("cat <<EOF\né $(rm -rf x)\nEOF", "rm -rf x"),
+    ];
+    for (src, want) in cases {
+        let s = ok(src);
+        let rm = commands(&s)
+            .into_iter()
+            .find(|c| c.canonical.as_deref() == Some("rm"))
+            .unwrap_or_else(|| panic!("{src}"));
+        assert_eq!(&src[rm.span.start..rm.span.end], want, "{src}");
+        assert_eq!(
+            &src[rm.args[1].span.start..rm.args[1].span.end],
+            "x",
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn comments_are_collected_with_their_trailing_flag() {
+    let cases: &[(&str, &[(&str, bool)])] = &[
+        (
+            "git status # shellwise: allow",
+            &[("# shellwise: allow", true)],
+        ),
+        ("# lead\nls", &[("# lead", false)]),
+        (
+            "  # indented\nls # t\n",
+            &[("# indented", false), ("# t", true)],
+        ),
+        (
+            "cat <<EOF # c1\nbody # not\nEOF\necho é # c3\n",
+            &[("# c1", true), ("# c3", true)],
+        ),
+        ("echo '# no' \"# no\" a#b ${#x}", &[]),
+        ("cat <<'EOF'\nrm -rf x # shellwise: allow\nEOF", &[]),
+        ("echo 'a\nb' # after", &[("# after", true)]),
+        ("ls;# glued", &[("# glued", true)]),
+    ];
+    for (src, want) in cases {
+        let s = ok(src);
+        let got: Vec<_> = s
+            .comments
+            .iter()
+            .map(|c| (c.text.as_str(), c.trailing))
+            .collect();
+        assert_eq!(got, *want, "{src}");
+        for c in &s.comments {
+            assert_eq!(&src[c.span.start..c.span.end], c.text, "{src}");
+        }
+    }
+}
+
+/// A deep nesting of each construct that recurses in the parser, `n` levels.
+fn nested(kind: &str, n: usize) -> String {
+    let (pre, post) = match kind {
+        k if k.starts_with("test_") => ("[[ ", " ]]"),
+        k if k.starts_with("let_") => ("let 'a[", "]'"),
+        "masked_arith" => ("(( ", " ))"),
+        _ => ("", ""),
+    };
+    let (open, mid, close) = match kind {
+        "subst" => ("echo $(", "true", ")"),
+        "paren" => ("(", "true", ")"),
+        "brace" => ("{ ", "true", "; }"),
+        "if" => ("if true; then ", "true", "; fi"),
+        "while" => ("while true; do ", "true", "; done"),
+        "case" => ("case x in a) ", "true", " ;; esac"),
+        "param" => ("${x:-", "y", "}"),
+        "dq" => ("\"$(echo ", "y", ")\""),
+        "arith" => ("$((", "1", "))"),
+        "procsub" => ("cat <(", "true", ")"),
+        "backtick" => ("echo `", "true", "`"),
+        "func" => ("f() { ", "true", "; }"),
+        // A `]` argument per level hides the nesting from a bracket count.
+        "masked_subst" => ("echo $(: ] ", "true", ")"),
+        "masked_brace" => ("{ : ]; ", "true", "; }"),
+        "masked_param" => ("${x:-]", "y", "}"),
+        // `!` and `&&`/`||` recurse in the parser without opening a bracket or a keyword.
+        "bang" => ("! ", "true", ""),
+        "coproc" => ("coproc ", "true", ""),
+        "test_not" => ("! ", "-n x", ""),
+        "test_and" => ("x && ", "x", ""),
+        "test_or" => ("x || ", "x", ""),
+        "test_paren" => ("( ", "x", " )"),
+        "test_not_paren" => ("! ( ", "x", " )"),
+        "test_masked_paren" => ("] || ( ", "x", " )"),
+        // Parameter offsets and subscripts bash evaluates as arithmetic.
+        "offset" => ("echo ${s:0:", "1", "}"),
+        "let_bracket" => ("a[", "$(rm x)", "]"),
+        "let_quoted" => ("\"]\"", "$(rm x)", ""),
+        // Nested `$((` that a bracket count misses, read by the arithmetic scan.
+        "masked_arith" => ("$((]] + ", "1", "))"),
+        _ => unreachable!(),
+    };
+    format!("{pre}{}{mid}{}{post}", open.repeat(n), close.repeat(n))
+}
+
+/// Each construct and the guard that must refuse 64 KiB of it.
+const BRACKETS: &str = "brackets nested deeper than 200 levels";
+const LOWERING: &str = "nesting deeper than 200 levels";
+const BUDGET: &str = "nested text too large to parse in time";
+/// 64 KiB of a two-byte operator (`! `) is 32k levels: past the stack cap in a debug build, which
+/// sizes 64 KiB per level; a release build (16 KiB per level) parses it and lowering decides.
+const STACK_CAP: &str = "nesting too deep to parse safely";
+const PARSES: &str = "parses";
+const NESTED_KINDS: [(&str, &str); 27] = [
+    ("masked_arith", BUDGET),
+    ("subst", BRACKETS),
+    ("paren", BRACKETS),
+    ("brace", BRACKETS),
+    ("if", LOWERING),
+    ("while", LOWERING),
+    ("case", LOWERING),
+    ("param", BRACKETS),
+    ("dq", BRACKETS),
+    ("arith", BRACKETS),
+    ("procsub", BRACKETS),
+    // Unescaped backticks do not nest, they pair up: only the absence of a crash counts.
+    ("backtick", ""),
+    ("func", BRACKETS),
+    ("masked_subst", BUDGET),
+    ("masked_brace", LOWERING),
+    ("masked_param", BUDGET),
+    // `! ! … cmd` is one negated pipeline, but every `!` counts toward the stack bound.
+    (
+        "bang",
+        if cfg!(debug_assertions) {
+            STACK_CAP
+        } else {
+            PARSES
+        },
+    ),
+    (
+        "test_not",
+        if cfg!(debug_assertions) {
+            STACK_CAP
+        } else {
+            LOWERING
+        },
+    ),
+    ("coproc", LOWERING),
+    ("test_and", LOWERING),
+    ("test_or", LOWERING),
+    ("test_paren", BRACKETS),
+    ("test_not_paren", BRACKETS),
+    ("test_masked_paren", LOWERING),
+    ("offset", BRACKETS),
+    ("let_bracket", BRACKETS),
+    // One subscript holding many quoted `]`: flat, but every `"` counts toward the stack bound.
+    (
+        "let_quoted",
+        if cfg!(debug_assertions) {
+            STACK_CAP
+        } else {
+            PARSES
+        },
+    ),
+];
+
+#[test]
+fn nesting_past_the_limit_is_an_error_not_a_crash() {
+    for (kind, guard) in NESTED_KINDS {
+        // 64 KiB of the construct: far past MAX_NESTING and deep enough to overflow a naive stack.
+        let per_level = nested(kind, 2).len() - nested(kind, 1).len();
+        let src = nested(kind, 64 * 1024 / per_level);
+        assert!(src.len() > 60 * 1024, "{kind}: {}", src.len());
+        let got = parse(&src, BashProfile::GitBash);
+        if guard.is_empty() {
+            continue;
+        }
+        if guard == PARSES {
+            assert!(got.is_ok(), "{kind}: {got:?}");
+            continue;
+        }
+        assert_eq!(got.expect_err(kind).message, guard, "{kind}");
+    }
+    for kind in [
+        "subst",
+        "brace",
+        "if",
+        "param",
+        "masked_subst",
+        "masked_brace",
+        "masked_param",
+    ] {
+        let src = nested(kind, MAX_NESTING + 1);
+        assert!(nested(kind, MAX_NESTING).len() < src.len());
+        let e = parse(&src, BashProfile::GitBash).expect_err(kind);
+        assert!(e.message.contains("nest"), "{kind}: {e:?}");
+    }
+    for kind in ["masked_brace", "if"] {
+        let src = nested(kind, MAX_NESTING);
+        assert!(
+            parse(&src, BashProfile::GitBash).is_ok(),
+            "{kind} at the limit"
+        );
+    }
+    // Each substitution level is parsed again with everything inside it; the reparse budget
+    // (32 times the command's length) allows about 60 levels that each wrap the whole rest.
+    for kind in ["masked_subst", "masked_param"] {
+        let src = nested(kind, 50);
+        assert!(
+            parse(&src, BashProfile::GitBash).is_ok(),
+            "{kind} at 50 levels"
+        );
+    }
+    for kind in ["subst", "brace", "if", "param"] {
+        let src = nested(kind, MAX_NESTING + 5);
+        let e = parse(&src, BashProfile::GitBash).expect_err(kind);
+        assert!(e.message.contains("nest"), "{kind}: {e:?}");
+    }
+}
+
+#[test]
+fn nesting_under_the_limit_parses() {
+    for (kind, levels) in [
+        ("brace", MAX_NESTING / 2),
+        ("if", MAX_NESTING / 2),
+        ("subst", 50),
+        ("param", 50),
+        ("dq", 50),
+        ("procsub", 50),
+    ] {
+        let src = nested(kind, levels);
+        assert!(parse(&src, BashProfile::GitBash).is_ok(), "{kind}");
+    }
+}
+
+#[test]
+fn long_flat_lists_parse() {
+    for sep in [" && ", " | ", "; ", "\n", " || "] {
+        let src = vec!["true"; 64 * 1024 / (4 + sep.len())].join(sep);
+        let s = ok(&src);
+        assert!(commands(&s).len() > 1000, "{sep:?}");
+    }
+    // 64 KiB of copies: propagation stops at its bound, so every arithmetic context is opaque.
+    let mut src = copy_chain(64 * 1024 / 12);
+    src.push_str("(( z ))");
+    assert!(src.len() > 60 * 1024, "{}", src.len());
+    let s = ok(&src);
+    assert!(commands(&s).last().unwrap().opaque, "copy chain");
+    // The same with `$x` copies.
+    let n = 64 * 1024 / 14;
+    let mut src = "z=1; ".to_string();
+    src.extend((1..=n).rev().map(|i| format!("x{i}=$x{}; ", i - 1)));
+    src.push_str("x0='a[$(rm -rf y)]'; (( z ))");
+    assert!(src.len() > 60 * 1024, "{}", src.len());
+    let s = ok(&src);
+    assert!(commands(&s).last().unwrap().opaque, "$x copy chain");
+}
+
+// ---------- gap table ----------
+
+#[derive(serde::Deserialize)]
+struct GapFile {
+    row: Vec<GapRow>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct GapRow {
+    pub command: String,
+    /// Every command bash runs, in pre-order (nested ones after their host command).
+    #[serde(default)]
+    pub commands: Vec<String>,
+    /// `true` when the parser must refuse the row (fail closed).
+    #[serde(default)]
+    pub error: bool,
+    pub why: String,
+}
+
+#[test]
+fn gap_table_rows_lower_to_the_commands_bash_runs() {
+    let text = std::fs::read_to_string("tests/cases/bash_gaps.toml").unwrap();
+    let file: GapFile = toml::from_str(&text).unwrap();
+    assert!(file.row.len() >= 19, "rows: {}", file.row.len());
+    for r in &file.row {
+        assert!(!r.why.is_empty(), "{}", r.command);
+        let got = parse(&r.command, BashProfile::GitBash);
+        if r.error {
+            assert!(got.is_err(), "{:?} must be refused: {got:?}", r.command);
+            assert!(r.commands.is_empty(), "{}", r.command);
+        } else {
+            let s = got.unwrap_or_else(|e| panic!("{:?}: {e:?}", r.command));
+            assert_eq!(names(&s), r.commands, "{:?}", r.command);
+            for c in commands(&s) {
+                if !c.name.parts.is_empty() && c.canonical.is_none() {
+                    assert!(
+                        c.opaque,
+                        "a name no rule can match must be opaque: {:?}",
+                        r.command
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn command_shapes_render_arguments() {
+    let s = ok("X=1 rm -rf \"$d\" $(git x)");
+    assert_eq!(command_shape(commands(&s)[0]), "X=1 rm -rf $ $()");
+}
+
+/// A `{NAME}` word that touches a redirect operator is no word of the command: the command keeps
+/// its name and operands, an assignment before it is bash's, and the commands in a subscript stay.
+/// With a space bash runs `{NAME}`. The words of a misread `coproc NAME [[ … ]]` are no commands.
+#[test]
+fn descriptor_names_leave_the_word_list() {
+    let rows: &[(&str, &[&str])] = &[
+        ("{x}>f echo hi", &["echo hi"]),
+        ("exec {x}>f", &["exec"]),
+        ("echo {x}", &["echo {x}"]),
+        ("{x}>f exec bash -c", &["exec bash -c"]),
+        (r#"{x}>f exec bash -c "$y""#, &["exec bash -c $"]),
+        ("{x}>f a=1 echo hi", &["a=1 echo hi"]),
+        ("{x}>f PATH=10", &["PATH=10 <none>"]),
+        (": {a[$(rm -rf x)]}>f", &["a=$() :", "rm -rf x"]),
+        ("{x} >f eval", &["{x} eval"]),
+        ("{x}>f <(:) a", &["$() a", ":"]),
+        ("coproc C [[ x == 1 || x -lt 2 ]]; wait", &["[[", "wait"]),
+    ];
+    let bad: Vec<String> = rows
+        .iter()
+        .filter_map(|(src, want)| {
+            let got = parse(src, BashProfile::GitBash).map(|s| {
+                commands(&s)
+                    .into_iter()
+                    .map(command_shape)
+                    .collect::<Vec<_>>()
+            });
+            let pass = got.as_ref().is_ok_and(|g| g == want);
+            (!pass).then(|| format!("{src}: {got:?}"))
+        })
+        .collect();
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+}

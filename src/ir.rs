@@ -11,6 +11,17 @@ pub const MAX_NESTING: usize = 200;
 pub struct Script {
     pub stmts: Vec<Stmt>,
     pub comments: Vec<Comment>,
+    /// `joins[i]`: the operator joining `stmts[i]` to the statement before it (`||` in
+    /// `a || { b; }`), for compound statements too. `None` for the first statement, and for any
+    /// index past the end: a parser that does not fill it leaves it empty. Read it with `join`.
+    pub joins: Vec<Option<ChainOp>>,
+}
+
+impl Script {
+    /// The operator joining statement `i` to the one before it.
+    pub fn join(&self, i: usize) -> Option<ChainOp> {
+        self.joins.get(i).copied().flatten()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,11 +93,20 @@ pub struct MethodCall {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Redirect {
-    /// The operator as written (`>`, `2>>`, `<`, `*>`).
-    pub op: String,
-    pub target: Word,
-    pub span: Span,
+pub enum Redirect {
+    File {
+        /// The operator as written (`>`, `2>>`, `<`, `*>`, `<<<`).
+        op: String,
+        target: Word,
+        span: Span,
+    },
+    /// A here-document. An expanding body (unquoted delimiter) holds its `$(…)` as `Subst`
+    /// parts; a quoted delimiter gives one literal part.
+    Heredoc {
+        body: Word,
+        expands: bool,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
