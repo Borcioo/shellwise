@@ -8404,7 +8404,10 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ("X3i pwsh Set-Alias b Get-Date; Rename-Item -LiteralPath Alias:b mk; mk (control: the value is read)", ps, vec![def("Set-Alias", &["b", "Get-Date"]), def("Rename-Item", &["-LiteralPath", "Alias:b", "mk"]), mk()], del(), in_link.clone()),
             ("X1g pwsh Set-Content -Value New-Item Alias:mk; mk", ps, vec![def("Set-Content", &["-Value", "New-Item", "Alias:mk"]), mk()], del(), mbc.clone()),
             ("X1h pwsh Set-Content -LiteralPath Alias:mk Get-Date; mk (control: the value is read)", ps, vec![def("Set-Content", &["-LiteralPath", "Alias:mk", "Get-Date"]), mk()], del(), in_link.clone()),
-            ("X1i pwsh Set-Content -Force Alias:mk Get-Date; mk (control: a switch takes no value)", ps, vec![def("Set-Content", &["-Force", "Alias:mk", "Get-Date"]), mk()], del(), in_link.clone()),
+            ("X1i pwsh Set-Content -Force Alias:mk New-Item; mk (a switch takes no value)", ps, vec![def("Set-Content", &["-Force", "Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("X2i pwsh Set-Alias b New-Item; Copy-Item Alias:* Alias:mk; mk (a wildcard copy: any value)", ps, vec![b_ni(), def("Copy-Item", &["Alias:*", "Alias:mk"]), mk()], del(), mbc.clone()),
+            ("X2j pwsh Copy-Item Alias:ni Alias:a,Alias:mk; mk (a list: any alias)", ps, vec![def("Copy-Item", &["Alias:ni", "Alias:a,Alias:mk"]), mk()], del(), mbc.clone()),
+            ("B19 pwsh Set-Alias mk Get-Date @p; mk (a splat may give the value)", ps, vec![def("Set-Alias", &["mk", "Get-Date", "@p"]), mk()], del(), mbc.clone()),
             // M-B: M21, `& mk` reads as the plain New-Item call (rr8_pins; the control
             // `New-Item t\j …; Remove-Item -Recurse o\x` gives o\x).
             ("M21 pwsh Set-Alias mk New-Item; & mk t\\j …; Remove-Item -Recurse o\\x", ps, vec![def("Set-Alias", &["mk", "New-Item"]), st(lits("&", &[&["mk"][..], &link_at[..]].concat()))], rr(r"C:\w\repo\o\x"), paths(&[r"C:\w\repo\o\x"])),
