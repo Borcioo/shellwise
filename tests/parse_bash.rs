@@ -827,6 +827,10 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         ),
         // By rule: `$-` is text.
         (format!("{x}(( $- ))"), "(("),
+        // Expansions other than a plain name: indirect, subscripted, with an operator.
+        (format!("{x}k=$(echo x); (( ${{!k}} ))"), "(("),
+        (format!("{x}a=(1); (( ${{a[x]}} + 1 ))"), "(("),
+        (format!("{x}(( ${{x:-1}} ))"), "(("),
         // Writes through a nameref, or a declaration whose options are not static: any name may
         // change, and any write may reach an integer name.
         (
@@ -1026,6 +1030,7 @@ fn arithmetic_reading_a_tainted_name_is_opaque() {
         "_x=1; (( $_x ))".to_string(),
         "set -- 1; n=1; (( ${n} + ${1} + ${#} + ${?} + ${$} + $! + ${@} + ${*} ))".to_string(),
         "n=1; (( $((n)) + 1 ))".to_string(),
+        "a=(1); _x=1; (( (1 + 2-3*4/5%6<<7>>8==9!=1&&2||3^4|5&~6?7:8,_x=2#1) + a[0] ))".to_string(),
         "o=i; z=1; declare +$o z; (( z ))".to_string(),
         "z=1; declare nn=1; (( z ))".to_string(),
         "z=1; : ${z:-1}; (( z ))".to_string(),

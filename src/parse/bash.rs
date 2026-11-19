@@ -1895,10 +1895,11 @@ fn is_identifier(name: &str) -> bool {
 
 /// Arithmetic text as the name scanner reads it, or `None` when it is not plain. The parser
 /// splits the text, so each `$(…)` and backtick body ends where bash ends it; the body becomes a
-/// space (its output, run-time text). Plain pieces are text of identifiers, numbers, operators and
-/// spaces, `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`), and a nested `$((…))` that
-/// is plain itself. An expansion glued to a name or another expansion forms a name at run time,
-/// so it is not plain; nor is any quote, escape or other expansion.
+/// space (its output, run-time text), as does a nested `$((…))`, which is read as its own context.
+/// Plain pieces are those, text of identifiers, numbers, operators and spaces, and
+/// `$name`/`${name}` (a name, a positional or `# ? $ ! @ *`). An expansion glued to a name or
+/// another expansion forms a name at run time, so it is not plain; nor is any quote, escape or
+/// other expansion.
 fn plain_view(text: &str) -> Option<String> {
     let pieces = word::parse(text, &ParserOptions::default()).ok()?;
     let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -1942,14 +1943,10 @@ fn plain_view(text: &str) -> Option<String> {
                 out.push_str(&name);
                 out.push('}');
             }
-            WordPiece::CommandSubstitution(_) | WordPiece::BackquotedCommandSubstitution(_) => {
-                out.push(' ')
-            }
-            WordPiece::ArithmeticExpression(e) => {
-                out.push('(');
-                out.push_str(&plain_view(&e.value)?);
-                out.push(')');
-            }
+            // Run-time output, and an integer whose text is read as its own context.
+            WordPiece::CommandSubstitution(_)
+            | WordPiece::BackquotedCommandSubstitution(_)
+            | WordPiece::ArithmeticExpression(_) => out.push(' '),
             _ => return None,
         }
         joins = true;
