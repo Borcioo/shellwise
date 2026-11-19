@@ -1167,7 +1167,7 @@ impl Location {
                 in_shell,
             } => {
                 // Ruling 49: a command the script defines may do anything.
-                if calls_defined(&raw, &self.defined) {
+                if calls_defined(&raw, self.shell, &self.defined) {
                     return unknown;
                 }
                 if !LOCATION_COMMANDS.contains(&name.as_str()) {
@@ -1666,7 +1666,7 @@ fn is_location_command(c: &SimpleCommand, shell: Shell, defined: &[String]) -> b
         return true;
     }
     match unwrap(c) {
-        Run::Cmd { raw, .. } if calls_defined(&raw, defined) => true,
+        Run::Cmd { raw, .. } if calls_defined(&raw, shell, defined) => true,
         Run::Cmd {
             name,
             raw,
@@ -1691,9 +1691,15 @@ fn changes_location(s: &Script, shell: Shell, defined: &[String]) -> bool {
 }
 
 /// A call of `raw` (as written, lowercased) runs a command the script defines (`defined`, where
-/// `*` stands for any name).
-fn calls_defined(raw: &str, defined: &[String]) -> bool {
-    defined.iter().any(|d| d == "*" || d == raw)
+/// `*` stands for any name): the name itself or, in pwsh, the command a shipped alias names and
+/// the Set-Location the shipped `cd..`, `cd\` and `cd~` run (fix7\spike-shadow.log).
+fn calls_defined(raw: &str, shell: Shell, defined: &[String]) -> bool {
+    let pwsh = is_pwsh(shell);
+    let target = pwsh.then(|| table(shell).alias(raw)).flatten();
+    let runs_sl = pwsh && matches!(raw, "cd.." | "cd\\" | "cd~");
+    defined.iter().any(|d| {
+        d == "*" || d == raw || target == Some(d.as_str()) || (runs_sl && d == "set-location")
+    })
 }
 
 /// The command names `s` defines anywhere, lowercased, without a scope prefix (Ruling 49):
@@ -2560,8 +2566,8 @@ fn absolutize(
         let sep = if os == Os::Windows { '\\' } else { '/' };
         Ok(canonical(&format!("{b}{sep}{rel}"), os))
     };
-    if let Some(rest) = posix_drive_rest(&s, shell, os, by) {
-        return Err(if plain_drive_rest(rest) {
+    if let Some((drive, rest)) = posix_drive_rest(&s, shell, os, by) {
+        return Err(if plain_drive_path(drive, rest) {
             Fail::Drive
         } else {
             Fail::Unknown
@@ -2614,7 +2620,7 @@ fn absolutize(
             return Ok(canonical(&format!("{t}\\{rest}"), os));
         }
         // Ruling 33: the provider cmdlet reads the drive at run time.
-        if pwsh && by == DeleteBy::Provider && plain_drive_rest(rest) {
+        if pwsh && by == DeleteBy::Provider && plain_drive_path(drive, rest) {
             return Err(Fail::Drive);
         }
         return Err(Fail::Unknown);
@@ -2626,12 +2632,18 @@ fn absolutize(
 /// `FileSystem::` prefix stripped) as a PowerShell drive path: any `name:` whose name
 /// `drive_named` accepts. There are no letter drives and no `Temp:` shortcut (it follows the
 /// drive, which may be remapped). A native program gets the literal text, a relative file name.
-fn posix_drive_rest(s: &str, shell: Shell, os: Os, by: DeleteBy) -> Option<&str> {
+fn posix_drive_rest(s: &str, shell: Shell, os: Os, by: DeleteBy) -> Option<(&str, &str)> {
     if os != Os::Posix || !is_pwsh(shell) || by != DeleteBy::Provider {
         return None;
     }
     let (drive, rest) = s.split_once(':')?;
-    drive_named(drive).then_some(rest)
+    drive_named(drive).then_some((drive, rest))
+}
+
+/// `drive:rest` is one plain path on that drive: `plain_drive_rest`, and no `,` or `;` in the
+/// name either (`repo,Proj:\y` is a list that also holds `repo`).
+fn plain_drive_path(drive: &str, rest: &str) -> bool {
+    !drive.contains([',', ';']) && plain_drive_rest(rest)
 }
 
 /// pwsh reads `drive`, the text before a path's first `:`, as a drive name (Ruling 49): a plain

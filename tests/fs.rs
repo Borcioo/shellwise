@@ -2903,6 +2903,36 @@ fn a_drive_name_is_any_prefix_powershell_does_not_reject() {
             ri(r"1:\y"),
             unproven("1"),
         ),
+        // An unquoted `,` makes a list (`repo,Proj:\y` also deletes `repo`) and a `;` a second
+        // statement: such a prefix is no plain drive path.
+        (
+            r"Windows git; repo,Proj:\y".to_string(),
+            Os::Windows,
+            vec![git()],
+            rr(r"repo,Proj:\y"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            r"Windows git; repo;Proj:\y".to_string(),
+            Os::Windows,
+            vec![git()],
+            rr(r"repo;Proj:\y"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "POSIX git; repo,Proj:/y".to_string(),
+            px,
+            vec![git()],
+            rr("repo,Proj:/y"),
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "POSIX git; repo;Proj:/y".to_string(),
+            px,
+            vec![git()],
+            rr("repo;Proj:/y"),
+            MAY_BE_CRITICAL,
+        ),
         (
             r"Windows New-PSDrive my-drive; my-drive:\y".to_string(),
             Os::Windows,
@@ -4429,6 +4459,66 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
             ],
             ".",
             MAY_BE_CRITICAL,
+        ),
+        // A shipped alias or location function runs the definition of the command it names
+        // (fix7\spike-shadow.log: each stays).
+        (
+            "function Set-Location {}; cd sub",
+            ps,
+            repo,
+            vec![func("Set-Location", vec![]), cd_sub()],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "function Set-Location {}; cd..",
+            ps,
+            sub,
+            vec![func("Set-Location", vec![]), one("cd..", and)],
+            r"..\repo",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "function Push-Location {}; pushd sub",
+            ps,
+            repo,
+            vec![
+                func("Push-Location", vec![]),
+                stmt(lits("pushd", &[sub]), and),
+            ],
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "function Get-ChildItem {}; cd sub && ls",
+            ps,
+            repo,
+            then_call(func("Get-ChildItem", vec![]), lits("ls", &[])),
+            ".",
+            MAY_BE_CRITICAL,
+        ),
+        (
+            "Git Bash function Set-Location {}; cd sub (control: no alias table)",
+            gb,
+            repo,
+            vec![
+                func("Set-Location", vec![]),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+            ],
+            ".",
+            paths(&[sub]),
+        ),
+        (
+            "Git Bash function Get-ChildItem {}; cd sub && ls (control)",
+            gb,
+            repo,
+            vec![
+                func("Get-ChildItem", vec![]),
+                stmt(lits("cd", &["/c/w/repo/sub"]), and),
+                one("ls", and),
+            ],
+            ".",
+            paths(&[sub]),
         ),
         // Controls: an undefined plain name, another defined name, the shipped `cd..` (N6i),
         // a function named `Function:f` (it defines no `f`: spike-defnames.log), `alias -p`.
