@@ -4877,3 +4877,12 @@ error = true
 cmds = [["Write-Output", "-a=b:"]]
 comments = []
 methods = []
+
+[[row]]
+id = "param-two-dash-at-glued-paren"
+mechanism = "a two-dash word ending in `@` before `(1)`: two arguments, as the tree reads them"
+command = "Write-Output --a=b@(1)"
+error = false
+cmds = [["Write-Output", "--a=b@", "(1)"]]
+comments = []
+methods = []
