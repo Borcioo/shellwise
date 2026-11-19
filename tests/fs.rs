@@ -8331,6 +8331,9 @@ fn a_script_alias_is_read_as_the_command_it_names() {
         let def = |c: &str, a: &[&str]| st(lits(c, a));
         let b_ni = || def("Set-Alias", &["b", "New-Item"]);
         let time = |a: &[&str]| lits("time", a);
+        let gmk = || st(lits("mk", &["/c/w/repo/t/j"]));
+        let gsub = || stmt(lits("cd", &["/c/w/repo/sub"]), and);
+        let back = || def("cd", &[r"C:\w\repo"]);
         rows.extend([
             // I-A: every `Alias:` writer has an entry (spike rr8 alias-provider.log C1-C3,
             // fix11 writers-*.log R2, K1, T1).
@@ -8411,6 +8414,32 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             // M-B: M21, `& mk` reads as the plain New-Item call (rr8_pins; the control
             // `New-Item t\j …; Remove-Item -Recurse o\x` gives o\x).
             ("M21 pwsh Set-Alias mk New-Item; & mk t\\j …; Remove-Item -Recurse o\\x", ps, vec![def("Set-Alias", &["mk", "New-Item"]), st(lits("&", &[&["mk"][..], &link_at[..]].concat()))], rr(r"C:\w\repo\o\x"), paths(&[r"C:\w\repo\o\x"])),
+            // Re-review 9 F1: a word holding `alias:` defines an alias only through a cmdlet
+            // that may write an item, in a pwsh dialect (rr9 probe5.log, probe8.log OB1-OB5,
+            // O1, O2): each row gives what its control gives.
+            ("O0 pwsh mk; Remove-Item (control)", ps, vec![mk()], del(), in_link.clone()),
+            ("O1 pwsh Write-Host 'Alias: x'; mk", ps, vec![def("Write-Host", &["Alias: x"]), mk()], del(), in_link.clone()),
+            ("O2 pwsh git commit -m 'alias: x'; mk", ps, vec![def("git", &["commit", "-m", "alias: x"]), mk()], del(), in_link.clone()),
+            ("OB0 Git Bash mk t/j; rm (control)", gb, vec![gmk()], gdel(), in_link.clone()),
+            ("OB1 Git Bash echo alias:x; mk t/j", gb, vec![def("echo", &["alias:x"]), gmk()], gdel(), in_link.clone()),
+            ("OB2 Git Bash git commit -m 'alias: x'; mk t/j", gb, vec![def("git", &["commit", "-m", "alias: x"]), gmk()], gdel(), in_link.clone()),
+            ("OB3 Git Bash grep -rn alias: .; mk t/j", gb, vec![def("grep", &["-rn", "alias:", "."]), gmk()], gdel(), in_link.clone()),
+            ("OB4c Git Bash cd sub && rm -rf . (control)", gb, vec![gsub()], rmrf("."), sub.clone()),
+            ("OB4 Git Bash echo alias:x; cd sub && rm -rf .", gb, vec![def("echo", &["alias:x"]), gsub()], rmrf("."), sub.clone()),
+            ("OB5 Git Bash git commit -m 'alias: x'; cd sub && rm -rf .", gb, vec![def("git", &["commit", "-m", "alias: x"]), gsub()], rmrf("."), sub.clone()),
+            ("XB1 Git Bash Move-Item Alias:ni Alias:mk; mk t/j (bash runs no cmdlet)", gb, vec![def("Move-Item", &["Alias:ni", "Alias:mk"]), gmk()], gdel(), in_link.clone()),
+            ("XO5 pwsh Publish-Thing Alias:mk New-Item; mk (a cmdlet pwsh does not ship may write Alias:)", ps, vec![def("Publish-Thing", &["Alias:mk", "New-Item"]), mk()], del(), mbc.clone()),
+            ("XO6 5.1 Move-Item Alias:ni Alias:mk; foo", p5, vec![def("Move-Item", &["Alias:ni", "Alias:mk"]), st(lits("foo", &link_at))], del(), mbc.clone()),
+            // A relative item path after a move to `Alias:` (rr9 spike U1a-h).
+            ("U1a pwsh cd Alias:; New-Item mk -Value New-Item; cd repo; mk", ps, vec![def("cd", &["Alias:"]), def("New-Item", &["mk", "-Value", "New-Item"]), back(), mk()], del(), mbc.clone()),
+            ("U1b pwsh cd Alias:; Set-Item mk New-Item; cd repo; mk", ps, vec![def("cd", &["Alias:"]), def("Set-Item", &["mk", "New-Item"]), back(), mk()], del(), mbc.clone()),
+            ("U1c pwsh Set-Location Alias:\\; ni .\\mk -Value New-Item; cd repo; mk", ps, vec![def("Set-Location", &[r"Alias:\"]), def("ni", &[r".\mk", "-Value", "New-Item"]), back(), mk()], del(), mbc.clone()),
+            ("U1d pwsh pushd Alias:; Set-Content mk New-Item; popd; mk", ps, vec![def("pushd", &["Alias:"]), def("Set-Content", &["mk", "New-Item"]), def("popd", &[]), mk()], del(), mbc.clone()),
+            ("U1e pwsh cd Alias:; New-Item mk -Value New-Item; mk (no cd back)", ps, vec![def("cd", &["Alias:"]), def("New-Item", &["mk", "-Value", "New-Item"]), mk()], del(), mbc.clone()),
+            ("U1f 5.1 cd Alias:; New-Item mk -Value New-Item; cd repo; mk", p5, vec![def("cd", &["Alias:"]), def("New-Item", &["mk", "-Value", "New-Item"]), back(), mk()], del(), mbc.clone()),
+            ("U1g pwsh cd Alias:; Copy-Item ni mk; cd repo; mk", ps, vec![def("cd", &["Alias:"]), def("Copy-Item", &["ni", "mk"]), back(), mk()], del(), mbc.clone()),
+            ("U1h pwsh Set-Alias b New-Item; cd Alias:; Rename-Item b mk; cd repo; mk", ps, vec![b_ni(), def("cd", &["Alias:"]), def("Rename-Item", &["b", "mk"]), back(), mk()], del(), mbc.clone()),
+            ("U1i pwsh cd C:\\w; New-Item mk -Value New-Item; cd repo; mk (control: a file)", ps, vec![def("cd", &[r"C:\w"]), def("New-Item", &["mk", "-Value", "New-Item"]), back(), mk()], del(), in_link.clone()),
         ]);
     }
     let mut bad: Vec<String> = Vec::new();

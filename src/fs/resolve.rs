@@ -1010,7 +1010,7 @@ impl Location {
     /// no file system is no file only when every part of the command is in a small harmless set
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
-        let aliases = script_aliases(script);
+        let aliases = script_aliases(script, is_pwsh(self.shell));
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
@@ -1924,14 +1924,14 @@ type Alias = (String, Option<Vec<String>>);
 /// The aliases `s` defines anywhere (`alias_defs`), also through a call of one of them
 /// (`Set-Alias sa Set-Alias; sa up Set-Location`). Each pass reads every node with the table so
 /// far and keeps every definition any pass found, so the table only grows; its values are words
-/// of the script's own text, so it stops.
-fn script_aliases(s: &Script) -> Vec<Alias> {
+/// of the script's own text, so it stops. `pwsh`: the script may run in a pwsh dialect.
+fn script_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
     let mut table: Vec<Alias> = Vec::new();
     loop {
         let mut next = table.clone();
         visit_script(s, &table, &mut |n| {
             if let Node::Cmd(c) = n {
-                next.extend(alias_defs(c));
+                next.extend(alias_defs(c, pwsh));
             }
         });
         next.sort();
@@ -1945,9 +1945,10 @@ fn script_aliases(s: &Script) -> Vec<Alias> {
 
 /// The aliases command `c` defines, whatever the dialect: a definition the shell does not run
 /// only adds a reading. pwsh: `$alias:n = v`, and each cmdlet the command word may be
-/// (`cmdlet_readings`) as `cmdlet_alias_defs` reads it, an alias of any name and value where it
-/// cannot. bash: `alias n='v …'`. A name the hook cannot read is `defined_names`' `*`.
-fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
+/// (`cmdlet_readings`) as `cmdlet_alias_defs` reads it, and where it cannot, an alias of any name
+/// and value when `pwsh` (a pwsh dialect) and the cmdlet may write an item (`item_cmdlet`).
+/// bash: `alias n='v …'`. A name the hook cannot read is `defined_names`' `*`.
+fn alias_defs(c: &SimpleCommand, pwsh: bool) -> Vec<Alias> {
     let mut out: Vec<Alias> = c
         .assigns
         .iter()
@@ -1978,12 +1979,25 @@ fn alias_defs(c: &SimpleCommand) -> Vec<Alias> {
         return out;
     }
     for cmdlet in cmdlet_readings(&name, &raw) {
+        // `None`: an `Alias:` path the reader cannot place. A move there (`cd Alias:`) may put
+        // a later relative item path on `Alias:` (rr9 spike U1a-h).
+        let moves = matches!(cmdlet.as_str(), "set-location" | "push-location");
         match cmdlet_alias_defs(&cmdlet, args) {
             Some(found) => out.extend(found),
-            None => out.push(("*".to_string(), None)),
+            None if pwsh && (moves || item_cmdlet(&cmdlet)) => out.push(("*".to_string(), None)),
+            None => {}
         }
     }
     out
+}
+
+/// `cmdlet` (lowercased, no alias) may be a cmdlet that writes a provider item: a Verb-Noun name,
+/// shipped or not, other than a stream writer (`Write-Host`, `Write-Output`), which takes no
+/// path, and a location move, which writes no item.
+fn item_cmdlet(cmdlet: &str) -> bool {
+    cmdlet_name(cmdlet)
+        && !cmdlet.starts_with("write-")
+        && !matches!(cmdlet, "set-location" | "push-location")
 }
 
 /// The cmdlets a command word may be, lowercased: the one a shipped alias names in pwsh 7 or in
@@ -2754,7 +2768,8 @@ const PS_ITEM_WRITERS: [&str; 30] = [
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
 /// command or a script call (PowerShell) may assign anything.
 pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
-    visit_script(script, &script_aliases(script), &mut |n| match n {
+    // The dialect is not known here: read the script as pwsh too.
+    visit_script(script, &script_aliases(script, true), &mut |n| match n {
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {
             let ty = m.type_name.to_ascii_lowercase();
