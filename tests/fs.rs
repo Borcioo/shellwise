@@ -7217,6 +7217,118 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             rmrf("/c/w/repo/t/j/x"),
             mbc.clone(),
         ),
+        // ---- pwsh definitions bound as PowerShell binds them, two values, and the names pwsh
+        // tries for a call (fix10\spike\lookup.log, params.log, ni.log).
+        (
+            "LP1 pwsh Set-Alias -Name mk -Value New-Item; mk …",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["-Name", "mk", "-Value", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LP2 pwsh New-Alias -Name mk -Value New-Item -Scope Global; mk …",
+            ps,
+            vec![
+                st(lits(
+                    "New-Alias",
+                    &["-Name", "mk", "-Value", "New-Item", "-Scope", "Global"],
+                )),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LP3 pwsh Set-Alias -Va New-Item -N mk -Option AllScope; mk …",
+            ps,
+            vec![
+                st(lits(
+                    "Set-Alias",
+                    &["-Va", "New-Item", "-N", "mk", "-Option", "AllScope"],
+                )),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LP4 pwsh Set-Alias mk Get-Date; Set-Alias mk New-Item; mk … (two values)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["mk", "Get-Date"])),
+                st(lits("Set-Alias", &["mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LP6 pwsh Set-Item -LiteralPath Alias:mk -Value New-Item; mk …",
+            ps,
+            vec![
+                st(lits(
+                    "Set-Item",
+                    &["-LiteralPath", "Alias:mk", "-Value", "New-Item"],
+                )),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LP7 pwsh Set-Alias mk $v; mk … (a value not read may make a link)",
+            ps,
+            vec![
+                with("Set-Alias", vec![lit("mk"), var("v")]),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LG1 pwsh Set-Alias Get-Mk New-Item; mk … (the Get- retry)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["Get-Mk", "New-Item"])),
+                st(lits("mk", &link_at)),
+            ],
+            rr(r"C:\w\repo\t\j\x"),
+            mbc.clone(),
+        ),
+        (
+            "LG2 pwsh Set-Alias New-Item Invoke-Expression; ni 'x' (a shipped alias's target)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["New-Item", "Invoke-Expression"])),
+                st(lits("ni", &["x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LG3 pwsh Set-Alias Get-E Invoke-Expression; & e 'x' (the Get- retry of an operand)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["Get-E", "Invoke-Expression"])),
+                st(lits("&", &["e", "x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
+        (
+            "LG4 pwsh Set-Alias Get-ChildItem Invoke-Expression; & gci 'x' (an operand's shipped target)",
+            ps,
+            vec![
+                st(lits("Set-Alias", &["Get-ChildItem", "Invoke-Expression"])),
+                st(lits("&", &["gci", "x"])),
+            ],
+            ri(r"Proj:\y"),
+            mbc.clone(),
+        ),
         // ---- the call is still read as written (an alias defined later or in a branch).
         (
             "SH1 Git Bash ln -s /c/x t/j; alias ln=true (shadowed later)",
@@ -7432,14 +7544,14 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             mbc.clone(),
         ),
         (
-            "SU2 pwsh Set-Alias e Get-Date -Option x; e 'x' (a form not read)",
+            "SU2 pwsh Set-Alias e Get-Date -Option x; e 'x' (bound: e runs Get-Date, control)",
             ps,
             vec![
                 st(lits("Set-Alias", &["e", "Get-Date", "-Option", "x"])),
                 st(lits("e", &["x"])),
             ],
             ri(r"Proj:\y"),
-            mbc.clone(),
+            proj(true),
         ),
         (
             "SU3 pwsh Set-Item Alias:e $v; e 'x' (a value not read)",
@@ -7713,6 +7825,32 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             mbc.clone(),
         ),
     ]);
+    // ---- more readings than the cap (2^7 ways to read `a0`): the call may be any command.
+    let mut tree: Vec<Stmt> = Vec::new();
+    for k in 0..8 {
+        for n in ["a", "b"] {
+            let (to_a, to_b) = if k == 7 {
+                ("true".to_string(), "true".to_string())
+            } else {
+                (format!("a{}", k + 1), format!("b{}", k + 1))
+            };
+            tree.push(st(cmd(
+                "alias",
+                vec![
+                    lit(&format!("{n}{k}={to_a}")),
+                    lit(&format!("{n}{k}={to_b}")),
+                ],
+            )));
+        }
+    }
+    tree.push(st(lits("a0", &["/c/w/repo/t/j"])));
+    rows.push((
+        "LX1 Git Bash alias a0=a1 a0=b1 … a7=true; a0 t/j (over the cap)",
+        gb,
+        tree,
+        rmrf("/c/w/repo/t/j/x"),
+        mbc.clone(),
+    ));
     let mut bad: Vec<String> = Vec::new();
     for (label, shell, before, delete, want) in rows {
         let got = judge(shell, &before, &delete);
@@ -7840,6 +7978,26 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ps,
             vec![
                 st(lits("Set-Alias", &["e", "Invoke-Expression"])),
+                st(lits("e", &["x"])),
+            ],
+            "env:TEMP",
+            true,
+        ),
+        (
+            "VP3 pwsh New-Item -Name e -Path Alias: -Value Invoke-Expression; e 'x'",
+            ps,
+            vec![
+                st(lits(
+                    "New-Item",
+                    &[
+                        "-Name",
+                        "e",
+                        "-Path",
+                        "Alias:",
+                        "-Value",
+                        "Invoke-Expression",
+                    ],
+                )),
                 st(lits("e", &["x"])),
             ],
             "env:TEMP",
