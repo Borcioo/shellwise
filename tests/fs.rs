@@ -2152,7 +2152,23 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
         ),
         (". .\\x.ps1", vec![stmt(lits(".", &[r".\x.ps1"]), seq)]),
         (". m.psm1", vec![stmt(lits(".", &["m.psm1"]), seq)]),
-        ("& run", vec![stmt(lits("&", &["run"]), seq)]),
+        // Ruling 38: `&`/`.` run the name they are given, and every check reads that name.
+        (
+            "& Invoke-Expression $x",
+            vec![stmt(
+                cmd("&", vec![lit("Invoke-Expression"), var("x")]),
+                seq,
+            )],
+        ),
+        (
+            "& Set-Alias Remove-Item",
+            vec![stmt(lits("&", &["Set-Alias", "Remove-Item", "x"]), seq)],
+        ),
+        ("& $f", vec![stmt(cmd("&", vec![var("f")]), seq)]),
+        // A name outside the plain-token shape: a drive-relative path, a colon, a script.
+        ("C:x", vec![stmt(lits("C:x", &[]), seq)]),
+        ("a:b", vec![stmt(lits("a:b", &[]), seq)]),
+        ("& C:x", vec![stmt(lits("&", &["C:x"]), seq)]),
         (
             "& New-PSDrive",
             vec![stmt(
@@ -2245,6 +2261,27 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
     for (label, before) in [
         ("& Get-Date", stmt(lits("&", &["Get-Date"]), seq)),
         ("wrapper alone", stmt(lits("command", &[]), seq)),
+        // Ruling 38: one control per accepted shape of a plain token.
+        ("& run", stmt(lits("&", &["run"]), seq)),
+        (". Get-Date", stmt(lits(".", &["Get-Date"]), seq)),
+        ("letters", stmt(lits("cargo", &["build"]), seq)),
+        ("dot", stmt(lits("rm.exe", &["x"]), seq)),
+        ("dash", stmt(lits("Get-Date", &[]), seq)),
+        ("underscore and digits", stmt(lits("my_tool2", &[]), seq)),
+        (
+            "a loop",
+            Stmt::Loop {
+                body: script(vec![git()]),
+                span: Span::default(),
+            },
+        ),
+        (
+            "function defined, not called",
+            Stmt::Func {
+                name: "g".to_string(),
+                body: script(vec![git()]),
+            },
+        ),
         (
             "Set-Alias g; git",
             stmt(lits("Set-Alias", &["g", "x"]), seq),
