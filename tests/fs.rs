@@ -8392,6 +8392,10 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             ("XC6 pwsh Copy-Item $s $d; foo (control: no Alias: path)", ps, vec![with("Copy-Item", vec![var("s"), var("d")]), st(lits("foo", &link_at))], del(), in_link.clone()),
             ("S9 pwsh Set-Item -LiteralPath $p New-Item; mk", ps, vec![with("Set-Item", vec![lit("-LiteralPath"), var("p"), lit("New-Item")]), mk()], del(), mbc.clone()),
             ("S10 pwsh Set-Item @p; mk (a splat may carry an Alias: path and a value)", ps, vec![def("Set-Item", &["@p"]), mk()], del(), mbc.clone()),
+            ("X1f 5.1 sc Alias:mk Get-Date; mk (control: sc is Set-Content in 5.1)", p5, vec![def("sc", &["Alias:mk", "Get-Date"]), mk()], del(), in_link.clone()),
+            ("X3g pwsh Set-Alias b New-Item; Rename-Item Alias:b $n; foo", ps, vec![b_ni(), with("Rename-Item", vec![lit("Alias:b"), var("n")]), st(lits("foo", &link_at))], del(), mbc.clone()),
+            ("B5c pwsh Set-Item -LiteralPath Alias:mk New-Item; foo (control: only mk)", ps, vec![def("Set-Item", &["-LiteralPath", "Alias:mk", "New-Item"]), st(lits("foo", &link_at))], del(), in_link.clone()),
+            ("XC7 pwsh Move-Item Function:a Function:mk; foo (control: no Alias: path)", ps, vec![def("Move-Item", &["Function:a", "Function:mk"]), st(lits("foo", &link_at))], del(), in_link.clone()),
             // M-B: M21, `& mk` reads as the plain New-Item call (rr8_pins; the control
             // `New-Item t\j …; Remove-Item -Recurse o\x` gives o\x).
             ("M21 pwsh Set-Alias mk New-Item; & mk t\\j …; Remove-Item -Recurse o\\x", ps, vec![def("Set-Alias", &["mk", "New-Item"]), st(lits("&", &[&["mk"][..], &link_at[..]].concat()))], rr(r"C:\w\repo\o\x"), paths(&[r"C:\w\repo\o\x"])),
