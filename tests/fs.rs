@@ -8789,3 +8789,211 @@ fn a_cd_in_a_heredoc_substitution_is_seen() {
     let quoted = format!("cat <<{q}EOF{q}{nl}$(cd /tmp/x){nl}EOF{nl}rm -rf .");
     assert_eq!(last_target_bash(&quoted), paths(&["/w/repo"]), "{quoted}");
 }
+
+// ------------------------------------------------------------ through the real pwsh parser
+
+/// `src` parsed by the real pwsh parser for Windows, the whole command read and the location
+/// following every statement before the last; the last argument of the last statement's first
+/// command, judged with that command's own `DeleteBy`.
+fn last_target_pwsh(src: &str) -> (Word, Target) {
+    let shell = Shell::Pwsh;
+    let script = shellwise::parse::pwsh::parse(src, shell, Os::Windows)
+        .unwrap_or_else(|e| panic!("{src}: {e:?}"));
+    let (mut loc, env) = win(shell);
+    loc.read_script(&script);
+    let n = script.stmts.len();
+    for i in 0..n - 1 {
+        loc.after_in(&script, i, &env);
+    }
+    let Stmt::Pipeline(p) = &script.stmts[n - 1] else {
+        panic!(
+            "{src}: last statement is no pipeline: {:?}",
+            script.stmts[n - 1]
+        )
+    };
+    let Elem::Cmd(c) = &p.elems[0] else {
+        panic!("{src}: no command")
+    };
+    let word = c.args.last().expect("a target").clone();
+    let by = delete_by(c, shell, Os::Windows);
+    let got = sorted(target(&word, &loc, &env, by, &real(), &far()));
+    (word, got)
+}
+
+/// A PowerShell list argument (`a,b`) is several paths: the hook cannot judge the joined text as
+/// one, and refuses the whole word as possibly critical whatever order its elements take. A
+/// quoted comma is one path.
+#[test]
+fn a_pwsh_list_argument_is_refused_as_maybe_critical() {
+    let q = '\'';
+    let quoted = format!("Remove-Item {q}C:\\a,b{q}");
+    let rows: Vec<(String, bool, Target)> = vec![
+        (
+            r"Remove-Item -Recurse C:\w\repo\a,C:\x".to_string(),
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        (r"rm -r .\a, $env:TEMP".to_string(), true, MAY_BE_CRITICAL),
+        // A variable before the separator does not make the list only dynamic.
+        (
+            r"Remove-Item -Recurse $x, C:\w\repo\a".to_string(),
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        // Joined, `.\a,..` reads as one harmless folder; its element `..` is the repo's parent.
+        (
+            r"Remove-Item -Recurse .\a,..".to_string(),
+            true,
+            MAY_BE_CRITICAL,
+        ),
+        // Control: a quoted comma is text, one literal path.
+        (quoted, false, paths(&[r"C:\a,b"])),
+    ];
+    let bad: Vec<String> = rows
+        .iter()
+        .filter_map(|(src, list, want)| {
+            let (word, got) = last_target_pwsh(src);
+            let has_sep = word.parts.contains(&WordPart::ListSep);
+            (has_sep != *list || got != *want)
+                .then(|| format!("{src}: ListSep {has_sep} (want {list}), {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+/// PowerShell 7's `&&` and `||` join pipelines: a `Set-Location` after `||` may not run. Only
+/// `Set-Location … &&` makes the location certain (a failed `Set-Location; …` goes on where it
+/// was). PowerShell rejects `||` after a statement such as `if` (`ParseInput`: unexpected
+/// token), so the parser refuses it and nothing reads a certain location from it.
+#[test]
+fn a_pwsh_set_location_on_one_branch_of_a_join_leaves_the_location_uncertain() {
+    let both = paths(&[r"C:\w\repo", r"C:\x"]);
+    let or = Some(ChainOp::Or);
+    let rows: &[(&str, Option<ChainOp>, Target)] = &[
+        // Control: the delete runs only after the move.
+        (
+            r"Set-Location C:\x && Remove-Item -Recurse .",
+            None,
+            paths(&[r"C:\x"]),
+        ),
+        (
+            r"Test-Path a || Set-Location C:\x && Remove-Item -Recurse .",
+            or,
+            both.clone(),
+        ),
+        (
+            r"Test-Path a || Set-Location C:\x; Remove-Item -Recurse .",
+            or,
+            both.clone(),
+        ),
+        (
+            r"$(if ($a) { }) || Set-Location C:\x && Remove-Item -Recurse .",
+            or,
+            both.clone(),
+        ),
+        // A script block run in place is read as a mover (Task 9): stricter than the union.
+        (
+            r"& { if ($a) { } } || Set-Location C:\x && Remove-Item -Recurse .",
+            or,
+            MAY_BE_CRITICAL,
+        ),
+    ];
+    let mut bad: Vec<String> = Vec::new();
+    for (src, join, want) in rows {
+        let script = shellwise::parse::pwsh::parse(src, Shell::Pwsh, Os::Windows).unwrap();
+        // The `Set-Location` is the statement right before the delete.
+        let i = script.stmts.len() - 2;
+        let got_join = script.join(i);
+        let (_, got) = last_target_pwsh(src);
+        if got_join != *join || got != *want {
+            bad.push(format!(
+                "{src}: join {got_join:?} (want {join:?}), {got:?}, want {want:?}"
+            ));
+        }
+    }
+    let invalid = r"if ($a) { } || Set-Location C:\x; Remove-Item -Recurse .";
+    if let Ok(s) = shellwise::parse::pwsh::parse(invalid, Shell::Pwsh, Os::Windows) {
+        bad.push(format!("{invalid}: parsed, want a refusal: {s:?}"));
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+/// P-VAR through the real parser: `$p` holds `Alias:b`, so `Rename-Item $p mk` may make `mk` the
+/// `New-Item` alias, and `mk` then a junction inside the delete. The control has no rename.
+#[test]
+fn p_var_through_the_real_pwsh_parser_may_be_critical() {
+    let mk = r"mk C:\w\repo\t\j -ItemType Junction -Target C:\x";
+    let del = r"Remove-Item -Recurse C:\w\repo\t\j\x";
+    let rows = [
+        (
+            format!(
+                "Set-Alias b New-Item; $p = Write-Output Alias:b; Rename-Item $p mk; {mk}; {del}"
+            ),
+            MAY_BE_CRITICAL,
+        ),
+        (format!("{mk}; {del}"), paths(&[r"C:\w\repo\t\j\x"])),
+    ];
+    let bad: Vec<String> = rows
+        .iter()
+        .filter_map(|(src, want)| {
+            let (_, got) = last_target_pwsh(src);
+            (got != *want).then(|| format!("{src}: {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+/// The list rows Task 9 built by hand, through the real parser: a list in an `Alias:` writer or
+/// a link path still counts.
+#[test]
+fn pwsh_list_rows_through_the_real_parser_keep_their_verdict() {
+    let mk = r"mk C:\w\repo\t\j -ItemType Junction -Target C:\x";
+    let del = r"Remove-Item -Recurse C:\w\repo\t\j\x";
+    let rows = [
+        // X2j: a list destination may be any alias.
+        (
+            format!(r"Copy-Item Alias:ni Alias:a,Alias:mk; {mk}; {del}"),
+            MAY_BE_CRITICAL,
+        ),
+        // A link among the paths of a list.
+        (
+            format!(
+                r"New-Item -ItemType Junction -Path C:\w\repo\a,C:\w\repo\t\j -Target C:\x; {del}"
+            ),
+            MAY_BE_CRITICAL,
+        ),
+        // Control: folders, no link.
+        (
+            format!(r"New-Item -ItemType Directory -Path C:\w\repo\a,C:\w\repo\b; {del}"),
+            paths(&[r"C:\w\repo\t\j\x"]),
+        ),
+    ];
+    let bad: Vec<String> = rows
+        .iter()
+        .filter_map(|(src, want)| {
+            let (_, got) = last_target_pwsh(src);
+            (got != *want).then(|| format!("{src}: {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} rows failed:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}

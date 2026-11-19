@@ -3101,6 +3101,11 @@ fn is_pwd(name: &str, shell: Shell) -> bool {
 /// The word's segments; `PWD` is `pwd` (the candidate folder).
 fn expand(w: &Word, env: &EnvView, shell: Shell, pwd: Option<&str>) -> Result<Vec<Seg>, Fail> {
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
+    // A list (`a,C:\`) is several paths, and any element may be critical: refuse the whole word
+    // before an element's variable can make it only dynamic. Joined, its text is no path.
+    if w.parts.contains(&WordPart::ListSep) {
+        return Err(Fail::Unknown);
+    }
     let mut out = Vec::new();
     for p in &w.parts {
         match p {
@@ -3140,6 +3145,8 @@ fn expand(w: &Word, env: &EnvView, shell: Shell, pwd: Option<&str>) -> Result<Ve
             WordPart::Var(name) => out.push(Seg::lit(env.get(name).ok_or(Fail::Dynamic)?)),
             WordPart::Tilde => out.push(Seg::lit(env.home().ok_or(Fail::Dynamic)?)),
             WordPart::Subst(_) | WordPart::Block(_) => return Err(Fail::Dynamic),
+            // Unreachable: a list is refused above.
+            WordPart::ListSep => return Err(Fail::Unknown),
         }
     }
     Ok(out)

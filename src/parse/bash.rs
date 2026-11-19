@@ -1510,7 +1510,8 @@ impl Lower {
                     continue;
                 }
                 // A file name is text the script does not hold: read `_`, which is never clean.
-                WordPart::Glob(_) => {
+                // Bash never builds a `ListSep`; one would be read the same way.
+                WordPart::Glob(_) | WordPart::ListSep => {
                     self.read_arith("_");
                     continue;
                 }
@@ -2558,6 +2559,9 @@ fn rendered(w: &Word, subst: impl Fn(&Script) -> String) -> String {
             }
             WordPart::Tilde => out.push('~'),
             WordPart::Subst(s) | WordPart::Block(s) => out.push_str(&subst(s)),
+            // Bash never builds a `ListSep`; a list has no single value, so render one as an
+            // unread substitution, which `plain_view` never takes as plain.
+            WordPart::ListSep => out.push_str("$(…)"),
         }
     }
     out

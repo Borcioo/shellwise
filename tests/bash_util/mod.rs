@@ -34,6 +34,7 @@ pub fn shape(w: &Word) -> String {
             WordPart::Var(_) => s.push('$'),
             WordPart::Subst(_) | WordPart::Block(_) => s.push_str("$()"),
             WordPart::Tilde => s.push('~'),
+            WordPart::ListSep => s.push_str("<,>"),
         }
     }
     s

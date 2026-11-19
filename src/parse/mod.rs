@@ -4,6 +4,7 @@
 use crate::level::Span;
 
 pub mod bash;
+pub mod pwsh;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {

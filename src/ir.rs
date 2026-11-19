@@ -83,7 +83,14 @@ pub struct SimpleCommand {
     pub opaque: bool,
 }
 
-/// A static .NET call such as `[IO.Directory]::Delete(...)`.
+/// A .NET method call.
+///
+/// - Static, `[IO.Directory]::Delete(...)`: `type_name` is the type as written (`IO.Directory`)
+///   and `args` are the call's arguments.
+/// - Static on an expression, `$t::Delete(...)`: `type_name` is the receiver's text and `args[0]`
+///   is the receiver.
+/// - Instance, `$x.Delete(...)` or `(Get-Item x).Delete(...)`: `type_name` is empty, since the
+///   type is known only at run time, and `args[0]` is the receiver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodCall {
     pub type_name: String,
@@ -133,12 +140,19 @@ pub enum WordPart {
     Block(Box<Script>),
     Glob(String),
     Tilde,
+    /// A separator between the elements of a list argument (PowerShell `a,b`, `'a', $b`,
+    /// `-Path:a,b`): the word is one argument PowerShell binds as an array, and the parts between
+    /// two separators are one element. Only a real array separator is a `ListSep`; a quoted or
+    /// escaped comma (`'a,b'`, `` a`,b ``) stays inside a `Literal`. `Word::quote` describes the
+    /// elements' quoting, not whether the word is a list.
+    ListSep,
 }
 
 impl Word {
     /// The word's text when every part resolves at check time: literals and globs as written,
     /// variables from `env`, `~` from `env`'s home. `None` for a substitution, a script block or
-    /// a variable `env` cannot resolve.
+    /// a variable `env` cannot resolve, and for a list (split it on `ListSep` first: its text
+    /// is no single value).
     pub fn static_value(&self, env: &EnvView) -> Option<String> {
         let mut out = String::new();
         for part in &self.parts {
@@ -146,7 +160,7 @@ impl Word {
                 WordPart::Literal(s) | WordPart::Glob(s) => out.push_str(s),
                 WordPart::Var(name) => out.push_str(env.get(name)?),
                 WordPart::Tilde => out.push_str(env.home()?),
-                WordPart::Subst(_) | WordPart::Block(_) => return None,
+                WordPart::Subst(_) | WordPart::Block(_) | WordPart::ListSep => return None,
             }
         }
         Some(out)
@@ -280,5 +294,16 @@ mod tests {
             assert!(w.is_dynamic() || w.parts == vec![WordPart::Tilde], "{w:?}");
         }
         assert!(!word(vec![WordPart::Literal("x".into())]).is_dynamic());
+    }
+
+    #[test]
+    fn a_list_has_no_single_static_value() {
+        let w = word(vec![
+            WordPart::Literal("C:\\".into()),
+            WordPart::ListSep,
+            WordPart::Literal("x".into()),
+        ]);
+        assert_eq!(w.static_value(&EnvView::new()), None);
+        assert!(!w.is_dynamic());
     }
 }
