@@ -87,6 +87,7 @@ fn script(stmts: Vec<Stmt>) -> Script {
     Script {
         stmts,
         comments: Vec::new(),
+        joins: Vec::new(),
     }
 }
 

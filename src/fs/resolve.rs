@@ -2342,7 +2342,11 @@ enum Node<'a> {
 fn cmd_words(c: &SimpleCommand) -> Vec<&Word> {
     std::iter::once(&c.name)
         .chain(c.args.iter())
-        .chain(c.redirects.iter().map(|r| &r.target))
+        .chain(c.redirects.iter().map(|r| match r {
+            crate::ir::Redirect::File { target, .. } => target,
+            // An expanding here-document body holds its `$(…)` as `Subst` parts.
+            crate::ir::Redirect::Heredoc { body, .. } => body,
+        }))
         .chain(c.assigns.iter().map(|(_, w)| w))
         .collect()
 }
