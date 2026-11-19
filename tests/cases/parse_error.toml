@@ -141,6 +141,16 @@ fix = "correct the syntax at column"
 oracle = "refuses"
 
 [[row]]
+id = "pwsh-a-hash-inside-a-word-in-a-subexpression-is-no-comment"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Write-Output a#b)\"; Get-Date ("
+level = "warn"
+rules = ["parse-error"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
 id = "pwsh-a-string-left-open-after-a-subexpression-is-break"
 os = "any"
 shell = "pwsh"

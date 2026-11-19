@@ -261,7 +261,10 @@ fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
                     stack.push(S::Block);
                     i += 1;
                 }
-                '#' => stack.push(S::Line),
+                // Inside `$(`, a `#` in the middle of a word (`a#b`) is part of it.
+                '#' if matches!(top, S::Out) || i == 0 || starts_token(b[i - 1].1) => {
+                    stack.push(S::Line)
+                }
                 '(' if matches!(top, S::Sub(_)) => {
                     if let Some(S::Sub(depth)) = stack.last_mut() {
                         *depth += 1;
@@ -321,6 +324,11 @@ fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
         S::Double(at) => Some((QuoteKind::Double, at)),
         _ => None,
     })
+}
+
+/// Whether a token starts after `c`: whitespace or a character that ends a word.
+fn starts_token(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ';' | '(' | ')' | '{' | '}' | '|' | '&')
 }
 
 fn is_single_quote(c: char) -> bool {
