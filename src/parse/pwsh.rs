@@ -35,6 +35,17 @@ const STACK_BYTES: usize = 256 * 1024 * 1024;
 /// Parse `src` as the given PowerShell dialect on `os`. Any syntax error, unmodelled construct
 /// or nesting past `ir::MAX_NESTING` is an error: the caller fails closed.
 pub fn parse(src: &str, dialect: Shell, os: Os) -> Result<Script, ParseError> {
+    // Empty or blank text runs nothing, and PowerShell reports no error for it.
+    if matches!(dialect, Shell::Pwsh | Shell::Powershell5)
+        && src.chars().all(|c| {
+            matches!(
+                c,
+                ' ' | '\t' | '\r' | '\n' | '\u{b}' | '\u{c}' | '\u{a0}' | '\u{feff}'
+            )
+        })
+    {
+        return Ok(Script::default());
+    }
     let out = parse_lossy(src, dialect, os);
     if let Some(e) = out.tree_error {
         return Err(e);
@@ -217,71 +228,250 @@ fn first_tree_error(src: &str, tree: &Tree) -> Option<ParseError> {
             "PowerShell syntax error".to_string(),
         ),
     };
-    Some(match unclosed_quote(src) {
-        Some((quote, at)) => error(
+    let lexed = lex(src);
+    // `--%` passes the rest of its line as text, whose quotes and pipes the reading below would
+    // take as code: such a text names no kind.
+    let sure = lexed.sure && !src.contains("--%");
+    if let Some((quote, at)) = lexed.open.filter(|_| sure) {
+        return Some(error(
             Span {
                 start: at,
                 end: src.len(),
             },
             &message,
             ParseKind::UnclosedQuote(quote),
-        ),
-        None => error(sp, &message, ParseKind::Syntax),
-    })
+        ));
+    }
+    if sure {
+        if let Some(at) = empty_pipe(&lexed.code, &|at| piped_statement_at(tree.root_node(), at)) {
+            return Some(error(
+                at,
+                "PowerShell syntax error: an empty pipe element",
+                ParseKind::EmptyPipeElement,
+            ));
+        }
+        if let Some(at) = missing_argument(src, &lexed.code) {
+            return Some(error(
+                at,
+                "PowerShell syntax error: a parameter followed by a comma has no argument",
+                ParseKind::MissingArgument,
+            ));
+        }
+    }
+    Some(error(sp, &message, ParseKind::Syntax))
 }
 
-/// The quote left open at the end of `src` and the byte offset where it opens, read the way
-/// PowerShell reads quotes: `''` inside single quotes, backtick escapes and `""` inside double
-/// quotes, `#` comments outside them, and a `$(…)` subexpression inside double quotes read as
-/// code, with its own quotes and parentheses. When quotes nest, the innermost open one counts.
-fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
+/// What a reading of `src`'s quotes, here-strings and comments finds.
+struct Lexed {
+    /// The innermost quote or here-string left open at the end, and the byte offset where it
+    /// opens (the `@` of a here-string).
+    open: Option<(QuoteKind, usize)>,
+    /// The characters outside strings and comments, with their byte offsets. A string or
+    /// here-string is one `"` where it opens (and the code of a `$(…)` inside it follows), a
+    /// comment is one space, and an escaped character is one `x`.
+    code: Vec<(usize, char)>,
+    /// False when the text holds what this reading does not model (text after a here-string
+    /// header): then it names no kind.
+    sure: bool,
+}
+
+/// The first character of the bare word being read, and whether it holds a `=`.
+#[derive(Clone, Copy, Default)]
+struct WordStart {
+    first: Option<char>,
+    eq: bool,
+}
+
+impl WordStart {
+    /// A `#` here is word text, not a comment: in a bare word that starts with a letter (`a#b`,
+    /// `a'b'#c`), which is a command name or argument. After a variable, a number, a quote or a
+    /// bracket, and in a word holding `=` (a hashtable entry), an expression may be read, where
+    /// `#` starts a comment: those stay comments, the side that claims no unclosed quote.
+    fn holds_hash(self) -> bool {
+        self.first.is_some_and(char::is_alphabetic) && !self.eq
+    }
+}
+
+/// A comment inside `$(` in a string: PowerShell finds where the string ends without reading
+/// the comment, so its quotes are text and its parentheses still count.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubComment {
+    No,
+    Line,
+    Block,
+}
+
+/// Read `src` the way PowerShell reads quotes: `''` inside single quotes; backtick escapes and
+/// `""` inside double quotes; a here-string from `@'` or `@"` that ends its line to a line that
+/// starts with `'@` or `"@`; `#` comments outside strings (see `WordStart::holds_hash`); and a
+/// `$(…)` inside double quotes as code, with its own quotes and parentheses. When quotes nest,
+/// the innermost open one counts.
+fn lex(src: &str) -> Lexed {
     #[derive(Clone, Copy)]
     enum S {
-        Out,
+        Out(WordStart),
         /// Code inside `$(` in a double-quoted string, with its open parentheses.
-        Sub(usize),
+        Sub(usize, SubComment, WordStart),
         Single(usize),
         Double(usize),
+        HereSingle(usize),
+        HereDouble(usize),
         Line,
         Block,
     }
     let b: Vec<(usize, char)> = src.char_indices().collect();
-    let mut stack = vec![S::Out];
+    let mut stack = vec![S::Out(WordStart::default())];
+    let mut code = Vec::new();
     let mut i = 0;
+    let line_start = |i: usize| i > 0 && b[i - 1].1 == '\n';
     while i < b.len() {
         let (at, c) = b[i];
         let next = b.get(i + 1).map(|&(_, c)| c);
         let top = *stack.last().expect("the stack keeps its base");
         match top {
-            S::Out | S::Sub(_) => match c {
-                '`' => i += 1,
-                c if is_single_quote(c) => stack.push(S::Single(at)),
-                c if is_double_quote(c) => stack.push(S::Double(at)),
-                '<' if next == Some('#') => {
-                    stack.push(S::Block);
-                    i += 1;
-                }
-                // Inside `$(`, a `#` in the middle of a word (`a#b`) is part of it.
-                '#' if matches!(top, S::Out) || i == 0 || starts_token(b[i - 1].1) => {
-                    stack.push(S::Line)
-                }
-                '(' if matches!(top, S::Sub(_)) => {
-                    if let Some(S::Sub(depth)) = stack.last_mut() {
-                        *depth += 1;
+            S::Sub(depth, comment, _) if comment != SubComment::No => {
+                let ends = match comment {
+                    SubComment::Line => c == '\n' || c == '\r',
+                    _ => c == '#' && next == Some('>'),
+                };
+                if ends {
+                    if comment == SubComment::Block {
+                        i += 1;
+                    }
+                    set_top(
+                        &mut stack,
+                        S::Sub(depth, SubComment::No, WordStart::default()),
+                    );
+                    code.push((at, ' '));
+                } else {
+                    match c {
+                        '`' => i += 1,
+                        '(' => {
+                            set_top(&mut stack, S::Sub(depth + 1, comment, WordStart::default()))
+                        }
+                        ')' if depth == 0 => {
+                            stack.pop();
+                            code.push((at, ')'));
+                        }
+                        ')' => {
+                            set_top(&mut stack, S::Sub(depth - 1, comment, WordStart::default()))
+                        }
+                        _ => {}
                     }
                 }
-                ')' => match top {
-                    S::Sub(0) => {
-                        stack.pop();
+            }
+            S::Out(word) | S::Sub(_, _, word) => {
+                // The frame with the word grown by `c`: a boundary character ends the word.
+                let boundary =
+                    c.is_whitespace() || matches!(c, ';' | '(' | ')' | '{' | '}' | '|' | '&' | ',');
+                let grown = if boundary {
+                    WordStart::default()
+                } else {
+                    WordStart {
+                        first: word.first.or(Some(c)),
+                        eq: word.eq || c == '=',
                     }
-                    S::Sub(depth) => {
-                        stack.pop();
-                        stack.push(S::Sub(depth - 1));
+                };
+                let frame = |w: WordStart, depth: Option<usize>, k: SubComment| match top {
+                    S::Sub(d, _, _) => S::Sub(depth.unwrap_or(d), k, w),
+                    _ => S::Out(w),
+                };
+                set_top(&mut stack, frame(grown, None, SubComment::No));
+                match c {
+                    '`' => {
+                        // A backtick at the line end continues the line.
+                        let eol = matches!(next, Some('\n' | '\r'));
+                        code.push((at, if eol { ' ' } else { 'x' }));
+                        if eol {
+                            set_top(
+                                &mut stack,
+                                frame(WordStart::default(), None, SubComment::No),
+                            );
+                        }
+                        i += 1;
                     }
-                    _ => {}
-                },
-                _ => {}
-            },
+                    '@' if word.first.is_none()
+                        && next.is_some_and(|n| is_single_quote(n) || is_double_quote(n)) =>
+                    {
+                        // A here-string header ends its line; text after it is an error of
+                        // its own kind.
+                        let rest = &b[i + 2..];
+                        let Some(eol) = rest.iter().position(|&(_, c)| c == '\n').filter(|&e| {
+                            rest[..e]
+                                .iter()
+                                .all(|&(_, c)| matches!(c, ' ' | '\t' | '\r'))
+                        }) else {
+                            return Lexed {
+                                open: None,
+                                code,
+                                sure: false,
+                            };
+                        };
+                        let quote = next.expect("checked above");
+                        stack.push(if is_single_quote(quote) {
+                            S::HereSingle(at)
+                        } else {
+                            S::HereDouble(at)
+                        });
+                        code.push((at, '"'));
+                        i += 2 + eol;
+                    }
+                    c if is_single_quote(c) => {
+                        code.push((at, '"'));
+                        stack.push(S::Single(at));
+                    }
+                    c if is_double_quote(c) => {
+                        code.push((at, '"'));
+                        stack.push(S::Double(at));
+                    }
+                    '<' if next == Some('#') => {
+                        code.push((at, ' '));
+                        if matches!(top, S::Sub(..)) {
+                            set_top(
+                                &mut stack,
+                                frame(WordStart::default(), None, SubComment::Block),
+                            );
+                        } else {
+                            set_top(
+                                &mut stack,
+                                frame(WordStart::default(), None, SubComment::No),
+                            );
+                            stack.push(S::Block);
+                        }
+                        i += 1;
+                    }
+                    '#' if !word.holds_hash() => {
+                        code.push((at, ' '));
+                        if matches!(top, S::Sub(..)) {
+                            set_top(
+                                &mut stack,
+                                frame(WordStart::default(), None, SubComment::Line),
+                            );
+                        } else {
+                            set_top(
+                                &mut stack,
+                                frame(WordStart::default(), None, SubComment::No),
+                            );
+                            stack.push(S::Line);
+                        }
+                    }
+                    '(' | ')' if matches!(top, S::Sub(..)) => {
+                        code.push((at, c));
+                        if let S::Sub(d, _, _) = top {
+                            match (c, d) {
+                                (')', 0) => {
+                                    stack.pop();
+                                }
+                                (')', d) => {
+                                    set_top(&mut stack, frame(grown, Some(d - 1), SubComment::No))
+                                }
+                                _ => set_top(&mut stack, frame(grown, Some(d + 1), SubComment::No)),
+                            }
+                        }
+                    }
+                    _ => code.push((at, c)),
+                }
+            }
             S::Single(_) => {
                 if is_single_quote(c) {
                     if next.is_some_and(is_single_quote) {
@@ -291,12 +481,19 @@ fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
                     }
                 }
             }
-            S::Double(_) => {
+            S::Double(_) | S::HereDouble(_) => {
+                let here = matches!(top, S::HereDouble(_));
                 if c == '`' {
                     i += 1;
                 } else if c == '$' && next == Some('(') {
-                    stack.push(S::Sub(0));
+                    code.push((b[i + 1].0, '('));
+                    stack.push(S::Sub(0, SubComment::No, WordStart::default()));
                     i += 1;
+                } else if here {
+                    if is_double_quote(c) && next == Some('@') && line_start(i) {
+                        stack.pop();
+                        i += 1;
+                    }
                 } else if is_double_quote(c) {
                     if next.is_some_and(is_double_quote) {
                         i += 1;
@@ -305,9 +502,16 @@ fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
                     }
                 }
             }
+            S::HereSingle(_) => {
+                if is_single_quote(c) && next == Some('@') && line_start(i) {
+                    stack.pop();
+                    i += 1;
+                }
+            }
             S::Line => {
                 if c == '\n' || c == '\r' {
                     stack.pop();
+                    code.push((at, c));
                 }
             }
             S::Block => {
@@ -319,21 +523,206 @@ fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
         }
         i += 1;
     }
-    // A comment left open at the end sits on `Out` (no quote open) or inside `$(`, where it hides
-    // the `)`: PowerShell reports the paren, not the quote.
-    if matches!(stack.last(), Some(S::Line)) {
-        return None;
-    }
-    stack.iter().rev().find_map(|s| match *s {
-        S::Single(at) => Some((QuoteKind::Single, at)),
-        S::Double(at) => Some((QuoteKind::Double, at)),
+    let open = stack.iter().rev().find_map(|s| match *s {
+        S::Single(at) | S::HereSingle(at) => Some((QuoteKind::Single, at)),
+        S::Double(at) | S::HereDouble(at) => Some((QuoteKind::Double, at)),
         _ => None,
-    })
+    });
+    Lexed {
+        open,
+        code,
+        sure: true,
+    }
 }
 
-/// Whether a token starts after `c`: whitespace or a character that ends a word.
-fn starts_token(c: char) -> bool {
-    c.is_whitespace() || matches!(c, ';' | '(' | ')' | '{' | '}' | '|' | '&')
+fn set_top<T: Copy>(stack: &mut [T], v: T) {
+    if let Some(t) = stack.last_mut() {
+        *t = v;
+    }
+}
+
+/// Whether the tree holds, starting at `at`, a statement PowerShell refuses as the head of a
+/// pipeline: a `foreach`, `for`, `while`, `if` or `switch` statement.
+fn piped_statement_at(root: Node, at: usize) -> bool {
+    let mut n = root.descendant_for_byte_range(at, at);
+    while let Some(x) = n.filter(|x| x.start_byte() == at) {
+        if matches!(
+            x.kind(),
+            "foreach_statement"
+                | "for_statement"
+                | "while_statement"
+                | "if_statement"
+                | "switch_statement"
+        ) {
+            return true;
+        }
+        n = x.parent();
+    }
+    false
+}
+
+/// The first empty pipe element in the code of `lex`: a `|` with nothing after it (the end, `|`,
+/// `;`, `)` or `}`, past spaces, line ends and comments), as the span of that `|`; or a `|` right
+/// after a `}` that closes a block of a statement `is_statement` confirms at the statement's first
+/// word, as the span from that word to the `|`. PowerShell refuses both (EmptyPipeElement). A
+/// `||` is the chain operator.
+fn empty_pipe(code: &[(usize, char)], is_statement: &dyn Fn(usize) -> bool) -> Option<Span> {
+    // Per bracket level: where the statement that level is in starts, when it starts with a word.
+    let mut level: Vec<Option<usize>> = vec![None];
+    // The open brackets, a `{` with the statement it is a block of.
+    let mut open: Vec<Option<usize>> = Vec::new();
+    let mut at_start = true;
+    let mut closed: Option<usize> = None;
+    let mut j = 0;
+    while j < code.len() {
+        let (at, c) = code[j];
+        match c {
+            ' ' | '\t' => {}
+            '\n' | '\r' | ';' => {
+                at_start = true;
+                closed = None;
+                *level.last_mut()? = None;
+            }
+            '(' | '[' | '{' => {
+                let kw = if c == '{' { *level.last()? } else { None };
+                open.push(kw);
+                level.push(None);
+                at_start = c != '[';
+                closed = None;
+            }
+            ')' | ']' | '}' => {
+                let kw = open.pop()?;
+                level.pop();
+                closed = if c == '}' { kw } else { None };
+                at_start = false;
+            }
+            '|' => {
+                let pair = code.get(j + 1).is_some_and(|&(_, n)| n == '|');
+                if pair {
+                    if code.get(j + 2).is_some_and(|&(_, n)| n == '|') {
+                        return None;
+                    }
+                    j += 2;
+                    at_start = false;
+                    closed = None;
+                    continue;
+                }
+                if let Some(kw_at) = closed.filter(|&k| is_statement(k)) {
+                    return Some(Span {
+                        start: kw_at,
+                        end: at + 1,
+                    });
+                }
+                let after = code[j + 1..]
+                    .iter()
+                    .map(|&(_, n)| n)
+                    .find(|n| !matches!(n, ' ' | '\t' | '\n' | '\r'));
+                if after.is_none_or(|n| matches!(n, '|' | ';' | ')' | '}')) {
+                    return Some(Span {
+                        start: at,
+                        end: at + 1,
+                    });
+                }
+                at_start = false;
+                closed = None;
+            }
+            c if at_start && c.is_alphabetic() => {
+                let end = code[j..]
+                    .iter()
+                    .position(|&(_, n)| !n.is_alphanumeric())
+                    .map_or(code.len(), |k| j + k);
+                *level.last_mut()? = Some(at);
+                at_start = false;
+                closed = None;
+                j = end;
+                continue;
+            }
+            _ => {
+                at_start = false;
+                closed = None;
+            }
+        }
+        j += 1;
+    }
+    None
+}
+
+/// PowerShell operators spelled like a parameter (`-eq`), which a comma may follow in an
+/// expression (`$a -eq,1`); a comparison may carry a `c` or `i` prefix.
+const OPERATORS: &[&str] = &[
+    "eq",
+    "ne",
+    "gt",
+    "ge",
+    "lt",
+    "le",
+    "like",
+    "notlike",
+    "match",
+    "notmatch",
+    "contains",
+    "notcontains",
+    "in",
+    "notin",
+    "replace",
+    "split",
+    "join",
+    "is",
+    "isnot",
+    "as",
+    "and",
+    "or",
+    "xor",
+    "not",
+    "band",
+    "bor",
+    "bxor",
+    "bnot",
+    "shl",
+    "shr",
+    "f",
+];
+
+fn is_operator(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    OPERATORS.contains(&n.as_str())
+        || n.strip_prefix(['c', 'i'])
+            .is_some_and(|r| OPERATORS.contains(&r))
+}
+
+/// The first parameter glued to a comma (`-L1,2:f`) in the code of `lex`: a `-` after a space,
+/// then a letter or `_`, then letters, digits or `_`, then `,`. PowerShell reads the parameter,
+/// then finds no argument before the comma (MissingArgument). The span is the word as written,
+/// up to a space or a character that ends it.
+fn missing_argument(src: &str, code: &[(usize, char)]) -> Option<Span> {
+    for j in 1..code.len() {
+        let (at, c) = code[j];
+        if c != '-' || !matches!(code[j - 1].1, ' ' | '\t') {
+            continue;
+        }
+        let name_start = j + 1;
+        if !code
+            .get(name_start)
+            .is_some_and(|&(_, n)| n.is_ascii_alphabetic() || n == '_')
+        {
+            continue;
+        }
+        let name_end = code[name_start..]
+            .iter()
+            .position(|&(_, n)| !(n.is_ascii_alphanumeric() || n == '_'))
+            .map_or(code.len(), |k| name_start + k);
+        let Some(&(comma_at, ',')) = code.get(name_end) else {
+            continue;
+        };
+        if is_operator(&src[code[name_start].0..comma_at]) {
+            continue;
+        }
+        let end = src[at..]
+            .find(|n: char| n.is_whitespace() || matches!(n, ';' | '|' | ')' | '}' | '&'))
+            .map_or(src.len(), |k| at + k);
+        return Some(Span { start: at, end });
+    }
+    None
 }
 
 fn is_single_quote(c: char) -> bool {
@@ -401,6 +790,22 @@ fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
 /// line end inside, a number glued to a dot as a command name (`5GB.`), a dot after a variable in
 /// a command name (`$m..x`), `++`/`--` after a string (`"a"--` is two arguments), a comment after a backtick line end glued to a word (word text), and a variable
 /// glued to a `?` (`$m?` names the variable `m?`).
+/// `"$a?: x"`: a variable in a double-quoted string whose name, read on through `?`, is followed
+/// by `:` and no name character. PowerShell refuses that string (a drive reference with no name),
+/// so `ps-var-colon` reads it from the text and how the tree splits the name does not matter.
+fn drive_after_name(src: &str, n: Node) -> bool {
+    let is_name = |c: char| c.is_alphanumeric() || c == '_' || c == '?';
+    n.parent()
+        .is_some_and(|p| p.kind() == "expandable_string_literal")
+        && {
+            let rest = &src[n.end_byte()..];
+            let end = rest.find(|c: char| !is_name(c)).unwrap_or(rest.len());
+            rest[end..]
+                .strip_prefix(':')
+                .is_some_and(|r| !r.starts_with(|c: char| is_name(c) || c == ':'))
+        }
+}
+
 fn misread_node(src: &str, root: Node) -> Option<ParseError> {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -500,7 +905,9 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             }
             // `${a}?.Name` ends at the brace.
             "variable" => {
-                !src[n.start_byte()..].starts_with("${") && src[n.end_byte()..].starts_with('?')
+                !src[n.start_byte()..].starts_with("${")
+                    && src[n.end_byte()..].starts_with('?')
+                    && !drive_after_name(src, n)
             }
             _ => false,
         };
@@ -2354,6 +2761,10 @@ impl<'a> Lower<'a> {
                 "assignment_expression" => {
                     let inner = cx.deeper(span(x))?;
                     out.push(self.assignment(x, inner)?);
+                }
+                // A string operand (`"$n: " + $c`) is a word of its own, so the rules read it.
+                "string_literal" => {
+                    out.push(single_pipeline(Elem::Expr(self.expr_word(x, cx)?)));
                 }
                 "ERROR" if !self.lossy => return Err(self.unmodelled(x)),
                 _ => push_kids(&mut stack, x),

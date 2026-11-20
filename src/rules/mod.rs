@@ -15,6 +15,10 @@ pub mod marker;
 pub mod parse_error;
 pub mod ps_var_colon;
 
+pub mod hang;
+
+pub mod pwsh_lint;
+
 pub struct Ctx<'a> {
     pub input: &'a CheckInput<'a>,
     /// Empty when the parse failed; `parse_error` then holds why.
@@ -72,6 +76,8 @@ pub fn all() -> Vec<Box<dyn Rule>> {
         Box::new(ps_var_colon::PsVarColon),
     ];
     rules.extend(bash_lint::rules());
+    rules.extend(pwsh_lint::rules());
+    rules.push(Box::new(hang::HangRule));
     #[cfg(feature = "testhooks")]
     rules.push(Box::new(testhooks::TestHook));
     rules

@@ -63,7 +63,15 @@ fn main() {
     out.push_str("    }\n}\n");
     let path = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("programs_table.rs");
     std::fs::write(path, out).expect("write the generated table");
+    pwsh_table::generate(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()));
+    rule_docs::generate(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()));
 }
+
+#[path = "build/pwsh_table.rs"]
+mod pwsh_table;
+
+#[path = "build/rule_docs.rs"]
+mod rule_docs;
 
 fn program(row: &toml::Table) -> String {
     let list = |key: &str| row.get(key).map_or_else(Vec::new, strings);

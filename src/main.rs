@@ -55,6 +55,29 @@ enum Cmd {
     Hook(HookCmd),
     /// Replay the corpus through the analysis and report the meters; exit 1 when it cannot measure.
     Bench(bench::BenchArgs),
+    /// Print the documentation of one rule; exit 64 for an unknown id.
+    Explain {
+        /// The rule id, as a finding names it.
+        id: String,
+    },
+}
+
+include!(concat!(env!("OUT_DIR"), "/rule_docs.rs"));
+
+/// `explain <id>`: the rule's doc, embedded at build time.
+fn run_explain(id: &str) -> i32 {
+    match RULE_DOCS.binary_search_by(|(k, _)| (*k).cmp(id)) {
+        Ok(i) => {
+            let mut stdout = io::stdout().lock();
+            let _ = stdout.write_all(RULE_DOCS[i].1.as_bytes());
+            let _ = stdout.flush();
+            0
+        }
+        Err(_) => {
+            eprintln!("shellwise: no rule {id:?}");
+            EXIT_USAGE
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -125,6 +148,7 @@ fn run(start: Instant) -> i32 {
         Cmd::Check(args) => run_check(start, args),
         Cmd::Hook(HookCmd::ClaudeCode(args)) => run_hook(start, args),
         Cmd::Bench(args) => bench::run(args),
+        Cmd::Explain { id } => run_explain(&id),
     }
 }
 

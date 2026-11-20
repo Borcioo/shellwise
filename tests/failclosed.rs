@@ -38,16 +38,20 @@ fn input_over_the_size_cap_fails_closed() {
 
 #[test]
 fn size_cap_is_64_kib() {
-    // A command at the cap is analysed: from the temp folder (an allowed root) the delete guard
-    // passes `rm -rf x`. One byte more fails closed.
-    let tail = "; rm -rf x";
+    // A command at the cap is analysed: from the temp folder (an allowed root) no rule flags the
+    // delete in pwsh or bash, which the raw scan still names. One byte more fails closed.
+    let tail = "; Remove-Item -Recurse -Force x";
     let at_cap = format!("{}{tail}", " ".repeat(64 * 1024 - tail.len()));
     assert_eq!(at_cap.len(), 64 * 1024);
     let temp = std::env::temp_dir().to_string_lossy().into_owned();
     let in_temp = [CHECK, &["--cwd", temp.as_str()]].concat();
     assert_ok(&run(&in_temp, Some(at_cap.as_bytes()), &[]));
     let over = format!(" {at_cap}");
-    assert_failclosed_danger(&run(CHECK, Some(over.as_bytes()), &[]), &over, "rm -rf x");
+    assert_failclosed_danger(
+        &run(CHECK, Some(over.as_bytes()), &[]),
+        &over,
+        "Remove-Item -Recurse -Force x",
+    );
 }
 
 #[test]

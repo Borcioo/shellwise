@@ -549,19 +549,20 @@ fn lowering_parse_error_leaves_the_destructive_arm_at_danger() {
 fn check_takes_the_deadline_from_each_layer() {
     let slow = [("SHELLWISE_TESTHOOK", "slow")];
     let short = "walk_budget_ms = 500\n";
-    let cmd = "rm -rf x";
+    // A delete no rule flags in pwsh or bash, which the raw scan still names.
+    let cmd = "Remove-Item -Recurse -Force x";
 
     // Integration file.
     let d = scratch("cli_deadline_integration");
     let integ = write(&d, "integ.toml", short);
     let r = check(&d, &["--config", integ.to_str().unwrap()], cmd, &slow);
-    common::assert_failclosed_danger(&r, cmd, "rm -rf x");
+    common::assert_failclosed_danger(&r, cmd, cmd);
 
     // User file.
     let d = scratch("cli_deadline_user");
     user_config(&d, short);
     let r = check(&d, &[], cmd, &slow);
-    common::assert_failclosed_danger(&r, cmd, "rm -rf x");
+    common::assert_failclosed_danger(&r, cmd, cmd);
 
     // Repo file: ignored, so the analysis finishes.
     let d = scratch("cli_deadline_repo");

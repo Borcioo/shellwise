@@ -29,7 +29,7 @@
 id = "ps-dirdelete-clean-tree"
 os = "windows"
 shell = "pwsh"
-command = "[IO.Directory]::Delete('build', $true)"
+command = "[IO.Directory]::Delete('FX_REPO\\build', $true)"
 level = "ok"
 rules = []
 
@@ -45,7 +45,7 @@ rules = []
 id = "ps-dirdelete-the-junction-itself"
 os = "windows"
 shell = "pwsh"
-command = "[IO.Directory]::Delete('jn')"
+command = "[IO.Directory]::Delete('FX_REPO\\jn')"
 level = "ok"
 rules = []
 
@@ -53,7 +53,7 @@ rules = []
 id = "ps-dirdelete-tree-with-a-junction"
 os = "windows"
 shell = "pwsh"
-command = "[IO.Directory]::Delete('linked', $true)"
+command = "[IO.Directory]::Delete('FX_REPO\\linked', $true)"
 level = "danger"
 rules = ["delete-through-link"]
 fix = "[IO.Directory]::Delete('"
@@ -203,8 +203,8 @@ id = "ps-ri-children-glob"
 os = "windows"
 shell = "pwsh"
 command = "Remove-Item -Recurse -Force build\\*"
-level = "ok"
-rules = []
+level = "warn"
+rules = ["ps-remove-item-star"]
 
 [[row]]
 id = "ps-ri-the-repo-root-as-dot"
