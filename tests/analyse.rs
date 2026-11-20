@@ -17,6 +17,15 @@ fn invalid_utf8_is_incomplete() {
     let r = run(CHECK, Some(&bytes), &[]);
     let lossy = String::from_utf8_lossy(&bytes).into_owned();
     assert_failclosed_danger(&r, &lossy, DESTRUCTIVE);
+    // A .NET `Delete()` call names no table row and is destructive all the same.
+    let delete = "(Get-Item x).Delete()";
+    let mut bytes = b"echo ".to_vec();
+    bytes.push(0xff);
+    bytes.extend_from_slice(b"; ");
+    bytes.extend_from_slice(delete.as_bytes());
+    let r = run(CHECK, Some(&bytes), &[]);
+    let lossy = String::from_utf8_lossy(&bytes).into_owned();
+    assert_failclosed_danger(&r, &lossy, ".Delete");
 }
 
 #[cfg(feature = "testhooks")]
@@ -65,6 +74,20 @@ mod hooks {
             // A panic in a rule, and one in a length rule (each path scans on its own).
             for mode in ["panic", "length-panic"] {
                 assert_incomplete_warn(&hook(mode, cmd));
+            }
+        }
+    }
+
+    #[test]
+    fn a_dotnet_delete_call_is_danger() {
+        // No table row names a `Delete()` method call; the scan still reads it as destructive.
+        for cmd in [
+            "(Get-Item x).Delete()",
+            "$d = Get-Item x; $d.Delete($true)",
+            "gci x -Recurse | % { $_.Delete() }",
+        ] {
+            for mode in ["panic", "length-panic"] {
+                assert_failclosed_danger(&hook(mode, cmd), cmd, ".Delete");
             }
         }
     }

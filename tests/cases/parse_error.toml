@@ -76,6 +76,16 @@ fix = "correct the syntax at column"
 oracle = "refuses"
 
 [[row]]
+id = "pwsh-other-kind-with-a-delete-method-is-danger"
+os = "any"
+shell = "pwsh"
+command = "Get-Date ( ; (Get-Item x).Delete()"
+level = "danger"
+rules = ["parse-error-destructive"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
 id = "pwsh-clean"
 os = "any"
 shell = "pwsh"

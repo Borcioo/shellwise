@@ -62,7 +62,10 @@ impl Budget {
 }
 
 fn opaque(span: Span) -> Hit {
-    Hit { row: None, span }
+    Hit {
+        kind: Kind::Unreadable,
+        span,
+    }
 }
 
 /// One `[[command]]` row of `data/destructive.toml`.
@@ -75,11 +78,21 @@ pub struct Entry {
     pub unless_any: Vec<String>,
 }
 
-/// A table row that matched, and the span of the simple command it matched.
+/// What a hit stands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    /// The index of the table row that matched.
+    Row(usize),
+    /// A .NET `Delete()` call on an object (`(Get-Item x).Delete()`), which no row names.
+    DeleteMethod,
+    /// A region the scan cannot read (an encoded command, nesting too deep, a spent budget).
+    Unreadable,
+}
+
+/// A match, and the span of the simple command it matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
-    /// The table row, or `None` for a nested body the scan cannot read (an encoded command).
-    pub row: Option<usize>,
+    pub kind: Kind,
     pub span: Span,
 }
 
@@ -168,12 +181,13 @@ pub fn raw_destructive(cmd: &str) -> Option<Span> {
         .min_by_key(|s| (s.start, s.end))
 }
 
-/// The span of the first simple command in `cmd` that a row of the destructive table names. An
-/// unreadable region (a spent budget, nesting past `MAX_DEPTH`, a pipe into a shell) is no row.
+/// The span of the first simple command in `cmd` that a row of the destructive table names, or
+/// that calls a .NET `Delete()`. An unreadable region (a spent budget, nesting past `MAX_DEPTH`,
+/// a pipe into a shell) is neither.
 pub fn destructive_row(cmd: &str) -> Option<Span> {
     hits(table(), cmd)
         .into_iter()
-        .filter(|h| h.row.is_some())
+        .filter(|h| h.kind != Kind::Unreadable)
         .map(|h| h.span)
         .min_by_key(|s| (s.start, s.end))
 }
@@ -275,7 +289,7 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
             {
                 let span = seg_span(&s.words);
                 for h in hits_at(table, &join(&next.words), depth + 1, b) {
-                    out.push(Hit { row: h.row, span });
+                    out.push(Hit { kind: h.kind, span });
                 }
             }
             // `… | bash`, `… | iex`: what the segment prints runs as code.
@@ -302,13 +316,13 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
         }
         for (span, body) in seg.embedded {
             for h in hits_at(table, &body, depth + 1, b) {
-                out.push(Hit { row: h.row, span });
+                out.push(Hit { kind: h.kind, span });
             }
         }
         out.extend(seg.unreadable.into_iter().map(opaque));
     }
     // Both readings usually find the same command.
-    out.sort_by_key(|h| (h.span.start, h.span.end, h.row));
+    out.sort_by_key(|h| (h.span.start, h.span.end, h.kind));
     out.dedup();
     out
 }
@@ -328,7 +342,7 @@ fn feed(
         match piped_text(producer, b) {
             Some(text) => {
                 for h in hits_at(table, &text, depth + 1, b) {
-                    out.push(Hit { row: h.row, span });
+                    out.push(Hit { kind: h.kind, span });
                 }
             }
             // A spent budget is reported once, by `hits`.
@@ -388,7 +402,7 @@ fn scan_walk(
         Walk::Split { body, depth } => {
             let span = seg_span(words);
             for h in hits_at(table, body, *depth, b) {
-                out.push(Hit { row: h.row, span });
+                out.push(Hit { kind: h.kind, span });
             }
         }
         Walk::Opaque => out.push(opaque(seg_span(words))),
@@ -426,18 +440,21 @@ fn segment_hits(
     let name = base_name(&words[0].value);
     // `(Get-Item x).Delete()`, `$d.Delete($true)`: a .NET delete on an object.
     if name.ends_with(".delete") && (name.starts_with('.') || name.starts_with('$')) {
-        out.push(Hit { row: None, span });
+        out.push(Hit {
+            kind: Kind::DeleteMethod,
+            span,
+        });
         return;
     }
     match nested_body(&name, words, b) {
         Some(Nested::Body(body)) => {
             for h in hits_at(table, &body, depth + 1, b) {
-                out.push(Hit { row: h.row, span });
+                out.push(Hit { kind: h.kind, span });
             }
             return;
         }
         Some(Nested::Opaque) => {
-            out.push(Hit { row: None, span });
+            out.push(opaque(span));
             return;
         }
         None => {}
@@ -487,7 +504,7 @@ fn segment_hits(
                 .any(|f| opts.iter().any(|a| flag_matches(f, a)));
             if required && !cleared {
                 out.push(Hit {
-                    row: Some(row),
+                    kind: Kind::Row(row),
                     span,
                 });
             }
@@ -1541,22 +1558,15 @@ mod tests {
         "echo $'it\\'s'; rm -rf x",
         "echo $'a\\'b' ; rm -rf x ; echo 'c'",
         "echo 'never closed; rm -rf x",
-        // every prefix of -Command, and bodies the scan cannot read
+        // every prefix of -Command
         "pwsh -co \"Remove-Item x\"",
         "pwsh -Comm 'ri x'",
-        "pwsh -EncodedCommand AAAA",
-        "powershell -e AAAA",
-        "pwsh.exe -enc AAAA",
-        "pwsh -ec AAAA",
-        "pwsh /enc AAAA",
-        "pwsh --EncodedCommand AAAA",
         "pwsh /Command 'Remove-Item x'",
         "pwsh \u{2013}c 'ri x'",
         // `\$'` is a literal dollar before a plain quote, not an ANSI-C string
         "echo \\$'a\\' <# ; rm -rf x ; echo '",
         // I1: nesting at and past the depth limit
         "pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
-        "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
         // I3: heredoc bodies are literal and the command resumes after the delimiter line
         "cat <<'EOF'\nit's done\nEOF\nrm -rf x\necho 'ok'",
         "git commit -F - <<'EOF'\nDon't keep the cache\nEOF\nrm -rf build && echo 'done'",
@@ -1627,6 +1637,8 @@ mod tests {
         "(Get-Item x).Delete()",
         "(Get-Item x).Delete($true)",
         "$d.Delete()",
+        "$d = Get-Item x; $d.Delete($true)",
+        "gci x -Recurse | % { $_.Delete() }",
         // I-2: the env -S body is a nested command (quotes, `\_`, wrappers, nested -S)
         "sudo -X foo env -S 'rm -rf x'",
         "sudo -X foo env -iS 'rm -rf x'",
@@ -1691,6 +1703,21 @@ mod tests {
         // that drops CR stops there): the earliest end is the safe side
         "echo \u{2018}a; cat <<EOF\nhello\nEOF\r\nrm -rf x\nEOF\necho \u{2019}",
         "echo \u{2018}a; cat <<EOF\r\nhello\r\nEOF\nrm -rf x\r\nEOF\r\necho \u{2019}",
+    ];
+
+    /// Destructive spellings the scan cannot read, with the unreadable class each is in: the
+    /// raw scan flags them, the verdicts do not (no row and no `Delete()` call is seen).
+    const UNREADABLE_DESTRUCTIVE: &[(&str, &str)] = &[
+        ("pwsh -EncodedCommand AAAA", "an encoded body"),
+        ("powershell -e AAAA", "an encoded body"),
+        ("pwsh.exe -enc AAAA", "an encoded body"),
+        ("pwsh -ec AAAA", "an encoded body"),
+        ("pwsh /enc AAAA", "an encoded body"),
+        ("pwsh --EncodedCommand AAAA", "an encoded body"),
+        (
+            "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
+            "nesting past MAX_DEPTH",
+        ),
     ];
 
     /// Commands the scan cannot read to the end (too deep, too much work, text it cannot see):
@@ -1790,16 +1817,29 @@ mod tests {
     fn every_destructive_spelling_is_caught() {
         let missed: Vec<&&str> = DESTRUCTIVE
             .iter()
-            .filter(|cmd| raw_destructive(cmd).is_none())
+            .filter(|cmd| destructive_row(cmd).is_none())
             .collect();
         assert!(missed.is_empty(), "missed: {missed:?}");
+    }
+
+    #[test]
+    fn unreadable_destructive_spellings_are_raw_hits_but_no_row() {
+        let missed: Vec<&(&str, &str)> = UNREADABLE_DESTRUCTIVE
+            .iter()
+            .filter(|(cmd, _)| raw_destructive(cmd).is_none() || destructive_row(cmd).is_some())
+            .collect();
+        assert!(missed.is_empty(), "missed or read as a row: {missed:?}");
     }
 
     #[test]
     fn unreadable_commands_are_flagged() {
         let missed: Vec<&&str> = OPAQUE
             .iter()
-            .filter(|cmd| !hits(table(), cmd).iter().any(|h| h.row.is_none()))
+            .filter(|cmd| {
+                !hits(table(), cmd)
+                    .iter()
+                    .any(|h| h.kind == Kind::Unreadable)
+            })
             .collect();
         assert!(missed.is_empty(), "not flagged as unreadable: {missed:?}");
     }
@@ -1855,7 +1895,7 @@ mod tests {
         let cmd = format!("sudo x {}; rm -rf x", "bash -c 'echo hi' ".repeat(1000));
         let hits = hits(table(), &cmd);
         assert!(
-            hits.iter().all(|h| h.row.is_none()),
+            hits.iter().all(|h| h.kind == Kind::Unreadable),
             "the rm was read: {hits:?}"
         );
         assert!(
@@ -1889,7 +1929,7 @@ mod tests {
         let mut seen = vec![false; table().len()];
         for cmd in DESTRUCTIVE {
             for hit in hits(table(), cmd) {
-                if let Some(row) = hit.row {
+                if let Kind::Row(row) = hit.kind {
                     seen[row] = true;
                 }
             }
