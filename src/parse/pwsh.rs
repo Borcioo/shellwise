@@ -23,7 +23,7 @@ use tree_sitter::{Node, Parser, Tree};
 
 use super::{Failure, ParseError, ParseKind, QuoteKind, internal};
 use crate::ir::{
-    ChainOp, Comment, Elem, MAX_NESTING, MethodCall, Pipeline, Quote, Redirect, Script,
+    ChainOp, Comment, Elem, LoopHead, MAX_NESTING, MethodCall, Pipeline, Quote, Redirect, Script,
     SimpleCommand, Stmt, Word, WordPart,
 };
 use crate::level::Span;
@@ -1286,6 +1286,12 @@ impl<'a> Lower<'a> {
         self.src.get(n.start_byte()..n.end_byte()).unwrap_or("")
     }
 
+    /// A `do … until (…)` statement, not `do … while (…)`: the keyword is an unnamed child.
+    fn do_until(&self, n: Node) -> bool {
+        let mut c = n.walk();
+        n.children(&mut c).any(|k| k.kind() == "until")
+    }
+
     fn unmodelled(&self, n: Node) -> ParseError {
         error(
             span(n),
@@ -1477,6 +1483,7 @@ impl<'a> Lower<'a> {
                         "statement_block" => out.push(Stmt::Loop {
                             body: self.block(k, cx.looping())?,
                             span: sp,
+                            head: LoopHead::Items,
                         }),
                         "variable" | "foreach_parameter" | "comment" => {}
                         _ => return Err(self.unmodelled(k)),
@@ -1501,9 +1508,13 @@ impl<'a> Lower<'a> {
                     }
                 }
                 let mut out = init.stmts;
+                let head = LoopHead::Counted {
+                    open: cond.stmts.is_empty(),
+                };
                 out.push(Stmt::Loop {
                     body: concat(concat(cond, body), iter),
                     span: sp,
+                    head,
                 });
                 out
             }
@@ -1519,12 +1530,22 @@ impl<'a> Lower<'a> {
                         _ => return Err(self.unmodelled(k)),
                     }
                 }
-                let body = if n.kind() == "do_statement" {
+                let at_end = n.kind() == "do_statement";
+                let head = LoopHead::Test {
+                    cond: cond.stmts.len(),
+                    at_end,
+                    until: at_end && self.do_until(n),
+                };
+                let body = if at_end {
                     concat(body, cond)
                 } else {
                     concat(cond, body)
                 };
-                vec![Stmt::Loop { body, span: sp }]
+                vec![Stmt::Loop {
+                    body,
+                    span: sp,
+                    head,
+                }]
             }
             "switch_statement" => {
                 let mut out = Vec::new();
@@ -1554,6 +1575,7 @@ impl<'a> Lower<'a> {
                 out.push(Stmt::Loop {
                     body: single(Stmt::Cond { branches, span: sp }),
                     span: sp,
+                    head: LoopHead::Items,
                 });
                 out
             }

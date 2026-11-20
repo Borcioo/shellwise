@@ -40,6 +40,7 @@ const WARN_DEFAULT: &[&str] = &[
     "ps-bare-bash",
     "ps-dotnet-relative-path",
     "ps-alias-shadow",
+    "follow-unbounded",
 ];
 
 fn is_deny(level: &str) -> bool {

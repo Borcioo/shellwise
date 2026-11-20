@@ -155,10 +155,29 @@ pub struct Msys {
     pub opt_out: Vec<String>,
 }
 
+/// The shell words a loop's end is read from (`[loops]`): keywords and clocks, not programs.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Loops {
+    /// Words that leave the loop or the shell (`break`).
+    pub exits: Vec<String>,
+    /// A whole condition that is always true (`true`, `$true`).
+    pub always: Vec<String>,
+    /// Words that read the time: a test holding one is a deadline (`SECONDS`, `Get-Date`).
+    pub clocks: Vec<String>,
+    /// Operators that compare numbers (`-lt`, `<`): a test with one on a variable the loop
+    /// changes is a counter.
+    pub compares: Vec<String>,
+    /// The sentence after a Bash and a PowerShell Fix line.
+    pub hint_bash: String,
+    pub hint_pwsh: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table {
     pub programs: Vec<Program>,
     pub msys: Msys,
+    pub loops: Loops,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +185,8 @@ struct RawTable {
     program: Vec<Program>,
     #[serde(default)]
     msys: Msys,
+    #[serde(default)]
+    loops: Loops,
 }
 
 const SHELLS: [&str; 2] = ["bash", "pwsh"];
@@ -236,9 +257,15 @@ pub fn load(text: &str) -> Result<Table, String> {
     {
         return Err("msys.roots: a root is empty or holds a /".to_string());
     }
+    let l = &raw.loops;
+    let words = [&l.exits, &l.always, &l.clocks, &l.compares];
+    if words.iter().any(|l| l.iter().any(|s| s.trim().is_empty())) {
+        return Err("loops: a list holds an empty string".to_string());
+    }
     Ok(Table {
         programs: raw.program,
         msys: raw.msys,
+        loops: raw.loops,
     })
 }
 
@@ -259,6 +286,11 @@ pub fn table() -> &'static [Program] {
 /// The embedded `[msys]` facts.
 pub fn msys() -> &'static Msys {
     &embedded().msys
+}
+
+/// The embedded `[loops]` words.
+pub fn loops() -> &'static Loops {
+    &embedded().loops
 }
 
 fn family(shell: Shell) -> &'static str {
@@ -589,6 +621,8 @@ mod tests {
             assert_eq!(b, l, "row {:?}", l.name);
         }
         assert_eq!(built.msys, loaded.msys);
+        assert_eq!(built.loops, loaded.loops);
+        assert!(!loaded.loops.exits.is_empty());
         assert!(loaded.programs.iter().any(|p| !p.extra.is_empty()));
     }
 

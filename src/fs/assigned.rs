@@ -594,7 +594,7 @@ fn each_word_or_command(
                     }
                 }
             }
-            Stmt::Loop { body, span } => {
+            Stmt::Loop { body, span, .. } => {
                 lp(*span);
                 each_word_or_command(body, word, cmd, lp);
             }

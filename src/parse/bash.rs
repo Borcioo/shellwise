@@ -22,8 +22,8 @@ use brush_parser::{ParserOptions, SourceSpan, Token, TokenizerError};
 use super::{Failure, ParseError, ParseKind, QuoteKind, internal};
 use crate::BashProfile;
 use crate::ir::{
-    ChainOp, Comment, Elem, EnvView, MAX_NESTING, Pipeline, Quote, Redirect, Script, SimpleCommand,
-    Stmt, Word, WordPart,
+    ChainOp, Comment, Elem, EnvView, LoopHead, MAX_NESTING, Pipeline, Quote, Redirect, Script,
+    SimpleCommand, Stmt, Word, WordPart,
 };
 use crate::level::Span;
 
@@ -946,6 +946,7 @@ impl Lower {
                 out.push(Stmt::Loop {
                     body: self.body(t, &f.body.list, cx.looping())?,
                     span,
+                    head: LoopHead::Items,
                 });
                 out
             }
@@ -960,9 +961,14 @@ impl Lower {
                     elems: vec![Elem::Cmd(self.arith_command(t, &exprs, span, None, cx)?)],
                     chain: Some(ChainOp::Seq),
                 })];
+                let open = f
+                    .condition
+                    .as_ref()
+                    .is_none_or(|c| c.value.trim().is_empty());
                 out.push(Stmt::Loop {
                     body: self.body(t, &f.body.list, cx.looping())?,
                     span,
+                    head: LoopHead::Counted { open },
                 });
                 out
             }
@@ -996,8 +1002,14 @@ impl Lower {
             }
             C::WhileClause(w) | C::UntilClause(w) => {
                 let cx = cx.looping();
-                let body = concat(self.body(t, &w.0, cx)?, self.body(t, &w.1.list, cx)?);
-                vec![Stmt::Loop { body, span }]
+                let cond = self.body(t, &w.0, cx)?;
+                let head = LoopHead::Test {
+                    cond: cond.stmts.len(),
+                    at_end: false,
+                    until: matches!(cc, C::UntilClause(_)),
+                };
+                let body = concat(cond, self.body(t, &w.1.list, cx)?);
+                vec![Stmt::Loop { body, span, head }]
             }
             // A pipeline lowers `(( … ))` itself; this is `coproc (( … ))`.
             C::Arithmetic(a) => vec![Stmt::Pipeline(Pipeline {

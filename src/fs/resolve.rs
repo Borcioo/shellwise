@@ -2789,7 +2789,7 @@ fn visit_stmt(st: &Stmt, aliases: &[Alias], f: &mut dyn FnMut(Node<'_>)) {
                 }
             }
         }
-        Stmt::Loop { body, span } => {
+        Stmt::Loop { body, span, .. } => {
             f(Node::Loop(*span));
             visit_script(body, aliases, f);
         }

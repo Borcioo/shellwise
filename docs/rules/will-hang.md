@@ -45,7 +45,8 @@ claude -p "summarise the diff"
 
 `warn`: `Fix: timeout 120 claude -p <prompt>`
 
-A PowerShell function named like a built-in alias is `ps-alias-shadow`.
+A PowerShell function named like a built-in alias is `ps-alias-shadow`. A loop that waits with
+nothing to bound it is `wait-loop-unbounded`, and a follow command (`tail -f`) is `follow-unbounded`.
 
 ## Allow
 

@@ -179,6 +179,29 @@ fn a_function_an_alias_outranks_is_a_warn_in_a_ps1_file() {
     assert_eq!(report.exit_code(), 0);
 }
 
+/// A wait loop with no bound hangs a script as it hangs a command line: break in `lint` too.
+#[test]
+fn an_unbounded_wait_loop_in_a_sh_file_is_a_break() {
+    let d = folder("wait_loop");
+    let path = d.join("wait.sh");
+    std::fs::write(
+        &path,
+        "#!/bin/bash\nuntil grep -q done run.log; do\n  sleep 15\ndone\n",
+    )
+    .unwrap();
+    let report = lint(&path).unwrap();
+    assert_eq!(ids(&report), ["wait-loop-unbounded"]);
+    assert_eq!(report.exit_code(), 1);
+    // The bounded twin is clean.
+    let ok = d.join("bounded.sh");
+    std::fs::write(
+        &ok,
+        "#!/bin/bash\nfor i in $(seq 1 40); do\n  grep -q done run.log && break\n  sleep 15\ndone\n",
+    )
+    .unwrap();
+    assert!(lint(&ok).unwrap().findings.is_empty());
+}
+
 /// D6: Git Bash drops the CR of a CRLF script and runs it (Linux bash reads `$'\r'`). In the Git
 /// Bash profile (a Windows host) a CRLF `.sh` gets one warn, and the shellwise rules and the
 /// external linter read its LF twin.

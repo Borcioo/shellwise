@@ -440,6 +440,10 @@ New candidates, each entering v1 only with corpus evidence: `ps-remove-trailing-
 starting with `-` before any `--`), `inline-script-too-long` (warn; the fix carries a ready script
 template and the command to run it by path).
 
+Landed after the port (owner decisions): `wait-loop-unbounded` (break: a loop that waits, or whose
+condition is always true, with no counter, deadline or `timeout` that ends it) and
+`follow-unbounded` (warn: `tail -f`, `Get-Content -Wait` and the like with nothing that stops them).
+
 ### What the host setup deletes when shellwise ships
 
 | Host setup piece | Replaced by |

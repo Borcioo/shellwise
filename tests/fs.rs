@@ -14,8 +14,8 @@ use shellwise::fs::resolve::{
 use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
 use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
 use shellwise::ir::{
-    ChainOp, Elem, EnvView, MethodCall, Pipeline, Quote, Script, SimpleCommand, Stmt, Word,
-    WordPart,
+    ChainOp, Elem, EnvView, LoopHead, MethodCall, Pipeline, Quote, Script, SimpleCommand, Stmt,
+    Word, WordPart,
 };
 use shellwise::level::Span;
 use shellwise::{BashProfile, Deadline, Os, Shell};
@@ -2335,6 +2335,7 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             Stmt::Loop {
                 body: script(vec![git()]),
                 span: Span::default(),
+                head: LoopHead::Items,
             },
         ),
         (
@@ -3909,6 +3910,7 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     unknown_after(vec![Stmt::Loop {
         body: script(vec![stmt(lits("cd", &["sub"]), None)]),
         span: Span::default(),
+        head: LoopHead::Items,
     }]);
     unknown_after(vec![Stmt::Block(script(vec![stmt(
         lits("cd", &["sub"]),
@@ -4189,6 +4191,7 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
     let lp = Stmt::Loop {
         body: script(vec![one("cd..", seq), one("x", seq)]),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let got = resolve(
         &lit("."),
@@ -5114,6 +5117,7 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
     let lp = Stmt::Loop {
         body: script(vec![one("f", seq)]),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
     loc.read_script(&script(vec![func("f", vec![]), lp.clone()]));
@@ -5125,6 +5129,7 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
     let lp = Stmt::Loop {
         body: script(vec![stmt(lits("sudo", &["x"]), seq)]),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
     loc.read_script(&script(vec![func("sudo", vec![]), lp.clone()]));
@@ -5269,6 +5274,7 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
     let lp = Stmt::Loop {
         body,
         span: Span::default(),
+        head: LoopHead::Items,
     };
     expect(
         resolve(&repo, &base.inner(&lp), &env),
@@ -5633,6 +5639,7 @@ fn bodies_that_run_later_or_repeatedly_start_at_an_unknown_location() {
     let lp = |body: Script| Stmt::Loop {
         body,
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let func = Stmt::Func {
         name: "f".to_string(),
@@ -5684,6 +5691,7 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
     let lp = |body: Vec<Stmt>| Stmt::Loop {
         body: script(body),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let drive_new = || method("ExecutionContext.SessionState.Drive", "New", vec![lit("x")]);
     let rows: Vec<(&str, Vec<Stmt>, &str, bool, Target)> = vec![
@@ -6404,6 +6412,7 @@ fn a_loop_variable_named_in_the_loop_text_is_dynamic() {
     let s = script(vec![Stmt::Loop {
         body: script(vec![stmt(lits(":", &[]), None)]),
         span: Span { start: 0, end: 24 },
+        head: LoopHead::Items,
     }]);
     let (loc, mut env) = win(bash);
     mark_assigned(&mut env, &s, text);
@@ -7137,6 +7146,7 @@ fn a_script_alias_is_read_as_the_command_it_names() {
                 Stmt::Loop {
                     body: script(vec![st(lits("mk", &["/c/w/repo/t/j"]))]),
                     span: Span::default(),
+                    head: LoopHead::Items,
                 },
             ],
             rmrf("/c/w/repo/t/j/x"),
