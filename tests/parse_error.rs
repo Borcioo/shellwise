@@ -136,6 +136,24 @@ fn bash_lines_the_parser_cannot_place_before_an_unclosed_quote_get_the_raw_scan(
     assert_eq!(rules, ["parse-error"], "{v:?}");
 }
 
+/// R1-9: a complete line nested deeper than the parser reads (201 `if`s, no brackets for the
+/// up-front count) before the error's line: the cut search stops there and the lines before the
+/// error get the raw scan, instead of trying shorter cuts that leave the deep line unread. Twin: 3
+/// `if`s parse and the delete on line 1 is read by the rules.
+#[test]
+fn a_line_nested_too_deep_before_an_unclosed_quote_gets_the_raw_scan() {
+    let nested = |n: usize| format!("{}echo hi{}", "if true; then ".repeat(n), "; fi".repeat(n));
+    let deep = format!("rm -rf build\n{}\necho 'x", nested(201));
+    let v = bash_verdict(&deep);
+    let rules: Vec<&str> = v.findings.iter().map(|f| f.rule).collect();
+    assert_eq!(rules, ["parse-error", "parse-error-destructive"], "{v:?}");
+    let m = parse_error_message(&v);
+    assert!(m.contains("but may run the lines before it"), "{m}");
+    let shallow = format!("rm -rf build\n{}\necho 'x", nested(3));
+    let m = parse_error_message(&bash_verdict(&shallow)).to_string();
+    assert!(m.contains("but runs the lines before it"), "{m}");
+}
+
 #[cfg(feature = "oracle")]
 mod oracle {
     use super::case_loader::Row;

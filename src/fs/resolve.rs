@@ -4072,3 +4072,26 @@ impl Location {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R1-9 (D-empty): a move that names no folder and no unknown one is never proved on disk,
+    /// although every folder of an empty set exists. Control: the cwd itself is.
+    #[test]
+    fn a_move_to_no_folder_is_never_on_disk() {
+        let cwd = std::env::temp_dir();
+        let mut loc = Location::new(
+            Shell::Bash(crate::BashProfile::Posix),
+            Os::host(),
+            Some(&cwd),
+        );
+        let fs: SharedFs = Arc::new(super::super::RealFs);
+        loc.use_disk(&fs, &Deadline::new(std::time::Instant::now(), 8000));
+        let here = loc.dirs.clone();
+        assert!(!here.known.is_empty() && here.unknown.is_none(), "{here:?}");
+        assert!(loc.on_disk(&here));
+        assert!(!loc.on_disk(&Dirs::default()));
+    }
+}

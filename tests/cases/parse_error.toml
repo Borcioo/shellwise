@@ -1379,3 +1379,26 @@ level = "break"
 rules = ["parse-error"]
 oracle = "refuses"
 fix = """the \\" at column 12 and the quote after it write one quote and leave the string open: in PowerShell write a quote inside "…" as "" or use '…'"""
+
+# The live false warn of R1: in a command argument, a method call followed by an index or a member
+# (`$(…).Split(' ')[0]`, `$a.Split(1).Length`) is valid PowerShell (`ParseInput`: 0 errors) but the
+# vendored tree-sitter grammar does not read the postfix after the call's `)`. The fix is a grammar
+# change in vendor/tree-sitter-powershell (grammar.js and the generated parser), not local, so the
+# rows stay at warn. `(…)` around the argument parses.
+[[row]]
+id = "pwsh-gap-method-call-then-index-in-an-argument-is-warn"
+os = "any"
+shell = "pwsh"
+command = "git log -1 $(git blame -L x --porcelain a -- b | Select-Object -First 1).Split(' ')[0]"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-gap-method-call-then-member-in-an-argument-is-warn"
+os = "any"
+shell = "pwsh"
+command = "echo $a.Split(1).Length"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
