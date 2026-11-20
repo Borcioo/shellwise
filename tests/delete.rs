@@ -347,7 +347,7 @@ fn the_rows_hold_with_a_short_temp_spelling() {
         .eq_ignore_ascii_case(&long.to_string_lossy())
     {
         let _ = std::fs::remove_dir_all(&long);
-        // Straight to stderr: the test host setup captures `println!` of a passing test.
+        // Straight to stderr: the test runner captures `println!` of a passing test.
         use std::io::Write;
         let _ = writeln!(
             std::io::stderr(),
