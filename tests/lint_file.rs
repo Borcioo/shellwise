@@ -958,8 +958,8 @@ fn a_shellcheck_error_and_a_warning_are_warn_and_pass_the_file() {
         "{}",
         r.stdout
     );
-    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line. ShellCheck
-    // gives no one-step Fix line, so an error is warn (D5).
+    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line, as the
+    // shellwise parser does, so the error is warn (D5, R1-1; `bash -n` in the next test).
     let (path, r) = lint_cli(
         "sc_levels_error",
         "test.sh",
@@ -974,6 +974,50 @@ fn a_shellcheck_error_and_a_warning_are_warn_and_pass_the_file() {
         r.stdout
     );
     assert!(!r.stdout.contains("parse-error"), "{}", r.stdout);
+}
+
+/// R1-1: a file Bash refuses (an `if` with no `fi`) fails the lint: ShellCheck's parse error is
+/// break with its message as the Fix line, because the shellwise parser fails on the file too.
+/// Its twin that Bash parses (SC1035) passes.
+#[test]
+fn a_sh_file_bash_refuses_is_a_break_with_shellchecks_message() {
+    let open_if = "#!/bin/bash\nif true; then\n  echo hi\n";
+    let (path, r) = lint_cli("sc_refused", "openif.sh", open_if);
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    let head = format!("{}:2:1: break SC1046: ", path.display());
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&head))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    let message = &lines[at][head.len()..];
+    assert_eq!(lines[at + 1], format!("  Fix: {message}"), "{}", r.stdout);
+
+    let twin = "#!/bin/bash\nif [[$1 == x]]; then echo y; fi\n";
+    let (twin_path, t) = lint_cli("sc_refused_twin", "sc1035.sh", twin);
+    assert_eq!(t.code, 0, "{} {}", t.stdout, t.stderr);
+    assert!(!t.stdout.contains(": break "), "{}", t.stdout);
+    assert!(!t.stdout.contains("  Fix: "), "{}", t.stdout);
+
+    // The oracle: `bash -n` refuses the first file and parses its twin.
+    #[cfg(feature = "oracle")]
+    {
+        #[cfg(windows)]
+        let bash = r"C:\Program Files\Git\bin\bash.exe";
+        #[cfg(not(windows))]
+        let bash = "/bin/bash";
+        let syntax = |p: &Path| {
+            std::process::Command::new(bash)
+                .arg("-n")
+                .arg(p)
+                .output()
+                .expect("bash runs")
+                .status
+                .code()
+        };
+        assert_eq!(syntax(&path), Some(2));
+        assert_eq!(syntax(&twin_path), Some(0));
+    }
 }
 
 /// SC2164 (`cd` without `|| exit`) is left out by default; real ShellCheck reports it on this text.

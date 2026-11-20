@@ -81,7 +81,7 @@ fn run_explain(id: &str) -> i32 {
             let mut stdout = io::stdout().lock();
             let _ = writeln!(
                 stdout,
-                "# {id}\n\nA ShellCheck check that `shellwise lint` runs on a Bash file (`warn`). \
+                "# {id}\n\nA ShellCheck check that `shellwise lint` runs on a Bash file (`warn`; a parse error is `break` when the shellwise parser also fails on the file). \
                  Its page: https://www.shellcheck.net/wiki/{id}"
             );
             let _ = stdout.flush();
