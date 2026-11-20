@@ -1,0 +1,9 @@
+# The fixture's parity exceptions: the one allowed row of bash-backslash-collapse (row 0a, ok,
+# shellwise silent).
+
+[[exception]]
+baseline_guard = "bash-backslash-collapse"
+shape = "mapped-silent"
+label = "ok"
+expected = 1
+why = "the fixture's known answer for a named shape class"

@@ -47,8 +47,12 @@ replay's verdicts (every row as Windows): with `--diff` only …b2 moves (down, 
 
 | File | Known answer |
 |---|---|
-| `rule_map.toml` | the fixture's map: three baseline-guard ids, `fixture-unlanded` (maps to a rule that never lands), one parity exception |
+| `rule_map.toml` | the fixture's map: three baseline-guard ids, `fixture-unlanded` (maps to a rule that never lands), and a `runs_on` entry for each |
 | `rule_map_own_line.toml` | the same with `parse-error` as the own-line rule |
+| `parity_exceptions.toml` | one exception: `bash-backslash-collapse`, `mapped-silent`, `ok`, expected 1 (row 0a) |
+
+Tests in `tests/bench.rs` that need a cwd that exists on the machine, or rows these files do not hold,
+write their corpus, baseline and known slice into their own folder at run time.
 | `known.jsonl` | 1 checked (row 4), 1 not landed (row 9), 2 that expect none, of which row 5 is denied |
 | `known_miss.jsonl` | row 1 expects `parse-error`: exit 1 |
 | `known_not_landed.jsonl` | 0 checked: exit 1 |

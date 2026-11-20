@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = ("Bash", "PowerShell")
@@ -39,33 +40,20 @@ KNOWN_EACH = 10
 KNOWN_LINUX = 2          # Linux deny rows and Linux ok rows the slice holds at least, when the corpus has them
 WINDOWS, LINUX = "Windows", "Linux"
 DRIVE_CWD = re.compile(r"^[A-Za-z]:[\\/]")
-# Where the shellwise rule a baseline-guard id maps to (rule_map.toml) can fire: (tools, OSes), read from that
-# rule's gate. A slice row expects only rules that can fire on its tool and OS. An id not listed here is taken
-# as Windows-only (baseline-guard is a Windows hook), for both tools.
-BOTH = (WINDOWS, LINUX)
-RUNS_ON = {
-    "bash-backslash-collapse": (("Bash",), (WINDOWS,)),    # git_bash(ctx), src/rules/bash_lint.rs
-    "bash-msys-path-mangle": (("Bash",), (WINDOWS,)),      # git_bash(ctx), bash_lint.rs
-    "bash-powershell-syntax": (("Bash",), (WINDOWS,)),     # bash-ps-cmdlet: git_bash(ctx), bash_lint.rs
-    "bash-versioned-php": (("Bash",), (WINDOWS,)),         # git_bash(ctx), bash_lint.rs
-    "bash-vendor-bin-shebang": (("Bash",), (WINDOWS,)),    # git_bash(ctx), bash_lint.rs
-    "bash-too-long": (("Bash",), (WINDOWS,)),              # too-long: Git Bash only, src/rules/length.rs
-    "bash-unterminated-quote": (("Bash",), BOTH),          # parse-error: every shell and OS
-    "bat-metachar": (("PowerShell",), (WINDOWS,)),         # is_pwsh and os == Windows, pwsh_lint/bat.rs
-    "ps-bare-bash": (("PowerShell",), (WINDOWS,)),         # is_pwsh and os == Windows, pwsh_lint/ports.rs
-    "cli-inline-prose": (("PowerShell",), BOTH),           # is_pwsh, ports.rs
-    "gate-truncated-pipeline": (("PowerShell",), BOTH),    # is_pwsh, ports.rs (baseline-guard also flags Bash)
-    "ps-git-commit-stdin": (("PowerShell",), BOTH),        # is_pwsh, ports.rs
-    "ps-bad-parameter": (("PowerShell",), BOTH),           # Facts::for_shell (pwsh), ports.rs
-    "ps-native-nonewline": (("PowerShell",), BOTH),        # Facts::for_shell (pwsh), ports.rs
-    "ps-dotnet-relative-path": (("PowerShell",), BOTH),    # Facts::for_shell (pwsh), ports.rs
-    "stale-write-var": (("PowerShell",), BOTH),            # Facts::for_shell (pwsh), ports.rs
-    "ps-unix-command": (("PowerShell",), BOTH),            # is_pwsh, pwsh_lint/catalogue.rs
-    "git-no-verify": (TOOLS, BOTH),                        # git itself: the same on every OS (Task 32)
-    "git-restore-discards": (TOOLS, BOTH),                 # git itself (Task 32)
-    "git-unreadable": (TOOLS, BOTH),                       # git itself (Task 32)
-    "git-worktree-junction": (TOOLS, (WINDOWS,)),          # NTFS junctions exist only on Windows (Task 32)
-}
+# Where the shellwise rule a baseline-guard id maps to can fire: (tools, OSes), from `[runs_on]` in rule_map.toml
+# (one line of evidence per rule there; the bench fails on a map key without an entry and on a rule that fires
+# outside it). A slice row expects only rules that can fire on its tool and OS. An id not listed is taken as
+# Windows-only (baseline-guard is a Windows hook), for both tools.
+RULE_MAP = os.path.join(HERE, "rule_map.toml")
+
+
+def load_runs_on(path):
+    with open(path, "rb") as f:
+        table = tomllib.load(f)["runs_on"]
+    return {rule: (tuple(e["tools"]), tuple(e["os"])) for rule, e in table.items()}
+
+
+RUNS_ON = load_runs_on(RULE_MAP)
 # Draft: a target word the shell resolves at run time (variable, substitution, glob, %VAR%, ~).
 DYNAMIC = re.compile(r"[$`*?]|%[^%\s]+%|^~")
 
