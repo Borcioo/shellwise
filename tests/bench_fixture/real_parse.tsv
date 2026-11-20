@@ -1,0 +1,6 @@
+id	refused	error_id
+f00000000001	no	
+f00000000002	no	
+f00000000003	yes	TerminatorExpectedAtEndOfString
+f00000000005	no	
+f00000000006	yes	unexpected EOF

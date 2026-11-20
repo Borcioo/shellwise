@@ -1,0 +1,86 @@
+# tree-sitter-powershell fork
+
+Started from the crates.io package `tree-sitter-powershell` version 0.26.6 (MIT, upstream
+repository `airbus-cert/tree-sitter-powershell`); `LICENSE` is the upstream licence text.
+
+`src/parser.c`, `src/grammar.json`, `src/node-types.json` and `src/tree_sitter/` are generated:
+only `scripts/regen-grammar.ps1` writes them, with `tree-sitter-cli` 0.27.2
+(`cargo install tree-sitter-cli --version 0.27.2 --locked`, QuickJS runtime), the newest CLI
+whose parser the `tree-sitter` 0.27.2 runtime loads. `GENERATED` holds the hashes a test checks.
+
+## Packaging changes
+
+- `Cargo.toml`: `publish = false`.
+- Regenerated with the pinned CLI: the parser tables are unchanged; `parser.c` differs from
+  upstream only in its GCC optimisation pragma and `tree_sitter/array.h` is the CLI's own copy.
+- `bindings/rust/build.rs` defines `TREE_SITTER_HIDE_SYMBOLS`: the parser is linked into an
+  executable, and an exported symbol made MSVC's linker print a warning on every binary.
+
+## PowerShell character classes
+
+The grammar's typographic quote and dash classes, and the lowering's table of characters it
+refuses outside proven text (`unproven_special_char` in `src/parse/pwsh.rs`), are PowerShell
+7.7.0's own (`System.Management.Automation` 7.7.0.500, `CharExtensions` read by reflection):
+`IsDash` adds U+2013 to U+2015, `IsSingleQuote` U+2018 to U+201B, `IsDoubleQuote` U+201C to
+U+201E, and `IsWhitespace` U+0085, U+2028 and U+2029 beyond `\p{Zs}`.
+
+## Grammar changes
+
+Each change makes the tree agree with PowerShell's `Parser::ParseInput` on a shape the parser
+spike measured (`docs/spikes.md`).
+
+- Numbers take case-insensitive type suffixes (`l`, `d`, `n`, `u`, `ul`, `uy`, `us`, `y`, `s`),
+  multipliers (`kb` … `pb`), `0x` and `e` exponents in either case.
+- `generic_token` (a bare word): it may hold `<` and `>` after its first character (`a>b` is one
+  word); a leading digit or `*` is not followed by `>`, so `2>$null` is a redirection; its first
+  character is not `,`, `<`, `>`, a digit, `*` or a typographic quote; quoted sections and
+  backtick escapes inside it belong to the word, the one right after a leading digit or `*`
+  included (``2``;x`` ends at `;`); a Unicode space (`\p{Zs}`) ends it.
+- Redirection operators `1>` and `1>>`; a redirection target may be a bare word.
+- `command_name`: a name that starts with digits needs a letter after them (`(1..5)` and `1#` are
+  not commands); it never starts with `>` or a stream redirection (`>git`, `2>&1x`); a backtick
+  escapes the next character inside it, a line end included (`` git`<LF> status ``); Unicode
+  spaces and typographic quotes end it.
+- `stop_parsing`: `--%` is the token only before a space, a tab or the line end (`--%x` is not).
+  Its text ends where `Parser::ParseInput` ends it, probed over every ASCII character and the
+  typographic quotes: at CR, LF, or a `|` or `&&` outside double quotes (`--% x && git status`
+  runs `git`). A double quote, ASCII or typographic, protects `|` and `&&` up to the next quote or
+  the line end. A trailing `&` stays out of the token (a regex cannot tell it from `&&`).
+- New rule `glued_string_argument`: a closing quote ends an argument, so a bare word or a `(`
+  glued after a string starts the next argument (`"a \"b\""`, `"x \"(a|b)\""`, `'a'x`).
+- `command_parameter`: a one-dash parameter ends at the line end and keeps a backtick as a plain
+  character (`-a`<LF>ri` is `-a`` and the command `ri`); in a two-dash word a backtick escapes the
+  next character, a line end included; a `%` may follow the first letter (`-M50%`); a Unicode
+  space ends an attached value (`--name=a`); a double-quoted part of an attached value holds no
+  `$` and no backtick, so such a string is lexed as its own node (`--a="$(x)"`).
+- New hidden rule `_glued_expandable_string`: an expandable string glued to a parameter
+  (`--a="$x"`) is a real string node with its variables and subexpressions.
+- `_command_token`: a Unicode space ends it.
+- `generic_token` never starts with `#` (a comment starts there) or `;` (a statement ends there); `command_argument_sep`: a
+  Unicode space separates arguments.
+- Null-conditional member access `${a}?.Name`.
+- New rule `glued_argument`: a variable or `$(…)` with text glued after it (`$env:TEMP\x`,
+  `$d\sub`, `${name}:`, `$a$b`) is one argument.
+- Extras: BOM, word joiner, zero-width space, Unicode spaces and NEL are whitespace; a backtick
+  before CR continues the line.
+- Strings: typographic quotes open and close verbatim strings, expandable strings and
+  here-strings; here-strings accept CR-only line ends; `""` doubling covers the typographic
+  forms.
+- A parameter glued to a quoted value (`-m'msg'`, `-S"text"`) is one argument.
+- A command argument is one comma list of items (`a,b`, `'a', $b`); the old alternatives for an
+  array literal and a glued pair are gone. `-split x` in argument position is a parameter and a
+  value, and `-1`, `-5MB` are negative number arguments.
+- `switch_clause`: the statement terminator after a clause is optional (`switch ($x) { 'a' {…}
+  'b' {…} }` on one line).
+- `.ForEach(…)` / `.Where(…)` take an argument list as well as a script block.
+- New `null_coalescing_expression` (`??`), `ternary_expression` (`? :`) and the `??=`
+  assignment operator.
+- `{}` is a valid script block expression.
+- Scanner: the text of an expandable string or here-string is read by the external scanner
+  (`_expandable_string_text`, `_expandable_here_string_text`), so a `#` inside a string is not a
+  comment; a lone CR ends a statement.
+- Scanner, statement terminator: a backtick line end (LF, CR or CRLF) after whitespace (a
+  character `iswspace` accepts, where the scan starts) is skipped like a space, so a blank line
+  after it still ends the statement (``git status `<LF><LF>ri x`` is two commands,
+  ``git log `<LF> -n 1`` stays one); glued to a word it stays the word's (``git`<LF><LF>ri``:
+  the name is ``git`<LF>``).

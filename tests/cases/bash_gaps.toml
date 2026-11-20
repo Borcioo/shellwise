@@ -1,0 +1,167 @@
+# Bash shapes a naive reader gets wrong. `commands`: every command bash runs, in pre-order (a
+# command, then the commands nested in its words; a compound's redirect targets before its body;
+# `<none>` is an assignment-only command). `error = true`: the parser must refuse the row, so the
+# check fails closed. tests/parse_bash.rs reads every row; tests/bash_oracle.rs checks them
+# against bash itself. Synthetic commands only.
+
+[[row]]
+command = "{ cd sub; git commit -m x; } | head"
+commands = ["cd", "git", "head"]
+why = "a brace group piped into head"
+
+[[row]]
+command = "( cd sub && git commit -m x ) | head"
+commands = ["cd", "git", "head"]
+why = "a subshell piped into head; git is not its last command's pipe"
+
+[[row]]
+command = "while read -r b; do git branch -D \"$b\"; done < list"
+commands = ["read", "git"]
+why = "a command inside a while loop"
+
+[[row]]
+command = '''
+cat <<EOF
+$(rm -rf build)
+EOF'''
+commands = ["cat", "rm"]
+why = "an unquoted heredoc body runs its substitutions"
+
+[[row]]
+command = '''
+cat <<'EOF'
+$(rm -rf build)
+EOF'''
+commands = ["cat"]
+why = "a quoted heredoc body is text"
+
+[[row]]
+command = '''
+cat <<EOF && rm -rf build
+body
+EOF'''
+commands = ["cat", "rm"]
+why = "a heredoc followed by && on its start line"
+
+[[row]]
+command = "echo ${x:-$(git reset --hard)}"
+commands = ["echo", "git"]
+why = "a substitution inside a parameter default"
+
+[[row]]
+command = "echo `git clean -fdx`"
+commands = ["echo", "git"]
+why = "backticks"
+
+[[row]]
+command = "echo \"`rm -rf build`\""
+commands = ["echo", "rm"]
+why = "backticks inside double quotes"
+
+[[row]]
+command = '''
+cat <<$'EOF'
+rm -rf build
+EOF'''
+error = true
+why = "brush-parser rejects a $'...' heredoc delimiter; refusing it fails closed"
+
+[[row]]
+command = '''
+cat <<$(x)
+rm -rf build
+$(x)'''
+error = true
+why = "brush-parser rejects a $(...) heredoc delimiter; refusing it fails closed"
+
+[[row]]
+command = "diff <(git show a:f) <(git show b:f)"
+commands = ["diff", "git", "git"]
+why = "process substitution as arguments"
+
+[[row]]
+command = "git log > >(tee log.txt)"
+commands = ["git", "tee"]
+why = "process substitution as a redirect target"
+
+[[row]]
+command = "while read -r l; do rm \"$l\"; done < <(git ls-files -d)"
+commands = ["git", "read", "rm"]
+why = "process substitution feeding a loop"
+
+[[row]]
+command = "cd sub | git status"
+commands = ["cd", "git"]
+why = "cd in a pipeline stage does not change git's directory"
+
+[[row]]
+command = "cd sub & git status"
+commands = ["cd", "git"]
+why = "cd in a background job does not change git's directory"
+
+[[row]]
+command = "rm -rf {build,dist}"
+commands = ["rm"]
+why = "brace expansion"
+
+[[row]]
+command = "$'rm' -rf build"
+commands = ["rm"]
+why = "an ANSI-C quoted command name"
+
+[[row]]
+command = '''
+git \
+  clean -fdx'''
+commands = ["git"]
+why = "a line continuation inside the command"
+
+[[row]]
+command = "x=$(git stash drop)"
+commands = ["<none>", "git"]
+why = "a substitution in an assignment-only command"
+
+[[row]]
+command = "if git diff --quiet; then git push; fi"
+commands = ["git", "git"]
+why = "commands in an if condition and body"
+
+[[row]]
+command = "time rm -rf build"
+commands = ["rm"]
+why = "the time keyword"
+
+[[row]]
+command = "! git diff --quiet && rm -rf build"
+commands = ["git", "rm"]
+why = "a negated pipeline"
+
+[[row]]
+command = "echo \"$(git status)\""
+commands = ["echo", "git"]
+why = "a substitution inside double quotes"
+
+[[row]]
+command = "for f in *; do rm \"$f\"; done"
+commands = ["rm"]
+why = "a for loop over a glob"
+
+[[row]]
+command = "case $1 in -f) git clean -fdx ;; esac"
+commands = ["git"]
+why = "a command in a case branch"
+
+[[row]]
+command = "f() { git clean -fdx; }"
+commands = ["git"]
+why = "a function body"
+
+[[row]]
+command = "echo $(( $(git rev-list --count HEAD) + 1 ))"
+commands = ["echo", "git"]
+why = "a substitution inside arithmetic"
+
+[[row]]
+command = "cd sub; git status # don't"
+commands = ["cd", "git"]
+why = "an apostrophe in a comment hides nothing"

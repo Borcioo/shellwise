@@ -1,0 +1,397 @@
+# The ps-var-colon rule through analyse: `"$name: text"` in a PowerShell double-quoted string is
+# break, because PowerShell reads `$name:` as a drive-qualified variable and refuses the string.
+# `oracle` says what pwsh's ParseInput does with the text; every break row must say "refuses" and
+# every allow twin "accepts".
+
+# --- Findings ---
+
+[[row]]
+id = "name-colon-space"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "name-colon-variable"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$f:$l"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${f}:" instead of "$f:"'
+oracle = "refuses"
+
+[[row]]
+id = "automatic-variable-colon-space"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$LASTEXITCODE: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${LASTEXITCODE}:" instead of "$LASTEXITCODE:"'
+oracle = "refuses"
+
+[[row]]
+id = "name-colon-at-the-end-of-the-string"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "at $h:"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${h}:" instead of "$h:"'
+oracle = "refuses"
+
+[[row]]
+id = "windows-powershell-5-reads-it-the-same"
+os = "any"
+shell = "powershell5"
+command = 'Write-Output "$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+
+[[row]]
+id = "inside-a-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "x $(Write-Output "$n: y")"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-an-assignment"
+os = "any"
+shell = "pwsh"
+command = '$m = "$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# An unquoted $(...) holding the string: one finding, from the inner string only.
+[[row]]
+id = "unquoted-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output $(Write-Output "$n: y")'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-an-if-block"
+os = "any"
+shell = "pwsh"
+command = 'if ($a) { Write-Output "$n: x" }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-loop-body"
+os = "any"
+shell = "pwsh"
+command = 'foreach ($i in 1) { Write-Output "$n: x" }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-function-body"
+os = "any"
+shell = "pwsh"
+command = 'function f { Write-Output "$n: x" }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-method-argument"
+os = "any"
+shell = "pwsh"
+command = '$x.Add("$n: x")'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-redirection-target"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output x > "$n: y.txt"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# A name with a letter outside ASCII (U+017C): PowerShell reads it whole.
+[[row]]
+id = "name-with-a-non-ascii-letter"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$za\u017c: x\""
+level = "break"
+rules = ["ps-var-colon"]
+fix = "write \"${za\u017c}:\" instead of \"$za\u017c:\""
+oracle = "refuses"
+
+[[row]]
+id = "in-a-try-block"
+os = "any"
+shell = "pwsh"
+command = 'try { Write-Output "$n: x" } catch { }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-subexpression-operand"
+os = "any"
+shell = "pwsh"
+command = '$c + $(Write-Output "$n: x")'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "a-bare-string-statement"
+os = "any"
+shell = "pwsh"
+command = '"$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# A string that is an operand of `+` at statement level.
+[[row]]
+id = "the-left-operand-of-a-plus"
+os = "any"
+shell = "pwsh"
+command = '"$n: " + $c'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "the-right-operand-of-a-plus"
+os = "any"
+shell = "pwsh"
+command = '"a" + "$n: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "an-operand-of-a-plus-in-a-loop-body"
+os = "any"
+shell = "pwsh"
+command = 'foreach ($n in 1,2) { "$n: " + $c[$n-1] }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "an-operand-of-a-plus-in-an-assignment"
+os = "any"
+shell = "pwsh"
+command = '$x = "a" + "$n: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# `?` is a name character: `$a?:` is a variable `a?` on a drive.
+[[row]]
+id = "a-name-ending-in-a-question-mark"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$a?: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${a?}:" instead of "$a?:"'
+oracle = "refuses"
+
+# --- Allow twins ---
+
+# Inside $(...) and ${...} the outer string's rules do not apply: a single-quoted string there is
+# literal, and a braced name may hold a colon.
+[[row]]
+id = "single-quoted-inside-a-subexpression"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$('$n: x')\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "braced-name-holding-a-colon"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "${x $n: y}"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# `::` after the name is a static member; `?` and a letter outside ASCII (U+0105) are name
+# characters, so `$n:?z` and `$n:` U+0105 `z` are drive references.
+[[row]]
+id = "question-mark-after-the-colon"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$n:?z"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "static-member-after-the-name"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$t::Now"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "non-ascii-letter-after-the-colon"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$n:\u0105z\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "static-member-inside-a-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "now $($t::Now)"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "dollar-dollar-then-a-name"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$$n: x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# U+0060 (backtick) escapes the $.
+[[row]]
+id = "escaped-dollar"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"\u0060$n: x\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "operands-of-a-plus-braced"
+os = "any"
+shell = "pwsh"
+command = '"a" + "${n}: x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "a-name-ending-in-a-question-mark-braced"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "${a?}: x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "braced-name"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "${n}: done"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "drive-reference-env"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$env:TEMP x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$($n): x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "single-quoted"
+os = "any"
+shell = "pwsh"
+command = "Write-Output '$n: x'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "scope-reference-script"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$script:x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "scope-reference-global"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$global:x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "colon-with-no-variable"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "time: 10:30"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bash-is-not-read"
+os = "any"
+shell = "bash"
+command = 'echo "$n: done"'
+level = "ok"
+rules = []

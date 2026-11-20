@@ -1,0 +1,777 @@
+# The program table: every program name, alias, option spelling and per-program fact the rules
+# use. Read by `src/programs.rs` (the one walker); rule code holds no program or option names.
+# Only programs that occur in the corpus or the trap catalogue go in.
+#
+# [[program]]
+# name           = "timeout"          the name as a shell finds it, lowercase; a path and `.exe`
+#                                     on the typed name are ignored (`/usr/bin/timeout`,
+#                                     `timeout.exe`), and case is ignored on Windows and Git Bash
+# shells         = ["bash"]           where the name applies: "bash", "pwsh"; [] or absent = both
+# aliases        = { bash = [], pwsh_windows = [], pwsh_posix = [] }
+#                                     further names per shell (the alias keys are optional)
+# kind           = ["wrapper"]        any of "wrapper", "native-msys", "delete", "eval", "shell",
+#                                     "interactive", "launcher"
+# value_options  = ["-s"]             options that take the next word as their value
+# fix            = "..."              the Fix line text a rule about this program prints; `<path>`
+#                                     and the like are filled in by the rule (`<command>`: the command as typed)
+#
+# Wrapper facts (kind = "wrapper"; `programs::strip_wrappers` reads them):
+# operands       = 1                  words before the wrapped command that are not options
+#                                     (`timeout DURATION cmd`)
+# assignments    = true               `NAME=value` words before the command are assignments to it
+# no_run_options = ["-v"]             with one of these the wrapper runs nothing (`command -v x`)
+# flag_options   = ["-p"]             options that take no value; with value_options and
+#                                     no_run_options, from the tool's own help. Any other option
+#                                     makes the wrapped command unread: it may take a value.
+#
+# Rule facts:
+# escapes        = "always"           the program turns `\\` into `\` itself: "always" (printf) or
+#                                     "option" (only with one of `escape_options`, echo -e)
+# escape_options = ["-e"]             for escapes = "option"; a short cluster holding the letter
+#                                     counts (`-ne`)
+# cmd_options    = ["/d"]             cmd.exe spellings that break in this shell (`cd /d`)
+#
+# Any other key is kept for the task that reads it (`Program::extra`).
+
+# --- Wrappers: run the rest of their words as a command (Ruling 93: only the common ones) ---
+
+[[program]]
+name = "timeout"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-s", "--signal", "-k", "--kill-after"]
+flag_options = ["--preserve-status", "--foreground", "-v", "--verbose"]
+operands = 1
+bounds_wait = true
+
+[[program]]
+name = "nice"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-n", "--adjustment"]
+
+# `-S` (`--split-string`) is listed nowhere on purpose: its value is the command.
+[[program]]
+name = "env"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-u", "--unset", "-C", "--chdir", "-a", "--argv0"]
+flag_options = ["-", "-i", "--ignore-environment", "-0", "--null", "-v", "--debug", "--block-signal", "--default-signal", "--ignore-signal", "--list-signal-handling"]
+assignments = true
+
+[[program]]
+name = "sudo"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type", "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user"]
+flag_options = ["-A", "--askpass", "-b", "--background", "-B", "--bell", "-E", "--preserve-env", "-H", "--set-home", "-i", "--login", "-k", "--reset-timestamp", "-n", "--non-interactive", "-P", "--preserve-groups", "-S", "--stdin", "-s", "--shell"]
+no_run_options = ["-l", "--list", "-v", "--validate", "-V", "--version", "-K", "--remove-timestamp"]
+assignments = true
+
+[[program]]
+name = "command"
+shells = ["bash"]
+kind = ["wrapper"]
+flag_options = ["-p"]
+no_run_options = ["-v", "-V"]
+
+[[program]]
+name = "nohup"
+shells = ["bash"]
+kind = ["wrapper"]
+
+# `exec [-cl] [-a name] [command [arguments]]` (bash's `help exec`); with no command it runs nothing.
+[[program]]
+name = "exec"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-a"]
+flag_options = ["-c", "-l"]
+
+# `builtin shell-builtin [arguments]` (bash's `help builtin`).
+[[program]]
+name = "builtin"
+shells = ["bash"]
+kind = ["wrapper"]
+
+# --- Programs that turn `\\` into `\` themselves (bash-backslash-collapse) ---
+
+[[program]]
+name = "printf"
+shells = ["bash"]
+escapes = "always"
+value_options = ["-v"]
+
+[[program]]
+name = "echo"
+shells = ["bash"]
+escapes = "option"
+escape_options = ["-e"]
+
+# --- Native Windows programs that take Linux paths, which Git Bash rewrites (bash-msys-path-mangle) ---
+
+[[program]]
+name = "docker"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+follow_when = ["-f", "--follow"]
+follow_sub = "logs"
+
+[[program]]
+name = "docker-compose"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+[[program]]
+name = "wsl"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+[[program]]
+name = "kubectl"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+follow_when = ["-f", "--follow"]
+follow_sub = "logs"
+
+[[program]]
+name = "podman"
+shells = ["bash"]
+kind = ["native-msys"]
+fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+
+# --- Herd's versioned PHP launchers: .bat files Git Bash runs by that name only through a profile function (bash-versioned-php) ---
+
+[[program]]
+name = "php74"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php80"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php81"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php82"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php83"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php84"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+[[program]]
+name = "php85"
+shells = ["bash"]
+kind = ["launcher"]
+fix = "call the php.exe of that version by its full path"
+
+# --- Builtins with a cmd.exe spelling that breaks in bash (bash-cd-slash-d) ---
+
+[[program]]
+name = "cd"
+shells = ["bash"]
+cmd_options = ["/d"]
+fix = "cd <path>"
+
+# --- Builtins whose `NAME=value` operand assigns like a plain `NAME=value` (src/fs/assigned.rs) ---
+
+[[program]]
+name = "export"
+shells = ["bash"]
+assigns_operand = true
+
+# --- Programs that wait (Task 33: will-hang, read by src/rules/hang.rs) ---
+# hang_when       options that start the wait; empty = the program always waits
+# hang_unless     options that end or bound the wait, read as getopt does (`-rt 5`, `-t5`, `--print`;
+#                 a letter in value_options takes the rest of its cluster or the next word)
+# hang_stdin      true = feeding stdin (redirect, here-string, pipe, loop) ends the wait
+# hang_bash_only  true = checked in Bash only
+# hang_level      "break" or "warn" (default warn)
+# bounds_wait     true on a wrapper that bounds what it wraps (timeout)
+
+[[program]]
+name = "read"
+shells = ["bash"]
+kind = ["interactive"]
+value_options = ["-a", "-d", "-i", "-n", "-N", "-p", "-t", "-u"]
+hang_unless = ["-t", "-u"]
+hang_stdin = true
+hang_level = "break"
+fix = 'feed read its input on the same line: <command> <<< "<value>"'
+loop_role = ["wait"]
+loop_wait_when = ["-t"]
+
+[[program]]
+name = "claude"
+kind = ["interactive"]
+hang_when = ["-p", "--print"]
+hang_bash_only = true
+hang_level = "warn"
+fix = "timeout 120 claude -p <prompt>"
+lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = ["--version", "-v", "--help", "-h"] }
+
+# --- Wait loops (wait-loop-unbounded, read by src/rules/wait_loop.rs; the loop words are in [loops]) ---
+# loop_role       what the command is to a loop: "wait" (it pauses, so the loop polls)
+# loop_wait_when  for "wait": only with one of these options (`read -t`)
+# loop_wait_ms    for "wait": with one of these options its number is milliseconds
+# loop_body       on a shell row: the option whose next word is a script the rule reads too
+#                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
+
+[[program]]
+name = "sleep"
+shells = ["bash"]
+loop_role = ["wait"]
+
+[[program]]
+name = "start-sleep"
+shells = ["pwsh"]
+aliases = { pwsh_windows = ["sleep"], pwsh_posix = ["sleep"] }
+loop_role = ["wait"]
+loop_wait_ms = ["-Milliseconds", "-m"]
+
+[[program]]
+name = "wait-process"
+shells = ["pwsh"]
+loop_role = ["wait"]
+
+[[program]]
+name = "wait-job"
+shells = ["pwsh"]
+loop_role = ["wait"]
+
+[[program]]
+name = "wait-event"
+shells = ["pwsh"]
+loop_role = ["wait"]
+
+# --- Follow commands (follow-unbounded, read by src/rules/wait_loop.rs) ---
+# follow            true = the command always follows its input (`watch`)
+# follow_when       options that make it follow (`tail -f`)
+# follow_sub        the subcommand the options count after (`kubectl logs -f`)
+# ends_follow       true = as a later pipeline stage it ends the pipeline (`head`)
+# ends_follow_when  options with which it ends the pipeline (`grep -m1`, `Select-Object -First`)
+# The Get-Content and Select-Object rows (PowerShell) carry `follow_when` and `ends_follow_when`.
+
+[[program]]
+name = "tail"
+shells = ["bash"]
+follow_when = ["-f", "-F", "--follow"]
+
+[[program]]
+name = "watch"
+shells = ["bash"]
+follow = true
+
+[[program]]
+name = "head"
+shells = ["bash"]
+ends_follow = true
+
+[[program]]
+name = "grep"
+shells = ["bash"]
+ends_follow_when = ["-m", "--max-count", "-q", "--quiet"]
+
+# --- The delete family (Task 32: [program.delete], read by src/rules/delete.rs) ---
+
+[[program]]
+name = "remove-item"
+shells = ["pwsh"]
+kind = ["delete"]
+value_options = ["-Filter", "-Include", "-Exclude", "-Credential", "-Stream", "-ErrorAction", "-ea", "-WarningAction", "-wa", "-InformationAction", "-infa", "-ProgressAction", "-proga", "-ErrorVariable", "-ev", "-WarningVariable", "-wv", "-InformationVariable", "-iv", "-OutVariable", "-ov", "-OutBuffer", "-ob", "-PipelineVariable", "-pv"]
+lint = { tags = ["children-delete"], flag_hints = ["-rf=-Recurse -Force", "-fr=-Recurse -Force", "-Rf=-Recurse -Force"] }
+[program.delete]
+recursive = ["-Recurse"]
+forced = ["-Force"]
+dry_run = ["-WhatIf"]
+target_options = ["-Path", "-LiteralPath"]
+
+[[program]]
+name = "clear-content"
+shells = ["pwsh"]
+kind = ["delete"]
+value_options = ["-Filter", "-Include", "-Exclude", "-Credential", "-Stream", "-ErrorAction", "-ea", "-WarningAction", "-wa", "-ErrorVariable", "-ev", "-OutVariable", "-ov"]
+[program.delete]
+dry_run = ["-WhatIf"]
+target_options = ["-Path", "-LiteralPath"]
+
+[[program]]
+name = "rm"
+kind = ["delete"]
+[program.delete]
+recursive = ["-r", "-R", "--recursive"]
+forced = ["-f", "--force"]
+
+[[program]]
+name = "rmdir"
+kind = ["delete"]
+[program.delete]
+
+[[program]]
+name = "unlink"
+kind = ["delete"]
+[program.delete]
+
+[[program]]
+name = "shred"
+kind = ["delete"]
+[program.delete]
+
+[[program]]
+name = "find"
+[program.delete]
+targets = "leading"
+contents = true
+exec_options = ["-exec", "-execdir", "-ok", "-okdir"]
+exec_ends = [";", "+"]
+
+[[program]]
+name = "xargs"
+shells = ["bash"]
+value_options = ["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace", "--max-lines", "--eof"]
+[program.delete]
+runner = true
+
+[[program]]
+name = "robocopy"
+[program.delete]
+targets = "second"
+always_recursive = true
+follows_links = true
+slash_options = true
+dry_run = ["/L"]
+
+# --- Code the guard does not read: danger only with a raw destructive match (opaque-destructive) ---
+
+[[program]]
+name = "bash"
+shells = ["bash"]
+kind = ["shell"]
+loop_body = ["-c"]
+
+[[program]]
+name = "sh"
+kind = ["shell"]
+loop_body = ["-c"]
+
+[[program]]
+name = "zsh"
+kind = ["shell"]
+loop_body = ["-c"]
+
+[[program]]
+name = "pwsh"
+kind = ["shell"]
+value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-SettingsFile", "-WindowStyle", "-w", "-CustomPipeName", "-EncodedCommand", "-e", "-ec", "-Version", "-v"]
+lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+
+[[program]]
+name = "powershell"
+kind = ["shell"]
+value_options = ["-ExecutionPolicy", "-ep", "-ex", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
+lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+
+# cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit). pwsh
+# starts it as "C:\WINDOWS\system32\cmd.exe" (29 characters with the quotes) in place of the typed
+# word: a typed `cmd /c echo …` of 8166 characters is refused (measured with pwsh 7.7).
+[[program]]
+name = "cmd"
+kind = ["shell"]
+line_limit = 8191
+launch_path_units = 29
+fix = "delete the leading cmd /c and run the program directly from PowerShell, which starts command lines up to 32766 characters"
+
+[[program]]
+name = "eval"
+shells = ["bash"]
+kind = ["eval"]
+
+[[program]]
+name = "invoke-expression"
+shells = ["pwsh"]
+kind = ["eval"]
+
+# --- git (Task 32: [program.discard], read by src/rules/git.rs). Subcommands use `words`, not
+# `name`: tests/shape.rs reads every `name` key in the table as a program name. ---
+
+[[program]]
+name = "git"
+lint = { tags = ["git-cli"], global_value_options = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--attr-source", "--shallow-file"], stdin_commit = ["commit"], file_long = ["--file"], file_short = ["F"] }
+[program.discard]
+global_value_options = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--attr-source", "--shallow-file"]
+config_options = ["-c"]
+hook_config_keys = ["core.hookspath"]
+no_verify = "--no-verify"
+verify = "--verify"
+staged = ["--staged", "-S"]
+worktree = ["--worktree", "-W"]
+source_options = ["-s", "--source"]
+hunk_options = ["--ours", "--theirs", "-p", "--patch", "-m", "--merge"]
+branch_options = ["-b", "-B", "--orphan", "--detach", "-d"]
+clean_value_options = ["-e", "--exclude"]
+clean_dirs_options = ["-d"]
+force_options = ["-f", "--force"]
+
+[[program.discard.subcommands]]
+words = "commit"
+action = "hooks"
+no_verify_short = "n"
+value_shorts = "mFCct"
+value_long = ["--message", "--file", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--author", "--date", "--template", "--trailer", "--cleanup", "--pathspec-from-file"]
+
+[[program.discard.subcommands]]
+words = "push"
+action = "hooks"
+value_shorts = "o"
+value_long = ["--repo", "--receive-pack", "--exec", "--push-option"]
+
+[[program.discard.subcommands]]
+words = "merge"
+action = "hooks"
+value_shorts = "mFsX"
+value_long = ["--message", "--file", "--strategy-option", "--into-name", "--cleanup"]
+
+[[program.discard.subcommands]]
+words = "rebase"
+action = "hooks"
+value_shorts = "CxsX"
+value_long = ["--onto", "--strategy-option", "--exec", "--whitespace", "--empty"]
+
+[[program.discard.subcommands]]
+words = "am"
+action = "hooks"
+no_verify_short = "n"
+value_shorts = "Cp"
+value_long = ["--directory", "--exclude", "--include", "--whitespace", "--patch-format", "--resolvemsg", "--quoted-cr", "--empty"]
+
+# `long_options`: every long option of the subcommand, from `git <sub> --git-completion-helper-all`
+# (git 2.53), so a unique prefix (`--har`) reads as the option git takes it for.
+[[program.discard.subcommands]]
+words = "checkout"
+action = "checkout-paths"
+value_shorts = "bB"
+value_long = ["--orphan"]
+long_options = ["--guess", "--overlay", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--detach", "--track", "--force", "--orphan", "--overwrite-ignore", "--ignore-other-worktrees", "--ours", "--theirs", "--patch", "--unified", "--inter-hunk-context", "--ignore-skip-worktree-bits", "--pathspec-from-file", "--pathspec-file-nul", "--no-guess", "--no-overlay", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-detach", "--no-track", "--no-force", "--no-orphan", "--no-overwrite-ignore", "--no-ignore-other-worktrees", "--no-patch", "--no-ignore-skip-worktree-bits", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
+
+[[program.discard.subcommands]]
+words = "restore"
+action = "restore-paths"
+long_options = ["--source", "--staged", "--worktree", "--ignore-unmerged", "--overlay", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--ours", "--theirs", "--patch", "--unified", "--inter-hunk-context", "--ignore-skip-worktree-bits", "--pathspec-from-file", "--pathspec-file-nul", "--no-source", "--no-staged", "--no-worktree", "--no-ignore-unmerged", "--no-overlay", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-patch", "--no-ignore-skip-worktree-bits", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
+
+[[program.discard.subcommands]]
+words = "worktree remove"
+action = "worktree-remove"
+
+[[program.discard.subcommands]]
+words = "reset"
+action = "discard"
+danger_options = ["--hard", "--merge"]
+long_options = ["--quiet", "--no-refresh", "--mixed", "--soft", "--hard", "--merge", "--keep", "--recurse-submodules", "--patch", "--unified", "--inter-hunk-context", "--intent-to-add", "--pathspec-from-file", "--pathspec-file-nul", "--stdin", "--refresh", "--no-quiet", "--no-recurse-submodules", "--no-patch", "--no-intent-to-add", "--no-pathspec-from-file", "--no-pathspec-file-nul", "--no-stdin"]
+
+[[program.discard.subcommands]]
+words = "switch"
+action = "discard"
+value_shorts = "cC"
+value_long = ["--create", "--force-create", "--orphan"]
+long_options = ["--create", "--force-create", "--guess", "--discard-changes", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--detach", "--track", "--force", "--orphan", "--overwrite-ignore", "--ignore-other-worktrees", "--no-create", "--no-force-create", "--no-guess", "--no-discard-changes", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-detach", "--no-track", "--no-force", "--no-orphan", "--no-overwrite-ignore", "--no-ignore-other-worktrees"]
+
+[[program.discard.subcommands]]
+words = "stash drop"
+action = "discard"
+warn_only = true
+
+[[program.discard.subcommands]]
+words = "stash clear"
+action = "discard"
+
+[[program.discard.subcommands]]
+words = "clean"
+action = "clean"
+value_shorts = "e"
+value_long = ["--exclude"]
+long_options = ["--quiet", "--dry-run", "--force", "--interactive", "--exclude", "--no-quiet", "--no-dry-run", "--no-force", "--no-interactive"]
+
+# --- PowerShell lint (Task 30). Every rule fact sits in the row's `lint` table (`Program::extra`):
+# `tags` says which rule reads the row; the other keys are that rule's lists. Cmdlet rows are
+# named by the cmdlet (lowercase): the rules look a command up by the cmdlet its alias resolves to.
+
+[[program]]
+name = "bash"
+shells = ["pwsh"]
+kind = ["shell"]
+loop_body = ["-c"]
+fix ="& \"$env:ProgramFiles\\Git\\bin\\bash.exe\""
+lint = { tags = ["wsl-bash"] }
+
+[[program]]
+name = "wsl"
+shells = ["pwsh"]
+value_options = ["-d", "--distribution", "-u", "--user", "--cd"]
+lint = { tags = ["wsl-launcher"], exec_flags = ["-e", "--exec"] }
+
+[[program]]
+name = "tee-object"
+shells = ["pwsh"]
+lint = { tags = ["tee-cmdlet"], variable_params = ["variable"] }
+
+# `variable_params`: parameters that bind a variable by name (stale-write-var), named or at their
+# position.
+[[program]]
+name = "set-variable"
+shells = ["pwsh"]
+lint = { variable_params = ["name"] }
+
+[[program]]
+name = "new-variable"
+shells = ["pwsh"]
+lint = { variable_params = ["name"] }
+
+[[program]]
+name = "invoke-restmethod"
+shells = ["pwsh"]
+lint = { variable_params = ["statuscodevariable", "responseheadersvariable", "sessionvariable"] }
+
+[[program]]
+name = "invoke-webrequest"
+shells = ["pwsh"]
+lint = { variable_params = ["sessionvariable"] }
+
+[[program]]
+name = "select-object"
+shells = ["pwsh"]
+lint = { tags = ["truncator"], truncate_params = ["first"], flag_hints = ["-n#=-First "] }
+ends_follow_when = ["-First", "-Index"]
+
+[[program]]
+name = "get-content"
+shells = ["pwsh"]
+lint = { flag_hints = ["-n#=-TotalCount "] }
+follow_when = ["-Wait"]
+
+[[program]]
+name = "set-content"
+shells = ["pwsh"]
+lint = { tags = ["file-writer"], content_position = ["1"] }
+
+[[program]]
+name = "out-file"
+shells = ["pwsh"]
+lint = { tags = ["file-writer"], append_params = ["append"] }
+
+[[program]]
+name = "get-childitem"
+shells = ["pwsh"]
+lint = { flag_hints = ["-la=-Force", "-al=-Force", "-lh=-Force", "-lah=-Force", "-alh=-Force", "-ltr=-Force"] }
+
+[[program]]
+name = "select-string"
+shells = ["pwsh"]
+lint = { flag_hints = ["-A#=-Context 0,"] }
+
+[[program]]
+name = "set-location"
+shells = ["pwsh"]
+lint = { flag_hints = ["/d=", "/D="] }
+
+[[program]]
+name = "gh"
+shells = ["pwsh"]
+lint = { tags = ["prose-cli"], prose_subcommands = ["pr", "issue", "release"], prose_flags = ["--body=--body-file", "-b=--body-file", "--notes=--notes-file", "-n=--notes-file", "--title", "-t"] }
+
+[[program]]
+name = "rg"
+shells = ["pwsh"]
+fix = "--files-without-match"
+lint = { follow_flags = ["-L"] }
+
+[[program]]
+name = "stop-process"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], name_params = ["name"] }
+
+[[program]]
+name = "taskkill"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], name_flags = ["/IM"] }
+
+[[program]]
+name = "pkill"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], always = ["yes"] }
+
+[[program]]
+name = "killall"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], always = ["yes"] }
+
+[[program]]
+name = "python"
+shells = ["pwsh"]
+aliases = { pwsh_windows = ["python3", "py"], pwsh_posix = ["python3"] }
+lint = { tags = ["interpreter"], stdin_args = ["-"] }
+
+[[program]]
+name = "node"
+shells = ["pwsh"]
+lint = { tags = ["interpreter"], stdin_args = ["-"] }
+
+[[program]]
+name = "php"
+shells = ["pwsh"]
+lint = { tags = ["interpreter"], stdin_args = ["-"] }
+
+# ps-unix-command: Unix tools PowerShell does not have; `fix` names the PowerShell way.
+
+[[program]]
+name = "head"
+shells = ["pwsh"]
+fix = "Select-Object -First N"
+lint = { tags = ["unix-only", "truncator"] }
+
+[[program]]
+name = "tail"
+shells = ["pwsh"]
+fix = "Select-Object -Last N"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "grep"
+shells = ["pwsh"]
+fix = "Select-String or rg"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "sed"
+shells = ["pwsh"]
+fix = "the -replace operator"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "awk"
+shells = ["pwsh"]
+fix = "ForEach-Object with -split"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "wc"
+shells = ["pwsh"]
+fix = "Measure-Object -Line"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "which"
+shells = ["pwsh"]
+fix = "Get-Command"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "touch"
+shells = ["pwsh"]
+fix = "New-Item -ItemType File"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "xargs"
+shells = ["pwsh"]
+value_options = ["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace", "--max-lines", "--eof"]
+fix = "ForEach-Object"
+lint = { tags = ["unix-only"] }
+[program.delete]
+runner = true
+
+[[program]]
+name = "cut"
+shells = ["pwsh"]
+fix = "ForEach-Object with -split"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "less"
+shells = ["pwsh"]
+fix = "plain output"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "export"
+shells = ["pwsh"]
+fix = "$env:NAME = 'value'"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "source"
+shells = ["pwsh"]
+fix = "dot-sourcing (. .\\file.ps1)"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "basename"
+shells = ["pwsh"]
+fix = "Split-Path -Leaf"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "dirname"
+shells = ["pwsh"]
+fix = "Split-Path -Parent"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "realpath"
+shells = ["pwsh"]
+fix = "Resolve-Path"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "uniq"
+shells = ["pwsh"]
+fix = "Sort-Object -Unique"
+lint = { tags = ["unix-only"] }
+
+# --- The Git Bash path conversion (bash-msys-path-mangle) ---
+
+[msys]
+# A word Git Bash rewrites into a Windows path: `/<root>` or `/<root>/...`, alone or as the value
+# of `--opt=` / `-o=`.
+roots = ["var", "usr", "etc", "tmp", "home", "opt", "bin", "sbin", "app", "srv", "data", "root", "mnt", "run", "lib", "workspace", "code"]
+# Environment names that turn the conversion off; the rule stays quiet when the command sets one.
+opt_out = ["MSYS_NO_PATHCONV", "MSYS2_ARG_CONV_EXCL"]
+
+# --- The words a loop's end is read from (wait-loop-unbounded) ---
+
+[loops]
+# Words that leave the loop or the shell.
+exits = ["break", "exit", "return", "throw"]
+# A whole loop condition that is always true (Bash `true`, `:`; PowerShell `$true`, `1`).
+always = ["true", ":", "$true", "1"]
+# Words that read the time: a test holding one is a deadline (`$SECONDS`, `date +%s`,
+# `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`).
+clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopwatch", "Elapsed"]
+# Operators that compare numbers: a test with one on a variable the loop changes is a counter
+# (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
+compares = ["-lt", "-le", "-gt", "-ge", "<", "<=", ">", ">="]
+# The sentence after the Fix line.
+hint_bash = "when you wait for a process, wait on the process (wait <pid>) rather than on a line in its log"
+hint_pwsh = "when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"

@@ -1,0 +1,1116 @@
+# The git rules, through analyse, against the fixture tree `tests/delete.rs` builds (FX_ names
+# as in delete.toml; FX_REPO also holds `wt/` with a junction or symlink `wt/node_modules` to
+# FX_OUTSIDE/target, and a plain `wt-clean/`). Path-free pwsh rows run on every OS. The runner
+# enables `policies.git_no_verify` except on rows whose id starts with `policy-off-`; `nocwd-`
+# rows run with no cwd.
+#
+# Rows ported from baseline-guard's tests/test_rules.py carry an id starting with `sg-` (or
+# `nocwd-sg-`); `tests/delete.rs` checks their count per rule against PORTED. Ported, and the
+# baseline-guard lines that name the rule (approximate: counted with grep, so comment lines are in
+# and allow twins with no rule name are out):
+#   git-restore-discards  12 ported (7 deny, 5 allow) of about 19 lines; the rest are the same
+#                         shapes behind a cwd the hook could not follow.
+#   git-no-verify         24 ported (13 deny, 11 allow) of about 218 lines; dropped: prefix
+#                         abbreviations (`--no-veri`), quoting and escapes inside a config key,
+#                         GIT_CONFIG_* environment tricks, backtick bodies: obfuscation-only
+#                         shapes (Ruling 91).
+#   git-unreadable         6 ported (5 deny, 1 allow) of about 27 lines; dropped: `env -S`/
+#                         `env --chdir` bodies, splats and arrays that carry the subcommand
+#                         (obfuscation; an unread wrapper with a delete is opaque-destructive).
+#   git-worktree-junction  rebuilt on this fixture (baseline-guard builds its own repo with real
+#                         worktrees; the suffix lookup through `git worktree list` is not ported,
+#                         so a bare name that is no folder here is a finding).
+# Corpus counts of the shapes (2026-11-19): `git worktree remove` 320, `git checkout --` 73,
+# `git restore` 41, `git commit --no-verify` 26, `git clean -f` 5, `git reset --hard` 3,
+# `git stash drop|clear` 2.
+
+# ---------------------------------------------------------------- git-restore-discards
+
+[[row]]
+id = "sg-restore-checkout-dashdash"
+os = "any"
+shell = "pwsh"
+command = "git checkout -- src/b.js"
+level = "warn"
+rules = ["git-restore-discards"]
+fix = "git diff --stat -- src/b.js"
+
+[[row]]
+id = "sg-restore-checkout-dashdash-with-C"
+os = "windows"
+shell = "pwsh"
+command = "git -C D:\\x checkout HEAD -- src/b.js src/c.js"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "sg-restore-checkout-dot"
+os = "any"
+shell = "pwsh"
+command = "git checkout ."
+level = "danger"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "sg-restore-restore-a-file"
+os = "any"
+shell = "pwsh"
+command = "git restore src/b.js"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "sg-restore-staged-and-worktree"
+os = "any"
+shell = "pwsh"
+command = "git restore --staged --worktree src/b.js"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "sg-restore-bash-checkout-dashdash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout -- b.txt && npm test"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "nocwd-sg-restore-checkout-a-word"
+os = "any"
+shell = "pwsh"
+command = "git checkout main"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "sg-restore-staged-only"
+os = "any"
+shell = "pwsh"
+command = "git restore --staged b.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-restore-ours"
+os = "any"
+shell = "pwsh"
+command = "git checkout --ours -- a.pot b.mo"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-restore-new-branch"
+os = "any"
+shell = "pwsh"
+command = "git checkout -b feature/y"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-restore-text-in-a-search"
+os = "any"
+shell = "pwsh"
+command = "rg -n 'git checkout -- y' notes.md"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-restore-marker"
+os = "any"
+shell = "pwsh"
+command = "git checkout -- b.txt # baseline-guard: allow"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "restore-checkout-a-file-on-disk"
+os = "any"
+shell = "pwsh"
+command = "git checkout src/a.txt"
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "restore-checkout-a-branch"
+os = "any"
+shell = "pwsh"
+command = "git checkout develop"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- git-discard
+
+[[row]]
+id = "discard-reset-hard"
+os = "any"
+shell = "pwsh"
+command = "git reset --hard HEAD~2"
+level = "danger"
+rules = ["git-discard"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "discard-reset-hard-bash"
+os = "windows"
+shell = "gitbash"
+command = "git reset --hard origin/develop"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "discard-reset-soft"
+os = "any"
+shell = "pwsh"
+command = "git reset --soft HEAD~2"
+level = "ok"
+rules = []
+
+[[row]]
+id = "discard-stash-drop"
+os = "windows"
+shell = "gitbash"
+command = "git stash drop stash@{1}"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "discard-stash-clear"
+os = "windows"
+shell = "gitbash"
+command = "git stash clear && git status"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "discard-stash-list"
+os = "any"
+shell = "pwsh"
+command = "git stash list --oneline"
+level = "ok"
+rules = []
+
+[[row]]
+id = "discard-switch-discard-changes"
+os = "any"
+shell = "pwsh"
+command = "git switch --discard-changes develop"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "discard-switch-plain"
+os = "any"
+shell = "pwsh"
+command = "git switch develop"
+level = "ok"
+rules = []
+
+[[row]]
+id = "discard-checkout-force"
+os = "any"
+shell = "pwsh"
+command = "git checkout -f develop"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "discard-marker"
+os = "any"
+shell = "pwsh"
+command = "git reset --hard HEAD~2 # shellwise: allow"
+level = "ok"
+rules = ["git-discard"]
+
+# ---------------------------------------------------------------- git clean (the delete levels)
+
+[[row]]
+id = "clean-in-the-repo"
+os = "any"
+shell = "pwsh"
+command = "git clean -fdx"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-a-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fd build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "clean-dry-run"
+os = "any"
+shell = "pwsh"
+command = "git clean -nd"
+level = "ok"
+rules = []
+
+[[row]]
+id = "clean-outside"
+os = "any"
+shell = "pwsh"
+command = "git -C FX_OUTSIDE clean -fd"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-in-home"
+os = "any"
+shell = "pwsh"
+command = "git -C FX_HOME clean -fdx"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "nocwd-clean"
+os = "any"
+shell = "pwsh"
+command = "git clean -fd"
+level = "danger"
+rules = ["git-discard"]
+
+# `-n` only lists what it would remove, wherever it points.
+[[row]]
+id = "clean-dry-run-outside"
+os = "any"
+shell = "pwsh"
+command = "git -C FX_OUTSIDE clean -nd"
+level = "ok"
+rules = []
+
+# `checkout -b <name>` creates a branch; the name is no path, even when a folder has it.
+[[row]]
+id = "checkout-new-branch-named-like-a-folder"
+os = "any"
+shell = "pwsh"
+command = "git checkout -b build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "checkout-new-branch-from-a-variable"
+os = "any"
+shell = "bash"
+command = 'git checkout -b "$BRANCH"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "worktree-remove-force-the-home-folder"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+# ---------------------------------------------------------------- git-worktree-junction
+
+[[row]]
+id = "worktree-remove-force-with-a-junction"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force wt"
+level = "danger"
+rules = ["git-worktree-junction"]
+fix = "[IO.Directory]::Delete('"
+
+[[row]]
+id = "worktree-remove-with-a-junction"
+os = "windows"
+shell = "gitbash"
+command = "git worktree remove wt"
+level = "warn"
+rules = ["git-worktree-junction"]
+fix = "rm '"
+
+[[row]]
+id = "worktree-remove-with-C"
+os = "any"
+shell = "pwsh"
+command = "git -C FX_REPO worktree remove -f wt"
+level = "danger"
+rules = ["git-worktree-junction"]
+
+[[row]]
+id = "worktree-remove-after-set-location"
+os = "any"
+shell = "pwsh"
+command = "Set-Location FX_REPO; git worktree remove wt"
+level = "warn"
+rules = ["git-worktree-junction"]
+
+[[row]]
+id = "worktree-remove-a-variable"
+os = "windows"
+shell = "pwsh"
+command = "$w = 'FX_REPO\\wt'; git worktree remove --force $w"
+level = "danger"
+rules = ["git-worktree-junction"]
+
+[[row]]
+id = "worktree-remove-clean"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove wt-clean"
+level = "ok"
+rules = []
+
+[[row]]
+id = "worktree-remove-a-gone-absolute-path"
+os = "windows"
+shell = "pwsh"
+command = "git worktree remove FX_OUTSIDE\\gone"
+level = "ok"
+rules = []
+
+[[row]]
+id = "worktree-remove-a-bare-name"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove feature-y"
+level = "warn"
+rules = ["git-worktree-junction"]
+fix = "pass the worktree's full path"
+
+[[row]]
+id = "worktree-list"
+os = "any"
+shell = "pwsh"
+command = "git worktree list --porcelain"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- git-unreadable
+
+[[row]]
+id = "sg-unreadable-variable-before-the-subcommand"
+os = "any"
+shell = "pwsh"
+command = "git $x worktree remove wt"
+level = "warn"
+rules = ["git-unreadable"]
+fix = "write git's options and the subcommand literally"
+
+[[row]]
+id = "sg-unreadable-variable-subcommand"
+os = "windows"
+shell = "pwsh"
+command = "git -C D:\\x $s"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "sg-unreadable-substitution"
+os = "windows"
+shell = "gitbash"
+command = "git $(cat opts) worktree remove wt"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "sg-unreadable-git-dir-variable"
+os = "any"
+shell = "pwsh"
+command = "git --git-dir=$gd log"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "sg-unreadable-bash-split-value"
+os = "windows"
+shell = "gitbash"
+command = "git -C $v --force"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "sg-unreadable-a-value-then-a-subcommand"
+os = "any"
+shell = "pwsh"
+command = "git -C $d status"
+level = "ok"
+rules = []
+
+[[row]]
+id = "unreadable-quoted-value-then-a-subcommand"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$repo" log --oneline -3'
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- git-no-verify (policy on)
+
+[[row]]
+id = "sg-noverify-commit-long"
+os = "any"
+shell = "pwsh"
+command = "git commit --no-verify -m 'fix: y'"
+level = "danger"
+rules = ["git-no-verify"]
+fix = "without `--no-verify`"
+
+[[row]]
+id = "sg-noverify-commit-n"
+os = "any"
+shell = "pwsh"
+command = "git commit -n -m y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-commit-nm"
+os = "any"
+shell = "pwsh"
+command = "git commit -nm y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-commit-anm"
+os = "any"
+shell = "pwsh"
+command = "git add -A; git commit -anm y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-commit-qn-with-C"
+os = "windows"
+shell = "pwsh"
+command = "git -C D:\\x commit -qn -m y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-commit-reuse-then-n"
+os = "any"
+shell = "pwsh"
+command = "git commit -C HEAD -n"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-after-a-here-string"
+os = "windows"
+shell = "pwsh"
+command = "git commit -m @'\nfix: y\n'@ --no-verify"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-push"
+os = "any"
+shell = "pwsh"
+command = "git push --no-verify origin feature/y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-bash-chain"
+os = "windows"
+shell = "gitbash"
+command = "git add -A && git commit --no-verify -m y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-merge"
+os = "any"
+shell = "pwsh"
+command = "git merge --no-verify side-branch"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-rebase"
+os = "any"
+shell = "pwsh"
+command = "git rebase --no-verify develop"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-hookspath-null"
+os = "windows"
+shell = "gitbash"
+command = "git -c core.hooksPath=/dev/null commit -m y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-hookspath-folder"
+os = "any"
+shell = "pwsh"
+command = "git -c core.hooksPath=.husky commit -m y"
+level = "danger"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "sg-noverify-in-a-message"
+os = "any"
+shell = "pwsh"
+command = "git commit -m '--no-verify'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-in-a-second-message"
+os = "any"
+shell = "pwsh"
+command = "git commit -m y -m 'never use --no-verify or -n'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-as-the-message-value"
+os = "any"
+shell = "pwsh"
+command = "git commit --message --no-verify"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-turned-back-on"
+os = "any"
+shell = "pwsh"
+command = "git commit --no-verify --verify -m y"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-push-dry-run"
+os = "any"
+shell = "pwsh"
+command = "git push -n origin feature/y"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-log-n"
+os = "any"
+shell = "pwsh"
+command = "git log -n 7"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-after-dashdash"
+os = "any"
+shell = "pwsh"
+command = "git commit -m y -- --no-verify"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-other-config-key"
+os = "any"
+shell = "pwsh"
+command = "git -c core.pager=cat log -3"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-hookspath-on-log"
+os = "any"
+shell = "pwsh"
+command = "git -c core.hooksPath=y log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-config-command"
+os = "windows"
+shell = "gitbash"
+command = "git config core.hooksPath .husky"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-noverify-marker"
+os = "any"
+shell = "pwsh"
+command = "git commit --no-verify -m y # baseline-guard: allow"
+level = "ok"
+rules = ["git-no-verify"]
+
+[[row]]
+id = "policy-off-commit-no-verify"
+os = "any"
+shell = "pwsh"
+command = "git commit --no-verify -m 'fix: y'"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- Ruling 122 (c): whole-tree discards
+
+[[row]]
+id = "restore-restore-dot-at-the-root"
+os = "any"
+shell = "pwsh"
+command = "git restore ."
+level = "danger"
+rules = ["git-restore-discards"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "restore-checkout-dashdash-dot-at-the-root"
+os = "windows"
+shell = "gitbash"
+command = "git checkout -- ."
+level = "danger"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "restore-checkout-dashdash-dot-in-a-subfolder"
+os = "windows"
+shell = "gitbash"
+command = "cd src && git checkout -- ."
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "clean-files-only"
+os = "any"
+shell = "pwsh"
+command = "git clean -f"
+level = "ok"
+rules = []
+
+[[row]]
+id = "worktree-remove-force-after-the-path"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove wt --force"
+level = "danger"
+rules = ["git-worktree-junction"]
+
+# ---------------------------------------------------------------- Ruling 122 item 2: git gaps
+
+[[row]]
+id = "unreadable-c-var-then-config-then-subcommand"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" -c core.quotepath=off status'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unreadable-c-var-then-config-then-subcommand-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git -C $d -c core.autocrlf=false log -1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "unreadable-c-var-then-config-then-a-variable-subcommand"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" -c core.quotepath=off $s'
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "restore-checkout-a-branch-in-an-unknown-folder"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" checkout main'
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "restore-checkout-a-branch-here"
+os = "any"
+shell = "pwsh"
+command = "git checkout main"
+level = "ok"
+rules = []
+
+[[row]]
+id = "restore-checkout-dot-in-an-unknown-folder"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" checkout .'
+level = "danger"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "worktree-remove-force-in-a-cluster"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove -ff wt"
+level = "danger"
+rules = ["git-worktree-junction"]
+
+[[row]]
+id = "worktree-remove-force-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --forc wt"
+level = "danger"
+rules = ["git-worktree-junction"]
+
+[[row]]
+id = "worktree-remove-an-option-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = 'git worktree remove $opt wt'
+level = "danger"
+rules = ["git-worktree-junction"]
+
+[[row]]
+id = "discard-reset-keep"
+os = "any"
+shell = "pwsh"
+command = "git reset --keep HEAD~1"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "restore-checkout-a-variable"
+os = "any"
+shell = "pwsh"
+command = "git checkout $b"
+level = "warn"
+rules = ["git-restore-discards"]
+fix = "git switch <branch>"
+
+[[row]]
+id = "worktree-remove-force-a-tree-the-walk-cannot-read"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force locked"
+level = "danger"
+rules = ["walk-unreadable"]
+
+[[row]]
+id = "worktree-remove-a-tree-the-walk-cannot-read-unforced"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove locked"
+level = "warn"
+rules = ["walk-unreadable"]
+
+# ---------------------------------------------------------------- fix round 3 (security review)
+
+# F4: a pathspec that is the whole tree at the repo root is a whole-tree discard.
+[[row]]
+id = "clean-dirs-the-root-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fd ."
+level = "danger"
+rules = ["git-discard"]
+fix = "git clean -nd"
+
+[[row]]
+id = "clean-dirs-the-root-pathspec-after-dashdash"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fdx -- ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-dirs-the-top-magic-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fdx :/"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-dirs-a-folder-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fd build/"
+level = "ok"
+rules = []
+
+[[row]]
+id = "clean-files-the-root-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -f ."
+level = "danger"
+rules = ["git-discard"]
+
+# F7: git reads a long option by a unique prefix.
+[[row]]
+id = "reset-hard-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --har"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "reset-merge-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --mer"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "checkout-force-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git checkout --forc"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-force-by-a-prefix"
+os = "windows"
+shell = "gitbash"
+command = "git clean --forc -d"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "reset-soft-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --sof"
+level = "ok"
+rules = []
+
+[[row]]
+id = "reset-an-ambiguous-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --m"
+level = "ok"
+rules = []
+
+[[row]]
+id = "reset-a-mode-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git reset $MODE"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "clean-options-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git clean $OPTS"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "commit-a-word-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = 'git commit -m "$MSG"'
+level = "ok"
+rules = []
+
+# The value of an option that takes one is no option (`switch -c <name>`).
+[[row]]
+id = "switch-create-a-branch-from-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git switch -c "$BRANCH"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-create-a-branch-from-a-variable-long"
+os = "any"
+shell = "pwsh"
+command = "git switch --create $p[1]"
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-a-word-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = 'git switch -q "$MODE"'
+level = "warn"
+rules = ["git-unreadable"]
+
+# `-d` takes a value on `checkout` only: on `clean` the next word may be `-f`.
+[[row]]
+id = "clean-a-word-after-a-flag-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git clean -d $OPTS"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "checkout-a-word-after-detach-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git checkout -d $OPTS"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "clean-dry-run-excluding-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git clean -n -e "$KEEP"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "checkout-reset-a-branch-from-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git checkout -B "$BRANCH"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-an-ambiguous-prefix"
+os = "any"
+shell = "pwsh"
+command = "git switch --d"
+level = "ok"
+rules = []
+
+[[row]]
+id = "reset-a-pathspec-like-an-option"
+os = "any"
+shell = "pwsh"
+command = "git reset -- --har"
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-discard-changes-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git switch --disc main"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "restore-staged-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git restore --stag src/a.txt"
+level = "ok"
+rules = []
+# ---------------------------------------------------------------- item 5 (Ruling 132): a linked worktree
+# `linkedwt-` rows run with the cwd inside FX_LINKED, a real linked worktree of the real repo
+# FX_MAIN (`mainwt-` rows run there). `git worktree remove` never touches the main repository's
+# `.git` and refuses a dirty tree without --force: removing a linked worktree, the cwd's own
+# included, is ok, and with --force a warn that uncommitted work in it is lost. A delete that
+# bypasses git, and the main working tree as the target, stay critical.
+[[row]]
+id = "linkedwt-gb-remove-itself-after-cd-to-main-force"
+os = "windows"
+shell = "gitbash"
+command = "cd FX_MAIN && git log --oneline -1; git worktree remove --force .claude/worktrees/lw; git branch -D fix/x | tail -1"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "linkedwt-gb-remove-itself-after-cd-to-main"
+os = "windows"
+shell = "gitbash"
+command = "cd FX_MAIN && git worktree remove .claude/worktrees/lw"
+level = "ok"
+rules = []
+
+[[row]]
+id = "linkedwt-remove-itself-absolute-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "linkedwt-remove-itself-absolute"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove FX_LINKED"
+level = "ok"
+rules = []
+
+[[row]]
+id = "linkedwt-remove-itself-relative-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "mainwt-remove-a-linked-worktree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force .claude/worktrees/lw"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "mainwt-remove-a-linked-worktree"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove .claude/worktrees/lw"
+level = "ok"
+rules = []
+
+# Twins: a delete that bypasses git keeps its verdict; the main working tree stays critical.
+[[row]]
+id = "linkedwt-gb-rm-rf-itself"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "mainwt-remove-the-main-working-tree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_MAIN"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "linkedwt-remove-the-main-working-tree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_MAIN"
+level = "critical"
+rules = ["delete-critical"]
+
+# A linked worktree that holds a protected path stays critical for that reason.
+[[row]]
+id = "linkedwt-protected-inside-remove-itself-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]
+
+# A linked worktree that is itself a protected path, by its text or through a link (identity
+# only), stays critical.
+[[row]]
+id = "linkedwt-protected-exact-remove-itself-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "linkedwt-protected-link-remove-itself-force"
+os = "windows"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]

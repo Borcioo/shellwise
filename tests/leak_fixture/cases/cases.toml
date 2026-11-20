@@ -1,0 +1,18 @@
+# Control for the leak leg's case check (scripts/leak_check.py): every command below is also in
+# corpus.jsonl next to this file. `expect_flagged` is the answer the check must give: 40+
+# characters or a path separator is checked, a short command without one passes.
+
+[[case]]
+shell = "bash"
+command = "git log --oneline --decorate --graph --all -n 40"
+expect_flagged = true
+
+[[case]]
+shell = "bash"
+command = "cat a/b"
+expect_flagged = true
+
+[[case]]
+shell = "bash"
+command = "ls -la"
+expect_flagged = false

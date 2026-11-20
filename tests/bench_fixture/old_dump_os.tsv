@@ -1,0 +1,5 @@
+id	level	rules	raw_hit
+f000000000b1	warn	bash-msys-path-mangle	no
+f000000000b2	warn	bash-msys-path-mangle	no
+f000000000b5	ok	-	no
+f000000000b6	ok	-	no

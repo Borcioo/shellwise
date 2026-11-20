@@ -1,0 +1,695 @@
+# Verdict rows for the parse kinds pwsh refuses (`EmptyPipeElement`, `MissingArgument`), the Fix-line
+# hints of an unclosed quote, and one synthetic row per shape of the corpus texts the real shell
+# accepts while our parser refuses them (warn, never break). `oracle` is what the real shell's
+# parser does with the text (pwsh ParseInput, bash -n); every break row must say "refuses".
+
+# --- An empty pipe element: pwsh refuses it ---
+
+[[row]]
+id = "empty-pipe-between-two-pipes"
+os = "any"
+shell = "pwsh"
+command = "a | | b"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 3, or put the command after it on the same line"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-at-the-end"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem |"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 15"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-before-a-semicolon"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | ; Get-Date"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 15"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-before-a-closing-paren"
+os = "any"
+shell = "pwsh"
+command = "(Get-ChildItem | )"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 16"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-on-the-next-line"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem |\n| Out-Host"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 15"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-before-a-chain-operator"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | || Get-Date"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 15"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-with-a-delete-is-break-only"
+os = "any"
+shell = "pwsh"
+command = "Remove-Item -Recurse x | | Out-Host"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 24"
+oracle = "refuses"
+
+[[row]]
+id = "a-foreach-statement-piped"
+os = "any"
+shell = "pwsh"
+command = "foreach ($x in 1,2) { $x } | Out-Host"
+level = "break"
+rules = ["parse-error"]
+fix = "write $( before the foreach at column 1 and ) before the | at column 28"
+oracle = "refuses"
+
+[[row]]
+id = "an-if-statement-piped"
+os = "any"
+shell = "pwsh"
+command = "Get-Date; if ($a) { 1 } else { 2 } | Out-Host"
+level = "break"
+rules = ["parse-error"]
+fix = "write $( before the if at column 11 and ) before the | at column 36"
+oracle = "refuses"
+
+[[row]]
+id = "a-for-statement-piped-inside-a-block"
+os = "any"
+shell = "pwsh"
+command = "& { for ($i = 0; $i -lt 2; $i++) { $i } | Out-Host }"
+level = "break"
+rules = ["parse-error"]
+fix = "write $( before the for at column 5 and ) before the | at column 41"
+oracle = "refuses"
+
+[[row]]
+id = "a-while-statement-piped"
+os = "any"
+shell = "pwsh"
+command = "while ($i -lt 1) { $i++ } | Out-Host"
+level = "break"
+rules = ["parse-error"]
+fix = "write $( before the while at column 1 and ) before the | at column 27"
+oracle = "refuses"
+
+[[row]]
+id = "a-switch-statement-piped"
+os = "any"
+shell = "pwsh"
+command = "switch (1) { 1 { 'a' } } | Out-Host"
+level = "break"
+rules = ["parse-error"]
+fix = "write $( before the switch at column 1 and ) before the | at column 26"
+oracle = "refuses"
+
+[[row]]
+id = "empty-pipe-before-a-closing-brace"
+os = "any"
+shell = "pwsh"
+command = "& { Get-ChildItem | }"
+level = "break"
+rules = ["parse-error"]
+fix = "remove the empty | at column 19"
+oracle = "refuses"
+
+# A statement ends at `;` or a line end: a block piped after it is not the statement's.
+[[row]]
+id = "a-block-piped-after-a-foreach-and-a-semicolon-is-no-piped-statement"
+os = "any"
+shell = "pwsh"
+command = "foreach ($x in 1) { $x }; & { 1 } | Out-Host\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "a-block-piped-on-the-line-after-a-foreach-is-no-piped-statement"
+os = "any"
+shell = "pwsh"
+command = "foreach ($x in 1) { $x }\n& { 1 } | Out-Host\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "a-chain-operator-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem || Get-Date\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+[[row]]
+id = "allow-a-pipe"
+os = "any"
+shell = "pwsh"
+command = "a | b"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-a-pipe-at-the-line-end"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem |\nOut-Host"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-a-comment-after-a-pipe"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | # each item\nOut-Host"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-pipes-inside-strings"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"x | | y\" 'z |'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-pipes-inside-a-here-string"
+os = "any"
+shell = "pwsh"
+command = "$t = @'\na | | b\n'@"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-a-foreach-statement-inside-a-subexpression-piped"
+os = "any"
+shell = "pwsh"
+command = "$(foreach ($x in 1,2) { $x }) | Out-Host"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-foreach-object-piped"
+os = "any"
+shell = "pwsh"
+command = "1,2 | ForEach-Object { $_ } | Out-Host"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# A pipe at the start of a line continues the pipeline above it: our parser does not read it, so it
+# is warn, never a deny.
+[[row]]
+id = "a-pipe-starting-the-next-line-is-no-empty-element"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem\n| Out-Host"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+# --- A parameter followed by a comma: pwsh refuses it (MissingArgument) ---
+
+[[row]]
+id = "git-log-line-range"
+os = "any"
+shell = "pwsh"
+command = "git log -L1,2:f.txt"
+level = "break"
+rules = ["parse-error"]
+fix = "quote the argument: '-L1,2:f.txt'"
+oracle = "refuses"
+
+[[row]]
+id = "git-log-line-range-with-a-format-and-a-pipe"
+os = "any"
+shell = "pwsh"
+command = "git log --format='%h %s' -L10,20:src/app.php | Select-Object -First 3"
+level = "break"
+rules = ["parse-error"]
+fix = "quote the argument: '-L10,20:src/app.php'"
+oracle = "refuses"
+
+[[row]]
+id = "a-short-parameter-and-a-comma"
+os = "any"
+shell = "pwsh"
+command = "tool -a,b"
+level = "break"
+rules = ["parse-error"]
+fix = "quote the argument: '-a,b'"
+oracle = "refuses"
+
+[[row]]
+id = "allow-git-log-line-range-quoted"
+os = "any"
+shell = "pwsh"
+command = "git log '-L1,2:f.txt'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-git-log-line-range-after-a-space"
+os = "any"
+shell = "pwsh"
+command = "git log -L 1,2:f.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-a-parameter-with-a-colon-value-list"
+os = "any"
+shell = "pwsh"
+command = "tool -a:b,c"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "a-double-dash-word-and-a-comma-is-no-missing-argument"
+os = "any"
+shell = "pwsh"
+command = "tool --a,b"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "a-dash-word-inside-a-list-is-no-missing-argument"
+os = "any"
+shell = "pwsh"
+command = "tool test,-p,c"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "a-comparison-operator-and-a-comma-is-no-missing-argument"
+os = "any"
+shell = "pwsh"
+command = "$r = $a -eq,1"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "a-parameter-and-a-comma-before-a-quote-gets-the-reasons-fix"
+os = "any"
+shell = "pwsh"
+command = 'git log -L1,2:"a b.txt"'
+level = "break"
+rules = ["parse-error"]
+fix = "correct the syntax at column 9"
+oracle = "refuses"
+
+# The rows below hold a later syntax error, so the reading runs on them: each construct before it
+# is accepted by pwsh and names no deny kind.
+[[row]]
+id = "a-comparison-operator-and-a-comma-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$r = $a -eq,1; $s = $a -ceq,2\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "a-command-block-piped-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Where-Object { $_ } | Out-Host\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "a-comment-after-a-pipe-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | # c\nOut-Host\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pipes-inside-a-string-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"x | | y\"\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# `--%` passes the rest of its line as text: such a text names no deny kind.
+[[row]]
+id = "a-stop-parsing-token-names-no-kind"
+os = "any"
+shell = "pwsh"
+command = "x --% a | | b"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+[[row]]
+id = "a-negative-number-list-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "tool -1,2\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "a-backslash-quote-in-single-quotes-gets-the-plain-fix"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'a\\\"b"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 14"
+oracle = "refuses"
+# --- Fix-line hints of an unclosed quote ---
+
+[[row]]
+id = "backslash-quote-inside-a-double-quoted-string"
+os = "any"
+shell = "pwsh"
+command = 'rg "a\"b"'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "typographic-quote-inside-a-double-quoted-string"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --body \"it”s\""
+level = "break"
+rules = ["parse-error"]
+fix = """replace the typographic quote at column 24 with ' or \""""
+oracle = "refuses"
+
+[[row]]
+id = "allow-a-doubled-quote"
+os = "any"
+shell = "pwsh"
+command = 'rg "a""b"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "allow-an-apostrophe-inside-a-double-quoted-string"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --body \"it's\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- Corpus texts the real shell accepts and our parser refuses, one per shape (warn) ---
+
+[[row]]
+id = "gap-a-group-glued-to-a-range"
+os = "any"
+shell = "pwsh"
+command = "git log --oneline (git merge-base main dev)..dev"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-redirect-after-a-foreach-statement"
+os = "any"
+shell = "pwsh"
+command = "foreach ($f in 'a.txt','b.txt') { Get-Content $f } *> out.txt"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-comma-after-a-space"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem a* , b* -Recurse"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-an-index-after-a-method-call-argument"
+os = "any"
+shell = "pwsh"
+command = "npm run $s.Split(' ')[0]"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-an-index-after-a-group-method-call"
+os = "any"
+shell = "pwsh"
+command = "Write-Output (git rev-parse HEAD).Split(' ')[0]"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-dash-words-in-a-list"
+os = "any"
+shell = "pwsh"
+command = "pwsh -File run.ps1 -CargoArgs test,-p,core,--no-run"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-caret-and-braces"
+os = "any"
+shell = "pwsh"
+command = "git rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-two-carets-and-braces"
+os = "any"
+shell = "pwsh"
+command = "git rev-parse HEAD^^{tree}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-call-with-a-dotted-parameter"
+os = "any"
+shell = "pwsh"
+command = "& $m -h127.0.0.1 x"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-member-glued-to-a-path"
+os = "any"
+shell = "pwsh"
+command = 'Get-ChildItem $_.FullName\cfg -Force'
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-an-assignment-inside-a-group"
+os = "any"
+shell = "pwsh"
+command = "$c=(Name=$null)"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-parameter-alone"
+os = "any"
+shell = "pwsh"
+command = "-File"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-backslash-quotes-and-backtick-quotes"
+os = "any"
+shell = "pwsh"
+command = "python -c \"import sys; print(\\\"a `\\\"b\\\" 'c d'\\\")\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-backslash-quotes-around-an-escaped-dollar"
+os = "any"
+shell = "pwsh"
+command = "ssh h \"for f in a b; do echo \\\"`$f: %{code}\\n\\\"; done\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-backslash-quotes-around-backtick-quotes"
+os = "any"
+shell = "pwsh"
+command = "ssh h \"cd \\\"SELECT (c '%\\`\\\"ref\\`\\\":5%')\\\" -N\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-backslash-quotes-in-two-arguments"
+os = "any"
+shell = "pwsh"
+command = "M 'a b' \"AND %s\\\", `$db->esc( 'k' ) '%'\" \"AND %s\\\", '%'\" 'c d'"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-quotes-spliced-into-single-quotes"
+os = "any"
+shell = "pwsh"
+command = "wp eval 'echo \"a='\"'\"'b'\"'\"'\";'"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-backslash-quotes-in-a-multi-line-argument"
+os = "any"
+shell = "pwsh"
+command = "python -c \"\nq=re.compile(r'\\\"k\\\"\\s*:\\s*\\\"(?:[\\w-]+:)?v\\\"')\n\"\n\"=== next\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-doubled-backticks-in-a-here-string"
+os = "any"
+shell = "pwsh"
+command = "$t = @\"\n$x\n``````\n\"@"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-a-method-call-on-a-here-string"
+os = "any"
+shell = "pwsh"
+command = "Swap \"/// .await`n}\" @'\n'@.TrimEnd().Replace(\"`r`n\", \"`n\")"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-an-apostrophe-in-a-here-string-with-a-method-call"
+os = "any"
+shell = "pwsh"
+command = "Swap 'a' @'\nit's done\n'@.Replace(\"`r`n\", \"`n\").TrimEnd()"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-bash-a-heredoc-inside-a-quoted-substitution"
+os = "any"
+shell = "bash"
+command = "git commit -q -m \"$(cat <<'EOF'\nfix: say \"hi\n\nIts body.\nEOF\n)\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-bash-a-case-inside-a-substitution"
+os = "any"
+shell = "bash"
+command = "for f in a b; do t=$(case $f in a|b) echo 2;; c) echo 3;; esac); echo $t; done"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "gap-bash-two-unterminated-heredocs"
+os = "any"
+shell = "bash"
+command = "python3 - <<'PY' 2>/dev/null || py -3 - <<'PY'\nprint(1)\nPY"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+# --- `-Name:N` and `-Name: value` (B4): PowerShell binds the value; the verdict is the one of the
+# spelling with a space ---
+
+[[row]]
+id = "colon-glued-number-before-a-delete-is-the-spaced-verdict"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem *.log | Select-Object -First:5 | Remove-Item"
+level = "warn"
+rules = ["dynamic-target"]
+oracle = "accepts"
+
+[[row]]
+id = "colon-then-space-switch-value-is-the-glued-verdict"
+os = "any"
+shell = "pwsh"
+command = "Remove-Item x.txt -Confirm: $false"
+level = "warn"
+rules = ["delete-unknown-location"]
+oracle = "accepts"
+
+[[row]]
+id = "colon-glued-number-reads-clean"
+os = "any"
+shell = "pwsh"
+command = "git log --oneline | Select-Object -Last:5"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "colon-at-the-line-end-stays-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -Path:\nx"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
