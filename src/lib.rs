@@ -530,6 +530,10 @@ pub mod testhooks {
             record("drive_exists", &PathBuf::from(format!("{letter}:\\")));
             RealFs.drive_exists(letter)
         }
+        fn is_hidden(&self, p: &Path) -> io::Result<bool> {
+            record("is_hidden", p);
+            RealFs.is_hidden(p)
+        }
     }
 }
 

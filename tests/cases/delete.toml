@@ -15,7 +15,9 @@
 # The runner replaces each FX_ name with its path (forward slashes for bash rows). A row whose
 # id starts with `nocwd-` runs with no cwd, `norepo-` with the cwd FX_NOREPO, `unccwd-` with a
 # cwd on a share no host answers (the twin `unccwd-git-clean` stays an unknown location),
-# `admincwd-` with the cwd `\\localhost\C$`, and `scratch-` with `scratch_dir` set to FX_OUTSIDE. Every path the fixture uses has no space.
+# `admincwd-` with the cwd `\\localhost\C$`, `plaingit-` with the cwd of a second repo whose
+# `.git` lacks the Hidden attribute (FX_REPO's has it), and `scratch-` with `scratch_dir` set to
+# FX_OUTSIDE. Every path the fixture uses has no space.
 # The rows are synthetic and ranked by the corpus counts of their shapes (2026-11-19, 50,862
 # rows): `git worktree remove` 320, `[IO.Directory]::Delete` 260, `Remove-Item` with
 # `-ErrorAction` 215, `Remove-Item -Recurse` 199, `rm -rf` 152, `rm <file>` 141,
@@ -3332,6 +3334,31 @@ command = 'test -d build; cd build; rm -rf *'
 level = "ok"
 rules = []
 
+# R1-2: a name typed with a folder runs a file of that name, which the list does not know.
+[[row]]
+id = "gb-cd-existing-after-a-local-ls"
+os = "windows"
+shell = "gitbash"
+command = './ls; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-local-test"
+os = "windows"
+shell = "gitbash"
+command = './test; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-quoted-backslash-ls"
+os = "windows"
+shell = "gitbash"
+command = ''''.\ls'; cd build; rm -rf *'''
+level = "danger"
+rules = ["delete-repo-contents"]
+
 [[row]]
 id = "gb-cd-existing-after-true"
 os = "windows"
@@ -3924,6 +3951,25 @@ shell = "pwsh"
 command = "rm -r -fo *"
 level = "critical"
 rules = ["delete-critical"]
+
+# R1-6: a `.git` without the Hidden attribute (WSL git, a copied repo) is taken by the wildcard
+# even without -Force (oracle R1/gitnohide.out); FX_REPO's `.git` is hidden, as `git init` makes it.
+[[row]]
+id = "plaingit-ps-ri-repo-contents-without-force"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse *"
+level = "critical"
+rules = ["delete-critical"]
+
+# Git Bash's `*` skips a dot name whatever its attributes.
+[[row]]
+id = "plaingit-gb-rm-rf-star"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf *"
+level = "danger"
+rules = ["delete-repo-contents"]
 
 # ---------------------------------------------------------------- Task 34 C4, C8, slice E: MSYS system folders
 [[row]]

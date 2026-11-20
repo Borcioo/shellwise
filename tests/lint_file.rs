@@ -994,6 +994,7 @@ fn a_sh_file_bash_refuses_is_a_break_with_shellchecks_message() {
     assert_eq!(lines[at + 1], format!("  Fix: {message}"), "{}", r.stdout);
 
     let twin = "#!/bin/bash\nif [[$1 == x]]; then echo y; fi\n";
+    #[cfg_attr(not(feature = "oracle"), allow(unused_variables))]
     let (twin_path, t) = lint_cli("sc_refused_twin", "sc1035.sh", twin);
     assert_eq!(t.code, 0, "{} {}", t.stdout, t.stderr);
     assert!(!t.stdout.contains(": break "), "{}", t.stdout);

@@ -977,6 +977,10 @@ impl Fs for CountingFs {
         self.count();
         RealFs.drive_exists(letter)
     }
+    fn is_hidden(&self, p: &Path) -> io::Result<bool> {
+        self.count();
+        RealFs.is_hidden(p)
+    }
 }
 
 /// One rule with its own counting file system.

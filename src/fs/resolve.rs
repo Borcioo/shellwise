@@ -2115,6 +2115,10 @@ fn command_leaves_disk(c: &SimpleCommand) -> bool {
     if !c.assigns.is_empty() {
         return false;
     }
+    // A name typed with a folder (`./ls`) runs a file of that name, which no list knows (R1-2).
+    if c.typed.contains(['/', '\\']) {
+        return false;
+    }
     // A name that is no literal (`$X`) is listed nowhere. The first eight location commands are
     // the plain moves; `source`, `eval` and the rest run code.
     let raw = raw_name(c);

@@ -37,6 +37,17 @@ impl Fixture {
         for file in ["repo/a.txt", "repo/build/x.o", "home/f.txt"] {
             std::fs::write(root.join(file), b"x").unwrap();
         }
+        // As `git init` leaves it on Windows: a PowerShell wildcard without -Force skips it.
+        #[cfg(windows)]
+        {
+            let git = root.join("repo/.git");
+            let out = std::process::Command::new("attrib")
+                .arg("+h")
+                .arg(&git)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "attrib +h {git:?}: {out:?}");
+        }
         Fixture { root }
     }
 }
@@ -164,6 +175,15 @@ fn a_repo_lookup_that_times_out_never_lowers_a_delete_to_warn() {
         // Ruling 127: a folder on disk takes the `cd`; a cwd that is gone reads nothing.
         row(bash, "cd build; rm -rf *", "repo", out, "ok", &[]),
         row(bash, "cd build; rm -rf *", "gone", out, "ok", &[]),
+        // R1-6: the hidden `.git` stays out of a wildcard without -Force.
+        row(
+            pwsh,
+            "Remove-Item -Recurse *",
+            "repo",
+            out,
+            "danger",
+            REPO_CONTENTS,
+        ),
     ];
     let mut wrong = mismatches(&fx, &control);
 
@@ -242,8 +262,19 @@ fn a_repo_lookup_that_times_out_never_lowers_a_delete_to_warn() {
         ),
     ];
     wrong.extend(mismatches(&fx, &dir_rows));
+    // R1-6: the read of the Hidden attribute times out: the wildcard may take `.git`.
+    unsafe { std::env::set_var("SHELLWISE_TESTHOOK", "hidden-lookup-timeout") };
+    let hidden_rows = [row(
+        pwsh,
+        "Remove-Item -Recurse *",
+        "repo",
+        out,
+        "critical",
+        CRITICAL,
+    )];
+    wrong.extend(mismatches(&fx, &hidden_rows));
     unsafe { std::env::remove_var("SHELLWISE_TESTHOOK") };
-    let total = control.len() + rows.len() + dir_rows.len();
+    let total = control.len() + rows.len() + dir_rows.len() + hidden_rows.len();
     assert!(
         wrong.is_empty(),
         "{} of {total} rows:\n{}",

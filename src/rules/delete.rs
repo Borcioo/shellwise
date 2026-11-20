@@ -870,6 +870,32 @@ impl<'a> Scene<'a> {
         }
     }
 
+    /// Whether a PowerShell wildcard without -Force skips `p` (`Fs::is_hidden`), read once under
+    /// the deadline. A read that fails or times out counts as not hidden: the wildcard takes it.
+    fn hidden(&self, p: &Path) -> bool {
+        let fs = Arc::clone(self.ctx.fs);
+        let path = p.to_path_buf();
+        #[allow(unused_mut)]
+        let mut deadline = *self.ctx.deadline;
+        // Test-only: the read runs out of time.
+        #[cfg(feature = "testhooks")]
+        let slow = crate::rules::testhooks::active("hidden-lookup-timeout");
+        #[cfg(not(feature = "testhooks"))]
+        let slow = false;
+        if slow {
+            deadline = crate::Deadline::new(std::time::Instant::now(), 0);
+        }
+        matches!(
+            bounded(&deadline, move || {
+                if slow {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                fs.is_hidden(&path)
+            }),
+            Ok(Ok(true))
+        )
+    }
+
     pub fn timeout(&self, span: Span, shown: &str) -> Finding {
         warn(
             WALK_TIMEOUT,
@@ -1009,12 +1035,14 @@ impl<'a> Scene<'a> {
                 Err(TimedOut) => return Some(self.lookup_timeout(how, span, &text)),
             };
             if self.key(&root) == self.key(&p) {
-                // A PowerShell wildcard leaves the hidden `.git` without -Force (Ruling 127).
-                let takes_git = (is_pwsh(shell) && how.forced) || step.starts_with('.');
+                // A PowerShell wildcard leaves a hidden `.git` without -Force (Ruling 127); a
+                // `.git` without the Hidden attribute (WSL git, a copied repo) it takes (R1-6).
+                let git = p.join(".git");
+                let takes_git =
+                    step.starts_with('.') || (is_pwsh(shell) && (how.forced || !self.hidden(&git)));
                 if !takes_git {
                     return Some(repo_contents(&p, span));
                 }
-                let git = p.join(".git");
                 let reason = resolve::critical_reason(
                     &git,
                     Some(&root),

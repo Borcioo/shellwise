@@ -66,6 +66,21 @@ fn touch(p: &Path) {
     std::fs::write(p, b"x").unwrap_or_else(|e| panic!("write {p:?}: {e}"));
 }
 
+/// Give `p` the Hidden attribute on Windows; elsewhere a dot name is hidden already.
+fn hide(p: &Path) {
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("attrib")
+            .arg("+h")
+            .arg(p)
+            .output()
+            .unwrap_or_else(|e| panic!("attrib {p:?}: {e}"));
+        assert!(out.status.success(), "attrib +h {p:?}: {out:?}");
+    }
+    #[cfg(not(windows))]
+    let _ = p;
+}
+
 /// A folder link: a junction on Windows, a symlink elsewhere.
 fn dir_link(link: &Path, target: &Path) {
     #[cfg(windows)]
@@ -177,6 +192,7 @@ fn fixture() -> Arc<Fixture> {
         }
         for dir in [
             "repo/.git",
+            "plaingit/.git",
             "repo/build",
             "repo/linked",
             "repo/wt-clean/src",
@@ -207,6 +223,9 @@ fn fixture() -> Arc<Fixture> {
         for (link, target) in LINKS {
             dir_link(&fx.at(link), &fx.at(target));
         }
+        // `git init` on Windows hides `.git`; the `plaingit-` repo keeps it plain, as WSL git
+        // or a copied repo leaves it (R1-6).
+        hide(&fx.at("repo/.git"));
         touch(&fx.at(&format!("{LOCKED}/f.txt")));
         lock(&fx.at(LOCKED));
         if let Some(repo) = fx
@@ -283,6 +302,8 @@ fn cwd(row: &Row) -> Option<PathBuf> {
         None
     } else if row.id.starts_with("norepo-") {
         Some(fx.at("norepo"))
+    } else if row.id.starts_with("plaingit-") {
+        Some(fx.at("plaingit"))
     } else if row.id.starts_with("admincwd-") {
         Some(PathBuf::from(ADMIN_SHARE_CWD))
     } else if row.id.starts_with("unccwd-") {
