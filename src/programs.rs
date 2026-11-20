@@ -752,7 +752,8 @@ mod tests {
         // Task 33: wait facts.
         assert!(yes(key("timeout", GIT_BASH, &["bounds_wait"])));
         assert!(yes(key("read", GIT_BASH, &["hang_stdin"])));
-        assert!(key("Read-Host", Shell::Pwsh, &["hang_level"]).is_some());
+        // Ruling 110: Read-Host fails fast in the tool, so it has no wait facts.
+        assert!(key("Read-Host", Shell::Pwsh, &["hang_level"]).is_none());
         assert!(key("read", Shell::Pwsh, &["hang_stdin"]).is_none());
         // Task 32: delete and discard tables.
         assert!(key("rm", GIT_BASH, &["delete", "recursive"]).is_some());

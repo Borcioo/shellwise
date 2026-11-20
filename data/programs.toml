@@ -171,7 +171,8 @@ fix = "cd <path>"
 
 # --- Programs that wait (Task 33: will-hang, read by src/rules/hang.rs) ---
 # hang_when       options that start the wait; empty = the program always waits
-# hang_unless     options that end or bound the wait (exact, <opt>=<value>, or glued to a short option)
+# hang_unless     options that end or bound the wait, read as getopt does (`-rt 5`, `-t5`, `--print`;
+#                 a letter in value_options takes the rest of its cluster or the next word)
 # hang_stdin      true = feeding stdin (redirect, here-string, pipe, loop) ends the wait
 # hang_bash_only  true = checked in Bash only
 # hang_level      "break" or "warn" (default warn)
@@ -181,24 +182,11 @@ fix = "cd <path>"
 name = "read"
 shells = ["bash"]
 kind = ["interactive"]
+value_options = ["-a", "-d", "-i", "-n", "-N", "-p", "-t", "-u"]
 hang_unless = ["-t", "-u"]
 hang_stdin = true
 hang_level = "break"
 fix = 'set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"'
-
-[[program]]
-name = "read-host"
-shells = ["pwsh"]
-kind = ["interactive"]
-hang_level = "warn"
-fix = "pass the value as a parameter or a variable instead of asking for it"
-
-[[program]]
-name = "ssh"
-kind = ["interactive"]
-hang_unless = ["BatchMode=yes"]
-hang_level = "warn"
-fix = "ssh -o BatchMode=yes <host> '<command>'"
 
 [[program]]
 name = "claude"
