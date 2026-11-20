@@ -248,6 +248,14 @@ fn system_path(c: &Canon) -> Option<&'static str> {
     hit.then_some("system folder")
 }
 
+/// `text`, a Git Bash path, is rooted with no drive (`/usr`, not `//srv` or `/c/x`) and names
+/// one of the POSIX system folders or a path inside one: there the MSYS tree's own folders.
+pub fn is_msys_system_path(text: &str) -> bool {
+    text.starts_with('/')
+        && !text.starts_with("//")
+        && system_path(&Canon::parse_posix(text)).is_some()
+}
+
 /// `critical_reason`, then the same match by file identity for any spelling it misses: a
 /// junction or symlink on the way, a drive made by `subst` before the command, an 8.3 name.
 /// `p` is critical when it is the same file as home, the repo root or a protected path, or the
@@ -332,6 +340,11 @@ pub fn repo_root(
     fs: &SharedFs,
     deadline: &Deadline,
 ) -> Result<Option<PathBuf>, TimedOut> {
+    // Test-only: the deadline runs out during the lookup.
+    #[cfg(feature = "testhooks")]
+    if crate::rules::testhooks::active("repo-lookup-timeout") {
+        return Err(TimedOut);
+    }
     let cwd = cwd.to_path_buf();
     let fs = Arc::clone(fs);
     let d = *deadline;
@@ -3256,7 +3269,12 @@ fn absolutize(
             join(base, &s)
         };
     }
-    if matches!(shell, Shell::Bash(_)) && s.starts_with('/') && !s.starts_with("//") {
+    // Relative to Git Bash's `/` (after `cd /`): a rooted Git Bash path.
+    let bash = matches!(shell, Shell::Bash(_));
+    if bash && base == Some("/") && !s.starts_with(['/', '\\']) && !is_drive(&s) {
+        s = Canon::parse_posix(&format!("/{s}")).render();
+    }
+    if bash && s.starts_with('/') && !s.starts_with("//") {
         let rest = s.trim_start_matches('/');
         if rest.is_empty() {
             return Ok("/".to_string());

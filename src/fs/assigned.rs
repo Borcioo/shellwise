@@ -19,9 +19,17 @@
 //! empty.
 
 use super::resolve::{is_pwd, mark_assigned_except};
-use crate::Shell;
-use crate::ir::{Elem, EnvView, Pipeline, Script, SimpleCommand, Stmt, Word, WordPart};
+use crate::ir::{ChainOp, Elem, EnvView, Pipeline, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::level::Span;
+use crate::{Os, Shell};
+
+/// `c` is a builtin whose `NAME=value` operand assigns like a plain `NAME=value`: its program
+/// row says `assigns_operand` (`export`).
+fn assigns_operand(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    !c.typed.is_empty()
+        && crate::programs::lookup(&c.typed, shell, os)
+            .is_some_and(|p| p.extra.get("assigns_operand") == Some(&toml::Value::Boolean(true)))
+}
 
 /// A name with literal values that holds only in part of the command, or with several values
 /// (a pwsh list, a loop variable): a target that uses it where it holds is judged once per
@@ -60,6 +68,8 @@ struct Candidate {
     within: Option<Span>,
     at: usize,
     stmt: Option<Span>,
+    /// No `&&` or `||` before it: it runs whenever the statements before it ran.
+    unconditional: bool,
 }
 
 /// More values than this and a name stays dynamic: each value is judged on its own.
@@ -77,8 +87,10 @@ pub fn resolve_assigned(
     script: &Script,
     command: &str,
     shell: Shell,
+    os: Os,
 ) -> Vec<Assigned> {
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
+    let declares = |c: &SimpleCommand| assigns_operand(c, shell, os);
     let key = |n: &str| {
         let n = n.trim_start_matches('$');
         if pwsh {
@@ -116,6 +128,7 @@ pub fn resolve_assigned(
         script,
         command,
         pwsh,
+        &declares,
         &key,
         &mut naive_known,
         &mut |c, known| {
@@ -140,7 +153,8 @@ pub fn resolve_assigned(
     // Plain assignments anywhere are the events above, placed by offset: the probe skips them.
     let mut plain: Vec<Span> = Vec::new();
     each_command(script, &mut |c| {
-        if c.typed.is_empty() && c.args.is_empty() && !c.opaque && !c.assigns.is_empty() {
+        let bare = c.typed.is_empty() && c.args.is_empty();
+        if (bare || declares(c)) && !c.opaque && !c.assigns.is_empty() {
             plain.push(c.span);
         }
     });
@@ -149,57 +163,73 @@ pub fn resolve_assigned(
     let mut everywhere: Vec<String> = Vec::new();
     let mut held: Vec<Assigned> = Vec::new();
     let mut known = env.clone();
-    candidates(script, command, pwsh, &key, &mut known, &mut |c, known| {
-        let k = key(&c.name);
-        let mine: Vec<usize> = events
-            .iter()
-            .filter(|(n, _)| *n == k)
-            .map(|(_, at)| *at)
-            .collect();
-        if mine.iter().any(|at| *at < c.at)
-            || probe.is_assigned(&c.name)
-            || KEPT.contains(&k.to_ascii_lowercase().trim_start_matches("env:"))
-            || is_pwd(&c.name, shell)
-        {
-            return None;
-        }
-        let later: Vec<usize> = mine.iter().copied().filter(|at| *at > c.at).collect();
-        let a = Assigned {
-            name: c.name.clone(),
-            values: c.values.clone(),
-            from: c.from,
-            until: later.iter().copied().min().unwrap_or(usize::MAX),
-            within: c.within,
-            blocked: loops
+    candidates(
+        script,
+        command,
+        pwsh,
+        &declares,
+        &key,
+        &mut known,
+        &mut |c, known| {
+            let k = key(&c.name);
+            let mine: Vec<usize> = events
                 .iter()
-                .filter(|l| Some(**l) != c.within)
-                .filter(|l| later.iter().any(|at| *at >= l.start && *at < l.end))
-                .copied()
-                .collect(),
-        };
-        let mine_used: Vec<Span> = uses
-            .iter()
-            .filter(|(n, _)| *n == k)
-            .map(|(_, s)| *s)
-            .collect();
-        if !mine_used.iter().any(|s| a.holds_at(*s)) {
-            return None;
-        }
-        // Set in `env` (and usable in later values) only when never assigned again: `env` is
-        // one view for the whole command, so a name reassigned later holds where `holds_at`
-        // says and nowhere else.
-        if a.values.len() == 1
-            && a.within.is_none()
-            && a.until == usize::MAX
-            && mine_used.iter().all(|s| a.holds_at(*s))
-        {
-            known.set(&a.name, &a.values[0]);
-            everywhere.push(k);
-        } else {
-            held.push(a.clone());
-        }
-        Some(a)
-    });
+                .filter(|(n, _)| *n == k)
+                .map(|(_, at)| *at)
+                .collect();
+            // Assignments before it are allowed when each is a top-level literal one (a plain
+            // assignment or a loop over a literal list) and this one runs whatever came before
+            // it (no `&&` or `||` in front): the name holds this value from here on.
+            let earlier_literal = mine
+                .iter()
+                .filter(|at| **at < c.at)
+                .all(|at| naive.iter().any(|n| n.at == *at && key(&n.name) == k));
+            let replaces = c.unconditional && earlier_literal;
+            if (mine.iter().any(|at| *at < c.at) && !replaces)
+                || probe.is_assigned(&c.name)
+                || KEPT.contains(&k.to_ascii_lowercase().trim_start_matches("env:"))
+                || is_pwd(&c.name, shell)
+            {
+                return None;
+            }
+            let later: Vec<usize> = mine.iter().copied().filter(|at| *at > c.at).collect();
+            let a = Assigned {
+                name: c.name.clone(),
+                values: c.values.clone(),
+                from: c.from,
+                until: later.iter().copied().min().unwrap_or(usize::MAX),
+                within: c.within,
+                blocked: loops
+                    .iter()
+                    .filter(|l| Some(**l) != c.within)
+                    .filter(|l| later.iter().any(|at| *at >= l.start && *at < l.end))
+                    .copied()
+                    .collect(),
+            };
+            let mine_used: Vec<Span> = uses
+                .iter()
+                .filter(|(n, _)| *n == k)
+                .map(|(_, s)| *s)
+                .collect();
+            if !mine_used.iter().any(|s| a.holds_at(*s)) {
+                return None;
+            }
+            // Set in `env` (and usable in later values) only when never assigned again: `env` is
+            // one view for the whole command, so a name reassigned later holds where `holds_at`
+            // says and nowhere else.
+            if a.values.len() == 1
+                && a.within.is_none()
+                && a.until == usize::MAX
+                && mine_used.iter().all(|s| a.holds_at(*s))
+            {
+                known.set(&a.name, &a.values[0]);
+                everywhere.push(k);
+            } else {
+                held.push(a.clone());
+            }
+            Some(a)
+        },
+    );
     // The final marks, with the literals in sight; then every candidate name that is not valid
     // at every use is dynamic (a held name is a candidate too, so it stays dynamic in `env`).
     for c in &naive {
@@ -221,46 +251,58 @@ fn candidates(
     script: &Script,
     command: &str,
     pwsh: bool,
+    declares: &dyn Fn(&SimpleCommand) -> bool,
     key: &dyn Fn(&str) -> String,
     known: &mut EnvView,
     accept: &mut dyn FnMut(&Candidate, &mut EnvView) -> Option<Assigned>,
 ) -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut taken: Vec<Assigned> = Vec::new();
+    // The operator that joins the statement before to this one.
+    let mut after: Option<ChainOp> = None;
     for st in &script.stmts {
+        let unconditional = !matches!(after, Some(ChainOp::And | ChainOp::Or));
+        // The IR keeps no joiner after a compound statement (`{ …; } && X=v`): it may be one.
+        after = match st {
+            Stmt::Pipeline(p) => p.chain,
+            _ => Some(ChainOp::And),
+        };
         let c = match st {
-            Stmt::Pipeline(p) => plain_assignment(p, command, pwsh).and_then(|(c, name, value)| {
-                let values: Option<Vec<String>> = value
-                    .parts
-                    .split(|p| *p == WordPart::ListSep)
-                    .map(|parts| {
-                        Word {
-                            parts: parts.to_vec(),
-                            span: value.span,
-                            quote: value.quote,
-                        }
-                        .static_value(known)
-                    })
-                    .collect();
-                // A pwsh list (`'a','b'`, `@('a', 'b')`) is lowered as an expression: read its
-                // text.
-                let values = values.or_else(|| {
-                    let text = command.get(value.span.start..value.span.end)?;
-                    (pwsh && (text.contains(',') || text.starts_with("@(")))
-                        .then(|| list_values(text, true))
-                        .flatten()
-                });
-                values
-                    .filter(|v| !v.is_empty() && v.len() <= MAX_VALUES)
-                    .map(|values| Candidate {
-                        name,
-                        values,
-                        from: c.span.end,
-                        within: None,
-                        at: c.span.start,
-                        stmt: Some(c.span),
-                    })
-            }),
+            Stmt::Pipeline(p) => {
+                plain_assignment(p, command, pwsh, declares).and_then(|(c, name, value)| {
+                    let values: Option<Vec<String>> = value
+                        .parts
+                        .split(|p| *p == WordPart::ListSep)
+                        .map(|parts| {
+                            Word {
+                                parts: parts.to_vec(),
+                                span: value.span,
+                                quote: value.quote,
+                            }
+                            .static_value(known)
+                        })
+                        .collect();
+                    // A pwsh list (`'a','b'`, `@('a', 'b')`) is lowered as an expression: read its
+                    // text.
+                    let values = values.or_else(|| {
+                        let text = command.get(value.span.start..value.span.end)?;
+                        (pwsh && (text.contains(',') || text.starts_with("@(")))
+                            .then(|| list_values(text, true))
+                            .flatten()
+                    });
+                    values
+                        .filter(|v| !v.is_empty() && v.len() <= MAX_VALUES)
+                        .map(|values| Candidate {
+                            name,
+                            values,
+                            from: c.span.end,
+                            within: None,
+                            at: c.span.start,
+                            stmt: Some(c.span),
+                            unconditional,
+                        })
+                })
+            }
             Stmt::Loop { span, .. } => {
                 loop_header(command, *span, pwsh).and_then(|(name, list)| {
                     let at_loop = Span {
@@ -281,6 +323,7 @@ fn candidates(
                         within: Some(*span),
                         at: span.start,
                         stmt: None,
+                        unconditional,
                     })
                 })
             }
@@ -296,20 +339,27 @@ fn candidates(
     out
 }
 
-/// `X=value` or `$x = value` alone in its statement, written so: `(command, name, value)`.
+/// `X=value` or `$x = value` alone in its statement, or the one operand of a builtin that
+/// assigns it (`export X=value`), written so: `(command, name, value)`.
 fn plain_assignment<'a>(
     p: &'a Pipeline,
     command: &str,
     pwsh: bool,
+    declares: &dyn Fn(&SimpleCommand) -> bool,
 ) -> Option<(&'a SimpleCommand, String, &'a Word)> {
     let [Elem::Cmd(c)] = p.elems.as_slice() else {
         return None;
     };
-    if p.chain == Some(crate::ir::ChainOp::Background)
+    // `export X=v`: one literal operand, the assignment itself (no option such as `-n`).
+    let operand = match c.args.as_slice() {
+        [w] if declares(c) => Some(w.span),
+        _ => None,
+    };
+    let bare = c.args.is_empty() && c.typed.is_empty();
+    if p.chain == Some(ChainOp::Background)
         || c.opaque
-        || !c.args.is_empty()
+        || !(bare || operand.is_some())
         || !c.redirects.is_empty()
-        || !c.typed.is_empty()
     {
         return None;
     }
@@ -317,7 +367,8 @@ fn plain_assignment<'a>(
         return None;
     };
     let name = name.trim_start_matches('$').to_string();
-    let text = command.get(c.span.start..c.span.end)?;
+    let span = operand.unwrap_or(c.span);
+    let text = command.get(span.start..span.end)?;
     // Written as a plain `=`: no `+=`, no index, no `==`, no Bash array.
     let plain = if pwsh {
         let t = text.strip_prefix('$')?;

@@ -199,6 +199,7 @@ fn fixture() -> Arc<Fixture> {
             "outside/target/keep.txt",
             "allowed/tmp1/f.txt",
             "home/f.txt",
+            "home/build/x.o",
             "protected/config.toml",
         ] {
             touch(&fx.at(file));
@@ -400,9 +401,10 @@ fn ported_rows_keep_their_count() {
 }
 
 /// Every finding id the two rules report (`tests/rules_meta.rs` sees only each rule's own id).
-const FINDING_IDS: [&str; 15] = [
+const FINDING_IDS: [&str; 16] = [
     shellwise::rules::delete::DELETE_CRITICAL,
     shellwise::rules::delete::DELETE_EMPTY_EXPANSION,
+    shellwise::rules::delete::DELETE_REPO_CONTENTS,
     shellwise::rules::delete::DELETE_THROUGH_LINK,
     shellwise::rules::delete::DELETE_OUTSIDE_PROJECT,
     shellwise::rules::delete::DELETE_ALLOWED_ROOT,
@@ -420,7 +422,8 @@ const FINDING_IDS: [&str; 15] = [
 
 /// `walk-timeout` is reported only when a walk sees the deadline pass while the worker still
 /// answers before it: `analyse` waits on the same deadline, so the verdict is then
-/// `analysis-incomplete`, danger from the raw scan of the delete. No row can pin that race.
+/// `analysis-incomplete`, danger from the raw scan of the delete. No case row can pin that race;
+/// `tests/delete_deadline.rs` forces a repo lookup to time out through a test hook instead.
 const NO_ROW: [&str; 1] = [shellwise::rules::delete::WALK_TIMEOUT];
 
 /// Findings that are only ever warn (Ruling 122): a row where they fire stands in for the deny row.

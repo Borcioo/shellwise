@@ -80,6 +80,20 @@ name = "nohup"
 shells = ["bash"]
 kind = ["wrapper"]
 
+# `exec [-cl] [-a name] [command [arguments]]` (bash's `help exec`); with no command it runs nothing.
+[[program]]
+name = "exec"
+shells = ["bash"]
+kind = ["wrapper"]
+value_options = ["-a"]
+flag_options = ["-c", "-l"]
+
+# `builtin shell-builtin [arguments]` (bash's `help builtin`).
+[[program]]
+name = "builtin"
+shells = ["bash"]
+kind = ["wrapper"]
+
 # --- Programs that turn `\\` into `\` themselves (bash-backslash-collapse) ---
 
 [[program]]
@@ -177,6 +191,13 @@ name = "cd"
 shells = ["bash"]
 cmd_options = ["/d"]
 fix = "cd <path>"
+
+# --- Builtins whose `NAME=value` operand assigns like a plain `NAME=value` (src/fs/assigned.rs) ---
+
+[[program]]
+name = "export"
+shells = ["bash"]
+assigns_operand = true
 
 # --- Programs that wait (Task 33: will-hang, read by src/rules/hang.rs) ---
 # hang_when       options that start the wait; empty = the program always waits
@@ -375,13 +396,17 @@ no_verify_short = "n"
 value_shorts = "Cp"
 value_long = ["--directory", "--exclude", "--include", "--whitespace", "--patch-format", "--resolvemsg", "--quoted-cr", "--empty"]
 
+# `long_options`: every long option of the subcommand, from `git <sub> --git-completion-helper-all`
+# (git 2.53), so a unique prefix (`--har`) reads as the option git takes it for.
 [[program.discard.subcommands]]
 words = "checkout"
 action = "checkout-paths"
+long_options = ["--guess", "--overlay", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--detach", "--track", "--force", "--orphan", "--overwrite-ignore", "--ignore-other-worktrees", "--ours", "--theirs", "--patch", "--unified", "--inter-hunk-context", "--ignore-skip-worktree-bits", "--pathspec-from-file", "--pathspec-file-nul", "--no-guess", "--no-overlay", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-detach", "--no-track", "--no-force", "--no-orphan", "--no-overwrite-ignore", "--no-ignore-other-worktrees", "--no-patch", "--no-ignore-skip-worktree-bits", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
 
 [[program.discard.subcommands]]
 words = "restore"
 action = "restore-paths"
+long_options = ["--source", "--staged", "--worktree", "--ignore-unmerged", "--overlay", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--ours", "--theirs", "--patch", "--unified", "--inter-hunk-context", "--ignore-skip-worktree-bits", "--pathspec-from-file", "--pathspec-file-nul", "--no-source", "--no-staged", "--no-worktree", "--no-ignore-unmerged", "--no-overlay", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-patch", "--no-ignore-skip-worktree-bits", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
 
 [[program.discard.subcommands]]
 words = "worktree remove"
@@ -391,10 +416,14 @@ action = "worktree-remove"
 words = "reset"
 action = "discard"
 danger_options = ["--hard", "--merge"]
+long_options = ["--quiet", "--no-refresh", "--mixed", "--soft", "--hard", "--merge", "--keep", "--recurse-submodules", "--patch", "--unified", "--inter-hunk-context", "--intent-to-add", "--pathspec-from-file", "--pathspec-file-nul", "--stdin", "--refresh", "--no-quiet", "--no-recurse-submodules", "--no-patch", "--no-intent-to-add", "--no-pathspec-from-file", "--no-pathspec-file-nul", "--no-stdin"]
 
 [[program.discard.subcommands]]
 words = "switch"
 action = "discard"
+value_shorts = "cC"
+value_long = ["--create", "--force-create", "--orphan"]
+long_options = ["--create", "--force-create", "--guess", "--discard-changes", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--detach", "--track", "--force", "--orphan", "--overwrite-ignore", "--ignore-other-worktrees", "--no-create", "--no-force-create", "--no-guess", "--no-discard-changes", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-detach", "--no-track", "--no-force", "--no-orphan", "--no-overwrite-ignore", "--no-ignore-other-worktrees"]
 
 [[program.discard.subcommands]]
 words = "stash drop"
@@ -408,6 +437,7 @@ action = "discard"
 [[program.discard.subcommands]]
 words = "clean"
 action = "clean"
+long_options = ["--quiet", "--dry-run", "--force", "--interactive", "--exclude", "--no-quiet", "--no-dry-run", "--no-force", "--no-interactive"]
 
 # --- PowerShell lint (Task 30). Every rule fact sits in the row's `lint` table (`Program::extra`):
 # `tags` says which rule reads the row; the other keys are that rule's lists. Cmdlet rows are

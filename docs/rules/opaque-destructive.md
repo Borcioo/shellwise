@@ -6,7 +6,10 @@ an option the program table does not model. It is a finding only when its raw te
 command that deletes or discards data (Ruling 91a): an unknown tool, or such a command with no
 delete in it, is ok.
 
-Level `danger` when a word the delete acts on (after the delete command's name, in the same
+Level `danger` when a word the delete acts on (after the delete command's name, matched as the
+scan matches it: with a folder, a module or `.exe` (`/usr/bin/rm`, `rm.exe`,
+`Microsoft.PowerShell.Management\Remove-Item`); every word of the command when no word spells the
+name, as in `r""m`; in the same
 statement: not a wrapper's switch such as Git Bash's `//c`, not a `cd` before or after it) spells
 a protected location literally: an absolute path that is
 a drive root, `/`, a system folder, the home folder, the repo root or a protected path (or an

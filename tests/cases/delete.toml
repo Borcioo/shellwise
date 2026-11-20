@@ -2072,8 +2072,8 @@ id = "gb-literal-assigned-twice"
 os = "windows"
 shell = "gitbash"
 command = 'd=build; d=src; rm -rf "$d/x"'
-level = "warn"
-rules = ["dynamic-target"]
+level = "ok"
+rules = []
 
 [[row]]
 id = "gb-literal-assigned-in-a-branch"
@@ -2371,3 +2371,565 @@ shell = "pwsh"
 command = "New-Item -ItemType Junction -Path box2 -Target ..\\outside; Remove-Item box2"
 level = "ok"
 rules = []
+
+# ---------------------------------------------------------------- fix round 3 (security review)
+
+# F1: a tilde prefix is the home folder, as `$HOME` is.
+[[row]]
+id = "gb-empty-expansion-tilde-quoted"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/"$X"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+fix = "${X:?}"
+
+[[row]]
+id = "gb-empty-expansion-tilde-unquoted"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/$X'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-empty-expansion-tilde-slash"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/$X/'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-empty-expansion-tilde-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/"$X"/*'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "px-empty-expansion-tilde-quoted"
+os = "posix"
+shell = "bash"
+command = 'rm -rf ~/"$X"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "ps-empty-expansion-tilde"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force "~\$x"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+fix = "if ($x)"
+
+[[row]]
+id = "gb-empty-expansion-tilde-subfolder"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/build/"$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+# F3 (Ruling 125): the literal contents of a protected folder are critical, like the folder.
+[[row]]
+id = "gb-rm-rf-home-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/*'
+level = "critical"
+rules = ["delete-critical"]
+fix = "<name>"
+
+[[row]]
+id = "gb-rm-rf-home-dot-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/.*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-root-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf /*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-drive-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf /c/*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-contents-after-cd-home"
+os = "windows"
+shell = "gitbash"
+command = 'cd ~ && rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-contents-after-cd-root"
+os = "windows"
+shell = "gitbash"
+command = 'cd / && rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-home-contents"
+os = "posix"
+shell = "bash"
+command = 'rm -rf ~/*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-root-contents"
+os = "posix"
+shell = "bash"
+command = 'rm -rf /*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-home-contents"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force $HOME\*'
+level = "critical"
+rules = ["delete-critical", "ps-remove-item-star"]
+
+[[row]]
+id = "ps-ri-tilde-contents"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force ~\*'
+level = "critical"
+rules = ["delete-critical", "ps-remove-item-star"]
+
+[[row]]
+id = "gb-rm-rf-home-subfolder-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/build/*'
+level = "warn"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-rm-rf-build-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ./build/*'
+level = "ok"
+rules = []
+
+# F15 (Ruling 125): a glob over the repo root's contents leaves `.git`: danger in every spelling;
+# one that takes `.git` stays critical.
+[[row]]
+id = "gb-rm-rf-repo-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "gb-rm-rf-repo-contents-after-dashdash"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf -- *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-rm-rf-repo-contents-dot-slash"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ./*'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "px-rm-rf-repo-contents"
+os = "posix"
+shell = "bash"
+command = 'rm -rf ./*'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-rm-rf-repo-contents-confirmed"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf * # shellwise: allow'
+level = "ok"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-rm-rf-repo-dot-names"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf .*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-repo-contents-takes-dot-git"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "norepo-gb-rm-rf-cwd-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf *'
+level = "ok"
+rules = []
+
+# F5: the command word is read unquoted.
+[[row]]
+id = "gb-rm-double-quoted-name"
+os = "windows"
+shell = "gitbash"
+command = '"rm" -rf /'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-single-quoted-name"
+os = "windows"
+shell = "gitbash"
+command = "'rm' -rf /"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-quoted-path-name"
+os = "windows"
+shell = "gitbash"
+command = '"/usr/bin/rm" -rf /'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-quoted-name-inside"
+os = "windows"
+shell = "gitbash"
+command = '"rm" -rf build'
+level = "ok"
+rules = []
+
+# F9: in unread code the delete verb is matched as the scan matches it; with no verb word found,
+# every word of the hit counts.
+[[row]]
+id = "gb-bash-c-rm-by-path"
+os = "windows"
+shell = "gitbash"
+command = "bash -c '/usr/bin/rm -rf /'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-c-rm-exe"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm.exe -rf /'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-pwsh-c-module-qualified-remove-item"
+os = "windows"
+shell = "pwsh"
+command = 'pwsh -c "Microsoft.PowerShell.Management\Remove-Item -Recurse -Force C:\"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-c-rm-glued-quotes"
+os = "windows"
+shell = "gitbash"
+command = """bash -c 'r""m -rf /'"""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-c-rm-by-path-inside"
+os = "windows"
+shell = "gitbash"
+command = "bash -c '/usr/bin/rm -rf build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+# F12: in Git Bash a rooted path with no drive under a system folder of the MSYS tree.
+[[row]]
+id = "gb-rm-rf-msys-usr"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /usr"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-etc"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /etc/"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-bin"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /bin"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-sbin"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /sbin"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-lib"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /lib64"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-system"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /System/x"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-tmp"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /tmp/x"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-rm-rf-msys-lookalike"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /usrdata"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# F11: every assignment before the delete a literal, the last unconditional at the same level:
+# the delete sees that last literal.
+[[row]]
+id = "gb-reassigned-literal"
+os = "windows"
+shell = "gitbash"
+command = 'X=build; X=/; rm -rf "$X"'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-exported-literal"
+os = "windows"
+shell = "gitbash"
+command = 'export X=/; rm -rf "$X"'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-reassigned-literal"
+os = "windows"
+shell = "pwsh"
+command = "$x = 'build'; $x = 'C:\\'; Remove-Item -Recurse -Force $x"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-reassigned-literal-inside"
+os = "windows"
+shell = "gitbash"
+command = 'X=/; X=build; rm -rf "$X"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-exported-literal-inside"
+os = "windows"
+shell = "gitbash"
+command = 'export X=build; rm -rf "$X/"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-reassigned-in-a-branch"
+os = "windows"
+shell = "gitbash"
+command = 'X=build; if true; then X=/; fi; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-reassigned-after-and"
+os = "windows"
+shell = "gitbash"
+command = 'X=build; true && X=/; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-reassigned-in-a-loop"
+os = "windows"
+shell = "gitbash"
+command = 'X=build; for X in a /; do :; done; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-reassigned-dynamic"
+os = "windows"
+shell = "gitbash"
+command = 'X=build; X=$(cat f); rm -rf "$X/"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+# F6: `exec` and `builtin` are wrappers.
+[[row]]
+id = "gb-exec-rm"
+os = "windows"
+shell = "gitbash"
+command = "exec rm -rf /"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-exec-a-name-rm"
+os = "windows"
+shell = "gitbash"
+command = "exec -a x rm -rf /"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-builtin-command-rm"
+os = "windows"
+shell = "gitbash"
+command = "builtin command rm -rf /"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-exec-rm-inside"
+os = "windows"
+shell = "gitbash"
+command = "exec rm -rf build"
+level = "ok"
+rules = []
+
+# Twins the mutants asked for.
+[[row]]
+id = "gb-rm-rf-home-quoted-star"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ~/'*'"
+level = "warn"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-rm-rf-msys-usr-contents"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /usr/*"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-msys-share-lookalike"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf //usr/lib/x"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-ri-root-relative-usr"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force /usr"
+level = "warn"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-readonly-then-reassigned"
+os = "windows"
+shell = "gitbash"
+command = 'readonly X=/; X=build; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-rm-rf-home-prefix-glob"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/bu*'
+level = "warn"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-reassigned-after-a-literal-loop"
+os = "windows"
+shell = "gitbash"
+command = 'for X in a /; do :; done; true; X=build; rm -rf "$X"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-bash-c-rm-by-path-after-cd"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'cd / && /usr/bin/rm -rf build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-reassigned-in-a-function-called-later"
+os = "windows"
+shell = "gitbash"
+command = 'f() { X=/; }; true; X=build; f; rm -rf "$X"; X=b'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-reassigned-after-a-group"
+os = "windows"
+shell = "gitbash"
+command = 'X=build; { true; } && X=/; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+# The IR keeps no joiner after a compound statement: an assignment right after one may be conditional.
+[[row]]
+id = "gb-reassigned-right-after-a-loop"
+os = "windows"
+shell = "gitbash"
+command = 'for X in a /; do :; done; X=build; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]

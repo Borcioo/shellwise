@@ -794,3 +794,177 @@ shell = "pwsh"
 command = "git worktree remove locked"
 level = "warn"
 rules = ["walk-unreadable"]
+
+# ---------------------------------------------------------------- fix round 3 (security review)
+
+# F4: a pathspec that is the whole tree at the repo root is a whole-tree discard.
+[[row]]
+id = "clean-dirs-the-root-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fd ."
+level = "danger"
+rules = ["git-discard"]
+fix = "git clean -nd"
+
+[[row]]
+id = "clean-dirs-the-root-pathspec-after-dashdash"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fdx -- ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-dirs-the-top-magic-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fdx :/"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-dirs-a-folder-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fd build/"
+level = "ok"
+rules = []
+
+[[row]]
+id = "clean-files-the-root-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git clean -f ."
+level = "danger"
+rules = ["git-discard"]
+
+# F7: git reads a long option by a unique prefix.
+[[row]]
+id = "reset-hard-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --har"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "reset-merge-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --mer"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "checkout-force-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git checkout --forc"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "clean-force-by-a-prefix"
+os = "windows"
+shell = "gitbash"
+command = "git clean --forc -d"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "reset-soft-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --sof"
+level = "ok"
+rules = []
+
+[[row]]
+id = "reset-an-ambiguous-prefix"
+os = "any"
+shell = "pwsh"
+command = "git reset --m"
+level = "ok"
+rules = []
+
+[[row]]
+id = "reset-a-mode-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git reset $MODE"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "clean-options-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git clean $OPTS"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "commit-a-word-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = 'git commit -m "$MSG"'
+level = "ok"
+rules = []
+
+# The value of an option that takes one is no option (`switch -c <name>`).
+[[row]]
+id = "switch-create-a-branch-from-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git switch -c "$BRANCH"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-create-a-branch-from-a-variable-long"
+os = "any"
+shell = "pwsh"
+command = "git switch --create $p[1]"
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-a-word-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = 'git switch -q "$MODE"'
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "switch-an-ambiguous-prefix"
+os = "any"
+shell = "pwsh"
+command = "git switch --d"
+level = "ok"
+rules = []
+
+[[row]]
+id = "reset-a-pathspec-like-an-option"
+os = "any"
+shell = "pwsh"
+command = "git reset -- --har"
+level = "ok"
+rules = []
+
+[[row]]
+id = "switch-discard-changes-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git switch --disc main"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "restore-staged-by-a-prefix"
+os = "any"
+shell = "pwsh"
+command = "git restore --stag src/a.txt"
+level = "ok"
+rules = []

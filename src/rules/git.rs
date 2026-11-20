@@ -76,6 +76,30 @@ pub(crate) struct GitSub {
     /// `discard`: always a warn (Ruling 122 item 3: its corpus rows were not harmful).
     #[serde(default)]
     pub warn_only: bool,
+    /// Every long option of the subcommand: git reads a unique prefix of one as that option.
+    #[serde(default)]
+    pub long_options: Vec<String>,
+}
+
+impl GitSub {
+    /// `word` with a long option written by a unique prefix (`--har`, `--forc=x`) spelled out,
+    /// as git's option parser reads it; any other word as it is.
+    fn spelled_out(&self, word: &str) -> String {
+        let (name, value) = match word.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (word, None),
+        };
+        if !name.starts_with("--") || name.len() <= 2 || self.long_options.iter().any(|o| o == name)
+        {
+            return word.to_string();
+        }
+        let mut fits = self.long_options.iter().filter(|o| o.starts_with(name));
+        match (fits.next(), fits.next(), value) {
+            (Some(full), None, Some(v)) => format!("{full}={v}"),
+            (Some(full), None, None) => full.clone(),
+            _ => word.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -247,23 +271,93 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
     }
     let (sub, rest_at) = matched?;
     let rest = &args[rest_at.min(args.len())..];
-    let rest_lits = &lits[rest_at.min(lits.len())..];
+    // Options as git reads them: a long option by its unique prefix, up to `--`.
+    let mut ended = false;
+    let spelled: Vec<Option<String>> = lits[rest_at.min(lits.len())..]
+        .iter()
+        .map(|t| {
+            let t = t.as_deref()?;
+            ended |= t == "--";
+            Some(if ended {
+                t.to_string()
+            } else {
+                sub.spelled_out(t)
+            })
+        })
+        .collect();
+    let rest_lits = spelled.as_slice();
     let git_loc = loc.for_git(&call.run, &scene.env);
+    let global = (&args[..sub_at], &lits[..sub_at]);
+    let found = judge_sub(scene, facts, call, sub, global, rest, rest_lits, &git_loc);
+    if found.is_some() || !has_danger_options(call, sub) {
+        return found;
+    }
+    // A word the guard cannot read where an option may stand may be the one that discards.
+    let end = rest_lits
+        .iter()
+        .position(|t| t.as_deref() == Some("--"))
+        .unwrap_or(rest_lits.len());
+    // Not the value of an option that takes one (`checkout -b "$BRANCH"`, `clean -e "$P"`,
+    // `switch -c "$BRANCH"`).
+    let value_of = |j: usize| {
+        j > 0
+            && rest_lits[j - 1].as_deref().is_some_and(|t| {
+                facts
+                    .branch_options
+                    .iter()
+                    .chain(&facts.clean_value_options)
+                    .chain(&sub.value_long)
+                    .any(|o| o == t)
+                    || t.strip_prefix('-')
+                        .is_some_and(|c| c.chars().count() == 1 && sub.value_shorts.contains(c))
+            })
+    };
+    let k = (0..end).find(|&j| rest_lits[j].is_none() && !value_of(j))?;
+    Some(warn(
+        GIT_UNREADABLE,
+        format!(
+            "the guard could not read `{}`, which may be an option that makes `git {}` throw away uncommitted work",
+            shown(scene, &rest[k]),
+            sub.words
+        ),
+        Some(format!(
+            "write the options of `git {}` literally so the guard can check them",
+            sub.words
+        )),
+        call.span(),
+    ))
+}
+
+/// The destructive table's row for `git <sub>` lists the options that make it discard (`git
+/// reset --hard`), not one that always discards (`git stash clear`).
+fn has_danger_options(call: &Call, sub: &GitSub) -> bool {
+    let mut name = vec![call.name.clone()];
+    name.extend(sub.words.split_whitespace().map(str::to_lowercase));
+    scan::table()
+        .iter()
+        .any(|e| e.names.contains(&name) && !e.requires_any.is_empty())
+}
+
+/// The finding of one known subcommand: `global` holds git's own options before it.
+#[allow(clippy::too_many_arguments)]
+fn judge_sub(
+    scene: &mut Scene,
+    facts: &GitFacts,
+    call: &Call,
+    sub: &GitSub,
+    global: (&[Word], &[Option<String>]),
+    rest: &[Word],
+    rest_lits: &[Option<String>],
+    git_loc: &Location,
+) -> Option<Finding> {
     match sub.action {
         GitAction::Hooks => {
             if !scene.ctx.cfg.policies.git_no_verify {
                 return None;
             }
-            hooks(
-                facts,
-                sub,
-                &args[..sub_at],
-                &lits[..sub_at],
-                rest_lits,
-                call.span(),
-            )
+            hooks(facts, sub, global.0, global.1, rest_lits, call.span())
         }
-        GitAction::WorktreeRemove => worktree_remove(scene, facts, rest, rest_lits, &git_loc, call),
+        GitAction::WorktreeRemove => worktree_remove(scene, facts, rest, rest_lits, git_loc, call),
         GitAction::CheckoutPaths | GitAction::RestorePaths => {
             if rest_lits
                 .iter()
@@ -273,7 +367,7 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
                 // Conflict resolution or interactive: chosen hunk by hunk.
                 return None;
             }
-            let found = restore(scene, facts, sub, rest, rest_lits, &git_loc, call.span());
+            let found = restore(scene, facts, sub, rest, rest_lits, git_loc, call.span());
             if found.is_some() {
                 return found;
             }
@@ -281,7 +375,7 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
             discard(call, sub, rest_lits)
         }
         GitAction::Discard => discard(call, sub, rest_lits),
-        GitAction::Clean => clean(scene, facts, call, sub, rest, rest_lits, &git_loc),
+        GitAction::Clean => clean(scene, facts, call, sub, rest, rest_lits, git_loc),
     }
 }
 
@@ -781,14 +875,34 @@ fn clean(
         j += 1;
     }
     let mut worst = None;
+    let shown_cmd = scene
+        .ctx
+        .input
+        .command
+        .get(call.span().start..call.span().end)
+        .unwrap_or_default()
+        .to_string();
+    // `clean -fd` over the whole folder git runs in: a whole-tree discard (Ruling 122 (c)).
+    let dirs_too = rest_lits.iter().flatten().any(|t| {
+        facts
+            .clean_dirs_options
+            .iter()
+            .any(|e| scan::flag_matches(e, t))
+    });
+    let whole_tree = || {
+        finding(
+            GIT_DISCARD,
+            Level::Danger,
+            format!(
+                "`{shown_cmd}` deletes every untracked file and folder in the tree git runs in, which no commit or stash holds"
+            ),
+            format!(
+                "look at `git clean -nd` first and delete only what you mean; or, {CONFIRM_FIX}"
+            ),
+            call.span(),
+        )
+    };
     if specs.is_empty() {
-        let shown_cmd = scene
-            .ctx
-            .input
-            .command
-            .get(call.span().start..call.span().end)
-            .unwrap_or_default()
-            .to_string();
         match git_loc.dirs() {
             Some(dirs) => {
                 for d in dirs {
@@ -804,31 +918,33 @@ fn clean(
                 ));
             }
         }
-        // `clean -fd` over the whole folder git runs in: a whole-tree discard (Ruling 122 (c)).
-        let dirs_too = rest_lits.iter().flatten().any(|t| {
-            facts
-                .clean_dirs_options
-                .iter()
-                .any(|e| scan::flag_matches(e, t))
-        });
         if dirs_too && worst.as_ref().is_none_or(|f| f.level < Level::Danger) {
-            return Some(finding(
-                GIT_DISCARD,
-                Level::Danger,
-                format!(
-                    "`{shown_cmd}` deletes every untracked file and folder in the tree git runs in, which no commit or stash holds"
-                ),
-                format!(
-                    "look at `git clean -nd` first and delete only what you mean; or, {CONFIRM_FIX}"
-                ),
-                call.span(),
-            ));
+            return Some(whole_tree());
         }
         return worst;
     }
+    // A pathspec of the whole tree: `:/` (the top of the repo, wherever git runs) or one that
+    // names the repo root (`.` there).
+    let repo = scene.repo().ok().flatten();
+    let mut whole = false;
     for w in specs {
+        let top = literal(w).is_some_and(|t| matches!(t.as_str(), ":/" | ":/." | ":(top)"));
+        whole |= top
+            || repo.as_ref().is_some_and(|root| {
+                matches!(
+                    resolve::target(w, git_loc, &scene.env, DeleteBy::Native, scene.ctx.fs, scene.ctx.deadline),
+                    Target::Paths(ps) if ps.iter().any(|p| same_path(scene, p, root))
+                )
+            });
+        if top {
+            continue;
+        }
         let found = scene.judge_word(w, git_loc, DeleteBy::Native, how, call.span());
         worst = max_finding(worst, found);
+    }
+    // With a pathspec git removes untracked folders whether or not `-d` is given.
+    if whole && worst.as_ref().is_none_or(|f| f.level < Level::Danger) {
+        return Some(whole_tree());
     }
     worst
 }

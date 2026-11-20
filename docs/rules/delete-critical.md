@@ -3,7 +3,8 @@
 A delete whose target is one of these, or an ancestor of one:
 
 - a system path: `C:\Windows`, `C:\Program Files*`, `C:\ProgramData` (any drive), `/usr`, `/etc`,
-  `/bin`, `/sbin`, `/lib*`, `/System`;
+  `/bin`, `/sbin`, `/lib*`, `/System` (in Git Bash, the same rooted paths with no drive: the MSYS
+  tree's own folders);
 - a drive root, or `/`;
 - the home folder (from the hook's own environment, whatever the command assigns to `HOME`);
 - the root of the repo holding the cwd (only when the cwd is in a repo);
@@ -11,7 +12,10 @@ A delete whose target is one of these, or an ancestor of one:
 
 Level `critical`: a hard block. The allow marker does not lower it. Deleting *inside* the repo
 root (`find . -name '*.o' -delete` from the root, `git clean -fd`) is not critical; inside a drive
-root, `/`, a system path, the home folder or a protected path still is.
+root, `/`, a system path, the home folder or a protected path still is, and so is a glob over
+their direct contents (`rm -rf ~/*`, `rm -rf /*`, `cd ~ && rm -rf *`, Ruling 125). A glob over the
+repo root's contents is `delete-repo-contents` (danger) unless it takes `.git` too (`rm -rf .*`).
+The lexical match of these folders never waits on the repo lookup.
 
 A pwsh list is split and each element judged (`Remove-Item build,C:\` is critical because of
 `C:\`, `Remove-Item build, clean` is ok).
