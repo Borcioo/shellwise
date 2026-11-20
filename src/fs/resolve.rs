@@ -182,6 +182,9 @@ pub fn critical_reason(
             "drive root"
         });
     }
+    if let Some(r) = system_path(&canon) {
+        return Some(r);
+    }
     // macOS volumes ignore case by default.
     let key_of = |t: &str| {
         let k = path_key(t, os);
@@ -192,10 +195,17 @@ pub fn critical_reason(
         }
     };
     let key = key_of(&text);
+    // Matched by text too, so a device spelling (`\\?\C:\…\.git`) needs no file-system call.
+    let git_dir = cwd_repo.map(repo_git);
     let named: Vec<(&Path, &'static str, &'static str)> = home
         .map(|h| (h, "home folder", "ancestor of the home folder"))
         .into_iter()
         .chain(cwd_repo.map(|r| (r, "repo root", "ancestor of the repo root")))
+        .chain(
+            git_dir
+                .as_deref()
+                .map(|g| (g, REPO_GIT, "ancestor of the repo root")),
+        )
         .chain(protected.iter().map(|p| {
             (
                 p.as_path(),
@@ -214,6 +224,36 @@ pub fn critical_reason(
     keys.iter()
         .find(|(k, _, _)| is_within(k, &key, os))
         .map(|(_, _, above)| *above)
+}
+
+/// A folder of the operating system, or a path inside one (Ruling 98(2)): on Windows
+/// `<drive>:\Windows`, `Program Files*` and `ProgramData`; elsewhere `/usr`, `/etc`, `/bin`,
+/// `/sbin`, `/lib*` and `/System`.
+fn system_path(c: &Canon) -> Option<&'static str> {
+    let first = c.comps.first()?;
+    let hit = c.rooted
+        && match c.os {
+            Os::Windows => {
+                let first = first.to_lowercase();
+                is_drive(&c.prefix)
+                    && (first == "windows"
+                        || first.starts_with("program files")
+                        || first == "programdata")
+            }
+            Os::Posix => {
+                matches!(first.as_str(), "usr" | "etc" | "bin" | "sbin" | "System")
+                    || first.starts_with("lib")
+            }
+        };
+    hit.then_some("system folder")
+}
+
+/// `text`, a Git Bash path, is rooted with no drive (`/usr`, not `//srv` or `/c/x`) and names
+/// one of the POSIX system folders or a path inside one: there the MSYS tree's own folders.
+pub fn is_msys_system_path(text: &str) -> bool {
+    text.starts_with('/')
+        && !text.starts_with("//")
+        && system_path(&Canon::parse_posix(text)).is_some()
 }
 
 /// `critical_reason`, then the same match by file identity for any spelling it misses: a
@@ -242,6 +282,7 @@ pub fn critical_by_identity(
     }
     if let Some(r) = cwd_repo {
         named.push((r.to_path_buf(), "repo root", "ancestor of the repo root"));
+        named.push((repo_git(r), REPO_GIT, "ancestor of the repo root"));
     }
     for x in protected {
         named.push((x.clone(), "protected path", "ancestor of a protected path"));
@@ -275,12 +316,35 @@ pub fn critical_by_identity(
     })?
 }
 
+/// A Windows share, volume or device path (`\\srv\share`, `\\?\UNC\…`, `\\.\PhysicalDrive0`):
+/// the guard makes no file-system call on one (a call may hang on the network or send the
+/// user's credentials to the server, Ruling 114(f)). A verbatim drive path (`\\?\C:\x`) is none.
+pub fn is_network_or_device(p: &Path, os: Os) -> bool {
+    // Only a Windows reading gives such a prefix.
+    Canon::parse(&p.to_string_lossy(), os)
+        .prefix
+        .starts_with("\\\\")
+}
+
+const REPO_GIT: &str = "repo's .git, which holds every commit";
+
+/// The `.git` folder (or the file of a worktree) of the repo rooted at `root`. Deleting it is
+/// critical; deleting inside it (`.git/index.lock`) is judged as any path in the project.
+fn repo_git(root: &Path) -> PathBuf {
+    root.join(".git")
+}
+
 /// The root of the repo holding `cwd`: the nearest folder with a `.git` folder or file.
 pub fn repo_root(
     cwd: &Path,
     fs: &SharedFs,
     deadline: &Deadline,
 ) -> Result<Option<PathBuf>, TimedOut> {
+    // Test-only: the deadline runs out during the lookup.
+    #[cfg(feature = "testhooks")]
+    if crate::rules::testhooks::active("repo-lookup-timeout") {
+        return Err(TimedOut);
+    }
     let cwd = cwd.to_path_buf();
     let fs = Arc::clone(fs);
     let d = *deadline;
@@ -2326,6 +2390,11 @@ fn looked_up_alias<'t>(
 }
 
 fn elem_nests_location_change(e: &Elem, shell: Shell, defined: &[String]) -> bool {
+    // A Bash substitution or child-shell body runs in a subshell: a `cd` there cannot move this
+    // shell (Ruling 122). PowerShell runs `$( )` and `( )` in the session itself.
+    if matches!(shell, Shell::Bash(_)) {
+        return false;
+    }
     let words: Vec<&Word> = match e {
         Elem::Cmd(c) => cmd_words(c),
         Elem::Method(m) => m.args.iter().collect(),
@@ -2773,8 +2842,15 @@ const PS_ITEM_WRITERS: [&str; 30] = [
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
 /// command or a script call (PowerShell) may assign anything.
 pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
+    mark_assigned_except(env, script, command, &[]);
+}
+
+/// `mark_assigned`, except the assignments of the commands whose span is in `skip` (the literal
+/// assignments `assigned::resolve_assigned` reads itself).
+pub fn mark_assigned_except(env: &mut EnvView, script: &Script, command: &str, skip: &[Span]) {
     // The dialect is not known here: read the script as pwsh too.
     visit_script(script, &script_aliases(script, true), &mut |n| match n {
+        Node::Cmd(c) if skip.contains(&c.span) => {}
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {
             let ty = m.type_name.to_ascii_lowercase();
@@ -2895,10 +2971,15 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
         }
     }
     let writer = PS_ITEM_WRITERS.contains(&name.as_str());
-    for a in &args {
+    for (w, a) in c.args.iter().zip(&args) {
         match a {
             Some(t) => mark_drive_path(env, t),
-            None if writer => env.mark_all_dynamic(),
+            // A word that resolves now (`$env:TEMP\x`, `~`) names that text; any other word
+            // may name any drive path.
+            None if writer => match w.static_value(env) {
+                Some(t) => mark_drive_path(env, &t),
+                None => env.mark_all_dynamic(),
+            },
             None => {}
         }
     }
@@ -2995,8 +3076,8 @@ pub enum UnknownKind {
     Dynamic,
     /// The hook cannot tell which folder the path names, and it may be a drive root, the home
     /// folder or the repo root under another name: a share or volume path, a remapped drive, a
-    /// tree an earlier statement links, a location the hook cannot follow. Reported as
-    /// critical, so the allow marker cannot lower it.
+    /// tree an earlier statement links, a location the hook cannot follow. Reported as danger
+    /// (`delete-unknown-location`, Ruling 98(1)), which the allow marker confirms.
     MayBeCritical,
 }
 
@@ -3033,7 +3114,7 @@ const NON_FS_DRIVES: [&str; 6] = ["env", "variable", "cert", "hkcu", "hklm", "ws
 
 /// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`) with no `.` or `..` step,
 /// no stream suffix and no `,` or `;` (`Env:FOO,bar` is a list that holds the file `bar`).
-fn on_non_fs_drive(text: &str) -> bool {
+pub fn on_non_fs_drive(text: &str) -> bool {
     let Some((drive, rest)) = text.split_once(':') else {
         return false;
     };
@@ -3091,7 +3172,7 @@ fn strip_fs_provider(s: &str) -> &str {
     s
 }
 
-fn is_pwd(name: &str, shell: Shell) -> bool {
+pub(crate) fn is_pwd(name: &str, shell: Shell) -> bool {
     match shell {
         Shell::Pwsh | Shell::Powershell5 => name.eq_ignore_ascii_case("PWD"),
         Shell::Bash(_) => name == "PWD",
@@ -3188,7 +3269,12 @@ fn absolutize(
             join(base, &s)
         };
     }
-    if matches!(shell, Shell::Bash(_)) && s.starts_with('/') && !s.starts_with("//") {
+    // Relative to Git Bash's `/` (after `cd /`): a rooted Git Bash path.
+    let bash = matches!(shell, Shell::Bash(_));
+    if bash && base == Some("/") && !s.starts_with(['/', '\\']) && !is_drive(&s) {
+        s = Canon::parse_posix(&format!("/{s}")).render();
+    }
+    if bash && s.starts_with('/') && !s.starts_with("//") {
         let rest = s.trim_start_matches('/');
         if rest.is_empty() {
             return Ok("/".to_string());
@@ -3527,6 +3613,20 @@ pub fn target(
     fs: &SharedFs,
     deadline: &Deadline,
 ) -> Target {
+    target_how(word, loc, env, by, fs, deadline, true)
+}
+
+/// `target`, for a delete that is `recursive` or not: a delete that is not removes a link an
+/// earlier statement makes as the link only, so that link's own path is no unknown location.
+pub fn target_how(
+    word: &Word,
+    loc: &Location,
+    env: &EnvView,
+    by: DeleteBy,
+    fs: &SharedFs,
+    deadline: &Deadline,
+    recursive: bool,
+) -> Target {
     let pwsh = matches!(loc.shell, Shell::Pwsh | Shell::Powershell5);
     let mut plans = Vec::new();
     for base in loc.bases() {
@@ -3621,13 +3721,22 @@ pub fn target(
         }
         all
     };
-    if paths.iter().any(|p| loc.near_new_link(p)) {
+    if paths
+        .iter()
+        .any(|p| loc.near_new_link(p) && (recursive || !loc.is_new_link(p)))
+    {
         return Target::UnknownLocation(UnknownKind::MayBeCritical);
     }
     Target::Paths(paths.into_iter().map(PathBuf::from).collect())
 }
 
 impl Location {
+    /// `p` is a link an earlier statement creates, by its compared text.
+    fn is_new_link(&self, p: &str) -> bool {
+        let key = path_key(p, self.os);
+        !self.new_link_unknown && self.new_links.iter().any(|l| path_key(l, self.os) == key)
+    }
+
     /// `p` holds a link an earlier statement creates, or lies beside one.
     fn near_new_link(&self, p: &str) -> bool {
         if self.new_link_unknown {

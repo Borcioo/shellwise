@@ -8,7 +8,10 @@ use crate::parse::ParseError;
 use crate::{CheckInput, Deadline, Origin};
 
 pub mod bash_lint;
+pub mod delete;
+pub mod git;
 pub mod length;
+pub mod marker;
 pub mod parse_error;
 pub mod ps_var_colon;
 
@@ -71,6 +74,8 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     let mut rules: Vec<Box<dyn Rule>> = vec![
         Box::new(parse_error::ParseErrorRule),
         Box::new(parse_error::ParseErrorDestructiveRule),
+        Box::new(delete::DeleteRule),
+        Box::new(git::GitRule),
         Box::new(ps_var_colon::PsVarColon),
     ];
     rules.extend(bash_lint::rules());

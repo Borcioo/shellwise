@@ -16,6 +16,7 @@ const FIELDS: &[&str] = &[
     "operands",
     "assignments",
     "no_run_options",
+    "flag_options",
     "escapes",
     "escape_options",
     "cmd_options",
@@ -123,7 +124,7 @@ fn program(row: &toml::Table) -> String {
     }
     extra.push_str("t }");
     format!(
-        "            Program {{ name: {}, shells: {}, aliases: Aliases {{ bash: {}, pwsh_windows: {}, pwsh_posix: {} }}, kind: vec![{}], value_options: {}, fix: {}, operands: {operands}, assignments: {assignments}, no_run_options: {}, escapes: {}, escape_options: {}, cmd_options: {}, extra: {extra} }},\n",
+        "            Program {{ name: {}, shells: {}, aliases: Aliases {{ bash: {}, pwsh_windows: {}, pwsh_posix: {} }}, kind: vec![{}], value_options: {}, fix: {}, operands: {operands}, assignments: {assignments}, no_run_options: {}, flag_options: {}, escapes: {}, escape_options: {}, cmd_options: {}, extra: {extra} }},\n",
         string_expr(name),
         vec_of(&list("shells")),
         vec_of(&alias("bash")),
@@ -133,6 +134,7 @@ fn program(row: &toml::Table) -> String {
         vec_of(&list("value_options")),
         fix.map_or("None".to_string(), |f| format!("Some({})", string_expr(f))),
         vec_of(&list("no_run_options")),
+        vec_of(&list("flag_options")),
         escapes.map_or("None".to_string(), |e| format!("Some({e})")),
         vec_of(&list("escape_options")),
         vec_of(&list("cmd_options")),

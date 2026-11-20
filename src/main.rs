@@ -17,7 +17,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 use shellwise::adapter::check_json;
 use shellwise::adapter::claude_code::{self, Event};
 use shellwise::config::{Config, HOOK_MARGIN_MS, MIN_HOOK_TIMEOUT_MS};
-use shellwise::ir::EnvView;
 use shellwise::level::{Finding, Verdict, exit_code};
 use shellwise::{
     AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse, unread,
@@ -218,6 +217,10 @@ fn run_lint(start: Instant, args: LintArgs) -> i32 {
 /// `hook claude-code`: read the event, ignore a tool that is not a shell, load the config from
 /// the event's `cwd`, analyse, print the reply. Every path exits 0; an unread input denies.
 fn run_hook(start: Instant, args: HookArgs) -> i32 {
+    // Before the event is read: an unread or malformed event is let through too.
+    if shellwise::turned_off() {
+        return 0;
+    }
     let os = Os::host();
     let bytes = match read_stdin(Deadline::new(start, HOOK_READ_MS)) {
         Input::Bytes(bytes) if bytes.len() > MAX_READ_BYTES => {
@@ -313,7 +316,7 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
         shell: args.shell.shell(),
         os: Os::host(),
         cwd: args.cwd.clone(),
-        env: EnvView::new(),
+        env: claude_code::hook_env(args.shell.shell(), Os::host()),
         origin: Origin::CommandLine,
         problem: cfg_problem,
     };

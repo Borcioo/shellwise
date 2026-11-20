@@ -1105,7 +1105,8 @@ os = "any"
 shell = "pwsh"
 command = "Remove-Item build\\* -Recurse -Force"
 level = "warn"
-rules = ["ps-remove-item-star"]
+# With no cwd the delete guard cannot place the relative path: a warn (Ruling 122).
+rules = ["delete-unknown-location", "ps-remove-item-star"]
 oracle = "accepts"
 
 [[row]]

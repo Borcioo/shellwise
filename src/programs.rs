@@ -90,6 +90,10 @@ pub struct Program {
     /// Wrapper: with one of these it runs nothing (`command -v x`).
     #[serde(default)]
     pub no_run_options: Vec<String>,
+    /// Wrapper: options that take no value. An option in none of the wrapper's lists may take
+    /// one, so the command after it is unread.
+    #[serde(default)]
+    pub flag_options: Vec<String>,
     #[serde(default)]
     pub escapes: Option<Escapes>,
     /// For `Escapes::Option`: the options that turn escapes on.
@@ -183,6 +187,7 @@ pub fn load(text: &str) -> Result<Table, String> {
         let lists = [
             &p.value_options,
             &p.no_run_options,
+            &p.flag_options,
             &p.escape_options,
             &p.cmd_options,
             &p.aliases.bash,
@@ -192,7 +197,10 @@ pub fn load(text: &str) -> Result<Table, String> {
         if lists.iter().any(|l| l.iter().any(|s| s.trim().is_empty())) {
             return Err(format!("{row}: a list holds an empty string"));
         }
-        let wrapper_facts = p.operands > 0 || p.assignments || !p.no_run_options.is_empty();
+        let wrapper_facts = p.operands > 0
+            || p.assignments
+            || !p.no_run_options.is_empty()
+            || !p.flag_options.is_empty();
         if wrapper_facts && !p.is(Kind::Wrapper) {
             return Err(format!(
                 "{row}: wrapper facts on a row that is not a wrapper"
@@ -311,23 +319,74 @@ pub fn lookup(typed: &str, shell: Shell, os: Os) -> Option<&'static Program> {
 /// The command `cmd` runs once its wrappers are read: `timeout 60 rm x` reads as `rm x`, with the
 /// assignments of `env A=1 …` and `sudo A=1 …` added to the command's own. `cmd` itself when its
 /// name is no wrapper, when a wrapper runs nothing (`command -v rm`, `nohup` alone) or when its
-/// name is not static. A wrapped name that is not static gives an opaque command.
+/// name is not static. A wrapped name that is not static gives an opaque command, and so does a
+/// wrapper still in front after `MAX_WRAPPERS` strips: a command may sit behind it.
 pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, SimpleCommand> {
     let env = EnvView::new();
+    let wrapper_of = |c: &SimpleCommand| {
+        c.name
+            .static_value(&env)
+            .and_then(|name| lookup(&name, shell, os).filter(|p| p.is(Kind::Wrapper)))
+    };
     let mut current = Cow::Borrowed(cmd);
     for _ in 0..MAX_WRAPPERS {
-        let Some(name) = current.name.static_value(&env) else {
-            break;
-        };
-        let Some(wrapper) = lookup(&name, shell, os).filter(|p| p.is(Kind::Wrapper)) else {
-            break;
+        let Some(wrapper) = wrapper_of(&current) else {
+            return current;
         };
         match unwrap_once(&current, wrapper, shell, os) {
             Some(next) => current = Cow::Owned(next),
-            None => break,
+            None => return current,
         }
     }
+    if wrapper_of(&current).is_some() {
+        current.to_mut().opaque = true;
+    }
     current
+}
+
+/// What one option word of a wrapper does, from the wrapper's table row.
+enum WrapperOption {
+    /// It takes this many words, itself included.
+    Words(usize),
+    /// The wrapper runs nothing (`command -v`).
+    RunsNothing,
+    /// The row does not list it: it may take a value.
+    Unknown,
+}
+
+/// Read the option word `v` (an exact flag is taken before). A long option may carry its value
+/// after `=`. A short cluster is flags and run-nothing letters, then at most one value option,
+/// whose value is the rest of the word or, as its last letter, the next word (`-Eu root`):
+/// letters after a value option are its value (`-udeploy`), never options.
+fn read_option(wrapper: &Program, v: &str) -> WrapperOption {
+    let has = |list: &[String], o: &str| list.iter().any(|x| x == o);
+    let value = |o: &str| has(&wrapper.value_options, o);
+    let flag = |o: &str| has(&wrapper.flag_options, o);
+    if v.starts_with("--") {
+        let name = v.split_once('=').map_or(v, |(n, _)| n);
+        if has(&wrapper.no_run_options, name) {
+            return WrapperOption::RunsNothing;
+        }
+        return match v.split_once('=') {
+            Some(_) if value(name) || flag(name) => WrapperOption::Words(1),
+            None if value(v) => WrapperOption::Words(2),
+            _ => WrapperOption::Unknown,
+        };
+    }
+    let letters: Vec<char> = v.chars().skip(1).collect();
+    for (k, c) in letters.iter().enumerate() {
+        let o = format!("-{c}");
+        if has(&wrapper.no_run_options, &o) {
+            return WrapperOption::RunsNothing;
+        }
+        if value(&o) {
+            return WrapperOption::Words(if k + 1 == letters.len() { 2 } else { 1 });
+        }
+        if !flag(&o) {
+            return WrapperOption::Unknown;
+        }
+    }
+    WrapperOption::Words(1)
 }
 
 /// The command one wrapper runs, or `None` when it runs none.
@@ -341,6 +400,8 @@ fn unwrap_once(
     let mut assigns = cmd.assigns.clone();
     let mut operands = wrapper.operands;
     let mut options = true;
+    // An option the table does not list: it may take a value, which shifts every word after it.
+    let mut unknown_option = false;
     let mut i = 0;
     while let Some(w) = cmd.args.get(i) {
         let Some(v) = w.static_value(&env) else {
@@ -356,19 +417,18 @@ fn unwrap_once(
         if options && v == "--" {
             options = false;
             i += 1;
+        } else if options && wrapper.flag_options.contains(&v) {
+            // Also `env -`, which has no letter.
+            i += 1;
         } else if options && v.len() > 1 && v.starts_with('-') {
-            if wrapper
-                .no_run_options
-                .iter()
-                .any(|o| Program::option_matches(&v, o))
-            {
-                return None;
+            match read_option(wrapper, &v) {
+                WrapperOption::Words(n) => i += n,
+                WrapperOption::RunsNothing => return None,
+                WrapperOption::Unknown => {
+                    unknown_option = true;
+                    i += 1;
+                }
             }
-            i += if wrapper.value_options.contains(&v) {
-                2
-            } else {
-                1
-            };
         } else if let Some((name, value)) = assignment(&v).filter(|_| wrapper.assignments) {
             // The parser may already hold an argument that looks like an assignment as one.
             if !assigns.iter().any(|(n, _)| n == name) {
@@ -398,7 +458,9 @@ fn unwrap_once(
     } else {
         canonical(&typed, shell, os)
     };
-    let opaque = cmd.opaque || name.is_dynamic() || canonical.is_none();
+    // After an unknown option the name is a guess: the option may have taken a value, so
+    // `timeout --weird v 60 rm x` would read `60`, and `timeout --weird rm 60 x` would read `rm`.
+    let opaque = cmd.opaque || name.is_dynamic() || canonical.is_none() || unknown_option;
     Some(SimpleCommand {
         span: Span {
             start: name.span.start,
@@ -605,9 +667,11 @@ mod tests {
             ("timeout \"$T\" rm -rf x", "rm", &["-rf", "x"]),
             ("timeout ${T:-60} rm x", "rm", &["x"]),
             ("timeout --signal=KILL 5 rm x", "rm", &["x"]),
-            // Ruling 111: an unknown wrapper option does not hide the command.
-            ("timeout --weird 60 rm -rf x", "rm", &["-rf", "x"]),
+            ("timeout -sKILL 5 rm x", "rm", &["x"]),
+            ("timeout --foreground 5 rm x", "rm", &["x"]),
             ("sudo -E rm x", "rm", &["x"]),
+            ("sudo -Eu root rm x", "rm", &["x"]),
+            ("env - rm x", "rm", &["x"]),
             // After `--` a word with a dash is the command.
             ("nohup -- -x y", "-x", &["y"]),
             // nice takes no assignments: `A=1` is the program it runs.
@@ -655,6 +719,24 @@ mod tests {
             let script = parse(src);
             let c = strip_wrappers(first(&script), GIT_BASH, Os::Windows);
             assert!(matches!(c, Cow::Borrowed(_)), "{src}");
+        }
+    }
+
+    #[test]
+    fn a_command_after_an_option_the_row_does_not_list_is_opaque() {
+        for src in [
+            "timeout --weird 60 rm -rf x",
+            "timeout --weird rm 60 x",
+            "timeout -q 60 rm x",
+            "sudo -Eq rm x",
+            "sudo --frobnicate=1 rm x",
+            "env -S 'rm -rf x'",
+            "sudo -e f",
+            "sudo --edit f",
+        ] {
+            let script = parse(src);
+            let c = strip_wrappers(first(&script), GIT_BASH, Os::Windows);
+            assert!(c.opaque, "{src}");
         }
     }
 

@@ -857,11 +857,16 @@ fn shellcheck_findings_of_one_code_on_one_line_are_all_printed() {
 
 #[test]
 fn a_shellcheck_error_fails_the_file_and_a_warning_does_not() {
+    // The delete guard's warn about the unread target sits beside ShellCheck's.
     let (path, r) = lint_cli("sc_levels", "var.sh", "rm $var\n");
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
     assert_eq!(
         places(&path, &r),
-        ["1:4: warn SC2086", "1:4: warn SC2154"],
+        [
+            "1:1: warn dynamic-target",
+            "1:4: warn SC2086",
+            "1:4: warn SC2154"
+        ],
         "{}",
         r.stdout
     );

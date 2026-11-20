@@ -66,12 +66,15 @@ fn input_over_the_size_cap_fails_closed() {
 
 #[test]
 fn size_cap_is_64_kib() {
-    // A command at the cap is analysed: only the inline length rule speaks. One byte more fails
-    // closed. The tail is a delete no other rule flags in pwsh or bash, which the raw scan still names.
+    // A command at the cap is analysed: from the temp folder (an allowed root) only the inline
+    // length rule speaks, while the raw scan still names the delete in pwsh or bash. One byte
+    // more fails closed.
     let tail = "; Remove-Item -Recurse -Force x";
     let at_cap = format!("{}{tail}", " ".repeat(64 * 1024 - tail.len()));
     assert_eq!(at_cap.len(), 64 * 1024);
-    let r = run(CHECK, Some(at_cap.as_bytes()), &[]);
+    let temp = std::env::temp_dir().to_string_lossy().into_owned();
+    let in_temp = [CHECK, &["--cwd", temp.as_str()]].concat();
+    let r = run(&in_temp, Some(at_cap.as_bytes()), &[]);
     assert_eq!(r.code, 1, "{}", r.stdout);
     let rules: Vec<String> = r.json()["findings"]
         .as_array()

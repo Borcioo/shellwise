@@ -30,6 +30,15 @@ pub const MAX_READ_BYTES: usize = 1024 * 1024;
 /// The rule id of every analysis that did not finish for a reason other than a parse error.
 pub const ANALYSIS_INCOMPLETE: &str = "analysis-incomplete";
 
+/// `SHELLWISE=off` turns the whole check off; any other value leaves it on.
+const OFF_VAR: &str = "SHELLWISE";
+const OFF_VALUE: &str = "off";
+
+/// `SHELLWISE=off` is set: every caller lets the command through unread.
+pub fn turned_off() -> bool {
+    std::env::var_os(OFF_VAR).is_some_and(|v| v == OFF_VALUE)
+}
+
 /// The stack of the thread that parses and runs the rules.
 const WORKER_STACK: usize = 64 * 1024 * 1024;
 
@@ -130,6 +139,9 @@ impl Deadline {
 /// `problem`, invalid UTF-8, input over `MAX_INPUT_BYTES`, a panic, a dead worker, a parser that
 /// failed itself and the deadline make the analysis incomplete (`incomplete`).
 pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdict {
+    if turned_off() {
+        return Verdict::new(Vec::new());
+    }
     if input.bytes.len() > MAX_READ_BYTES {
         return unread("input over the hard size cap");
     }
@@ -144,7 +156,7 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
         origin: input.origin,
     };
     let mut findings = match length_stage(&check, cfg, deadline) {
-        Ok(found) => found,
+        Ok(found) => levels(found, cfg).findings,
         Err(reason) => return levels(incomplete(&command, reason).findings, cfg),
     };
     let problem = if let Some(reason) = input.problem {
@@ -156,8 +168,9 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
     } else {
         None
     };
+    // Each stage's findings already carry their configured levels, and the marker has run.
     findings.extend(checked(&check, problem, cfg, deadline).findings);
-    levels(findings, cfg)
+    Verdict::new(findings)
 }
 
 /// The configured level of each finding.
@@ -218,11 +231,12 @@ fn checked(
             Err(reason) => reason,
         },
     };
-    incomplete_from(
+    let verdict = incomplete_from(
         bounded_scan(Arc::clone(&command), deadline),
         &command,
         reason,
-    )
+    );
+    levels(verdict.findings, cfg)
 }
 
 /// How long the raw scan may run past the deadline. The deadline ends 1500 ms before the hook
@@ -323,7 +337,7 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
             _ => (Script::default(), Some(e)),
         },
     };
-    let fs: fs::SharedFs = Arc::new(fs::RealFs);
+    let fs = rule_fs();
     let ctx = rules::Ctx {
         input,
         script: &script,
@@ -344,12 +358,97 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
     {
         findings.retain(|f| f.rule == rules::parse_error::PARSE_ERROR);
     }
-    Ok(Verdict::new(findings))
+    // The config levels, then the marker: a level the marker lowered is never raised again.
+    let verdict = levels(findings, cfg);
+    Ok(rules::marker::apply(
+        &script,
+        input.command,
+        parse_error.is_some(),
+        verdict,
+    ))
 }
 
 #[cfg(feature = "testhooks")]
 fn testhook_is(mode: &str) -> bool {
     rules::testhooks::active(mode)
+}
+
+/// The file system the rules read: the real one, or with `SHELLWISE_TESTHOOK=fs-record` the
+/// real one recording every path it is asked about (`testhooks::FS_CALLS`).
+#[cfg(feature = "testhooks")]
+fn rule_fs() -> fs::SharedFs {
+    if testhook_is("fs-record") {
+        Arc::new(testhooks::RecordingFs)
+    } else {
+        Arc::new(fs::RealFs)
+    }
+}
+
+#[cfg(not(feature = "testhooks"))]
+fn rule_fs() -> fs::SharedFs {
+    Arc::new(fs::RealFs)
+}
+
+/// Test-only: a file system that records the paths of every call. Compiled only with the
+/// `testhooks` feature.
+#[cfg(feature = "testhooks")]
+pub mod testhooks {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use crate::fs::{FileId, Fs, LinkKind, Meta, RealFs};
+
+    /// Every path `RecordingFs` was asked about, in order (`mount_points` records `<mounts>`).
+    pub static FS_CALLS: Mutex<Vec<(&str, PathBuf)>> = Mutex::new(Vec::new());
+
+    fn record(call: &'static str, p: &Path) {
+        FS_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((call, p.to_path_buf()));
+    }
+
+    pub struct RecordingFs;
+
+    impl Fs for RecordingFs {
+        fn lstat(&self, p: &Path) -> io::Result<Meta> {
+            record("lstat", p);
+            RealFs.lstat(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<PathBuf>> {
+            record("read_dir", p);
+            RealFs.read_dir(p)
+        }
+        fn link_target(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+            record("link_target", p);
+            RealFs.link_target(p)
+        }
+        fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
+            record("long_path", p);
+            RealFs.long_path(p)
+        }
+        fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
+            record("link_kind", p);
+            RealFs.link_kind(p)
+        }
+        fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
+            record("file_id", p);
+            RealFs.file_id(p)
+        }
+        fn device(&self, p: &Path) -> io::Result<Option<u64>> {
+            record("device", p);
+            RealFs.device(p)
+        }
+        fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
+            record("mount_points", Path::new("<mounts>"));
+            RealFs.mount_points()
+        }
+        fn drive_exists(&self, letter: char) -> io::Result<bool> {
+            record("drive_exists", &PathBuf::from(format!("{letter}:\\")));
+            RealFs.drive_exists(letter)
+        }
+    }
 }
 
 #[cfg(not(feature = "testhooks"))]
