@@ -16,6 +16,14 @@ vendor\bin\phpunit --filter 'A|B'
 
 `break`: `Fix: vendor\bin\phpunit --% --filter "A|B"`
 
+After `--%` every argument that holds an operator or a space is put in double quotes, not only the first one:
+
+```powershell
+tools\composer.bat require 'a/b:^1.2' 'c/d:^2.0'
+```
+
+`break`: `Fix: tools\composer.bat --% require "a/b:^1.2" "c/d:^2.0"`
+
 ```powershell
 tools\wp.bat option get %PATH%
 ```

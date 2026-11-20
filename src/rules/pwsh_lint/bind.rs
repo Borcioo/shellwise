@@ -65,7 +65,8 @@ pub fn is_dash(c: char) -> bool {
 }
 
 /// A parameter token as written: the name after the dash, and the value after `:` when one is
-/// attached (`-Path:x`). `-Path:` alone (`attached` empty) takes the next word as its value.
+/// attached (`-Path:x`, `-Path: x` without the spaces). `-Path:` alone (`attached` empty) takes
+/// the next word as its value.
 pub struct ParamToken<'a> {
     pub name: &'a str,
     pub attached: Option<&'a str>,
@@ -94,7 +95,7 @@ pub fn param_token<'a>(src: &'a str, w: &Word) -> Option<ParamToken<'a>> {
     Some(match body.split_once(':') {
         Some((name, value)) => ParamToken {
             name,
-            attached: Some(value),
+            attached: Some(value.trim_start_matches([' ', '\t'])),
         },
         None => ParamToken {
             name: body,

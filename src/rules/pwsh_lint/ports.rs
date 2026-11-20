@@ -4,7 +4,9 @@
 
 use tree_sitter::{Node, Parser};
 
-use super::bind::{Arg, Problem, bind_args, ends_parameters, named, positional, switch_on};
+use super::bind::{
+    Arg, Bound, Problem, bind, bind_args, ends_parameters, named, positional, switch_on,
+};
 use super::table::{ALL_SETS, Cmdlet, Facts};
 use super::{
     Ctx, ENV_SCOPE, Rule, Site, Walk, command_tagged, elem_span, finding, has_folder, is_native,
@@ -13,6 +15,7 @@ use super::{
 use crate::Os;
 use crate::ir::{Elem, Quote, SimpleCommand, Stmt, WordPart};
 use crate::level::{Finding, Level, Span};
+use crate::rules::Scope;
 
 // ---------------------------------------------------------------------------------------------
 // gate-truncated-pipeline
@@ -320,7 +323,11 @@ fn hint_finding(ctx: &Ctx, c: &SimpleCommand, cmd: &Cmdlet) -> Option<Finding> {
                 else {
                     continue;
                 };
-                if number_takes_the_first_position(src, c, cmd, next) {
+                // A spelling that binds no parameter (`Select-Object -n 5`) is refused whatever
+                // the number binds to.
+                if bind(cmd, spelling.trim_start_matches('-')) != Bound::Missing
+                    && number_takes_the_first_position(src, c, cmd, next)
+                {
                     continue;
                 }
                 let cut = Span {
@@ -669,15 +676,24 @@ pub const STALE_WRITE_VAR: &str = "stale-write-var";
 /// between tool calls, so it reads as `$null` and the write empties the file. Writers are the rows
 /// tagged `file-writer` (their content: the bound content parameters, the positional word at
 /// `lint.content_position`, or a bare expression piped in; `lint.append_params` skips an append)
-/// and `[IO.File]::WriteAll*`. Bound names: assignments, `-OutVariable`/`-PipelineVariable`,
-/// `foreach` variables and parameters.
+/// and `[IO.File]::WriteAll*`. Bound names: assignments, the common parameters that name a
+/// variable, a row's `lint.variable_params` (`Tee-Object -Variable`, `Set-Variable -Name`, named or
+/// at its position), `foreach` variables and parameters. A dot-sourced script may set any
+/// variable, so a write after one is not judged. A command line only: a script file keeps its
+/// state from line to line.
 pub struct StaleWriteVar;
 
 /// `[IO.File]::WriteAll*`: (type, method prefix).
 const WRITE_ALL: &[(&str, &str)] = &[("io.file", "writeall"), ("system.io.file", "writeall")];
 
 /// Common parameters that bind a variable by name.
-const VARIABLE_PARAMS: &[&str] = &["outvariable", "pipelinevariable"];
+const VARIABLE_PARAMS: &[&str] = &[
+    "outvariable",
+    "pipelinevariable",
+    "errorvariable",
+    "warningvariable",
+    "informationvariable",
+];
 
 /// The parameters that carry a writer's content, and those that name its file.
 const CONTENT_PARAMS: &[&str] = &["value", "inputobject"];
@@ -686,6 +702,10 @@ const PATH_PARAMS: &[&str] = &["path", "literalpath", "filepath"];
 impl Rule for StaleWriteVar {
     fn id(&self) -> &'static str {
         STALE_WRITE_VAR
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::CommandLine
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
@@ -707,6 +727,14 @@ impl Rule for StaleWriteVar {
             }
         }
         let mut bound: Vec<String> = w.assigned.clone();
+        // Where the first dot-source starts: `. .\vars.ps1` runs the script in this scope.
+        let dot_sourced = w
+            .sites
+            .iter()
+            .map(|s| s.cmd)
+            .filter(|c| c.name.span.start > c.span.start && src[c.span.start..].starts_with('.'))
+            .map(|c| c.span.start)
+            .min();
         for site in &w.sites {
             let c = site.cmd;
             let Some(cmd) = table_name(c, t, ctx.input.os, &w) else {
@@ -718,6 +746,15 @@ impl Rule for StaleWriteVar {
             for p in VARIABLE_PARAMS {
                 if let Some(v) = named_value(src, &args, p) {
                     bound.push(v.trim_start_matches('+').to_lowercase());
+                }
+            }
+            if let Some(row) = program(ctx, cmd.name) {
+                for p in lint(row, "variable_params") {
+                    if let Some(v) =
+                        named_value(src, &args, p).or_else(|| at_position(&args, cmd, p))
+                    {
+                        bound.push(v.to_lowercase());
+                    }
                 }
             }
             let Some(row) = command_tagged(ctx, c, "file-writer") else {
@@ -770,6 +807,9 @@ impl Rule for StaleWriteVar {
         // The second parse runs only for a command that writes a variable.
         bound.extend(tree_bound_names(src));
         for (span, expr) in contents {
+            if dot_sourced.is_some_and(|at| span.start > at) {
+                continue;
+            }
             if let Some(name) = stale_var(&expr, &bound, t) {
                 out.push(finding(
                     STALE_WRITE_VAR,
@@ -799,6 +839,16 @@ fn named_value(src: &str, args: &[Arg], param: &str) -> Option<String> {
         } => Some(a.trim_matches(['\'', '"']).to_string()),
         _ => None,
     }
+}
+
+/// The literal positional word that binds `param`: the one at the position `param` holds in a
+/// parameter set, when `param` is not given by name.
+fn at_position(args: &[Arg], cmd: &Cmdlet, param: &str) -> Option<String> {
+    let p = cmd.params.iter().find(|p| p.name == param)?;
+    let k = p.sets.iter().find(|m| m.position >= 0)?.position;
+    positional(args)
+        .get(usize::try_from(k).ok()?)
+        .and_then(|w| literal(w))
 }
 
 /// Names bound without an assignment: `foreach ($x in …)` and parameters (`param($a)`,
@@ -1098,14 +1148,24 @@ impl Rule for InlineProse {
                 let Some((open, typographic)) = torn_quote(tail) else {
                     continue;
                 };
-                let other = if open == '"' {
-                    "'...'"
+                let (other_open, other) = if open == '"' {
+                    ('\'', "'...'")
                 } else {
-                    "\"...\" (mind `$` in it)"
+                    ('"', "\"...\" (mind `$` in it)")
                 };
-                let file_fix = file
-                    .map(|f| format!(", or write the text with the Write tool and pass {f} <file>"))
-                    .unwrap_or_default();
+                // The text holds quotes of both families: the other quote is torn too.
+                let fix = match (torn_by_both(tail, other_open), file) {
+                    (false, Some(f)) => format!(
+                        "quote the {flag} text with {other} instead, or write the text with the Write tool and pass {f} <file>"
+                    ),
+                    (false, None) => format!("quote the {flag} text with {other} instead"),
+                    (true, Some(f)) => {
+                        format!("write the {flag} text with the Write tool and pass {f} <file>")
+                    }
+                    (true, None) => format!(
+                        "pass the {flag} text in a here-string: @' at the end of the line before the text, '@ at the start of the line after it"
+                    ),
+                };
                 out.push(finding(
                     CLI_INLINE_PROSE,
                     Level::Break,
@@ -1114,12 +1174,23 @@ impl Rule for InlineProse {
                         "PowerShell ends a string opened by `{open}` at a typographic `{typographic}` too, so the text after {flag} reaches {} torn into pieces or stripped of its quotes",
                         c.typed
                     ),
-                    format!("quote the {flag} text with {other} instead{file_fix}"),
+                    fix,
                 ));
                 return;
             }
         }
     }
+}
+
+/// Whether the string at the start of `raw` (to its closing straight quote) also holds a
+/// typographic quote of `other`'s family, which would tear it quoted with `other` too.
+fn torn_by_both(raw: &str, other: char) -> bool {
+    let Some((_, family)) = TORN_BY.iter().find(|(open, _)| *open == other) else {
+        return false;
+    };
+    let mut chars = raw.chars();
+    let Some(q) = chars.next() else { return false };
+    chars.take_while(|c| *c != q).any(|c| family.contains(&c))
 }
 
 /// (opening quote, typographic quote) for the first string at the start of `raw` that holds a

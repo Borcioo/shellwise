@@ -29,6 +29,16 @@ level = "break"
 rules = ["will-hang"]
 fix = 'feed read its input'
 
+# The Fix keeps the command as typed and feeds it on the same line; it names no variable.
+[[row]]
+id = "bash-read-fix-feeds-the-command-as-typed"
+os = "any"
+shell = "bash"
+command = 'read -r name'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input on the same line: append <<< "<value>" to the read command'
+
 [[row]]
 id = "bash-read-prompt-value-looks-like-an-option"
 os = "any"

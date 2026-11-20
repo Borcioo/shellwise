@@ -37,7 +37,7 @@ impl Rule for BatMetachar {
             let explicit = has_bat_extension(&c.typed);
             // The launcher patterns compile globs: matched only once an argument needs it.
             let mut launcher: Option<bool> = explicit.then_some(true);
-            for (k, arg) in c.args.iter().enumerate() {
+            for arg in &c.args {
                 if stops_parsing(src, arg) {
                     break;
                 }
@@ -53,7 +53,7 @@ impl Rule for BatMetachar {
                     break;
                 }
                 let raw = text(src, arg.span);
-                let fix = bat_fix(ctx, c, k, defined.is_some());
+                let fix = bat_fix(ctx, c, defined.is_some());
                 let message = match defined {
                     Some(name) => format!(
                         "`{}` is a .bat launcher, so cmd.exe replaces `%{name}%` in the argument {raw} with that variable's value before the program sees it, even inside quotes",
@@ -302,9 +302,9 @@ fn is_relative(name: &str) -> bool {
 }
 
 /// The Fix line: the program by its path when `cfg.tool_paths` names one for the launcher;
-/// otherwise, for an operator, the same call after `--%` with the argument in double quotes,
-/// which cmd.exe leaves alone.
-fn bat_fix(ctx: &Ctx, c: &SimpleCommand, bad: usize, percent: bool) -> String {
+/// otherwise, for an operator, the same call after `--%` with every argument that holds an
+/// operator or a space in double quotes, which cmd.exe leaves alone.
+fn bat_fix(ctx: &Ctx, c: &SimpleCommand, percent: bool) -> String {
     let src = ctx.input.command;
     let base = c
         .typed
@@ -336,18 +336,19 @@ fn bat_fix(ctx: &Ctx, c: &SimpleCommand, bad: usize, percent: bool) -> String {
     if percent {
         return format!("{by_path}, or keep %NAME% out of the argument");
     }
+    // After `--%` the words reach cmd.exe as written: every one that holds an operator or a space
+    // goes in double quotes, which cmd.exe leaves alone.
     let mut words = Vec::new();
-    for (k, a) in c.args.iter().enumerate() {
+    for a in &c.args {
         let Some(v) = literal(a) else {
             return by_path;
         };
-        if k == bad {
-            if v.contains('"') {
-                return by_path;
-            }
-            words.push(format!("\"{v}\""));
-        } else {
+        if reparse_bat_arg(&v, false).metachars.is_empty() && !v.contains(char::is_whitespace) {
             words.push(v);
+        } else if v.contains('"') {
+            return by_path;
+        } else {
+            words.push(format!("\"{v}\""));
         }
     }
     format!("{} --% {}", c.typed, words.join(" "))
@@ -467,6 +468,15 @@ mod tests {
                 "{name}: an unresolved launcher with a folder counts"
             );
         }
+        // A rooted name is not joined to a local cwd either (an .exe there would be found).
+        let (found, calls) = run(
+            &format!(r"\tools\php{ARG}"),
+            r"C:\bin",
+            Some(r"C:\repo"),
+            &[r"C:\repo\\tools\php.exe", r"C:\repo\tools\php.exe"],
+        );
+        assert!(calls.is_empty(), "{calls:?}");
+        assert_eq!(found.len(), 1);
     }
 
     #[test]

@@ -3877,8 +3877,7 @@ methods = []
 
 [[row]]
 id = "param-r-one-dash-colon-node-gap"
-mechanism = "`-a:` then a space, the `:` its own node: kept refused"
-parser = "refuses"
+mechanism = "`-a:` then a space, the `:` its own node: one element with the space"
 command = "Write-Output -a: x"
 error = false
 cmds = [["Write-Output", "-a: x"]]
@@ -4993,5 +4992,137 @@ parser = "refuses"
 command = "node --name=$($p['a`b'])"
 error = false
 cmds = [["node", "--name=$($p['a`b'])"]]
+comments = []
+methods = []
+
+[[row]]
+id = "glue-colon-integer"
+mechanism = "`-Name:` glued to a number passes it as the value"
+command = "Get-ChildItem | Select-Object -First:5"
+error = false
+cmds = [["Get-ChildItem"], ["Select-Object", "-First:5"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-value"
+mechanism = "`-Name:` then spaces takes the next word as its value: one element with the spaces"
+command = "Remove-Item x.txt -Confirm: $false"
+error = false
+cmds = [["Remove-Item", "x.txt", "-Confirm: $false"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-integer"
+mechanism = "`-Name:` then a space and a number"
+command = "Get-ChildItem | Select-Object -First: 2"
+error = false
+cmds = [["Get-ChildItem"], ["Select-Object", "-First: 2"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-parameter-value"
+mechanism = "`-Name:` then a space takes a dash word as its value, not as a parameter"
+command = "Get-ChildItem -Path: -Force"
+error = false
+cmds = [["Get-ChildItem", "-Path: -Force"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-comment-value"
+mechanism = "`-Name:` then a comment before the value: one element for PowerShell, not modelled"
+parser = "refuses"
+command = "Get-ChildItem -Path: <#c#> x"
+error = false
+cmds = [["Get-ChildItem", "-Path: <#c#> x"]]
+comments = ["<#c#>"]
+methods = []
+
+[[row]]
+id = "colon-space-two-dash-is-two-words"
+mechanism = "`--name:` then a space: two arguments for PowerShell, not modelled"
+parser = "refuses"
+command = "git log --x: y"
+error = false
+cmds = [["git", "log", "--x:", "y"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-at-the-line-end-has-no-value"
+mechanism = "`-Name:` at the end of the line: PowerShell refuses it (ParameterRequiresArgument)"
+command = "Get-ChildItem -Path:\nx"
+error = true
+cmds = [["Get-ChildItem", "-Path:"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-before-a-semicolon-has-no-value"
+mechanism = "`-Name:` then a semicolon: PowerShell refuses it (ParameterRequiresArgument)"
+command = "Get-ChildItem -Path: ; x"
+error = true
+cmds = [["Get-ChildItem", "-Path:"], ["x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-native-is-two-arguments"
+mechanism = "`-m: x` to a native program: one AST element, but the program gets `-m:` and `x` (probed), not modelled"
+parser = "refuses"
+command = "git commit -m: x"
+error = false
+cmds = [["git", "commit", "-m: x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-after-a-word-is-two-words"
+mechanism = "a word ending in `:` then a space: two arguments"
+command = "Get-ChildItem x: y"
+error = false
+cmds = [["Get-ChildItem", "x:", "y"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-after-a-comma-list-is-two-words"
+mechanism = "a comma list ending in `-b:` then a space: two arguments, not modelled"
+parser = "refuses"
+command = "Write-Output a,-b: x"
+error = false
+cmds = [["Write-Output", "a,-b:", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-two-dash-to-a-cmdlet-is-two-words"
+mechanism = "`--a:` then a space to a cmdlet: two arguments, not modelled"
+parser = "refuses"
+command = "Write-Output --a: x"
+error = false
+cmds = [["Write-Output", "--a:", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-after-a-variable-word-is-two-words"
+mechanism = "a variable word ending in `-b:` then a space: two arguments"
+command = "Write-Output $a-b: x"
+error = false
+cmds = [["Write-Output", "$a-b:", "x"]]
+comments = []
+methods = []
+
+[[row]]
+id = "colon-space-after-a-group-starts-a-parameter"
+mechanism = "`(1)-b: x`: the group, then `-b: x` as one parameter element, not modelled"
+parser = "refuses"
+command = "Write-Output (1)-b: x"
+error = false
+cmds = [["Write-Output", "(1)", "-b: x"]]
 comments = []
 methods = []

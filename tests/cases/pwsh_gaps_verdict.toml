@@ -654,3 +654,42 @@ command = "python3 - <<'PY' 2>/dev/null || py -3 - <<'PY'\nprint(1)\nPY"
 level = "warn"
 rules = ["parse-error"]
 oracle = "accepts"
+
+# --- `-Name:N` and `-Name: value` (B4): PowerShell binds the value; the verdict is the one of the
+# spelling with a space ---
+
+[[row]]
+id = "colon-glued-number-before-a-delete-is-the-spaced-verdict"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem *.log | Select-Object -First:5 | Remove-Item"
+level = "warn"
+rules = ["dynamic-target"]
+oracle = "accepts"
+
+[[row]]
+id = "colon-then-space-switch-value-is-the-glued-verdict"
+os = "any"
+shell = "pwsh"
+command = "Remove-Item x.txt -Confirm: $false"
+level = "warn"
+rules = ["delete-unknown-location"]
+oracle = "accepts"
+
+[[row]]
+id = "colon-glued-number-reads-clean"
+os = "any"
+shell = "pwsh"
+command = "git log --oneline | Select-Object -Last:5"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "colon-at-the-line-end-stays-warn"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -Path:\nx"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"

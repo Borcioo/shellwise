@@ -390,8 +390,10 @@ fn lex(src: &str) -> Lexed {
                         }
                         i += 1;
                     }
-                    '@' if word.first.is_none()
-                        && next.is_some_and(|n| is_single_quote(n) || is_double_quote(n)) =>
+                    '@' if next.is_some_and(|n| is_single_quote(n) || is_double_quote(n))
+                        && (word.first.is_none()
+                            || (header_ends_line(&b[i + 2..])
+                                && glued_here_string(word, b[i - 1].1, &code))) =>
                     {
                         // A here-string header ends its line; text after it is an error of
                         // its own kind.
@@ -533,6 +535,58 @@ fn lex(src: &str) -> Lexed {
         code,
         sure: true,
     }
+}
+
+/// The text after a here-string's `@'` or `@"` ends its line: only spaces before the line end.
+fn header_ends_line(rest: &[(usize, char)]) -> bool {
+    rest.iter().position(|&(_, c)| c == '\n').is_some_and(|e| {
+        rest[..e]
+            .iter()
+            .all(|&(_, c)| matches!(c, ' ' | '\t' | '\r'))
+    })
+}
+
+/// Whether a `@'` or `@"` glued after `prev`, in the bare word `word`, opens a here-string for
+/// PowerShell (probed with `ParseInput`): after a parameter's colon (`-Value:@'`), and in an
+/// expression after any token but a word that starts with a letter (`$msg=@'`, `$a+=@'`,
+/// `$a=[string]@'`, `1+@'`). Glued to a command argument's word (`Write-Output a=@'`, `$a=@'`,
+/// `-x=@'`) or to a letter word in an expression (`$x = a=@'`) it is a quote.
+fn glued_here_string(word: WordStart, prev: char, code: &[(usize, char)]) -> bool {
+    if word.first.is_some_and(char::is_alphabetic) {
+        return false;
+    }
+    (prev == ':' && word.first.is_some_and(is_dash)) || statement_is_expression(code)
+}
+
+/// Whether the statement the end of `code` is in starts as an expression (a variable, a type, a
+/// number, a string, `@`): PowerShell reads it in expression mode, where a command starts in
+/// argument mode. The statement starts after the last `;`, line end or `|`, or the `(`, `[` or
+/// `{` still open, outside brackets closed since.
+fn statement_is_expression(code: &[(usize, char)]) -> bool {
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (k, &(_, c)) in code.iter().enumerate().rev() {
+        match c {
+            ')' | ']' | '}' => depth += 1,
+            '(' | '[' | '{' if depth > 0 => depth -= 1,
+            '(' | '[' | '{' | ';' | '\n' | '\r' | '|' if depth == 0 => {
+                start = k + 1;
+                break;
+            }
+            _ => {}
+        }
+    }
+    code[start..]
+        .iter()
+        .map(|&(_, c)| c)
+        .find(|c| !c.is_whitespace())
+        .is_some_and(|c| matches!(c, '$' | '[' | '@' | '"') || c.is_ascii_digit())
+}
+
+/// `: ` between a parameter and its value: a colon, then spaces or tabs only.
+fn colon_then_spaces(gap: &str) -> bool {
+    gap.strip_prefix(':')
+        .is_some_and(|r| !r.is_empty() && r.chars().all(|c| matches!(c, ' ' | '\t')))
 }
 
 fn set_top<T: Copy>(stack: &mut [T], v: T) {
@@ -995,6 +1049,7 @@ const GLUE: &[(&str, &str, Lead, &str)] = &[
     ("command_argument_sep", "variable", Lead::Dollar, "glue-colon-variable"),
     ("command_argument_sep", "verbatim_string_characters", Lead::Single, "glue-colon-squote"),
     ("command_argument_sep", "generic_token", Lead::Other, "fix2-i2-colon-value-dot-kept"),
+    ("command_argument_sep", "integer_literal", Lead::Other, "glue-colon-integer"),
     ("command_parameter", "expandable_string_literal", Lead::Double, "param-glued-dquote"),
     ("command_parameter", "verbatim_string_characters", Lead::Single, "param-glued-quote"),
     ("command_parameter", "parenthesized_expression", Lead::Paren, "subexpr-in-param"),
@@ -2061,7 +2116,13 @@ impl<'a> Lower<'a> {
                 "command_name" | "command_name_expr" => name = Some(self.name_word(k, cx)?),
                 "command_elements" => {
                     let after = name.as_ref().map_or(k.start_byte(), |w| w.span.end);
-                    for el in self.elements(k, after)? {
+                    // A cmdlet binds `-Name: value` as one parameter; a native program gets two
+                    // arguments (probed), so only a known command joins them.
+                    let cmdlet = name.as_ref().is_some_and(|w| {
+                        canonical(&self.src[w.span.start..w.span.end], self.dialect, self.os)
+                            .is_some()
+                    });
+                    for el in self.elements(k, after, cmdlet)? {
                         last_closes = matches!(&el, Element::Arg(nodes) if closes(nodes));
                         match el {
                             Element::Arg(nodes)
@@ -2163,8 +2224,8 @@ impl<'a> Lower<'a> {
 
     /// Group command elements as PowerShell does: one argument is the children between two
     /// separators (`a, b` and `-Name:value` arrive as several children).
-    /// `after` is where the command name ends.
-    fn elements<'t>(&self, ce: Node<'t>, after: usize) -> R<Vec<Element<'t>>> {
+    /// `after` is where the command name ends; `cmdlet`: the name is a known command.
+    fn elements<'t>(&self, ce: Node<'t>, after: usize, cmdlet: bool) -> R<Vec<Element<'t>>> {
         let b = self.src.as_bytes();
         let mut out = Vec::new();
         let mut group: Vec<Node> = Vec::new();
@@ -2304,6 +2365,10 @@ impl<'a> Lower<'a> {
                     glued
                         || gap.trim() == ","
                         || (gap == ":" && prev.starts_with(b"-"))
+                        // `-Confirm: $false`: a one-dash parameter's colon then spaces takes the
+                        // next word as its value, one element for PowerShell. The grammar splits
+                        // the `:` off as its own node only after a parameter.
+                        || (cmdlet && colon_then_spaces(&gap) && !prev.starts_with(b"--"))
                         // `-name:(…)` takes its value; `--name:(…)` is two arguments.
                         || (gap.is_empty()
                             && prev.starts_with(b"-")

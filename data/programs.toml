@@ -216,7 +216,7 @@ value_options = ["-a", "-d", "-i", "-n", "-N", "-p", "-t", "-u"]
 hang_unless = ["-t", "-u"]
 hang_stdin = true
 hang_level = "break"
-fix = 'set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"'
+fix = 'feed read its input on the same line: append <<< "<value>" to the read command'
 
 [[program]]
 name = "claude"
@@ -463,12 +463,39 @@ lint = { tags = ["wsl-launcher"], exec_flags = ["-e", "--exec"] }
 [[program]]
 name = "tee-object"
 shells = ["pwsh"]
-lint = { tags = ["tee-cmdlet"] }
+lint = { tags = ["tee-cmdlet"], variable_params = ["variable"] }
+
+# `variable_params`: parameters that bind a variable by name (stale-write-var), named or at their
+# position.
+[[program]]
+name = "set-variable"
+shells = ["pwsh"]
+lint = { variable_params = ["name"] }
+
+[[program]]
+name = "new-variable"
+shells = ["pwsh"]
+lint = { variable_params = ["name"] }
+
+[[program]]
+name = "invoke-restmethod"
+shells = ["pwsh"]
+lint = { variable_params = ["statuscodevariable", "responseheadersvariable", "sessionvariable"] }
+
+[[program]]
+name = "invoke-webrequest"
+shells = ["pwsh"]
+lint = { variable_params = ["sessionvariable"] }
 
 [[program]]
 name = "select-object"
 shells = ["pwsh"]
-lint = { tags = ["truncator"], truncate_params = ["first"] }
+lint = { tags = ["truncator"], truncate_params = ["first"], flag_hints = ["-n#=-First "] }
+
+[[program]]
+name = "get-content"
+shells = ["pwsh"]
+lint = { flag_hints = ["-n#=-TotalCount "] }
 
 [[program]]
 name = "set-content"
