@@ -520,7 +520,7 @@ const PREFIX_WORDS: [&str; 10] = [
 /// Every later word after a wrapper is also read as the command (`each_reading`), so a value
 /// option is listed only where the walk would otherwise reach another command: env's value before
 /// `-S`, and wsl with no command (it runs the default shell on the same stdin).
-const WRAPPERS: [(&str, &[&str]); 13] = [
+const WRAPPERS: [(&str, &[&str]); 14] = [
     ("sudo", &[]),
     ("doas", &[]),
     // `-S`/`--split-string` is read by `walk` (its value is the command).
@@ -532,6 +532,7 @@ const WRAPPERS: [(&str, &[&str]); 13] = [
     ("xargs", &[]),
     ("nohup", &[]),
     ("command", &[]),
+    ("builtin", &[]),
     ("exec", &[]),
     ("stdbuf", &[]),
     (
