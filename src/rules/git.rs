@@ -237,6 +237,14 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
         }
         GitAction::WorktreeRemove => worktree_remove(scene, rest, rest_lits, &git_loc, call),
         GitAction::CheckoutPaths | GitAction::RestorePaths => {
+            if rest_lits
+                .iter()
+                .flatten()
+                .any(|a| facts.hunk_options.contains(a))
+            {
+                // Conflict resolution or interactive: chosen hunk by hunk.
+                return None;
+            }
             let found = restore(scene, facts, sub, rest, rest_lits, &git_loc, call.span());
             if found.is_some() {
                 return found;
@@ -505,14 +513,6 @@ fn restore(
     git_loc: &Location,
     span: Span,
 ) -> Option<Finding> {
-    if rest_lits
-        .iter()
-        .flatten()
-        .any(|a| facts.hunk_options.contains(a))
-    {
-        // Conflict resolution or interactive: chosen hunk by hunk.
-        return None;
-    }
     let end = rest_lits.iter().position(|a| a.as_deref() == Some("--"));
     let is_dot = |a: &Option<String>| a.as_deref().is_some_and(|t| t.len() == 1 && t.starts_with('.'));
     let mut paths: Vec<&Word> = Vec::new();

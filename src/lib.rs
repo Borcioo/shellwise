@@ -29,6 +29,10 @@ pub const MAX_READ_BYTES: usize = 1024 * 1024;
 /// The rule id of every analysis that did not finish for a reason other than a parse error.
 pub const ANALYSIS_INCOMPLETE: &str = "analysis-incomplete";
 
+/// `SHELLWISE=off` turns the whole check off; any other value leaves it on.
+const OFF_VAR: &str = "SHELLWISE";
+const OFF_VALUE: &str = "off";
+
 /// The stack of the thread that parses and runs the rules.
 const WORKER_STACK: usize = 64 * 1024 * 1024;
 
@@ -129,6 +133,9 @@ impl Deadline {
 /// `problem`, invalid UTF-8, input over `MAX_INPUT_BYTES`, a panic, a dead worker, a parser that
 /// failed itself and the deadline make the analysis incomplete (`incomplete`).
 pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdict {
+    if std::env::var_os(OFF_VAR).is_some_and(|v| v == OFF_VALUE) {
+        return Verdict::new(Vec::new());
+    }
     if input.bytes.len() > MAX_READ_BYTES {
         return unread("input over the hard size cap");
     }
@@ -143,7 +150,7 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
         origin: input.origin,
     };
     let mut findings = match length_stage(&check, cfg, deadline) {
-        Ok(found) => found,
+        Ok(found) => levels(found, cfg).findings,
         Err(reason) => return levels(incomplete(&command, reason).findings, cfg),
     };
     let problem = if let Some(reason) = input.problem {
@@ -155,8 +162,9 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
     } else {
         None
     };
+    // Each stage's findings already carry their configured levels, and the marker has run.
     findings.extend(checked(&check, problem, cfg, deadline).findings);
-    levels(findings, cfg)
+    Verdict::new(findings)
 }
 
 /// The configured level of each finding.
@@ -217,11 +225,12 @@ fn checked(
             Err(reason) => reason,
         },
     };
-    incomplete_from(
+    let verdict = incomplete_from(
         bounded_scan(Arc::clone(&command), deadline),
         &command,
         reason,
-    )
+    );
+    levels(verdict.findings, cfg)
 }
 
 /// How long the raw scan may run past the deadline. The deadline ends 1500 ms before the hook
@@ -343,7 +352,14 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
     {
         findings.retain(|f| f.rule == rules::parse_error::PARSE_ERROR);
     }
-    Ok(Verdict::new(findings))
+    // The config levels, then the marker: a level the marker lowered is never raised again.
+    let verdict = levels(findings, cfg);
+    Ok(rules::marker::apply(
+        &script,
+        input.command,
+        parse_error.is_some(),
+        verdict,
+    ))
 }
 
 #[cfg(feature = "testhooks")]

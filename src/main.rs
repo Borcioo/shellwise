@@ -17,7 +17,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 use shellwise::adapter::check_json;
 use shellwise::adapter::claude_code::{self, Event};
 use shellwise::config::{Config, HOOK_MARGIN_MS, MIN_HOOK_TIMEOUT_MS};
-use shellwise::ir::EnvView;
 use shellwise::level::{Finding, Verdict, exit_code};
 use shellwise::{
     AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse, unread,
@@ -227,7 +226,7 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
         shell: args.shell.shell(),
         os: Os::host(),
         cwd: args.cwd.clone(),
-        env: EnvView::new(),
+        env: claude_code::hook_env(args.shell.shell(), Os::host()),
         origin: Origin::CommandLine,
         problem: cfg_problem,
     };

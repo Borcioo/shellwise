@@ -261,13 +261,13 @@ pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) ->
     )
 }
 
-/// The text of `c` names a destructive command: a raw-scan hit on a table row in its own span.
-/// A hit with no row behind it (an encoded or too-deep body) is no destructive match (Ruling
-/// 106(a)).
+/// The text of `c` names a destructive command: a raw-scan hit on a table row or a .NET
+/// `Delete()` call in its own span. A region the scan cannot read (an encoded or too-deep body)
+/// is no destructive match (Ruling 106(a)).
 fn unread_hits(c: &SimpleCommand, command: &str) -> bool {
     command
         .get(c.span.start..c.span.end)
-        .is_some_and(|t| scan::hits(scan::table(), t).iter().any(|h| h.row.is_some()))
+        .is_some_and(|t| scan::destructive_row(t).is_some())
 }
 
 fn opaque(c: &SimpleCommand, command: &str) -> Finding {
@@ -635,7 +635,8 @@ impl<'a> Scene<'a> {
         let os = self.os();
         let key = self.key(p);
         let mut placed = false;
-        for root in &self.ctx.cfg.allowed_roots {
+        let cfg = self.ctx.cfg;
+        for root in cfg.allowed_roots.iter().chain(cfg.scratch_dir.as_ref()) {
             let rk = self.key(root);
             if rk == key && !how.contents {
                 return Some(finding(

@@ -182,6 +182,9 @@ pub fn critical_reason(
             "drive root"
         });
     }
+    if let Some(r) = system_path(&canon) {
+        return Some(r);
+    }
     // macOS volumes ignore case by default.
     let key_of = |t: &str| {
         let k = path_key(t, os);
@@ -214,6 +217,29 @@ pub fn critical_reason(
     keys.iter()
         .find(|(k, _, _)| is_within(k, &key, os))
         .map(|(_, _, above)| *above)
+}
+
+/// A folder of the operating system, or a path inside one (Ruling 98(2)): on Windows
+/// `<drive>:\Windows`, `Program Files*` and `ProgramData`; elsewhere `/usr`, `/etc`, `/bin`,
+/// `/sbin`, `/lib*` and `/System`.
+fn system_path(c: &Canon) -> Option<&'static str> {
+    let first = c.comps.first()?;
+    let hit = c.rooted
+        && match c.os {
+            Os::Windows => {
+                let first = first.to_lowercase();
+                is_drive(&c.prefix)
+                    && (first == "windows"
+                        || first.starts_with("program files")
+                        || first == "programdata")
+            }
+            Os::Posix => {
+                c.prefix == "/"
+                    && (matches!(first.as_str(), "usr" | "etc" | "bin" | "sbin" | "System")
+                        || first.starts_with("lib"))
+            }
+        };
+    hit.then_some("system folder")
 }
 
 /// `critical_reason`, then the same match by file identity for any spelling it misses: a
@@ -2895,10 +2921,15 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
         }
     }
     let writer = PS_ITEM_WRITERS.contains(&name.as_str());
-    for a in &args {
+    for (w, a) in c.args.iter().zip(&args) {
         match a {
             Some(t) => mark_drive_path(env, t),
-            None if writer => env.mark_all_dynamic(),
+            // A word that resolves now (`$env:TEMP\x`, `~`) names that text; any other word
+            // may name any drive path.
+            None if writer => match w.static_value(env) {
+                Some(t) => mark_drive_path(env, &t),
+                None => env.mark_all_dynamic(),
+            },
             None => {}
         }
     }
@@ -2995,8 +3026,8 @@ pub enum UnknownKind {
     Dynamic,
     /// The hook cannot tell which folder the path names, and it may be a drive root, the home
     /// folder or the repo root under another name: a share or volume path, a remapped drive, a
-    /// tree an earlier statement links, a location the hook cannot follow. Reported as
-    /// critical, so the allow marker cannot lower it.
+    /// tree an earlier statement links, a location the hook cannot follow. Reported as danger
+    /// (`delete-unknown-location`, Ruling 98(1)), which the allow marker confirms.
     MayBeCritical,
 }
 

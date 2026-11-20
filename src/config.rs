@@ -60,6 +60,9 @@ pub struct Config {
     pub hook_timeout_ms: u64,
     /// Paths treated like a repo root by the delete guard.
     pub protected: Vec<PathBuf>,
+    /// Folders a delete may clear freely (deleting one itself is danger); `scratch_dir` counts
+    /// as one too. Integration and user files only: a cloned repo must not widen what is ok.
+    pub allowed_roots: Vec<PathBuf>,
     /// Commands whose output must not be truncated.
     pub gate_commands: Vec<String>,
     /// Windows `.bat` launcher names (`*` matches any run of characters).
@@ -85,6 +88,7 @@ impl Default for Config {
             walk_budget_ms: 8000,
             hook_timeout_ms: 10000,
             protected: Vec::new(),
+            allowed_roots: vec![std::env::temp_dir()],
             gate_commands: Vec::new(),
             bat_launchers: [
                 "php",
@@ -191,6 +195,7 @@ impl Config {
                     other => other.map(|v| self.hook_timeout_ms = v),
                 },
                 "protected" => paths(value, dir).map(|v| self.protected = v),
+                "allowed_roots" => paths(value, dir).map(|v| self.allowed_roots = v),
                 "gate_commands" => strings(value).map(|v| self.gate_commands = v),
                 "bat_launchers" => strings(value).map(|v| self.bat_launchers = v),
                 "scratch_dir" => value

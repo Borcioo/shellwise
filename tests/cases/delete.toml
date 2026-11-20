@@ -315,17 +315,37 @@ rules = ["delete-outside-project"]
 id = "ps-ri-after-cd-into-src"
 os = "windows"
 shell = "pwsh"
-command = "cd src; Remove-Item -Recurse -Force ..\\build"
+command = "cd src && Remove-Item -Recurse -Force ..\\build"
 level = "ok"
 rules = []
+
+# After `;` the delete also runs when the `cd` fails, from the repo root: `..\build` is then
+# outside the project.
+[[row]]
+id = "ps-ri-after-cd-into-src-or-not"
+os = "windows"
+shell = "pwsh"
+command = "cd src; Remove-Item -Recurse -Force ..\\build"
+level = "danger"
+rules = ["delete-outside-project"]
 
 [[row]]
 id = "ps-ri-after-cd-to-a-variable"
 os = "windows"
 shell = "pwsh"
-command = "cd $dir; Remove-Item -Recurse -Force build"
+command = "cd $dir && Remove-Item -Recurse -Force build"
 level = "danger"
 rules = ["dynamic-target"]
+
+# After `;` the delete also runs where the shell was when the `cd` fails, and that folder may
+# be critical from another spelling: unknown location.
+[[row]]
+id = "ps-ri-after-cd-to-a-variable-or-not"
+os = "windows"
+shell = "pwsh"
+command = "cd $dir; Remove-Item -Recurse -Force build"
+level = "danger"
+rules = ["delete-unknown-location"]
 
 [[row]]
 id = "ps-ri-after-making-a-junction"
@@ -698,14 +718,41 @@ command = "timeout --weird 60 newtool -x"
 level = "ok"
 rules = []
 
+# Ruling 111: past an unknown wrapper option the delete is read and judged by the delete levels.
 [[row]]
 id = "gb-wrapper-unknown-option-with-rm"
 os = "windows"
 shell = "gitbash"
 command = "timeout --weird 60 rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-wrapper-unknown-option-with-rm-outside"
+os = "windows"
+shell = "gitbash"
+command = "timeout --weird 60 rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+fix = "# shellwise: allow"
+
+# The wrapped command cannot be determined, and the text names a delete.
+[[row]]
+id = "gb-wrapper-unreadable-command-with-rm"
+os = "windows"
+shell = "gitbash"
+command = 'timeout 60 "$RUNNER" rm -rf build'
 level = "danger"
 rules = ["opaque-destructive"]
 fix = "# shellwise: allow"
+
+[[row]]
+id = "gb-wrapper-unreadable-command-no-delete"
+os = "windows"
+shell = "gitbash"
+command = 'timeout 60 "$RUNNER" make build'
+level = "ok"
+rules = []
 
 [[row]]
 id = "gb-bash-c-dynamic-text"
@@ -862,7 +909,7 @@ rules = ["dynamic-target"]
 id = "marker-confirms-opaque-destructive"
 os = "windows"
 shell = "gitbash"
-command = "timeout --weird 60 rm -rf build # shellwise: allow"
+command = "bash -c 'rm -rf build && make' # shellwise: allow"
 level = "ok"
 rules = ["opaque-destructive"]
 
@@ -928,7 +975,7 @@ os = "windows"
 shell = "pwsh"
 command = "Get-Date ( ; Remove-Item -Recurse x # shellwise: allow"
 level = "danger"
-rules = ["parse-error"]
+rules = ["parse-error-destructive"]
 
 # ---------------------------------------------------------------- one row per further table row
 

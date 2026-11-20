@@ -199,6 +199,7 @@ fn verdict(row: &Row) -> Verdict {
         cwd: cwd(row),
         env,
         origin: Origin::CommandLine,
+        problem: None,
     };
     analyse(&input, &config(row), &Deadline::new(Instant::now(), 8000))
 }
@@ -345,6 +346,7 @@ fn the_marker_does_not_confirm_too_long() {
         cwd: None,
         env: shellwise::ir::EnvView::new(),
         origin: Origin::CommandLine,
+        problem: None,
     };
     let v = analyse(&input, &Config::default(), &Deadline::new(Instant::now(), 8000));
     assert_eq!(v.level, Level::Break, "{v:?}");
