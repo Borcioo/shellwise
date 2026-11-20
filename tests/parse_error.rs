@@ -42,6 +42,100 @@ fn every_break_row_says_the_real_parser_refuses_it() {
     );
 }
 
+/// The verdict of a Bash command line with no cwd and the default config.
+fn bash_verdict(command: &str) -> shellwise::level::Verdict {
+    use shellwise::ir::EnvView;
+    use shellwise::{AnalyseInput, BashProfile, Deadline, Origin, Os, Shell, analyse};
+    let input = AnalyseInput {
+        bytes: command.as_bytes(),
+        shell: Shell::Bash(BashProfile::Posix),
+        os: Os::host(),
+        cwd: None,
+        env: EnvView::new(),
+        origin: Origin::CommandLine,
+        problem: None,
+    };
+    let cfg = shellwise::config::Config::default();
+    analyse(
+        &input,
+        &cfg,
+        &Deadline::new(std::time::Instant::now(), 8000),
+    )
+}
+
+fn parse_error_message(v: &shellwise::level::Verdict) -> &str {
+    let f = v.findings.iter().find(|f| f.rule == "parse-error");
+    f.map(|f| f.message.as_str())
+        .expect("a parse-error finding")
+}
+
+/// Ruling 126: the message says what Bash runs of the text, as the execution oracle shows.
+#[test]
+fn a_bash_unclosed_quote_message_says_whether_the_lines_before_it_run() {
+    let v = bash_verdict("echo ok\necho ok\necho \"abc");
+    let m = parse_error_message(&v);
+    assert!(
+        m.contains("Bash refuses the text from line 3 on, but runs the lines before it"),
+        "{m}"
+    );
+    // A line joined to the error's line (`\`, `|`) is refused with it: the refused text starts
+    // on the line before.
+    for joined in ["echo ok\n: \\\necho \"abc", "echo ok\necho a |\necho \"abc"] {
+        let v = bash_verdict(joined);
+        let m = parse_error_message(&v);
+        assert!(m.contains("from line 2 on, but runs"), "{joined:?}: {m}");
+    }
+    let nothing_runs = [
+        "echo ok; echo \"abc",
+        "if true; then\necho ok\necho \"abc\nfi",
+        "# note\necho ok; echo \"abc",
+    ];
+    for none in nothing_runs {
+        let v = bash_verdict(none);
+        let m = parse_error_message(&v);
+        assert!(m.contains("runs none of it"), "{none:?}: {m}");
+    }
+}
+
+/// When the cut search gives up (a construct open for more lines than it tries), the lines before
+/// the error's line are read by the raw scan: a delete there is danger under its own id.
+#[test]
+fn bash_lines_the_parser_cannot_place_before_an_unclosed_quote_get_the_raw_scan() {
+    let mut text = String::from("rm -rf build\nif true; then\n");
+    text.push_str(&"echo x\n".repeat(40));
+    text.push_str("echo \"abc");
+    let v = bash_verdict(&text);
+    let rules: Vec<&str> = v.findings.iter().map(|f| f.rule).collect();
+    assert_eq!(rules, ["parse-error", "parse-error-destructive"], "{v:?}");
+    assert_eq!(v.level, shellwise::level::Level::Danger);
+    let m = parse_error_message(&v);
+    assert!(m.contains("but may run the lines before it"), "{m}");
+    // A few long lines reach the cap on the bytes the search parses before the cut cap.
+    let mut long = String::from("rm -rf build\nif true; then\n");
+    // 9 lines of 7 KB: the tries read 315 KB in all before they reach line 1.
+    for _ in 0..9 {
+        long.push_str(&format!("echo {}\n", "x".repeat(7000)));
+    }
+    long.push_str("echo \"abc");
+    let v = bash_verdict(&long);
+    let rules: Vec<&str> = v.findings.iter().map(|f| f.rule).collect();
+    // The text is also too long to write inline, a length rule of the whole text.
+    assert_eq!(
+        rules,
+        [
+            "inline-script-too-long",
+            "parse-error",
+            "parse-error-destructive"
+        ],
+        "{v:?}"
+    );
+    // Without a destructive line there is nothing more than the break.
+    let quiet = text.replacen("rm -rf build", "echo build", 1);
+    let v = bash_verdict(&quiet);
+    let rules: Vec<&str> = v.findings.iter().map(|f| f.rule).collect();
+    assert_eq!(rules, ["parse-error"], "{v:?}");
+}
+
 #[cfg(feature = "oracle")]
 mod oracle {
     use super::case_loader::Row;

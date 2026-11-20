@@ -1,13 +1,16 @@
-//! `parse-error`: the text does not parse. A deny kind is `break` (the shell refuses the text and
-//! runs none of it); any other kind is `warn`. `parse-error-destructive`: any other kind when the
-//! raw text names a command of the destructive table is `danger`, under its own id so that a level
-//! configured for `parse-error` does not lower it.
+//! `parse-error`: the text does not parse. A deny kind is `break` (the shell refuses the text from
+//! the error on: PowerShell runs none of it, Bash runs the complete commands before it, which
+//! `bash_ran_before` finds); any other kind is `warn`. `parse-error-destructive`: any other kind
+//! when the raw text names a command of the destructive table is `danger`, under its own id so
+//! that a level configured for `parse-error` does not lower it; so is a raw destructive match in
+//! the commands Bash runs before a deny kind when the parser cannot read them.
 
 use super::{Ctx, Rule};
-use crate::Shell;
+use crate::ir::{ChainOp, Elem, Script, Stmt};
 use crate::level::{Finding, Level, Span};
-use crate::parse::{ParseError, ParseKind, QuoteKind};
+use crate::parse::{self, ParseError, ParseKind, QuoteKind};
 use crate::scan;
+use crate::{BashProfile, Deadline, Shell};
 
 pub const PARSE_ERROR: &str = "parse-error";
 pub const PARSE_ERROR_DESTRUCTIVE: &str = "parse-error-destructive";
@@ -15,9 +18,10 @@ pub const PARSE_ERROR_DESTRUCTIVE: &str = "parse-error-destructive";
 /// A backslash before a double quote, from code points.
 const BACKSLASH_QUOTE: &str = "\x5c\x22";
 
-/// Whether the shell is proven to refuse every text with this kind of error: an unclosed quote in
+/// Whether the shell is proven to refuse the text from this kind of error on: an unclosed quote in
 /// either shell; in PowerShell also an empty pipe element and a parameter glued to a comma, which
-/// the PowerShell parser identifies only in the shapes pwsh refuses.
+/// the PowerShell parser identifies only in the shapes pwsh refuses. PowerShell then runs none of
+/// the text; Bash runs the complete commands before it (`bash_ran_before`).
 pub fn is_deny_kind(kind: &ParseKind, _command: &str, shell: Shell) -> bool {
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
     match kind {
@@ -67,9 +71,11 @@ impl Rule for ParseErrorRule {
     }
 }
 
+/// What the shell runs of a text with a deny kind, when it runs none of it.
+const REFUSED: &str = "so the shell refuses the whole command and runs none of it";
+
 /// The message and Fix line of a deny kind, the Fix chosen by the shape of the text.
 fn deny_text(e: &ParseError, command: &str, shell: Shell, at: &str) -> (String, String) {
-    const REFUSED: &str = "so the shell refuses the whole command and runs none of it";
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
     match e.kind {
         ParseKind::UnclosedQuote(q) => {
@@ -175,6 +181,123 @@ impl Rule for ParseErrorDestructiveRule {
             ),
             syntax_fix(e, &at),
         ));
+    }
+}
+
+/// What Bash runs of a text before its deny-kind parse error. Bash reads and runs one complete
+/// command at a time, so every complete command before the one holding the error runs (execution
+/// oracle, Ruling 126).
+#[derive(Debug)]
+pub enum BashRan {
+    /// Nothing: the error is in the first command Bash reads.
+    Nothing,
+    /// The complete commands of `command[..end]`, as the parser read them.
+    Commands { end: usize, script: Script },
+    /// Bash may run `command[..end]`, but the parser could not read where its commands end.
+    Unread { end: usize },
+}
+
+/// How many line ends `bash_ran_before` tries, from the error's line back, before it gives up and
+/// reads the text before the error's line as `Unread`.
+const MAX_CUTS: usize = 32;
+
+/// How many bytes all of `bash_ran_before`'s parses may read together before it gives up the
+/// same way: a 56 KB text open over 8000 lines took 1.2 s with the cut cap alone (release).
+const MAX_CUT_BYTES: usize = 256 * 1024;
+
+/// The command `bash_ran_before` appends to a cut to prove the cut ends a complete command: it
+/// stays a statement of its own only after one.
+const SENTINEL: &str = ":";
+
+/// What Bash runs of `command` before the deny-kind error at `error_at`: the longest prefix that
+/// ends at a line end and holds only complete commands. A prefix proves that when the text with
+/// `SENTINEL` appended parses and the sentinel is a statement of its own after it (not an
+/// argument after a `\`, a heredoc line, a pipe element or the right side of `&&`/`||`); a
+/// prefix that does not parse ends inside a construct still open, so the cut before it is tried.
+pub fn bash_ran_before(
+    command: &str,
+    error_at: usize,
+    profile: BashProfile,
+    deadline: &Deadline,
+) -> BashRan {
+    let line_start = command
+        .get(..error_at)
+        .and_then(|t| t.rfind('\n'))
+        .map_or(0, |n| n + 1);
+    let cuts = command[..line_start]
+        .match_indices('\n')
+        .map(|(n, _)| n + 1)
+        .rev();
+    let mut read = 0usize;
+    for (tried, end) in cuts.enumerate() {
+        read += end;
+        if tried == MAX_CUTS || read > MAX_CUT_BYTES || deadline.expired() {
+            return BashRan::Unread { end: line_start };
+        }
+        let text = format!("{}{SENTINEL}", &command[..end]);
+        match parse::bash::parse(&text, profile) {
+            Ok(mut script) if sentinel_stands_alone(&script, end) => {
+                script.stmts.pop();
+                script.joins.truncate(script.stmts.len());
+                return if script.stmts.is_empty() {
+                    BashRan::Nothing
+                } else {
+                    BashRan::Commands { end, script }
+                };
+            }
+            Ok(_) => {}
+            Err(e) if matches!(e.kind, ParseKind::Internal(_) | ParseKind::TooDeep) => {
+                return BashRan::Unread { end: line_start };
+            }
+            Err(_) => {}
+        }
+    }
+    BashRan::Nothing
+}
+
+/// The last statement is the sentinel alone, starting at `end` and joined by a newline.
+fn sentinel_stands_alone(script: &Script, end: usize) -> bool {
+    let last = script.stmts.len().wrapping_sub(1);
+    let alone = match script.stmts.last() {
+        Some(Stmt::Pipeline(p)) => match p.elems.as_slice() {
+            [Elem::Cmd(c)] => c.span.start == end && c.typed == SENTINEL,
+            _ => false,
+        },
+        _ => false,
+    };
+    alone
+        && matches!(
+            script.join(last),
+            None | Some(ChainOp::Seq | ChainOp::Background)
+        )
+}
+
+/// The `parse-error` message of a Bash deny kind whose text runs complete commands before the
+/// error, the line the refused text starts on named.
+pub fn ran_before_message(message: &str, command: &str, end: usize, sure: bool) -> String {
+    let line = command[..end].matches('\n').count() + 1;
+    let runs = if sure { "runs" } else { "may run" };
+    message.replace(
+        REFUSED,
+        &format!("so Bash refuses the text from line {line} on, but {runs} the lines before it"),
+    )
+}
+
+/// `parse-error-destructive` for a raw destructive match at `hit` in the lines Bash runs before a
+/// deny-kind error, when the parser could not read them.
+pub fn unread_before(e: &ParseError, command: &str, hit: Span) -> Finding {
+    let at = position(command, e.span.start);
+    Finding {
+        rule: PARSE_ERROR_DESTRUCTIVE,
+        level: Level::Danger,
+        message: format!(
+            "{}: Bash runs the lines before the error at {at}, and the raw scan flags part of them as destructive",
+            e.message
+        ),
+        fix: Some(format!(
+            "correct the syntax at {at}, then run the command again so each line can be checked"
+        )),
+        span: hit,
     }
 }
 
