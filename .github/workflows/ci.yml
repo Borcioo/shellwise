@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins the toolchain; the first cargo call installs it.
+      - run: cargo --version
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --features testhooks -- -D warnings
+      - run: cargo test --features testhooks
+
+  build:
+    name: build (${{ matrix.target }})
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: shellwise.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: shellwise
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: shellwise
+          - os: macos-13
+            target: x86_64-apple-darwin
+            bin: shellwise
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shellwise-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}
+          if-no-files-found: error

@@ -1,0 +1,234 @@
+# The PowerShell rows of the baseline guard's "Known gaps" list, as synthetic commands.
+# Expected values are PowerShell 7.7.0's Parser::ParseInput answer (tests/pwsh_oracle.rs checks them).
+
+[[row]]
+id = "glued-value"
+command = "$a = 1# don't\ngit commit -nm x"
+error = false
+cmds = [["git", "commit", "-nm", "x"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "glued-index"
+command = "$b = @(1); $b[0]# don't\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "glued-type"
+command = "[int]# don't\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "glued-subexpr"
+command = "$(hostname)# don't\ngit status"
+error = false
+cmds = [["hostname"], ["git", "status"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "glued-array"
+command = "@(1)# don't\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "glued-paren"
+command = "Write-Output ('a')# don't\ngit status"
+error = false
+cmds = [["Write-Output", "('a')"], ["git", "status"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "glued-assign-eq"
+command = "$a=#don't\n1\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["#don't"]
+methods = []
+
+[[row]]
+id = "glued-assign-comma"
+command = "$a=1,#don't\n2\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["#don't"]
+methods = []
+
+[[row]]
+id = "glued-string"
+command = "'a'#don't\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["#don't"]
+methods = []
+
+[[row]]
+id = "glued-block-comment"
+command = "$a = 1<# don't #>\ngit status"
+error = false
+cmds = [["git", "status"]]
+comments = ["<# don't #>"]
+methods = []
+
+[[row]]
+id = "word-block-comment"
+command = "Write-Output a<# why #>; git commit -nm x"
+error = false
+cmds = [["Write-Output", "a<#", "why"]]
+comments = ["#>; git commit -nm x"]
+methods = []
+
+[[row]]
+id = "word-block-comment-quote"
+command = "Write-Output a<# why #>'\ngit status"
+error = false
+cmds = [["Write-Output", "a<#", "why"], ["git", "status"]]
+comments = ["#>'"]
+methods = []
+
+[[row]]
+id = "nbsp-sep"
+command = "Get-Date;\u00A0git status"
+error = false
+cmds = [["Get-Date"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "ff-sep"
+command = "Get-Date;\u000Cgit status"
+error = false
+cmds = [["Get-Date"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "ideographic-sep"
+command = "Get-Date;\u3000git status"
+error = false
+cmds = [["Get-Date"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "nbsp-comment"
+command = "Get-Date\u00A0# don't\ngit status"
+error = false
+cmds = [["Get-Date"], ["git", "status"]]
+comments = ["# don't"]
+methods = []
+
+[[row]]
+id = "cr-herestring"
+command = "$x = @'\rdon't\r'@\rgit status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "stop-parsing"
+command = "Write-Output --% don't\ngit status"
+error = false
+cmds = [["Write-Output", "--%", "don't"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "assign-nospace"
+command = "$o=git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "assign-member"
+command = "$a = @{}; $a.b = git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "assign-index"
+command = "$a = @(0); $a[0] = git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "assign-multi"
+command = "$a, $b = git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "assign-typed-space"
+command = "[string] $o = git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "assign-braced"
+command = "${o} = git status"
+error = false
+cmds = [["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "typographic-quote"
+command = "$w = \u2018literal\u2019; git checkout $w"
+error = false
+cmds = [["git", "checkout", "$w"]]
+comments = []
+methods = []
+
+[[row]]
+id = "call-git-path"
+command = "& 'C:\\Program Files\\Git\\cmd\\git.exe' commit -n"
+error = false
+cmds = [["'C:\\Program Files\\Git\\cmd\\git.exe'", "commit", "-n"]]
+comments = []
+methods = []
+
+[[row]]
+id = "cd-dotdot"
+command = "cd..; git status"
+error = false
+cmds = [["cd.."], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "cd-backslash"
+command = "cd\\; git status"
+error = false
+cmds = [["cd\\"], ["git", "status"]]
+comments = []
+methods = []
+
+[[row]]
+id = "dotnet-delete"
+command = "[IO.Directory]::Delete('x', $true)"
+error = false
+cmds = []
+comments = []
+methods = ["[IO.Directory]::Delete"]

@@ -1,0 +1,4 @@
+id	level	rules	raw_hit
+f00000000001	break	parse-error	no
+f00000000002	ok	-	no
+f00000000003	ok	-	no

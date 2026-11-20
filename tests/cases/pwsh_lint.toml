@@ -1,0 +1,1579 @@
+# The PowerShell lint rules (src/rules/pwsh_lint/), through analyse. Every rule has a row where
+# it fires and an allow twin where it does not. Break rows hold the expected Fix text; warn rows
+# are context only. `oracle` is what pwsh 7.7's ParseInput does with the text.
+#
+# Ported rows: the baseline guard rows of tests/test_rules.py for the nine installed PowerShell rules
+# and ps-unix-command (deny rows per rule there: bat-metachar 16, cli-inline-prose 11,
+# gate-truncated-pipeline 17, ps-bad-parameter 9, ps-bare-bash 12, ps-dotnet-relative-path 18,
+# ps-git-commit-stdin 4, ps-native-nonewline 7, ps-unix-command 4, stale-write-var 51). Rows that
+# build their command at run time (a Herd path, a defined test variable, a junction) or that need
+# a configured gate command are not portable here and are left out; the rest keep the baseline
+# guard's text where it is synthetic. Quote and backtick characters outside ASCII are written as \u
+# escapes.
+
+# --- bat-metachar (break, Windows): cmd.exe re-parses a .bat launcher's arguments ---
+
+[[row]]
+id = "bat-pipe-in-a-vendor-bin-filter"
+os = "windows"
+shell = "pwsh"
+command = "vendor\\bin\\phpunit --filter 'A|B'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "vendor\\bin\\phpunit --% --filter \"A|B\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-caret-in-a-composer-constraint"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'wordpress/mcp-adapter:^0.5'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "--% require \"wordpress/mcp-adapter:^0.5\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-ampersand-in-an-explicit-bat"
+os = "windows"
+shell = "pwsh"
+command = ".\\tools\\sshmux.bat exec dev 'uptime&&df'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "--% exec dev \"uptime&&df\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-pipe-inside-inner-quotes-of-a-wrapped-value"
+os = "windows"
+shell = "pwsh"
+command = "tools\\wp.bat db query 'SELECT \"a|b\" FROM t'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "starts by its own path"
+oracle = "accepts"
+
+[[row]]
+id = "bat-defined-percent-variable"
+os = "windows"
+shell = "pwsh"
+command = "tools\\wp.bat option get %PATH%"
+level = "break"
+rules = ["bat-metachar"]
+fix = "starts by its own path"
+oracle = "accepts"
+
+[[row]]
+id = "bat-allow-a-value-powershell-quotes"
+os = "windows"
+shell = "pwsh"
+command = "vendor\\bin\\phpunit --filter 'A B|C'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bat-allow-the-exe-by-its-path"
+os = "windows"
+shell = "pwsh"
+command = "& 'X:\\tools\\php84\\php.exe' vendor/bin/phpunit --filter 'A|B'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bat-allow-a-native-program"
+os = "windows"
+shell = "pwsh"
+command = "rg -n 'tail|head' ."
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bat-allow-an-undefined-percent-name"
+os = "windows"
+shell = "pwsh"
+command = "tools\\wp.bat db query 'SELECT LOCATE(1, a) FROM t WHERE b = 100% '"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bat-fix-quotes-every-argument-with-an-operator"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'a/b:^1.2' 'c/d:^2.0'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "tools\\composer.bat --% require \"a/b:^1.2\" \"c/d:^2.0\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-fix-quotes-an-argument-with-a-space"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'a/b:^1.2' --working-dir 'X:\\my dir'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "tools\\composer.bat --% require \"a/b:^1.2\" --working-dir \"X:\\my dir\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-fix-by-path-when-a-later-argument-holds-a-double-quote"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'a/b:^1.2' 'say \"hi\" x'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "starts by its own path"
+oracle = "accepts"
+
+# --- gate-truncated-pipeline (break): a tee'd run piped into a truncator ---
+
+[[row]]
+id = "gate-tee-then-select-first"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Tee-Object run.log | Select-Object -First 30"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "$out = npm test 2>&1 | Tee-Object run.log 2>&1; $out | Select-Object -Last 20"
+oracle = "accepts"
+
+# An attached number (`-First:30`) reads as the spaced one.
+[[row]]
+id = "gate-tee-then-select-first-attached"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Tee-Object run.log | Select-Object -First:30"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+oracle = "accepts"
+
+[[row]]
+id = "gate-tee-then-select-f-prefix"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Tee-Object run.log | Select-Object -f 30"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "$out = npm test"
+oracle = "accepts"
+
+[[row]]
+id = "gate-tee-then-head-is-also-a-unix-tool"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Tee-Object run.log | head -40"
+level = "warn"
+rules = ["gate-truncated-pipeline", "ps-unix-command"]
+fix = "$out = npm test"
+oracle = "accepts"
+
+[[row]]
+id = "gate-tee-behind-a-foreach"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Tee-Object run.log | ForEach-Object { $_ } | Select-Object -First 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "$out = npm test"
+oracle = "accepts"
+
+[[row]]
+id = "gate-allow-select-last"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Tee-Object run.log | Select-Object -Last 20"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "gate-allow-first-without-a-gate-or-tee"
+os = "any"
+shell = "pwsh"
+command = "Get-Content notes.txt | Select-Object -First 5"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-bad-parameter (break): the cmdlet refuses the parameter ---
+
+[[row]]
+id = "bad-param-ls-la-hint"
+os = "windows"
+shell = "pwsh"
+command = "ls -la D:\\x"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Force: ls -Force D:\\x"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-get-childitem-la-hint"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -la D:\\x"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Force: Get-ChildItem -Force D:\\x"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-select-string-recurse-missing"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Path app -Pattern x -Recurse"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `-Recurse`: Select-String -Path app -Pattern x"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-select-string-c-ambiguous"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem *.php | Select-String -Pattern x -C 2"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "write the full parameter name, one of"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-literalpath-prefix-without-a-value"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -l -Force"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "give -literalpath a value or remove it: Get-ChildItem -Force"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-l-at-the-end-of-a-pipeline-stage"
+os = "windows"
+shell = "pwsh"
+command = "ls -l | Select-Object -First 2"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "give -literalpath a value"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-grep-after-context-hint"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Select-String '# fail' -A 1"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Context 0,1: Select-String '# fail' -Context 0,1"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-cd-slash-d-hint"
+os = "any"
+shell = "pwsh"
+command = "Set-Location /d D:\\x"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `/d`: Set-Location D:\\x"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-get-content-unknown-name"
+os = "any"
+shell = "pwsh"
+command = "Get-Content notes.txt -TotalLines 5"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `-TotalLines`: Get-Content notes.txt 5"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-one-positional-too-many"
+os = "any"
+shell = "pwsh"
+command = "Set-Location D:\\a D:\\b"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "name the parameter for `D:\\b` or remove it: Set-Location D:\\a"
+oracle = "accepts"
+
+# The table holds pwsh 7 facts only (Rulings 110, 114(b)): Windows PowerShell 5.1 is not judged.
+[[row]]
+id = "bad-param-allow-windows-powershell-5-1"
+os = "any"
+shell = "powershell5"
+command = "Get-ChildItem -la D:\\x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-the-same-in-7"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.json | ConvertFrom-Json -AsHashtable"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-full-names"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -Force -Recurse D:\\x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-common-parameter-alias"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem D:\\x -ea SilentlyContinue"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-context"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Path app -Pattern x -Context 2,2"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-unique-alias-prefix"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -psp D:\\x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# A static parameter wins over a provider's dynamic one: -fo is -Force, not -FollowSymlink.
+[[row]]
+id = "bad-param-allow-a-static-prefix-over-a-dynamic-one"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -fo D:\\x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# Several dynamic parameters share the prefix and no static one has it.
+[[row]]
+id = "bad-param-ambiguous-dynamic-prefix"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -a D:\\x"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "-attributes"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-an-unknown-tool"
+os = "any"
+shell = "pwsh"
+command = "newtool -la --any x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-after-the-end-of-parameters"
+os = "any"
+shell = "pwsh"
+command = "Write-Output -- -la"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# `-A 1` alone: `-A` binds -AllMatches and `1` becomes the pattern, so the call runs (probed).
+[[row]]
+id = "bad-param-allow-a-hinted-number-that-takes-the-first-position"
+os = "any"
+shell = "pwsh"
+command = "Select-String -A 1 -Path notes.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-a-hinted-number-after-a-file"
+os = "any"
+shell = "pwsh"
+command = "Select-String b -A 1 notes.txt"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Context 0,1: Select-String b -Context 0,1 notes.txt"
+oracle = "accepts"
+
+# With -Pattern named, `1` becomes the path: the call fails (probed: "path not found").
+[[row]]
+id = "bad-param-a-hinted-number-after-a-named-pattern"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Pattern b -A 1"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Context 0,1: Select-String -Pattern b -Context 0,1"
+oracle = "accepts"
+
+# A splat may bind any parameter, so the positions are not counted (probed: this runs).
+[[row]]
+id = "bad-param-allow-a-splat"
+os = "any"
+shell = "pwsh"
+command = "$p = @{ PassThru = $true }; Set-Location D:\\x @p"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# Words pwsh 7.7 binds as arguments, not parameters (probed: no binding error): after `--`,
+# after `--%`, a quoted dash word and a negative number.
+[[row]]
+id = "bad-param-allow-a-dash-word-after-the-end-of-parameters"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -- -la"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-dash-word-after-stop-parsing"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem --% -la"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-quoted-dash-word"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem '-la'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-negative-number"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -1"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# A value parameter takes the next dash token as its value unless the token names a static
+# parameter (probed in pwsh 7.7: `-l -a` and `-l -File` list a path named so, `-Pattern -NoProfile`
+# searches for the text; `-l -Force` and `-Pattern -Quiet` are "Missing an argument").
+[[row]]
+id = "bad-param-allow-a-dash-value-that-names-no-parameter"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Path notes.txt -Pattern -NoProfile"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-dynamic-name-as-a-value"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -l -File"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-an-ambiguous-name-after-a-value-parameter"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Path notes.txt -Pattern -i"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "give -pattern a value or remove it: Select-String -Path notes.txt -i"
+oracle = "accepts"
+
+# `-Name:` and a space: the next word is the value, for a switch too (probed: both run).
+[[row]]
+id = "bad-param-allow-a-colon-then-a-space"
+os = "any"
+shell = "pwsh"
+command = "Get-Content notes.txt | Select-Object -First: 2"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-switch-colon-then-a-space"
+os = "any"
+shell = "pwsh"
+command = "Set-Location -PassThru: $false D:\\x"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-two-paths-for-one-position"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt b.txt"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "name the parameter for `b.txt` or remove it: Get-Content a.txt"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-list-for-one-position"
+os = "any"
+shell = "pwsh"
+command = "Get-Content -Path a.txt,b.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# A simple function (no CmdletBinding) takes an unknown name into $args.
+[[row]]
+id = "bad-param-allow-a-simple-function"
+os = "any"
+shell = "pwsh"
+command = "Clear-Host -Nope"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# Another provider's drive has other dynamic parameters than the FileSystem ones the table holds.
+[[row]]
+id = "bad-param-allow-another-provider-s-dynamic-parameter"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem Cert:\\CurrentUser -CodeSigningCert"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-that-dynamic-parameter-on-a-folder"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem D:\\x -CodeSigningCert"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `-CodeSigningCert`: Get-ChildItem D:\\x"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-get-content-n-hint"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt -n 5"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -TotalCount 5: Get-Content a.txt -TotalCount 5"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-select-object-n-hint"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Select-Object -n 5"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -First 5: Select-Object -First 5"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-get-content-n-without-a-number-is-removed"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt -n"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `-n`: Get-Content a.txt"
+oracle = "accepts"
+
+# Task 30 survivors B14, B15: pinned by rows.
+[[row]]
+id = "bad-param-allow-a-dash-word-after-stop-parsing"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem --% -Recursive"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-quoted-dash-word"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem '-Recursive'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-bare-bash (warn, Windows): `bash` in PowerShell is WSL ---
+
+[[row]]
+id = "bare-bash-script"
+os = "windows"
+shell = "pwsh"
+command = "bash tools/x.sh"
+level = "warn"
+rules = ["ps-bare-bash"]
+fix = "& \"$env:ProgramFiles\\Git\\bin\\bash.exe\" tools/x.sh"
+oracle = "accepts"
+
+[[row]]
+id = "bare-bash-after-a-chain"
+os = "windows"
+shell = "pwsh"
+command = "npm run build && bash scripts/deploy.sh"
+level = "warn"
+rules = ["ps-bare-bash"]
+fix = "Git\\bin\\bash.exe\" scripts/deploy.sh"
+oracle = "accepts"
+
+[[row]]
+id = "bare-bash-exe-in-capitals"
+os = "windows"
+shell = "pwsh"
+command = "BASH.exe x.sh"
+level = "warn"
+rules = ["ps-bare-bash"]
+fix = "Git\\bin\\bash.exe\" x.sh"
+oracle = "accepts"
+
+[[row]]
+id = "bare-bash-in-a-foreach-block"
+os = "windows"
+shell = "pwsh"
+command = "Get-ChildItem *.sh | ForEach-Object { bash $_.FullName }"
+level = "warn"
+rules = ["ps-bare-bash"]
+fix = "Git\\bin\\bash.exe\""
+oracle = "accepts"
+
+[[row]]
+id = "bare-bash-allow-git-bash-by-path"
+os = "windows"
+shell = "pwsh"
+command = "& 'C:\\Program Files\\Git\\bin\\bash.exe' tools/x.sh"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bare-bash-allow-the-word-in-a-string"
+os = "windows"
+shell = "pwsh"
+command = "Write-Output 'bash tools/x.sh'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-native-nonewline (break): native lines joined by -NoNewline ---
+
+[[row]]
+id = "nonewline-git-show"
+os = "any"
+shell = "pwsh"
+command = "git show HEAD:src/a.js | Set-Content -NoNewline src/a.js"
+level = "break"
+rules = ["ps-native-nonewline"]
+fix = "drop -NoNewline: Set-Content src/a.js"
+oracle = "accepts"
+
+[[row]]
+id = "nonewline-prefix-after-a-parenthesised-native"
+os = "any"
+shell = "pwsh"
+command = "(git show HEAD:a.txt) | Set-Content -NoNew a.txt"
+level = "break"
+rules = ["ps-native-nonewline"]
+fix = "drop -NoNewline: Set-Content a.txt"
+oracle = "accepts"
+
+[[row]]
+id = "nonewline-unapproved-verb-is-native"
+os = "any"
+shell = "pwsh"
+command = "Frob-Thing a | Set-Content -NoNewline a.txt"
+level = "break"
+rules = ["ps-native-nonewline"]
+fix = "drop -NoNewline"
+oracle = "accepts"
+
+[[row]]
+id = "nonewline-allow-a-cmdlet-producer"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt | Set-Content -NoNewline b.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "nonewline-allow-switched-off"
+os = "any"
+shell = "pwsh"
+command = "git show HEAD:a.txt | Set-Content -NoNewline:$false a.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-dotnet-relative-path (break): .NET resolves against the process directory ---
+
+[[row]]
+id = "dotnet-read-relative"
+os = "any"
+shell = "pwsh"
+command = "[IO.File]::ReadAllText('tools\\x.php')"
+level = "warn"
+rules = ["ps-dotnet-relative-path"]
+fix = "pass an absolute path: [IO.File]::ReadAllText((Join-Path $PWD 'tools\\x.php'))"
+oracle = "accepts"
+
+[[row]]
+id = "dotnet-write-relative-system-prefix"
+os = "any"
+shell = "pwsh"
+command = "[System.IO.File]::WriteAllText(\"src\\a.ts\", 'x')"
+level = "warn"
+rules = ["ps-dotnet-relative-path"]
+fix = "(Join-Path $PWD \"src\\a.ts\")"
+oracle = "accepts"
+
+[[row]]
+id = "dotnet-directory-move-second-path"
+os = "any"
+shell = "pwsh"
+command = "[IO.Directory]::Move('X:\\tmp\\a', 'b')"
+level = "warn"
+rules = ["ps-dotnet-relative-path"]
+fix = "(Join-Path $PWD 'b')"
+oracle = "accepts"
+
+[[row]]
+id = "dotnet-tilde-is-relative"
+os = "any"
+shell = "pwsh"
+command = "[io.file]::readalllines('~/.claude/x')"
+level = "warn"
+rules = ["ps-dotnet-relative-path"]
+fix = "(Join-Path $PWD '~/.claude/x')"
+oracle = "accepts"
+
+[[row]]
+id = "dotnet-allow-an-absolute-path"
+os = "any"
+shell = "pwsh"
+command = "[IO.File]::ReadAllText('X:\\tmp\\x.php')"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "dotnet-allow-a-joined-path"
+os = "any"
+shell = "pwsh"
+command = "[IO.File]::ReadAllText((Join-Path $PWD 'tools\\x.php'))"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- stale-write-var (break): a variable from an earlier call is empty here ---
+
+[[row]]
+id = "stale-set-content-value"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path report.md -Value $text"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $text in this same command before the write"
+oracle = "accepts"
+
+[[row]]
+id = "stale-piped-variable"
+os = "any"
+shell = "pwsh"
+command = "$t | Set-Content report.md"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $t in this same command"
+oracle = "accepts"
+
+[[row]]
+id = "stale-write-all-text"
+os = "any"
+shell = "pwsh"
+command = "[IO.File]::WriteAllText('X:\\tmp\\a.txt', $report)"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $report"
+oracle = "accepts"
+
+[[row]]
+id = "stale-out-file-input-object"
+os = "any"
+shell = "pwsh"
+command = "Out-File -FilePath report.md -InputObject $text"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $text"
+oracle = "accepts"
+
+[[row]]
+id = "stale-set-content-second-positional"
+os = "any"
+shell = "pwsh"
+command = "Set-Content report.md $text"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $text"
+oracle = "accepts"
+
+[[row]]
+id = "stale-attached-value"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path report.md -Value:$text"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $text"
+oracle = "accepts"
+
+[[row]]
+id = "stale-content-after-a-named-path"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path report.md $text"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $text"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-assigned-first"
+os = "any"
+shell = "pwsh"
+command = "$text = Get-Content a.md -Raw; Set-Content -Path report.md -Value $text"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-an-append"
+os = "any"
+shell = "pwsh"
+command = "$t | Out-File report.md -Append"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-an-environment-variable"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path a.txt -Value $env:USERNAME"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-a-foreach-variable"
+os = "any"
+shell = "pwsh"
+command = "foreach ($x in 1..3) { Set-Content -Path \"f$x.txt\" -Value $x }"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-a-single-quoted-dollar"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path a.txt -Value '$text'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-tee-object-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Tee-Object -Variable items | Out-Null; Set-Content b.txt $items"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-tee-object-to-a-file-binds-no-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Tee-Object -FilePath t.txt | Out-Null; Set-Content b.txt $items"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $items"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-error-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-Item nope -ErrorAction SilentlyContinue -ErrorVariable err; Set-Content err.txt $err"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-error-action-binds-no-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-Item nope -ErrorAction SilentlyContinue; Set-Content err.txt $err"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $err"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-warning-variable"
+os = "any"
+shell = "pwsh"
+command = "Write-Warning x -WarningVariable w; Set-Content w.txt $w"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-information-variable"
+os = "any"
+shell = "pwsh"
+command = "Write-Information x -InformationVariable iv; Set-Content i.txt $iv"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-set-variable-name"
+os = "any"
+shell = "pwsh"
+command = "Set-Variable -Name v -Value 1; Set-Content a.txt $v"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-set-variable-binds-only-its-name"
+os = "any"
+shell = "pwsh"
+command = "Set-Variable -Name v -Value 1; Set-Content a.txt $w"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $w"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-new-variable-positional-name"
+os = "any"
+shell = "pwsh"
+command = "New-Variable v 1; Set-Content a.txt $v"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-new-variable-value-is-no-name"
+os = "any"
+shell = "pwsh"
+command = "New-Variable v w; Set-Content a.txt $w"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $w"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-piped-set-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-Date | Set-Variable now; Set-Content a.txt $now"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-status-code-variable"
+os = "any"
+shell = "pwsh"
+command = "Invoke-RestMethod https://x.test -StatusCodeVariable sc | Out-Null; Set-Content a.txt $sc"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-response-headers-variable"
+os = "any"
+shell = "pwsh"
+command = "Invoke-RestMethod https://x.test -ResponseHeadersVariable h | Out-Null; Set-Content h.txt $h"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-session-variable"
+os = "any"
+shell = "pwsh"
+command = "Invoke-WebRequest https://x.test -SessionVariable s | Out-Null; Set-Content s.txt $s"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-after-a-dot-sourced-script"
+os = "any"
+shell = "pwsh"
+command = ". .\\vars.ps1; Set-Content -LiteralPath out.txt -Value $Body"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-script-run-with-the-call-operator-binds-nothing-here"
+os = "any"
+shell = "pwsh"
+command = "& .\\vars.ps1; Set-Content -LiteralPath out.txt -Value $Body"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $Body"
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-script-run-by-path-binds-nothing-here"
+os = "any"
+shell = "pwsh"
+command = ".\\vars.ps1; Set-Content -LiteralPath out.txt -Value $Body"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $Body"
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-dot-source-after-the-write-comes-too-late"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -LiteralPath out.txt -Value $Body; . .\\vars.ps1"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $Body"
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-switch-turned-off-after-colon-and-space-is-no-append"
+os = "any"
+shell = "pwsh"
+command = "$t | Out-File report.md -Append: $false"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $t"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-an-append-given-after-colon-and-space"
+os = "any"
+shell = "pwsh"
+command = "$t | Out-File report.md -Append: $true"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-git-commit-stdin (break): -F - with nothing piped in ---
+
+[[row]]
+id = "commit-stdin-after-cd"
+os = "any"
+shell = "pwsh"
+command = "cd X:\\src\\x; git commit -q -F - @'\nfix: x\n\nbody\n'@"
+level = "break"
+rules = ["ps-git-commit-stdin"]
+fix = "replace `-F -` with `-m`"
+oracle = "accepts"
+
+[[row]]
+id = "commit-stdin-long-form"
+os = "any"
+shell = "pwsh"
+command = "git add a.txt; git commit --file=- @'\nmsg\n'@; git log -1"
+level = "break"
+rules = ["ps-git-commit-stdin"]
+fix = "replace `-F -` with `-m`"
+oracle = "accepts"
+
+[[row]]
+id = "commit-stdin-short-cluster"
+os = "any"
+shell = "pwsh"
+command = "git commit -qF - @'\nmsg\n'@"
+level = "break"
+rules = ["ps-git-commit-stdin"]
+fix = "replace `-F -` with `-m`"
+oracle = "accepts"
+
+[[row]]
+id = "commit-stdin-after-a-global-option"
+os = "any"
+shell = "pwsh"
+command = "git -C X:\\src\\x commit -F - @'\nmsg\n'@"
+level = "break"
+rules = ["ps-git-commit-stdin"]
+fix = "replace `-F -` with `-m`"
+oracle = "accepts"
+
+[[row]]
+id = "commit-stdin-allow-piped"
+os = "any"
+shell = "pwsh"
+command = "@'\nmsg\n'@ | git commit -F -"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "commit-stdin-allow-a-message"
+os = "any"
+shell = "pwsh"
+command = "git commit -m @'\nmsg\n'@"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "commit-stdin-allow-a-file"
+os = "any"
+shell = "pwsh"
+command = "git commit -F X:\\tmp\\msg.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- cli-inline-prose (break): a typographic quote tears the string ---
+
+[[row]]
+id = "prose-body-low-double-quote"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --base develop --title 'chore: x' --body \"Zmiana \u201Ex\u201D gotowa\""
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "quote the --body text with '...' instead, or write the text with the Write tool and pass --body-file <file>"
+oracle = "accepts"
+
+[[row]]
+id = "prose-release-notes-short-flag"
+os = "any"
+shell = "pwsh"
+command = "gh release create v1.2.0 -n \"Fix \u201Ethe\u201D thing\""
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "--notes-file <file>"
+oracle = "accepts"
+
+[[row]]
+id = "prose-title-single-family"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title 'Fix \u2018x\u2019 now' --body-file b.txt"
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "quote the --title text with \"...\""
+oracle = "accepts"
+
+# Known gap (Task 27): the parser does not model a typographic quote inside an attached `--body=` value,
+# so only the parser's warn fires. When it does, this row becomes a cli-inline-prose break.
+[[row]]
+id = "prose-attached-body"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title 'fix: x' --body=\"Fix \u201Ethe\u201D thing\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "prose-allow-the-other-family"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body 'Zmiana \u201Ex\u201D gotowa'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-allow-a-subcommand-that-takes-no-prose"
+os = "any"
+shell = "pwsh"
+command = "gh repo create x --title \"A „b” c\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-allow-a-body-file"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title 'fix: x' --body-file b.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-both-families-offers-only-the-file"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body \"It\u2019s \u201Cdone\u201D now\""
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "write the --body text with the Write tool and pass --body-file <file>"
+oracle = "accepts"
+
+[[row]]
+id = "prose-both-families-without-a-file-form-offers-a-here-string"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title \"It\u2019s \u201Cdone\u201D\" --body-file b.md"
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "pass the --title text in a here-string"
+oracle = "accepts"
+
+[[row]]
+id = "prose-the-fixed-here-string-reads-clean"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title @'\nIt\u2019s \u201Cdone\u201D\n'@ --body-file b.md"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-one-family-still-offers-the-other-quote"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body \"say \u201Chi\u201D\""
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "quote the --body text with '...' instead"
+oracle = "accepts"
+
+# Task 30 survivor I03: a here-string body is never torn.
+[[row]]
+id = "prose-allow-a-here-string-body"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body @'\nIt\u2019s \u201Cdone\u201D\n'@"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-unix-command (warn) ---
+
+[[row]]
+id = "unix-tail"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | tail -20"
+level = "warn"
+rules = ["ps-unix-command"]
+oracle = "accepts"
+
+[[row]]
+id = "unix-export"
+os = "any"
+shell = "pwsh"
+command = "export FOO=1; node x.js"
+level = "warn"
+rules = ["ps-unix-command"]
+oracle = "accepts"
+
+[[row]]
+id = "unix-allow-select-last"
+os = "any"
+shell = "pwsh"
+command = "npm test 2>&1 | Select-Object -Last 20"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "unix-allow-inside-ssh"
+os = "any"
+shell = "pwsh"
+command = "ssh host 'tail -n 5 /var/log/x | grep y'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- pwsh-file-list-arg (warn) ---
+
+[[row]]
+id = "file-list-through-file"
+os = "any"
+shell = "pwsh"
+command = "pwsh -NoProfile -File tools\\sync.ps1 -Exclude a,b"
+level = "warn"
+rules = ["pwsh-file-list-arg"]
+oracle = "accepts"
+
+[[row]]
+id = "file-list-allow-one-quoted-value"
+os = "any"
+shell = "pwsh"
+command = "pwsh -NoProfile -File tools\\sync.ps1 -Exclude 'a,b'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-kill-wrapper (warn) ---
+
+[[row]]
+id = "kill-by-name-cmdlet"
+os = "any"
+shell = "pwsh"
+command = "Stop-Process -Name node -Force"
+level = "warn"
+rules = ["ps-kill-wrapper"]
+oracle = "accepts"
+
+[[row]]
+id = "kill-by-image-name"
+os = "any"
+shell = "pwsh"
+command = "taskkill /IM node.exe /F"
+level = "warn"
+rules = ["ps-kill-wrapper"]
+oracle = "accepts"
+
+[[row]]
+id = "kill-allow-by-id"
+os = "any"
+shell = "pwsh"
+command = "Stop-Process -Id $serverPid -Force"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-auto-variable (warn) ---
+
+[[row]]
+id = "auto-variable-read-only-home"
+os = "any"
+shell = "pwsh"
+command = "$home = 'x'; Write-Output $home"
+level = "warn"
+rules = ["ps-auto-variable"]
+oracle = "accepts"
+
+[[row]]
+id = "auto-variable-overwritten-input"
+os = "any"
+shell = "pwsh"
+command = "$input = Get-Content a.txt"
+level = "warn"
+rules = ["ps-auto-variable"]
+oracle = "accepts"
+
+[[row]]
+id = "auto-variable-allow-another-name"
+os = "any"
+shell = "pwsh"
+command = "$homePage = 'x'; Write-Output $homePage"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "auto-variable-allow-discard-to-null"
+os = "any"
+shell = "pwsh"
+command = "$null = Get-Item a.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-remove-item-star (warn) ---
+
+[[row]]
+id = "remove-item-star"
+os = "any"
+shell = "pwsh"
+command = "Remove-Item build\\* -Recurse -Force"
+level = "warn"
+# With no cwd the delete guard cannot place the relative path: a warn (Ruling 122).
+rules = ["delete-unknown-location", "ps-remove-item-star"]
+oracle = "accepts"
+
+[[row]]
+id = "remove-item-star-allow-the-text-in-a-string"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'Remove-Item build\\*'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-stdin-script (warn) ---
+
+[[row]]
+id = "stdin-script-python-dash"
+os = "any"
+shell = "pwsh"
+command = "$code = 'print(1)'; $code | python -"
+level = "warn"
+rules = ["ps-stdin-script"]
+oracle = "accepts"
+
+[[row]]
+id = "stdin-script-python-no-args"
+os = "any"
+shell = "pwsh"
+command = "Get-Content x.py | python"
+level = "warn"
+rules = ["ps-stdin-script"]
+oracle = "accepts"
+
+[[row]]
+id = "stdin-script-allow-a-file"
+os = "any"
+shell = "pwsh"
+command = "python x.py"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stdin-script-allow-data-into-a-script"
+os = "any"
+shell = "pwsh"
+command = "git diff | python tools/count.py"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- ps-empty-arg (warn) ---
+
+[[row]]
+id = "empty-arg-two-quotes"
+os = "any"
+shell = "pwsh"
+command = "ssh-keygen -t ed25519 -N '\"\"' -f key"
+level = "warn"
+rules = ["ps-empty-arg"]
+oracle = "accepts"
+
+[[row]]
+id = "empty-arg-allow-empty"
+os = "any"
+shell = "pwsh"
+command = "ssh-keygen -t ed25519 -N '' -f key"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- rg-follow-L (warn) ---
+
+[[row]]
+id = "rg-follow-l"
+os = "any"
+shell = "pwsh"
+command = "rg -L TODO src"
+level = "warn"
+rules = ["rg-follow-L"]
+oracle = "accepts"
+
+[[row]]
+id = "rg-allow-files-with-matches"
+os = "any"
+shell = "pwsh"
+command = "rg -l TODO src"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- wsl-argv-rejoin (warn, Windows) ---
+
+[[row]]
+id = "wsl-rejoined-space"
+os = "windows"
+shell = "pwsh"
+command = "wsl ls -la '/mnt/c/my dir'"
+level = "warn"
+rules = ["wsl-argv-rejoin"]
+oracle = "accepts"
+
+[[row]]
+id = "wsl-allow-exec"
+os = "windows"
+shell = "pwsh"
+command = "wsl --exec ls -la '/mnt/c/my dir'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "wsl-allow-plain-words"
+os = "windows"
+shell = "pwsh"
+command = "wsl ls /tmp"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- claude-cmd-live-config (warn) ---
+
+[[row]]
+id = "claude-live-config"
+os = "any"
+shell = "pwsh"
+command = "claude plugin validate ."
+level = "warn"
+rules = ["claude-cmd-live-config"]
+oracle = "accepts"
+
+[[row]]
+id = "claude-allow-a-temp-config"
+os = "any"
+shell = "pwsh"
+command = "$env:CLAUDE_CONFIG_DIR = 'X:\\tmp\\cfg'; claude plugin validate ."
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "claude-allow-version"
+os = "any"
+shell = "pwsh"
+command = "claude --help"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# --- Bash is out of scope: the same text in the Bash tool gets none of these rules ---
+
+[[row]]
+id = "bash-tool-gets-no-pwsh-rule"
+os = "any"
+shell = "bash"
+command = "ls -la /tmp"
+level = "ok"
+rules = []
+oracle = "accepts"

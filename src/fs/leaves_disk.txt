@@ -1,0 +1,21 @@
+# Programs a `cd` disk read may come after (Ruling 127): none deletes, moves or renames a folder.
+# One per line, lowercase: the name with PowerShell aliases resolved (`echo` runs Write-Output),
+# then, optionally, the literal first argument it must have. Anything else voids the read.
+echo
+printf
+pwd
+ls
+cat
+test
+true
+set
+git status
+git log
+git diff
+git rev-parse
+write-output
+write-host
+get-childitem
+get-content
+test-path
+get-location
