@@ -20,7 +20,10 @@ How PowerShell text is read for these kinds:
   closed. A comment inside that `$(…)` hides no quote from the string: PowerShell finds where the
   string ends without reading the comment, so `"$(Get-Date # c)"` closes its string.
 - A here-string runs from `@'` or `@"` at the end of a line to a line that starts with `'@` or
-  `"@`; quotes inside it are text. Text after a here-string header is `warn`.
+  `"@`; quotes inside it are text. Text after a here-string header is `warn`. Glued to the text
+  before it, `@'` opens a here-string after a parameter's colon (`-Value:@'`) and in a statement
+  that starts as an expression (`$msg=@'`, `$a=[string]@'`), unless the word starts with a letter;
+  glued to a command's argument (`Write-Output a=@'`, `$a=@'`) it is a quote, as in PowerShell.
 - A `#` glued to a bare word that starts with a letter (`a#b`) is part of the word. After a
   variable, a number, a quote or a bracket it starts a comment, as in an expression.
 - A `|` at the end of a line continues the pipeline on the next line.

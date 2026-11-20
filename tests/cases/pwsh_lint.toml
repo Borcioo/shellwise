@@ -99,6 +99,36 @@ level = "ok"
 rules = []
 oracle = "accepts"
 
+[[row]]
+id = "bat-fix-quotes-every-argument-with-an-operator"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'a/b:^1.2' 'c/d:^2.0'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "tools\\composer.bat --% require \"a/b:^1.2\" \"c/d:^2.0\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-fix-quotes-an-argument-with-a-space"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'a/b:^1.2' --working-dir 'X:\\my dir'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "tools\\composer.bat --% require \"a/b:^1.2\" --working-dir \"X:\\my dir\""
+oracle = "accepts"
+
+[[row]]
+id = "bat-fix-by-path-when-a-later-argument-holds-a-double-quote"
+os = "windows"
+shell = "pwsh"
+command = "tools\\composer.bat require 'a/b:^1.2' 'say \"hi\" x'"
+level = "break"
+rules = ["bat-metachar"]
+fix = "starts by its own path"
+oracle = "accepts"
+
 # --- gate-truncated-pipeline (break): a tee'd run piped into a truncator ---
 
 [[row]]
@@ -111,15 +141,14 @@ rules = ["gate-truncated-pipeline"]
 fix = "$out = npm test 2>&1 | Tee-Object run.log 2>&1; $out | Select-Object -Last 20"
 oracle = "accepts"
 
-# Known gap (Task 27): the parser does not model an attached number (`-First:30`), so the rules see
-# no script and only the parser's warn fires. When it does, this row becomes the break above.
+# An attached number (`-First:30`) reads as the spaced one.
 [[row]]
 id = "gate-tee-then-select-first-attached"
 os = "any"
 shell = "pwsh"
 command = "npm test 2>&1 | Tee-Object run.log | Select-Object -First:30"
 level = "warn"
-rules = ["parse-error"]
+rules = ["gate-truncated-pipeline"]
 oracle = "accepts"
 
 [[row]]
@@ -476,16 +505,14 @@ rules = ["ps-bad-parameter"]
 fix = "give -pattern a value or remove it: Select-String -Path notes.txt -i"
 oracle = "accepts"
 
-# `-Name:` and a space: the next word is the value, for a switch too (probed: both run). Known gap
-# (Task 27): the parser does not model the shape yet, so only its warn fires; the binder already
-# takes the next word, and these rows become ok once the parser reads it.
+# `-Name:` and a space: the next word is the value, for a switch too (probed: both run).
 [[row]]
 id = "bad-param-allow-a-colon-then-a-space"
 os = "any"
 shell = "pwsh"
 command = "Get-Content notes.txt | Select-Object -First: 2"
-level = "warn"
-rules = ["parse-error"]
+level = "ok"
+rules = []
 oracle = "accepts"
 
 [[row]]
@@ -493,8 +520,8 @@ id = "bad-param-allow-a-switch-colon-then-a-space"
 os = "any"
 shell = "pwsh"
 command = "Set-Location -PassThru: $false D:\\x"
-level = "warn"
-rules = ["parse-error"]
+level = "ok"
+rules = []
 oracle = "accepts"
 
 [[row]]
@@ -544,6 +571,55 @@ command = "Get-ChildItem D:\\x -CodeSigningCert"
 level = "break"
 rules = ["ps-bad-parameter"]
 fix = "remove `-CodeSigningCert`: Get-ChildItem D:\\x"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-get-content-n-hint"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt -n 5"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -TotalCount 5: Get-Content a.txt -TotalCount 5"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-select-object-n-hint"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Select-Object -n 5"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -First 5: Select-Object -First 5"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-get-content-n-without-a-number-is-removed"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt -n"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `-n`: Get-Content a.txt"
+oracle = "accepts"
+
+# Task 30 survivors B14, B15: pinned by rows.
+[[row]]
+id = "bad-param-allow-a-dash-word-after-stop-parsing"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem --% -Recursive"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-quoted-dash-word"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem '-Recursive'"
+level = "ok"
+rules = []
 oracle = "accepts"
 
 # --- ps-bare-bash (warn, Windows): `bash` in PowerShell is WSL ---
@@ -833,6 +909,194 @@ level = "ok"
 rules = []
 oracle = "accepts"
 
+[[row]]
+id = "stale-allow-tee-object-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Tee-Object -Variable items | Out-Null; Set-Content b.txt $items"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-tee-object-to-a-file-binds-no-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem | Tee-Object -FilePath t.txt | Out-Null; Set-Content b.txt $items"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $items"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-error-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-Item nope -ErrorAction SilentlyContinue -ErrorVariable err; Set-Content err.txt $err"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-error-action-binds-no-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-Item nope -ErrorAction SilentlyContinue; Set-Content err.txt $err"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $err"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-warning-variable"
+os = "any"
+shell = "pwsh"
+command = "Write-Warning x -WarningVariable w; Set-Content w.txt $w"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-information-variable"
+os = "any"
+shell = "pwsh"
+command = "Write-Information x -InformationVariable iv; Set-Content i.txt $iv"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-set-variable-name"
+os = "any"
+shell = "pwsh"
+command = "Set-Variable -Name v -Value 1; Set-Content a.txt $v"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-set-variable-binds-only-its-name"
+os = "any"
+shell = "pwsh"
+command = "Set-Variable -Name v -Value 1; Set-Content a.txt $w"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $w"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-new-variable-positional-name"
+os = "any"
+shell = "pwsh"
+command = "New-Variable v 1; Set-Content a.txt $v"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-new-variable-value-is-no-name"
+os = "any"
+shell = "pwsh"
+command = "New-Variable v w; Set-Content a.txt $w"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $w"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-piped-set-variable"
+os = "any"
+shell = "pwsh"
+command = "Get-Date | Set-Variable now; Set-Content a.txt $now"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-status-code-variable"
+os = "any"
+shell = "pwsh"
+command = "Invoke-RestMethod https://x.test -StatusCodeVariable sc | Out-Null; Set-Content a.txt $sc"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-response-headers-variable"
+os = "any"
+shell = "pwsh"
+command = "Invoke-RestMethod https://x.test -ResponseHeadersVariable h | Out-Null; Set-Content h.txt $h"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-session-variable"
+os = "any"
+shell = "pwsh"
+command = "Invoke-WebRequest https://x.test -SessionVariable s | Out-Null; Set-Content s.txt $s"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-after-a-dot-sourced-script"
+os = "any"
+shell = "pwsh"
+command = ". .\\vars.ps1; Set-Content -LiteralPath out.txt -Value $Body"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-script-run-with-the-call-operator-binds-nothing-here"
+os = "any"
+shell = "pwsh"
+command = "& .\\vars.ps1; Set-Content -LiteralPath out.txt -Value $Body"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $Body"
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-script-run-by-path-binds-nothing-here"
+os = "any"
+shell = "pwsh"
+command = ".\\vars.ps1; Set-Content -LiteralPath out.txt -Value $Body"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $Body"
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-dot-source-after-the-write-comes-too-late"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -LiteralPath out.txt -Value $Body; . .\\vars.ps1"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $Body"
+oracle = "accepts"
+
+[[row]]
+id = "stale-a-switch-turned-off-after-colon-and-space-is-no-append"
+os = "any"
+shell = "pwsh"
+command = "$t | Out-File report.md -Append: $false"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $t"
+oracle = "accepts"
+
+[[row]]
+id = "stale-allow-an-append-given-after-colon-and-space"
+os = "any"
+shell = "pwsh"
+command = "$t | Out-File report.md -Append: $true"
+level = "ok"
+rules = []
+oracle = "accepts"
+
 # --- ps-git-commit-stdin (break): -F - with nothing piped in ---
 
 [[row]]
@@ -968,6 +1232,55 @@ id = "prose-allow-a-body-file"
 os = "any"
 shell = "pwsh"
 command = "gh pr create --title 'fix: x' --body-file b.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-both-families-offers-only-the-file"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body \"It\u2019s \u201Cdone\u201D now\""
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "write the --body text with the Write tool and pass --body-file <file>"
+oracle = "accepts"
+
+[[row]]
+id = "prose-both-families-without-a-file-form-offers-a-here-string"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title \"It\u2019s \u201Cdone\u201D\" --body-file b.md"
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "pass the --title text in a here-string"
+oracle = "accepts"
+
+[[row]]
+id = "prose-the-fixed-here-string-reads-clean"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title @'\nIt\u2019s \u201Cdone\u201D\n'@ --body-file b.md"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-one-family-still-offers-the-other-quote"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body \"say \u201Chi\u201D\""
+level = "break"
+rules = ["cli-inline-prose"]
+fix = "quote the --body text with '...' instead"
+oracle = "accepts"
+
+# Task 30 survivor I03: a here-string body is never torn.
+[[row]]
+id = "prose-allow-a-here-string-body"
+os = "any"
+shell = "pwsh"
+command = "gh pr create --title x --body @'\nIt\u2019s \u201Cdone\u201D\n'@"
 level = "ok"
 rules = []
 oracle = "accepts"

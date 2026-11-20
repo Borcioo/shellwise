@@ -629,6 +629,284 @@ level = "warn"
 rules = ["parse-error"]
 oracle = "refuses"
 
+# --- A here-string glued after `=`, `+`, `:` or `]` (B1): in an expression, and after a
+# parameter's colon, PowerShell opens a here-string there; glued to a command argument's word it
+# reads a quote. Each row ends with a line the tree misreads, so the lexer decides the verdict. ---
+
+[[row]]
+id = "pwsh-here-string-glued-after-an-assignment"
+os = "any"
+shell = "pwsh"
+command = "$msg=@'\nit's done\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-plus-equals"
+os = "any"
+shell = "pwsh"
+command = "$a+=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-a-scoped-name"
+os = "any"
+shell = "pwsh"
+command = "$script:m=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-an-env-name"
+os = "any"
+shell = "pwsh"
+command = "$env:M=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-an-index"
+os = "any"
+shell = "pwsh"
+command = "$h['k']=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-a-member"
+os = "any"
+shell = "pwsh"
+command = "$o.Body=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-a-cast"
+os = "any"
+shell = "pwsh"
+command = "$a=[string]@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-a-parameter-colon"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path x -Value:@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-glued-here-string-with-quotes-and-a-pipe-is-no-empty-pipe"
+os = "any"
+shell = "pwsh"
+command = "$a=@'\nit's a | ; b ok'\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-glued-here-string-left-open-is-break"
+os = "any"
+shell = "pwsh"
+command = "$msg=@'\nit's done\n"
+level = "break"
+rules = ["parse-error"]
+fix = "end the here-string opened at column 6 with a line that starts with '@"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-glued-here-string-header-with-text-after-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "$msg=@'x\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-at-quote-glued-to-a-letter-word-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output a@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-at-quote-glued-after-a-letter-word-equals-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output a=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-at-quote-glued-to-a-variable-argument-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output $a=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-at-quote-glued-after-a-parameter-equals-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output -x=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-here-string-glued-after-an-operator"
+os = "any"
+shell = "pwsh"
+command = "$a-@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-after-a-number"
+os = "any"
+shell = "pwsh"
+command = "1+@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-here-string-glued-in-an-expression-after-a-command"
+os = "any"
+shell = "pwsh"
+command = "Get-Date; $b=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-at-quote-glued-in-a-command-after-an-expression-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "$b=1; Write-Output $a=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-at-quote-glued-to-a-letter-word-in-an-expression-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "$x = a=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "break"
+rules = ["parse-error"]
+fix = "close the '"
+oracle = "refuses"
+
+# A command after `=` in an expression: the lexer reads the statement's mode only, so it takes the
+# glued `@'` for a here-string where PowerShell reads a quote (a missed break, pinned).
+[[row]]
+id = "pwsh-missed-break-at-quote-glued-to-an-argument-of-an-assigned-command"
+os = "any"
+shell = "pwsh"
+command = "$a = Write-Output $a=@'\nit's\n'@\ngit rev-parse v1.0.1^{commit}"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# --- Missed breaks that stay at their level (B8): PowerShell refuses each, the parser does not
+# name a deny kind for it, and the cost is one retry. Pinned so a change is seen. ---
+
+[[row]]
+id = "pwsh-missed-break-comment-closer-inside-a-subexpression-string"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$(x <# c)" #>)"'
+level = "ok"
+rules = []
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-drive-variable-in-a-here-string"
+os = "any"
+shell = "pwsh"
+command = "$t = @\"\n$a?: x\n\"@"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-drive-variable-after-a-parameter-colon"
+os = "any"
+shell = "pwsh"
+command = 'Write-Host -Object:"$n: x"'
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-a-piped-function"
+os = "any"
+shell = "pwsh"
+command = "function f { 1 } | Out-Host"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-a-piped-try"
+os = "any"
+shell = "pwsh"
+command = "try { 1 } catch { } | Out-Host"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-a-piped-do-while"
+os = "any"
+shell = "pwsh"
+command = "do { 1 } while ($false) | Out-Host"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-a-piped-labelled-loop"
+os = "any"
+shell = "pwsh"
+command = ":outer foreach ($i in 1..3) { $i } | Out-Host"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-missed-break-a-one-line-here-string"
+os = "any"
+shell = "pwsh"
+command = "$t = @'x'@"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
 # --- Bash ---
 # `bash -n` does not parse inside backticks, so an unclosed quote there is not a proven refusal:
 # only an unclosed quote in the command's own text is a deny kind.

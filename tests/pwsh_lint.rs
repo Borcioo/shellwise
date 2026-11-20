@@ -30,6 +30,34 @@ fn every_break_row_states_its_fix_line() {
     assert!(missing.is_empty(), "break rows without `fix`: {missing:?}");
 }
 
+/// `stale-write-var` judges a command line only: a script file keeps its variables from line to
+/// line (a `.ps1` that dot-sources or uses New-Variable is fine).
+#[test]
+fn stale_write_var_skips_a_script_file() {
+    use shellwise::ir::EnvView;
+    use shellwise::{AnalyseInput, Deadline, Origin, Os, Shell, analyse};
+    let text = "Set-Content -Path report.md -Value $text";
+    let rules = |origin| {
+        let input = AnalyseInput {
+            bytes: text.as_bytes(),
+            shell: Shell::Pwsh,
+            os: Os::host(),
+            cwd: None,
+            env: EnvView::new(),
+            origin,
+            problem: None,
+        };
+        let v = analyse(
+            &input,
+            &shellwise::config::Config::default(),
+            &Deadline::new(std::time::Instant::now(), 8000),
+        );
+        v.findings.iter().map(|f| f.rule).collect::<Vec<_>>()
+    };
+    assert_eq!(rules(Origin::CommandLine), ["stale-write-var"]);
+    assert_eq!(rules(Origin::File), Vec::<&str>::new());
+}
+
 #[cfg(feature = "oracle")]
 mod oracle {
     use super::case_loader;

@@ -10,7 +10,7 @@ without a finding.
 
 | Shape | Level | Why | Fix |
 |---|---|---|---|
-| Bash `read` with no input: no `-t` or `-u` (alone or in a cluster such as `-rt 5`), no input redirect on stdin (`<`, `0<`, `<&`, here-string, here-document), not after a pipe, not in the background, not inside a compound command or a function | `break` | `read` waits on stdin, which stays open and empty. Probed in Git Bash: it waits until the outer timer. | `set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"` |
+| Bash `read` with no input: no `-t` or `-u` (alone or in a cluster such as `-rt 5`), no input redirect on stdin (`<`, `0<`, `<&`, here-string, here-document), not after a pipe, not in the background, not inside a compound command or a function | `break` | `read` waits on stdin, which stays open and empty. Probed in Git Bash: it waits until the outer timer. | `feed read its input on the same line: append <<< "<value>" to the read command` |
 | Bash `claude -p` or `claude --print` with no `timeout` before it | `warn` | Against an unreachable API it retries about 10 times at 2 minutes or more each. | `timeout 120 claude -p <prompt>` |
 | A PowerShell 7 function named like a built-in alias (`md`, `rd`) | `warn` | The alias outranks the function, so the call runs the aliased command with the function's arguments and the function body never runs. | `rename the function <name> to a Verb-Noun name and call it by that name` |
 
@@ -23,7 +23,7 @@ prompt fails at once, and no ssh wait was shown.
 read x
 ```
 
-`break`: `Fix: set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"`
+`break`: `Fix: feed read its input on the same line: append <<< "<value>" to the read command`
 
 ```bash
 v=$(read y)

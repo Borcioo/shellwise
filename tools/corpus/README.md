@@ -37,6 +37,10 @@ Labels, in this order:
 - `failed`: any other error result.
 - `ok`: everything else, including `(Bash completed with no output)` and calls moved to the background.
 
+The label says what the tool result showed, not what the shell parsed: 16 `ok` PowerShell rows are
+texts pwsh's parser refuses (14 of them a `\"` inside a double-quoted string), labelled from
+their tool result. Read such a row by its real-parse answer, not by its label.
+
 A fork or a resume copies earlier lines with the same uuid and `tool_use` id: each call is kept once.
 User lines marked `isMeta` or `isCompactSummary` quote earlier text and are never read as a result.
 A call with no result is dropped and counted. It also writes `<out stem>.stats.json` (files read, lines,
