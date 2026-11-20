@@ -16,6 +16,7 @@ use crate::ir::{Elem, EnvView, Redirect, Script, SimpleCommand, Stmt, Word, Word
 use crate::level::Span;
 use crate::{BashProfile, Os, Shell};
 
+#[cfg(test)]
 const TABLE_TEXT: &str = include_str!("../data/programs.toml");
 
 /// The most wrappers `strip_wrappers` reads through (`sudo timeout 5 nice …`).
@@ -233,9 +234,13 @@ pub fn load(text: &str) -> Result<Table, String> {
     })
 }
 
+// `fn generated() -> Table`: `build.rs` writes `data/programs.toml` as code, so a hook call builds
+// the table without parsing text. `load` stays the validator; a test pins the two together.
+include!(concat!(env!("OUT_DIR"), "/programs_table.rs"));
+
 fn embedded() -> &'static Table {
     static TABLE: OnceLock<Table> = OnceLock::new();
-    TABLE.get_or_init(|| load(TABLE_TEXT).expect("data/programs.toml is valid"))
+    TABLE.get_or_init(generated)
 }
 
 /// The embedded `data/programs.toml` rows.
@@ -509,6 +514,20 @@ mod tests {
             .iter()
             .map(|w| w.static_value(&EnvView::new()).unwrap_or_default())
             .collect()
+    }
+
+    /// The code `build.rs` writes is the table `load` reads from the same text: every field, every
+    /// `extra` key and value kind, the msys facts.
+    #[test]
+    fn the_generated_table_equals_the_loaded_text() {
+        let loaded = load(TABLE_TEXT).expect("data/programs.toml is valid");
+        let built = generated();
+        assert_eq!(built.programs.len(), loaded.programs.len());
+        for (b, l) in built.programs.iter().zip(&loaded.programs) {
+            assert_eq!(b, l, "row {:?}", l.name);
+        }
+        assert_eq!(built.msys, loaded.msys);
+        assert!(loaded.programs.iter().any(|p| !p.extra.is_empty()));
     }
 
     #[test]

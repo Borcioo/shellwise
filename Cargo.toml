@@ -33,3 +33,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win
 [dev-dependencies]
 sha2 = "0.11.1"
 syn = { version = "3.0.10", features = ["full", "visit"] }
+
+[build-dependencies]
+toml = "1.2.1"
