@@ -47,6 +47,11 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - run: cargo test --features testhooks
         if: runner.os != 'macOS'
+        env:
+          # The runner's default TEMP is an 8.3 short path, which the delete rules do not
+          # recognise as a temp root yet.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package
         shell: bash

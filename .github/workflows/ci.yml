@@ -31,6 +31,11 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --features testhooks -- -D warnings
       - run: cargo test --features testhooks
+        env:
+          # The runner's default TEMP is an 8.3 short path, which the delete rules do not
+          # recognise as a temp root yet.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
   build:
     name: build (${{ matrix.target }})
