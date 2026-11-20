@@ -3338,6 +3338,106 @@ command = "[IO.File]::Copy('a', 'b'); cd build; Remove-Item -Recurse -Force *"
 level = "critical"
 rules = ["delete-critical"]
 
+# One row per plain location move; a location command that runs code (`source`) leaves an
+# unknown folder, and a later absolute `cd` to an existing folder does not make it known.
+[[row]]
+id = "ps-cd-existing-after-chdir"
+os = "windows"
+shell = "pwsh"
+command = "chdir .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-sl"
+os = "windows"
+shell = "pwsh"
+command = "sl .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-set-location"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-pushd"
+os = "windows"
+shell = "gitbash"
+command = 'pushd .; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-push-location"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-popd"
+os = "windows"
+shell = "gitbash"
+command = 'pushd .; popd; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-pop-location"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location .; Pop-Location; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-absolute-after-source"
+os = "windows"
+shell = "gitbash"
+command = 'source x; cd FX_REPO/build; rm -rf *'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# Shapes around the list: an assignment or an argument that runs a command, a prefix assignment
+# (it may change what the program runs), and a `cd` inside a body after a stale statement.
+[[row]]
+id = "ps-cd-existing-after-an-assigned-move"
+os = "windows"
+shell = "pwsh"
+command = '$x = Move-Item build old -PassThru; cd build; Remove-Item -Recurse -Force *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-cd-existing-after-an-expression-argument"
+os = "windows"
+shell = "pwsh"
+command = "Write-Output (Move-Item build old); cd build; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-cd-existing-after-an-env-prefix"
+os = "windows"
+shell = "gitbash"
+command = 'GIT_EXTERNAL_DIFF=./x.sh git diff; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-in-a-group-after-a-move"
+os = "windows"
+shell = "gitbash"
+command = 'mv build old; { cd build; rm -rf *; }'
+level = "danger"
+rules = ["delete-repo-contents"]
+
 [[row]]
 id = "gb-cd-existing-after-a-program"
 os = "windows"
@@ -3486,7 +3586,7 @@ command = 'cd build | cat; rm -rf *'
 level = "danger"
 rules = ["delete-repo-contents"]
 
-# An `exit` with two words is left unread (the oracle ran forms with one word or none);
+# An `exit` with two words exits too (the oracle) but is kept unread, the conservative side;
 # `cd … || exit 1 &` runs the whole list in the background.
 [[row]]
 id = "gb-cd-missing-or-exit-with-two-words"

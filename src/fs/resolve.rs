@@ -1228,7 +1228,7 @@ impl Location {
         let [Elem::Cmd(c)] = p.elems.as_slice() else {
             return false;
         };
-        // Only the forms the oracle ran with one word or none; `exit 1 2` is left unread.
+        // `exit 1 2` exits too (the oracle), but is kept unread: the conservative side.
         !is_pwsh(self.shell)
             && p.chain != Some(ChainOp::Background)
             && literal(&c.name).as_deref() == Some("exit")
@@ -1410,9 +1410,11 @@ impl Location {
         let Some(disk) = &self.disk else {
             return false;
         };
-        // An unknown candidate needs no check: it dominates the folders read from it, whether
-        // the old folder stays a candidate or not.
-        if !self.disk_as_read || self.os != Os::host() || new.known.is_empty() {
+        if !self.disk_as_read
+            || self.os != Os::host()
+            || new.unknown.is_some()
+            || new.known.is_empty()
+        {
             return false;
         }
         let paths: Vec<PathBuf> = new.known.iter().map(PathBuf::from).collect();
@@ -2106,6 +2108,10 @@ fn command_leaves_disk(c: &SimpleCommand) -> bool {
     }
     if c.name.parts.is_empty() {
         return true;
+    }
+    // `GIT_EXTERNAL_DIFF=x git diff` runs `x`: a prefix assignment may change what runs.
+    if !c.assigns.is_empty() {
+        return false;
     }
     // A name that is no literal (`$X`) is listed nowhere. The first eight location commands are
     // the plain moves; `source`, `eval` and the rest run code.
