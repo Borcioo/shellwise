@@ -1444,6 +1444,122 @@ command = "rm -f locked/f.txt"
 level = "ok"
 rules = []
 
+# ---------------------------------------------------------------- one row per reading branch
+
+# A wrapper that runs nothing reads as a plain command, whatever name follows it.
+[[row]]
+id = "gb-command-v-rm"
+os = "any"
+shell = "bash"
+command = "command -v rm"
+level = "ok"
+rules = []
+
+# PowerShell aliases are read as the cmdlet they stand for.
+[[row]]
+id = "ps-ri-alias-outside"
+os = "windows"
+shell = "pwsh"
+command = "ri -Recurse -Force ..\\outside\\data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# A parameter's value is no target.
+[[row]]
+id = "ps-ri-exclude-value-is-no-target"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force build -Exclude ..\\outside"
+level = "ok"
+rules = []
+
+# After `--` a word with a dash is an operand: here `-rf` is a file, so the delete is not
+# recursive and walks nothing.
+[[row]]
+id = "gb-rm-double-dash-dash-word"
+os = "windows"
+shell = "gitbash"
+command = "rm -- -rf linked"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-xargs-without-a-delete"
+os = "any"
+shell = "bash"
+command = "ls | xargs echo"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-find-exec-rm-outside"
+os = "any"
+shell = "bash"
+command = "find ../outside/data -name f.txt -exec rm {} +"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# find's start folders stand before its first option; later words are option values.
+[[row]]
+id = "gb-find-newer-value-is-no-start"
+os = "any"
+shell = "bash"
+command = "find build -newer ../outside/data/f.txt -delete"
+level = "ok"
+rules = []
+
+[[row]]
+id = "nocwd-find-delete-without-a-start"
+os = "any"
+shell = "bash"
+command = "find -name '*.o' -delete"
+level = "danger"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "nocwd-rm-rf-an-absolute-path"
+os = "any"
+shell = "bash"
+command = "rm -rf FX_OUTSIDE/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# robocopy deletes in its destination (the second operand), never in its source; `/L` lists only.
+[[row]]
+id = "ps-robocopy-mir-source-outside"
+os = "windows"
+shell = "pwsh"
+command = "robocopy ..\\outside\\data build /MIR"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-robocopy-mir-list-only"
+os = "windows"
+shell = "pwsh"
+command = "robocopy build ..\\outside\\data /MIR /L"
+level = "ok"
+rules = []
+
+# robocopy /MIR is recursive: a destination holding a link leads out of it.
+[[row]]
+id = "ps-robocopy-mir-onto-a-linked-tree"
+os = "windows"
+shell = "pwsh"
+command = "robocopy src linked /MIR"
+level = "danger"
+rules = ["delete-through-link"]
+
+# Deleting inside an allowed root by content (`find <root> -delete`) is ok; only the root itself
+# is danger.
+[[row]]
+id = "gb-find-delete-inside-the-allowed-root"
+os = "any"
+shell = "bash"
+command = "find FX_ALLOWED/tmp1 FX_ALLOWED -name '*.tmp' -delete"
+level = "ok"
+rules = []
+
 # ---------------------------------------------------------------- the scratch root
 
 [[row]]

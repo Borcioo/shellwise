@@ -484,6 +484,38 @@ fn the_marker_does_not_confirm_too_long() {
     assert!(v.findings.iter().any(|f| f.rule == "too-long"), "{v:?}");
 }
 
+/// A level set in the configuration applies to the length stage and to an incomplete analysis
+/// too, not only to the rules after the parse.
+#[test]
+fn a_configured_level_applies_to_the_length_stage_and_to_an_incomplete_analysis() {
+    let mut cfg = Config::default();
+    cfg.levels.insert("too-long".to_string(), Level::Warn);
+    cfg.levels
+        .insert("analysis-incomplete".to_string(), Level::Warn);
+    let long = format!("echo {}", "a".repeat(8000));
+    for (text, problem, rule) in [
+        (long.as_str(), None, "too-long"),
+        (
+            "echo hi",
+            Some("a reason the caller gives"),
+            "analysis-incomplete",
+        ),
+    ] {
+        let input = AnalyseInput {
+            bytes: text.as_bytes(),
+            shell: Shell::Bash(BashProfile::GitBash),
+            os: Os::host(),
+            cwd: None,
+            env: shellwise::ir::EnvView::new(),
+            origin: Origin::CommandLine,
+            problem,
+        };
+        let v = analyse(&input, &cfg, &Deadline::new(Instant::now(), 8000));
+        let f = v.findings.iter().find(|f| f.rule == rule);
+        assert_eq!(f.map(|f| f.level), Some(Level::Warn), "{rule}: {v:?}");
+    }
+}
+
 #[test]
 fn allowed_roots_come_from_the_user_file_and_never_from_the_repo_file() {
     let dir = fixture().at("cfg");

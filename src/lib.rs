@@ -399,52 +399,52 @@ pub mod testhooks {
     use crate::fs::{FileId, Fs, LinkKind, Meta, RealFs};
 
     /// Every path `RecordingFs` was asked about, in order (`mount_points` records `<mounts>`).
-    pub static FS_CALLS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    pub static FS_CALLS: Mutex<Vec<(&str, PathBuf)>> = Mutex::new(Vec::new());
 
-    fn record(p: &Path) {
+    fn record(call: &'static str, p: &Path) {
         FS_CALLS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(p.to_path_buf());
+            .push((call, p.to_path_buf()));
     }
 
     pub struct RecordingFs;
 
     impl Fs for RecordingFs {
         fn lstat(&self, p: &Path) -> io::Result<Meta> {
-            record(p);
+            record("lstat", p);
             RealFs.lstat(p)
         }
         fn read_dir(&self, p: &Path) -> io::Result<Vec<PathBuf>> {
-            record(p);
+            record("read_dir", p);
             RealFs.read_dir(p)
         }
         fn link_target(&self, p: &Path) -> io::Result<Option<PathBuf>> {
-            record(p);
+            record("link_target", p);
             RealFs.link_target(p)
         }
         fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
-            record(p);
+            record("long_path", p);
             RealFs.long_path(p)
         }
         fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
-            record(p);
+            record("link_kind", p);
             RealFs.link_kind(p)
         }
         fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
-            record(p);
+            record("file_id", p);
             RealFs.file_id(p)
         }
         fn device(&self, p: &Path) -> io::Result<Option<u64>> {
-            record(p);
+            record("device", p);
             RealFs.device(p)
         }
         fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
-            record(Path::new("<mounts>"));
+            record("mount_points", Path::new("<mounts>"));
             RealFs.mount_points()
         }
         fn drive_exists(&self, letter: char) -> io::Result<bool> {
-            record(Path::new(&format!("{}:\\", letter.to_ascii_uppercase())));
+            record("drive_exists", &PathBuf::from(format!("{letter}:\\")));
             RealFs.drive_exists(letter)
         }
     }

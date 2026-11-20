@@ -273,6 +273,32 @@ command = "git clean -fd"
 level = "danger"
 rules = ["delete-unknown-location"]
 
+# `-n` only lists what it would remove, wherever it points.
+[[row]]
+id = "clean-dry-run-outside"
+os = "any"
+shell = "pwsh"
+command = "git -C FX_OUTSIDE clean -nd"
+level = "ok"
+rules = []
+
+# `checkout -b <name>` creates a branch; the name is no path, even when a folder has it.
+[[row]]
+id = "checkout-new-branch-named-like-a-folder"
+os = "any"
+shell = "pwsh"
+command = "git checkout -b build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "worktree-remove-force-the-home-folder"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
 # ---------------------------------------------------------------- git-worktree-junction
 
 [[row]]

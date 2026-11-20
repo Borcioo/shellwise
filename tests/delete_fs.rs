@@ -39,8 +39,11 @@ impl Drop for Fixture {
     }
 }
 
-/// The verdict level and the paths the rules asked the file system about.
-fn run(fx: &Fixture, shell: Shell, command: &str, cwd: &Path) -> (Level, Vec<PathBuf>) {
+/// Each file-system call: its method and the path it was asked about.
+type Calls = Vec<(&'static str, PathBuf)>;
+
+/// The verdict level and the calls the rules made.
+fn run(fx: &Fixture, shell: Shell, command: &str, cwd: &Path) -> (Level, Calls) {
     FS_CALLS.lock().unwrap().clear();
     let home = fx.at("home").to_string_lossy().into_owned();
     let env = env_view(shell, Os::Windows, [("USERPROFILE".to_string(), home)]);
@@ -79,19 +82,41 @@ fn no_file_system_call_on_a_share_or_device_spelling() {
     let git = fx.at("repo/.git").to_string_lossy().into_owned();
     let pwsh = Shell::Pwsh;
     let bash = Shell::Bash(BashProfile::GitBash);
-    // The repo lookup probes `<folder>\.git` above the cwd: a call on the local cwd, not on
-    // the spelling under test.
-    let probe = |c: &Path| {
-        c.file_name().is_some_and(|n| n == ".git") && repo.starts_with(c.parent().unwrap())
+    // The repo lookup's `lstat` of `<folder>\.git` above the cwd: a call on the local cwd,
+    // not on the spelling under test.
+    let probe = |(call, c): &(&str, PathBuf)| {
+        *call == "lstat"
+            && c.file_name().is_some_and(|n| n == ".git")
+            && repo.starts_with(c.parent().unwrap())
     };
 
     // Positive control: a local recursive delete walks its tree.
     let (level, calls) = run(&fx, pwsh, "Remove-Item -Recurse -Force build", &repo);
     assert_eq!(level, Level::Ok);
     let build = fx.at("repo/build").to_string_lossy().into_owned();
-    assert!(calls.iter().any(|c| under(c, &build)), "control: {calls:?}");
+    assert!(
+        calls.iter().any(|(_, c)| under(c, &build)),
+        "control: {calls:?}"
+    );
 
-    let rows: [(Shell, String, &Path, Level, &str); 7] = [
+    let share_cwd = Path::new(r"\\192.0.2.1\share\repo");
+    // (shell, command, cwd, level, the local folder the spelling names)
+    let rows: [(Shell, String, &Path, Level, &str); 9] = [
+        // A cwd on a share: no repo lookup and no walk there.
+        (
+            bash,
+            "rm -rf build".into(),
+            share_cwd,
+            Level::Danger,
+            r"\\192.0.2.1\share\repo",
+        ),
+        (
+            bash,
+            "git clean -fdx".into(),
+            share_cwd,
+            Level::Danger,
+            r"\\192.0.2.1\share\repo",
+        ),
         (
             pwsh,
             r"Remove-Item -Recurse -Force \\?\C:\".into(),
@@ -149,9 +174,11 @@ fn no_file_system_call_on_a_share_or_device_spelling() {
         if level != *want {
             wrong.push(format!("{command}: level {level:?}, want {want:?}"));
         }
-        let bad: Vec<&PathBuf> = calls
+        let bad: Vec<&(&str, PathBuf)> = calls
             .iter()
-            .filter(|c| c.to_string_lossy().starts_with(r"\\") || (under(c, local) && !probe(c)))
+            .filter(|x| {
+                x.1.to_string_lossy().starts_with(r"\\") || (under(&x.1, local) && !probe(x))
+            })
             .collect();
         if !bad.is_empty() {
             wrong.push(format!("{command}: file-system calls {bad:?}"));

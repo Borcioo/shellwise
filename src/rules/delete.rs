@@ -233,9 +233,7 @@ pub(crate) fn leading_literal(w: &Word) -> Option<&str> {
 }
 
 pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) -> Read<'_> {
-    if c.opaque {
-        return Read::Unread;
-    }
+    // An opaque command stays opaque through the strip.
     let run = programs::strip_wrappers(c, shell, os);
     if run.opaque {
         return Read::Unread;
@@ -247,8 +245,9 @@ pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) ->
     let Some(prog) = programs::lookup(&name, shell, os) else {
         return Read::Plain;
     };
-    // A wrapper left after the strip runs something the table cannot read.
-    if prog.is(Kind::Shell) || prog.is(Kind::Eval) || prog.is(Kind::Wrapper) {
+    // A wrapper left after the strip runs nothing (`command -v rm`) and has no delete facts, so
+    // it reads as a plain command.
+    if prog.is(Kind::Shell) || prog.is(Kind::Eval) {
         return Read::Unread;
     }
     Read::Call(
@@ -873,7 +872,7 @@ impl<'a> Scene<'a> {
             return None;
         }
         let how = How {
-            recursive: picked.recursive || facts.always_recursive,
+            recursive: picked.recursive,
             contents: picked.contents,
         };
         if picked.words.is_empty() {
