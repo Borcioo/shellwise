@@ -253,9 +253,6 @@ impl Rule for MsysPathMangle {
             let Some(p) = program(ctx, &c).filter(|p| p.is(Kind::NativeMsys)) else {
                 continue;
             };
-            if c.assigns.iter().any(|(n, _)| opt_out.contains(n)) {
-                continue;
-            }
             let Some((w, v)) = c
                 .args
                 .iter()

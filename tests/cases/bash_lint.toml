@@ -528,6 +528,14 @@ level = "warn"
 rules = ["bash-ps-cmdlet"]
 
 [[row]]
+id = "ps-cmdlet-behind-a-wrapper"
+os = "any"
+shell = "gitbash"
+command = 'timeout 5 Get-Content notes.txt'
+level = "warn"
+rules = ["bash-ps-cmdlet"]
+
+[[row]]
 id = "ps-cmdlet-allow-as-argument"
 os = "any"
 shell = "gitbash"
@@ -579,6 +587,14 @@ level = "warn"
 rules = ["bash-versioned-php"]
 
 [[row]]
+id = "versioned-php-behind-a-wrapper"
+os = "any"
+shell = "gitbash"
+command = 'nohup php83 artisan queue:work'
+level = "warn"
+rules = ["bash-versioned-php"]
+
+[[row]]
 id = "versioned-php-allow-plain"
 os = "any"
 shell = "gitbash"
@@ -612,6 +628,15 @@ command = './vendor/bin/phpunit --filter Foo'
 level = "warn"
 rules = ["bash-vendor-bin-shebang"]
 fix = "php ./vendor/bin/phpunit"
+
+[[row]]
+id = "vendor-bin-behind-a-wrapper"
+os = "any"
+shell = "gitbash"
+command = 'timeout 300 vendor/bin/phpunit'
+level = "warn"
+rules = ["bash-vendor-bin-shebang"]
+fix = "php vendor/bin/phpunit"
 
 [[row]]
 id = "vendor-bin-allow-through-php"
@@ -653,6 +678,24 @@ id = "cd-slash-d-uppercase-quoted"
 os = "any"
 shell = "gitbash"
 command = 'cd /D "D:/x"'
+level = "break"
+rules = ["bash-cd-slash-d"]
+fix = 'cd "D:/x"'
+
+[[row]]
+id = "cd-slash-d-behind-command"
+os = "any"
+shell = "gitbash"
+command = 'command cd /d D:/x'
+level = "break"
+rules = ["bash-cd-slash-d"]
+fix = 'cd "D:/x"'
+
+[[row]]
+id = "cd-slash-d-in-a-quoted-substitution"
+os = "any"
+shell = "gitbash"
+command = 'echo "$(cd /d D:/x && ls)"'
 level = "break"
 rules = ["bash-cd-slash-d"]
 fix = 'cd "D:/x"'

@@ -532,6 +532,8 @@ mod tests {
             "[[program]]\nname = \"a\"\noperands = 1\n",
             "[[program]]\nname = \"a\"\nescapes = \"option\"\n",
             "[[program]]\nname = \"a\"\nfix = \" \"\n",
+            "[[program]]\nname = \"a\"\nvalue_options = [\" \"]\n",
+            "[[program]]\nname = \"a\"\n[msys]\nroots = [\"a/b\"]\nopt_out = []\n",
             "program = []\n",
         ];
         for text in bad {
@@ -562,6 +564,13 @@ mod tests {
             Some("timeout")
         );
         assert!(lookup("TIMEOUT", POSIX, Os::Posix).is_none());
+        // On POSIX a backslash is part of the file name, not a separator.
+        assert!(lookup("x\\timeout", POSIX, Os::Posix).is_none());
+        // Git Bash names are Windows names on any host (the WSL leg runs them as Os::Posix).
+        assert_eq!(
+            lookup("C:\\x\\TIMEOUT.EXE", GIT_BASH, Os::Posix).map(|p| p.name.as_str()),
+            Some("timeout")
+        );
         assert!(lookup("timeout.exe", POSIX, Os::Posix).is_none());
         // A bash-only row is not a pwsh program: there `timeout` is timeout.exe.
         assert!(lookup("timeout", Shell::Pwsh, Os::Windows).is_none());
@@ -580,6 +589,10 @@ mod tests {
             // Ruling 111: an unknown wrapper option does not hide the command.
             ("timeout --weird 60 rm -rf x", "rm", &["-rf", "x"]),
             ("sudo -E rm x", "rm", &["x"]),
+            // After `--` a word with a dash is the command.
+            ("nohup -- -x y", "-x", &["y"]),
+            // nice takes no assignments: `A=1` is the program it runs.
+            ("nice A=1 x", "A=1", &["x"]),
             ("nice -n 5 rm x", "rm", &["x"]),
             ("sudo -u root nice rm x", "rm", &["x"]),
             ("nohup rm x", "rm", &["x"]),
@@ -605,6 +618,10 @@ mod tests {
         let names: Vec<&str> = c.assigns.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["A", "B"]);
         assert_eq!(c.typed, "docker");
+        // The wrapper's redirects belong to the command it runs.
+        let script = parse("timeout 5 rm x > log.txt");
+        let c = strip_wrappers(first(&script), GIT_BASH, Os::Windows);
+        assert_eq!(c.redirects.len(), 1);
     }
 
     #[test]
@@ -629,6 +646,10 @@ mod tests {
         assert!(c.opaque);
         assert!(c.canonical.is_none());
         assert_eq!(args(&c), ["-y"]);
+        // A glob as the name: which program runs depends on the folder.
+        let script = parse("timeout 5 ./r*m -y");
+        let c = strip_wrappers(first(&script), GIT_BASH, Os::Windows);
+        assert!(c.opaque && c.canonical.is_none());
     }
 
     #[test]
@@ -668,6 +689,10 @@ mod tests {
         let pwsh: &[(&str, &[&str])] = &[
             ("[IO.File]::Delete((Get-Item x))", &["Get-Item"]),
             ("\"x$(Get-Item a)\" | Out-Null", &["Get-Item", "Out-Null"]),
+            (
+                "Invoke-Command { Get-Item x }",
+                &["Invoke-Command", "Get-Item"],
+            ),
         ];
         for (src, want) in pwsh {
             let script = crate::parse::pwsh::parse(src, Shell::Pwsh, Os::Windows).unwrap();
@@ -700,7 +725,10 @@ mod tests {
         let int = |v: Option<toml::Value>| v.and_then(|v| v.as_integer());
         let yes = |v: Option<toml::Value>| v.and_then(|v| v.as_bool()) == Some(true);
         // Task 31: the cmd.exe line limit, in both shells.
-        assert_eq!(int(key("cmd.exe", Shell::Pwsh, &["line_limit"])), Some(8191));
+        assert_eq!(
+            int(key("cmd.exe", Shell::Pwsh, &["line_limit"])),
+            Some(8191)
+        );
         assert_eq!(int(key("cmd", GIT_BASH, &["line_limit"])), Some(8191));
         // Task 33: wait facts.
         assert!(yes(key("timeout", GIT_BASH, &["bounds_wait"])));
