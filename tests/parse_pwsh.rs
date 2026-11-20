@@ -4,6 +4,7 @@ use shellwise::ir::{
     ChainOp, Elem, EnvView, MAX_NESTING, Quote, Redirect, Script, SimpleCommand, Stmt, Word,
     WordPart,
 };
+use shellwise::parse::ParseKind;
 use shellwise::parse::pwsh::parse;
 use shellwise::{Os, Shell};
 
@@ -250,9 +251,15 @@ fn a_command_inside_a_syntax_error_fails_the_parse() {
         assert!(e.message.contains("syntax error"), "{src}: {e:?}");
     }
     let e = parse("Remove-Item 'x", Shell::Pwsh, Os::Windows).unwrap_err();
-    assert_eq!(e.unclosed, Some(shellwise::parse::QuoteKind::Single));
+    assert_eq!(
+        e.kind,
+        ParseKind::UnclosedQuote(shellwise::parse::QuoteKind::Single)
+    );
     let e = parse("Remove-Item \"x", Shell::Pwsh, Os::Windows).unwrap_err();
-    assert_eq!(e.unclosed, Some(shellwise::parse::QuoteKind::Double));
+    assert_eq!(
+        e.kind,
+        ParseKind::UnclosedQuote(shellwise::parse::QuoteKind::Double)
+    );
 }
 
 #[test]

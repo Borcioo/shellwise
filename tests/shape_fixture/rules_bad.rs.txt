@@ -1,0 +1,12 @@
+// A rule that hard-codes a program name, an option spelling and a regex: tests/shape.rs must
+// count each one.
+pub fn matches(name: &str, flag: &str) -> bool {
+    let pattern = Regex::new("^a+$");
+    name == "rm" && flag == "-Recurse" && pattern.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    // Inside #[cfg(test)]: not counted.
+    const ROWS: &[&str] = &["git", "--force"];
+}

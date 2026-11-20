@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 
 use tree_sitter::{Node, Parser, Tree};
 
-use super::{ParseError, QuoteKind};
+use super::{Failure, ParseError, ParseKind, QuoteKind, internal};
 use crate::ir::{
     ChainOp, Comment, Elem, MAX_NESTING, MethodCall, Pipeline, Quote, Redirect, Script,
     SimpleCommand, Stmt, Word, WordPart,
@@ -67,7 +67,7 @@ pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
         end: src.len(),
     };
     if !matches!(dialect, Shell::Pwsh | Shell::Powershell5) {
-        let e = error(whole, "not a PowerShell dialect", None);
+        let e = error(whole, "not a PowerShell dialect", ParseKind::Syntax);
         return Lossy {
             tree_error: Some(e),
             ..Lossy::default()
@@ -77,13 +77,19 @@ pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
     let run = std::thread::Builder::new()
         .name("pwsh-parse".into())
         .stack_size(STACK_BYTES)
-        .spawn(move || lossy_on_this_thread(&owned, dialect, os));
+        .spawn(move || {
+            #[cfg(feature = "testhooks")]
+            if crate::rules::testhooks::active("parse-panic") {
+                panic!("testhook: panic in the PowerShell parser");
+            }
+            lossy_on_this_thread(&owned, dialect, os)
+        });
     let joined = match run {
         Ok(handle) => handle.join().ok(),
         Err(_) => None,
     };
     joined.unwrap_or_else(|| Lossy {
-        tree_error: Some(error(whole, "the PowerShell parser did not finish", None)),
+        tree_error: Some(internal(whole, Failure::PwshNotFinished)),
         ..Lossy::default()
     })
 }
@@ -99,13 +105,13 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
         .is_err()
     {
         return Lossy {
-            tree_error: Some(error(whole, "the PowerShell grammar did not load", None)),
+            tree_error: Some(internal(whole, Failure::PwshGrammarNotLoaded)),
             ..Lossy::default()
         };
     }
     let Some(tree) = parser.parse(src, None) else {
         return Lossy {
-            tree_error: Some(error(whole, "the PowerShell parser gave no tree", None)),
+            tree_error: Some(internal(whole, Failure::PwshNoTree)),
             ..Lossy::default()
         };
     };
@@ -140,11 +146,11 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
     }
 }
 
-fn error(span: Span, message: &str, unclosed: Option<QuoteKind>) -> ParseError {
+fn error(span: Span, message: &str, kind: ParseKind) -> ParseError {
     ParseError {
         span,
         message: message.to_string(),
-        unclosed,
+        kind,
     }
 }
 
@@ -197,7 +203,6 @@ fn first_tree_error(src: &str, tree: &Tree) -> Option<ParseError> {
             stack.extend(kids(n));
         }
     }
-    let unclosed = unclosed_quote(src);
     let (sp, message) = match best {
         Some(n) if n.is_missing() => (
             span(n),
@@ -212,77 +217,123 @@ fn first_tree_error(src: &str, tree: &Tree) -> Option<ParseError> {
             "PowerShell syntax error".to_string(),
         ),
     };
-    Some(error(sp, &message, unclosed))
+    Some(match unclosed_quote(src) {
+        Some((quote, at)) => error(
+            Span {
+                start: at,
+                end: src.len(),
+            },
+            &message,
+            ParseKind::UnclosedQuote(quote),
+        ),
+        None => error(sp, &message, ParseKind::Syntax),
+    })
 }
 
-/// The quote left open at the end of `src`, read the way PowerShell reads quotes: `''` inside
-/// single quotes, backtick escapes and `""` inside double quotes, `#` comments outside them.
-fn unclosed_quote(src: &str) -> Option<QuoteKind> {
-    #[derive(PartialEq)]
+/// The quote left open at the end of `src` and the byte offset where it opens, read the way
+/// PowerShell reads quotes: `''` inside single quotes, backtick escapes and `""` inside double
+/// quotes, `#` comments outside them, and a `$(…)` subexpression inside double quotes read as
+/// code, with its own quotes and parentheses. When quotes nest, the innermost open one counts.
+fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
+    #[derive(Clone, Copy)]
     enum S {
         Out,
-        Single,
-        Double,
+        /// Code inside `$(` in a double-quoted string, with its open parentheses.
+        Sub(usize),
+        Single(usize),
+        Double(usize),
         Line,
         Block,
     }
-    let b: Vec<char> = src.chars().collect();
-    let mut s = S::Out;
+    let b: Vec<(usize, char)> = src.char_indices().collect();
+    let mut stack = vec![S::Out];
     let mut i = 0;
     while i < b.len() {
-        let c = b[i];
-        let next = b.get(i + 1).copied();
-        match s {
-            S::Out => match c {
+        let (at, c) = b[i];
+        let next = b.get(i + 1).map(|&(_, c)| c);
+        let top = *stack.last().expect("the stack keeps its base");
+        match top {
+            S::Out | S::Sub(_) => match c {
                 '`' => i += 1,
-                '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' => s = S::Single,
-                '"' | '\u{201c}' | '\u{201d}' | '\u{201e}' => s = S::Double,
+                c if is_single_quote(c) => stack.push(S::Single(at)),
+                c if is_double_quote(c) => stack.push(S::Double(at)),
                 '<' if next == Some('#') => {
-                    s = S::Block;
+                    stack.push(S::Block);
                     i += 1;
                 }
-                '#' => s = S::Line,
+                // Inside `$(`, a `#` in the middle of a word (`a#b`) is part of it.
+                '#' if matches!(top, S::Out) || i == 0 || starts_token(b[i - 1].1) => {
+                    stack.push(S::Line)
+                }
+                '(' if matches!(top, S::Sub(_)) => {
+                    if let Some(S::Sub(depth)) = stack.last_mut() {
+                        *depth += 1;
+                    }
+                }
+                ')' => match top {
+                    S::Sub(0) => {
+                        stack.pop();
+                    }
+                    S::Sub(depth) => {
+                        stack.pop();
+                        stack.push(S::Sub(depth - 1));
+                    }
+                    _ => {}
+                },
                 _ => {}
             },
-            S::Single => {
+            S::Single(_) => {
                 if is_single_quote(c) {
                     if next.is_some_and(is_single_quote) {
                         i += 1;
                     } else {
-                        s = S::Out;
+                        stack.pop();
                     }
                 }
             }
-            S::Double => {
+            S::Double(_) => {
                 if c == '`' {
+                    i += 1;
+                } else if c == '$' && next == Some('(') {
+                    stack.push(S::Sub(0));
                     i += 1;
                 } else if is_double_quote(c) {
                     if next.is_some_and(is_double_quote) {
                         i += 1;
                     } else {
-                        s = S::Out;
+                        stack.pop();
                     }
                 }
             }
             S::Line => {
                 if c == '\n' || c == '\r' {
-                    s = S::Out;
+                    stack.pop();
                 }
             }
             S::Block => {
                 if c == '#' && next == Some('>') {
-                    s = S::Out;
+                    stack.pop();
                     i += 1;
                 }
             }
         }
         i += 1;
     }
-    match s {
-        S::Single => Some(QuoteKind::Single),
-        S::Double => Some(QuoteKind::Double),
-        _ => None,
+    // A comment left open at the end sits on `Out` (no quote open) or inside `$(`, where it hides
+    // the `)`: PowerShell reports the paren, not the quote.
+    if matches!(stack.last(), Some(S::Line)) {
+        return None;
     }
+    stack.iter().rev().find_map(|s| match *s {
+        S::Single(at) => Some((QuoteKind::Single, at)),
+        S::Double(at) => Some((QuoteKind::Double, at)),
+        _ => None,
+    })
+}
+
+/// Whether a token starts after `c`: whitespace or a character that ends a word.
+fn starts_token(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ';' | '(' | ')' | '{' | '}' | '|' | '&')
 }
 
 fn is_single_quote(c: char) -> bool {
@@ -338,7 +389,7 @@ fn unproven_special_char(src: &str, root: Node) -> Option<ParseError> {
             return Some(error(
                 Span { start: i, end },
                 "PowerShell reads this character as an ASCII dash, quote or space here",
-                None,
+                ParseKind::Unmodelled,
             ));
         }
     }
@@ -457,7 +508,7 @@ fn misread_node(src: &str, root: Node) -> Option<ParseError> {
             return Some(error(
                 span(n),
                 "PowerShell's tokenizer reads this as another token",
-                None,
+                ParseKind::Unmodelled,
             ));
         }
         stack.extend(kids(n));
@@ -696,7 +747,7 @@ fn unglued(src: &str, root: Node) -> Option<ParseError> {
             error(
                 at,
                 &format!("PowerShell may read these glued pieces differently: {l}, {r}"),
-                None,
+                ParseKind::Unmodelled,
             )
         })
 }
@@ -744,7 +795,7 @@ impl Cx {
             return Err(error(
                 at,
                 &format!("nesting deeper than {MAX_NESTING} levels"),
-                None,
+                ParseKind::TooDeep,
             ));
         }
         Ok(Cx { depth, ..self })
@@ -777,7 +828,7 @@ impl<'a> Lower<'a> {
         error(
             span(n),
             &format!("PowerShell construct not modelled: {}", n.kind()),
-            None,
+            ParseKind::Unmodelled,
         )
     }
 
@@ -1278,7 +1329,7 @@ impl<'a> Lower<'a> {
                         return Err(error(
                             span(k),
                             "`&&` and `||` are PowerShell 7 syntax; Windows PowerShell 5.1 rejects them",
-                            None,
+                            ParseKind::Syntax,
                         ));
                     }
                     let op = if self.text(k) == "&&" {
@@ -2500,7 +2551,7 @@ impl<'a> Lower<'a> {
                                 end: at + 2,
                             },
                             "a subexpression inside a word that the parser did not read",
-                            None,
+                            ParseKind::Unmodelled,
                         ));
                     } else if c == '$'
                         && let Some(vlen) = var_len(&text[i..])

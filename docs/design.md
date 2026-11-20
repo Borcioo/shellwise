@@ -172,17 +172,25 @@ The highest finding wins; all findings are listed. Exit 64+ is a usage or intern
   `dynamic-target` / `walk-timeout`, level from config (default `danger`). In the Claude Code
   adapter a verdict whose only deny is shim-eligible `dynamic-target` runs under the shim instead
   (next sections); everything else about it stays as here.
-- A failed analysis (parse error, panic, internal error, input over the cap, invalid UTF-8,
-  deadline) → `danger` (`analysis-failed`), unless the whole raw text matches the harmless grammar:
-  no shell metacharacter (``; & | < > ( ) $ ` \ " ' { } [ ] * ? ~ #``, newline) and a first word
-  from a short read-only list (`ls`, `echo`, `pwd`, `git status|log|diff|show`, `grep`, `head`,
-  `tail`, `wc`, `which`), every word compared exactly as written (case-sensitive: git sends a
-  mixed-case subcommand to alias lookup), ASCII only, with no later word starting with `-` or `/`,
-  or a sole `--version` after `git`, `cargo`, `rustc`, `node`, `npm`, `python` or `pwsh`. The
-  raw-text scan only names the destructive command in the reason; it never clears a command. The
-  allow marker has no effect on this path (without a parse a trailing `#` cannot be told from an
-  escaped or quoted one, and input past the cap could hide anything before it). Measured on the
-  corpus: 2 of 22,346 bash rows (0.009 %) fall on this path without being shell syntax errors.
+- A parse error is a lint (`parse-error`), not a block. It is `break` only for a kind the parser
+  identifies and a real-shell probe confirms the shell refuses: an unclosed quote (outside the
+  PowerShell exceptions in `docs/rules/parse-error.md`). Any other parse error is `warn`, or
+  `danger` under its own id `parse-error-destructive` when the raw-text scan finds a command of
+  the destructive table or a .NET `Delete()` call; a level configured for `parse-error` does
+  not lower it.
+- An analysis that does not finish for any other reason (a panic, a parser that failed itself,
+  input over 64 KiB, invalid UTF-8, the deadline, a worker that did not start or ended without a
+  result, a config that did not load) → `analysis-incomplete`: `danger` when the raw-text scan
+  finds a command of the destructive table or a .NET `Delete()` call, `warn` otherwise. A region
+  the scan cannot read (a pipe into a shell, nesting past its depth limit, an encoded body) is no
+  destructive match, and
+  a scan that does not finish is `warn` too. Only input that cannot be scanned at all (over 1 MiB,
+  or stdin still open at the deadline) is `danger` unread. The scan runs only on this path; started
+  when the deadline has run out, it still gets 500 ms of the 1500 ms the deadline leaves before
+  the hook timeout. The length rules run on the raw text before all of this, so a config that
+  did not load still gets them. The allow marker has no effect on this path (without a parse a
+  trailing `#` cannot be told from an escaped or quoted one, and input past the cap could hide
+  anything before it).
 
 ### Delete guard
 
