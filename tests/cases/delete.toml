@@ -785,6 +785,14 @@ level = "danger"
 rules = ["delete-outside-project"]
 
 [[row]]
+id = "gb-sudo-long-list-option"
+os = "any"
+shell = "bash"
+command = "sudo --list rm -rf FX_HOME"
+level = "ok"
+rules = []
+
+[[row]]
 id = "gb-sudo-list"
 os = "any"
 shell = "bash"
