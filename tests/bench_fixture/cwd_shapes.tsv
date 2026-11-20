@@ -1,0 +1,13 @@
+cwd	shape	os
+C:\fixture\proj	drive	Windows
+c:/fixture/proj	drive	Windows
+\\fixture-host\share\proj	unc	Windows
+//fixture-host/share/proj	unc	Windows
+/mnt/c/fixture	wsl-mnt	Linux
+/mnt/c	wsl-mnt	Linux
+/mnt/cc/fixture	posix	Linux
+/fixture/proj	posix	Linux
+/	posix	Linux
+-	missing	Windows
+fixture/proj	other	Windows
+C:fixture	other	Windows

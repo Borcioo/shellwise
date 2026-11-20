@@ -300,6 +300,16 @@ fn a_known_row_absent_from_the_corpus_fails() {
 }
 
 #[test]
+fn a_known_row_whose_os_is_not_the_replayed_one_fails() {
+    let inputs = Inputs {
+        known: "known_os_mismatch.jsonl",
+        ..FULL
+    };
+    bench("known-os", &inputs, &[], &[])
+        .assert_fail("known row f00000000004 is Linux in the slice but replays on Windows");
+}
+
+#[test]
 fn a_missing_known_file_fails() {
     let inputs = Inputs {
         known: "no-such-known.jsonl",
@@ -415,6 +425,83 @@ fn the_dump_holds_one_line_per_row_with_the_raw_hit() {
     assert!(
         row7.starts_with("f00000000007\tdanger\t") && row7.ends_with("\tyes"),
         "{row7}"
+    );
+}
+
+/// `corpus_os.jsonl`: each row replays on the OS its cwd shape names, and the report counts the
+/// rows per OS and per cwd shape. (No rule on this base reads the env into a verdict:
+/// `bench::tests` holds the env control.)
+#[test]
+fn each_row_replays_on_the_os_its_cwd_names() {
+    let inputs = Inputs {
+        corpus: "corpus_os.jsonl",
+        baseline: "baseline_os.jsonl",
+        known: "known.jsonl",
+        rule_map: Some("rule_map.toml"),
+        real_parse: None,
+    };
+    let b = bench("os", &inputs, &["--dump", "{dir}/dump.tsv"], &[]);
+    b.assert_code(0);
+    let text = std::fs::read_to_string(b.dir.join("dump.tsv")).unwrap();
+    for line in [
+        // A drive cwd stays Windows: Git Bash rewrites the POSIX path, as before.
+        "f000000000b1\twarn\tbash-msys-path-mangle\tno",
+        // The same command from a Linux cwd runs in POSIX bash, which rewrites nothing.
+        "f000000000b2\tok\t-\tno",
+    ] {
+        assert!(text.lines().any(|l| l == line), "no {line:?}: {text}");
+    }
+    let v = b.report();
+    assert_eq!(count(&v["rows_per_os"], "Windows"), (3, 2, 1), "{v}");
+    assert_eq!(count(&v["rows_per_os"], "Linux"), (2, 2, 0), "{v}");
+    let shapes = &v["cwd_shapes"];
+    for (shape, n) in [
+        ("drive", 1),
+        ("unc", 1),
+        ("wsl-mnt", 1),
+        ("posix", 1),
+        ("missing", 1),
+        ("other", 0),
+    ] {
+        assert_eq!(shapes[shape], n, "{shape}: {shapes}");
+    }
+    for line in [
+        "replayed on Windows: 3 (Bash 2, PowerShell 1)",
+        "replayed on Linux: 2 (Bash 2, PowerShell 0)",
+        "cwd shapes: drive 1, unc 1, wsl-mnt 1, posix 1, missing 1, other 0",
+    ] {
+        assert!(
+            b.run.stdout.lines().any(|l| l == line),
+            "no {line:?}: {}",
+            b.run.stdout
+        );
+    }
+}
+
+#[test]
+fn the_diff_counts_the_moved_rows_per_os() {
+    let inputs = Inputs {
+        corpus: "corpus_os.jsonl",
+        baseline: "baseline_os.jsonl",
+        known: "known.jsonl",
+        rule_map: Some("rule_map.toml"),
+        real_parse: None,
+    };
+    let old = fixture("old_dump_os.tsv");
+    let b = bench("diff_os", &inputs, &["--diff", old.as_str()], &[]);
+    b.assert_code(0);
+    let m = &b.report()["moves"];
+    assert_eq!(m["down"], 1, "{m}");
+    assert_eq!(m["moved_by_os"]["Linux"], 1, "{m}");
+    assert_eq!(m["moved_by_os"]["Windows"], 0, "{m}");
+    assert_eq!(m["moved"][0]["os"], "Linux", "{m}");
+    assert!(
+        b.run
+            .stdout
+            .lines()
+            .any(|l| l == "moves by OS: Windows 0, Linux 1"),
+        "{}",
+        b.run.stdout
     );
 }
 
