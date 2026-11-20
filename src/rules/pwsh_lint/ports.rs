@@ -1,5 +1,5 @@
-//! The installed baseline-guard PowerShell rules, except `bat-metachar` (`bat.rs`). They are break,
-//! as in baseline-guard, except `gate-truncated-pipeline`, `ps-bare-bash` and
+//! The installed baseline guard PowerShell rules, except `bat-metachar` (`bat.rs`). They are
+//! break, as in the baseline guard, except `gate-truncated-pipeline`, `ps-bare-bash` and
 //! `ps-dotnet-relative-path`: warn, because in the corpus each also fired on runs that worked.
 
 use tree_sitter::{Node, Parser};

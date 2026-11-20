@@ -1,4 +1,4 @@
-# The PowerShell rows of the baseline-guard "Known gaps" list, as synthetic commands.
+# The PowerShell rows of the baseline guard's "Known gaps" list, as synthetic commands.
 # Expected values are PowerShell 7.7.0's Parser::ParseInput answer (tests/pwsh_oracle.rs checks them).
 
 [[row]]

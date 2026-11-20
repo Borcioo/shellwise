@@ -1,25 +1,26 @@
 //! `shellwise bench`: replay the corpus in process through `analyse` and report the meters.
 //!
 //! Every corpus row runs as a command line with the default config (or `--config`, the file the
-//! host setup installs), the row's cwd, on the OS its cwd shape names (`CwdShape`) and with a fixed
+//! hook setup installs), the row's cwd, on the OS its cwd shape names (`CwdShape`) and with a fixed
 //! synthetic environment of that OS (`WINDOWS_ENV`, `POSIX_ENV`), never the machine's own. The
 //! result still depends on the machine that runs it: the rules read this machine's disk (a row
 //! whose cwd is gone here cannot fire a rule that reads the disk: `rows_cwd_missing`,
 //! `disk_reading_rules`; system paths are read by the row's OS), and the default config's allowed
 //! root is this machine's temp folder. The report keeps four lines apart
 //! (Global Constraints, F8): meter 1, rows the real shell's parser also refuses, parity denials
-//! baseline-guard already makes, and the own line of the owner-requested length rule; then meter 2
-//! (split by those lines and by rule family), `parse_kind_false_deny`, per rule × label counts,
-//! parity per installed baseline-guard rule and its exception keys, the in-process latency (the
-//! median over `--passes` passes) and each rule's own cost.
+//! the baseline guard already makes, and the own line of the owner-requested length rule; then
+//! meter 2 (split by those lines and by rule family), `parse_kind_false_deny`, per rule × label
+//! counts, parity per installed baseline guard rule and its exception keys, the in-process latency
+//! (the median over `--passes` passes) and each rule's own cost. The baseline guard is the earlier,
+//! rule-per-regex Python guard whose verdicts `tools/corpus/baseline.py` replays.
 //!
-//! A baseline-guard id reaches a shellwise id only through the rule map (`tools/corpus/rule_map.toml`,
+//! A baseline guard id reaches a shellwise id only through the rule map (`tools/corpus/rule_map.toml`,
 //! compiled in; `--rule-map` replaces it). The meters are reported, never gating; the run fails
 //! (exit 1, one `FAIL:` line each) only when it cannot measure or a known answer is wrong:
 //! - 0 rows, or 0 rows for one shell, or 0 rows joined to the baseline;
-//! - a baseline-guard id in the baseline or in `known.jsonl` that the map does not name;
+//! - a baseline guard id in the baseline or in `known.jsonl` that the map does not name;
 //! - a map key without a `runs_on` entry, or a mapped rule that fires outside its entry on a row
-//!   baseline-guard denies with that id;
+//!   the baseline guard denies with that id;
 //! - a config or a parity exception file that does not load;
 //! - 0 `known.jsonl` rows checked, a checked row missing from the corpus, or one missing its rule;
 //! - with `--diff`, a second replay of the same build (the head-vs-head control) that moves a row.
@@ -78,7 +79,8 @@ const WINDOWS_ENV: [(&str, &str); 3] = [
 const POSIX_ENV: [(&str, &str); 1] = [("HOME", "/h/bench")];
 /// The corpus labels (`extract.py`), the keys a parity exception may name.
 const LABELS: [&str; 4] = ["ok", "failed", "denied-hook", "denied-permission"];
-/// The parity shape classes the bench computes for a row baseline-guard denies and shellwise allows.
+/// The parity shape classes the bench computes for a row the baseline guard denies and shellwise
+/// allows.
 const SHAPE_MAPPED_WARN: &str = "mapped-warn";
 const SHAPE_MAPPED_SILENT: &str = "mapped-silent";
 const SHAPES: [&str; 2] = [SHAPE_MAPPED_WARN, SHAPE_MAPPED_SILENT];
@@ -186,7 +188,7 @@ pub struct BenchArgs {
     /// The corpus `extract.py` writes.
     #[arg(long, value_name = "FILE")]
     corpus: PathBuf,
-    /// The baseline-guard replay `baseline.py` writes.
+    /// The baseline guard replay `baseline.py` writes.
     #[arg(long, value_name = "FILE")]
     baseline: PathBuf,
     /// Where the JSON report goes.
@@ -215,7 +217,7 @@ pub struct BenchArgs {
 /// What the replay measures with: the config, the parity exceptions and the timing passes.
 #[derive(clap::Args)]
 struct MeasureArgs {
-    /// An integration config file (the one the host setup installs); the default config otherwise.
+    /// An integration config file (the one the hook setup installs); the default config otherwise.
     /// Neither the user file nor a repo file is read.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
@@ -268,7 +270,7 @@ struct RuleMap {
     runs_on: BTreeMap<String, RunsOn>,
 }
 
-/// Where the shellwise rule a baseline-guard id maps to can fire, read from that rule's gate.
+/// Where the shellwise rule a baseline guard id maps to can fire, read from that rule's gate.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RunsOn {
@@ -285,7 +287,7 @@ struct ParityFile {
     exception: Vec<ParityException>,
 }
 
-/// Rows of one installed baseline-guard rule that shellwise allows on purpose, keyed by the rule,
+/// Rows of one installed baseline guard rule that shellwise allows on purpose, keyed by the rule,
 /// a shape class the bench computes (`SHAPES`) and the row's label, with the expected count of
 /// that key; never row ids (F9).
 #[derive(Deserialize)]
@@ -551,7 +553,7 @@ fn bench(args: &BenchArgs) -> Result<Vec<String>, String> {
     }
     if !unmapped.is_empty() {
         return Err(format!(
-            "the rule map names no shellwise id for these baseline-guard ids: {}",
+            "the rule map names no shellwise id for these baseline guard ids: {}",
             unmapped.into_iter().collect::<Vec<_>>().join(", ")
         ));
     }
@@ -704,7 +706,7 @@ fn load_rule_map(path: Option<&Path>) -> Result<RuleMap, String> {
 }
 
 /// The rows where a mapped rule fires on a tool or OS its `runs_on` entry leaves out, among the
-/// rows baseline-guard denies with that id (elsewhere the mapped rule may fire for its own reasons).
+/// rows the baseline guard denies with that id (elsewhere the mapped rule may fire for its own reasons).
 fn check_runs_on(
     rows: &[(&CorpusRow, Tool)],
     head: &[Replayed],
@@ -1278,7 +1280,7 @@ fn diff(
 }
 
 /// The line a denied, non-destructive `ok` row counts on. Exactly one, in this order: the real
-/// parser refuses the text; every deny rule is a port of a baseline-guard rule that denies this row
+/// parser refuses the text; every deny rule is a port of a baseline guard rule that denies this row
 /// too; every deny rule is a parity or own-line rule (at least one own-line); otherwise meter 1.
 /// Meter 2's rows are split by the same lines.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1583,7 +1585,7 @@ impl Report {
         r
     }
 
-    /// Each key of one baseline-guard rule: the allowed rows the bench counted and the exceptions'
+    /// Each key of one baseline guard rule: the allowed rows the bench counted and the exceptions'
     /// expected counts, as (shape, label, allows, expected, why).
     fn parity_keys<'a>(
         p: Option<&'a ParityRule>,
@@ -1638,8 +1640,10 @@ impl Report {
             .into_iter()
             .map(|sg| {
                 let p = self.parity_per_rule.get(sg);
-                let mine: Vec<&ParityException> =
-                    exceptions.iter().filter(|e| e.baseline_guard == sg).collect();
+                let mine: Vec<&ParityException> = exceptions
+                    .iter()
+                    .filter(|e| e.baseline_guard == sg)
+                    .collect();
                 let keys = Report::parity_keys(p, &mine);
                 let excepted: u64 = keys.iter().map(|k| k.3).sum();
                 let unexplained: u64 = keys.iter().map(|k| k.2.saturating_sub(k.3)).sum();
@@ -1876,12 +1880,14 @@ impl Report {
             let p = self.parity_per_rule.get(sg);
             if let Some(p) = p.filter(|p| p.shellwise_allows > 0) {
                 println!(
-                    "parity {sg}: baseline-guard denies {}, shellwise allows {}",
+                    "parity {sg}: baseline guard denies {}, shellwise allows {}",
                     p.baseline_guard_denies, p.shellwise_allows
                 );
             }
-            let mine: Vec<&ParityException> =
-                exceptions.iter().filter(|e| e.baseline_guard == sg).collect();
+            let mine: Vec<&ParityException> = exceptions
+                .iter()
+                .filter(|e| e.baseline_guard == sg)
+                .collect();
             for (shape, label, allows, expected, _) in Report::parity_keys(p, &mine) {
                 println!(
                     "parity {sg} {shape} {label}: shellwise allows {allows}, expected {expected}, unexplained {}",
@@ -1944,7 +1950,7 @@ impl KnownResult {
     }
 }
 
-/// The known-answer slice. A row whose baseline-guard ids map to a landed rule (`rules::all()` or
+/// The known-answer slice. A row whose baseline guard ids map to a landed rule (`rules::all()` or
 /// `rules::length_rules()`) is checked: each such mapped id must be among its findings. A row that
 /// expects none is reported when denied, not failed (the meters gate nothing before Task 35).
 fn check_known(

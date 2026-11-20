@@ -1,7 +1,7 @@
 # bash-ps-cmdlet
 
 A PowerShell cmdlet as a command in the Bash tool: Git Bash has no such command
-(`Get-ChildItem: command not found`). It replaces baseline-guard's `bash-powershell-syntax`.
+(`Get-ChildItem: command not found`). It replaces the baseline guard's `bash-powershell-syntax`.
 
 | Case | Level |
 |---|---|

@@ -68,7 +68,7 @@ fn touch(p: &Path) {
     std::fs::write(p, b"x").unwrap_or_else(|e| panic!("write {p:?}: {e}"));
 }
 
-/// A linked worktree of the real repo FX_MAIN, where the host setup puts its own (item 5).
+/// A linked worktree of the real repo FX_MAIN, where an agent host puts its own (item 5).
 const LINKED: &str = "main/.claude/worktrees/lw";
 /// A folder link to LINKED, outside the repos.
 const LINKED_LINK: &str = "lwlink";
@@ -506,7 +506,7 @@ fn git_rows() {
     run_file("git.toml");
 }
 
-/// Rows ported from baseline-guard's tests/test_rules.py, per rule, as git.toml's header records
+/// Rows ported from the baseline guard's tests/test_rules.py, per rule, as git.toml's header records
 /// them (every OS counted).
 const PORTED: [(&str, usize); 3] = [
     ("sg-restore-", 12),
@@ -666,7 +666,7 @@ fn the_marker_confirms_only_break_and_danger_of_other_rules() {
 fn the_marker_must_end_the_command() {
     for (text, marked) in [
         ("rm -rf x # shellwise: allow", true),
-        ("rm -rf x # baseline-guard: allow\n", true),
+        ("rm -rf x # shellwise: allow\n", true),
         ("rm -rf x #shellwise: allow", true),
         ("rm -rf x # shellwise: allow\nrm -rf y", false),
         ("rm -rf x\n# shellwise: allow", false),

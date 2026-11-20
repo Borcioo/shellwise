@@ -18,6 +18,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - A user config file and a per-repository `.shellwise.toml` that can only raise levels.
 - `SHELLWISE=off` turns the check off.
 
+### Changed
+
+- The allow marker is `# shellwise: allow` alone: the transition alias the design notes named no
+  longer confirms a command.
+
 ### Fixed
 
 - On Windows, a temp folder, allowed root, project, home folder or protected path given in its

@@ -1,6 +1,6 @@
 # git-restore-discards
 
-Ported from baseline-guard. `git checkout -- <paths>`, `git checkout .`, `git checkout <word>` where
+Ported from the baseline guard. `git checkout -- <paths>`, `git checkout .`, `git checkout <word>` where
 the word is a file on disk, and `git restore <paths>` (unless limited to the index with
 `--staged`/`-S` and no `--worktree`/`-W`) overwrite every uncommitted edit in those files, not
 only the agent's own. `--ours`, `--theirs`, `-p` and `-m` choose hunk by hunk and are no

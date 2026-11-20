@@ -1,6 +1,6 @@
 # git-worktree-junction
 
-Ported from baseline-guard. `git worktree remove --force <path>` deletes through junctions inside
+Ported from the baseline guard. `git worktree remove --force <path>` deletes through junctions inside
 the worktree and empties their targets. The worktree is walked for links whose target is outside
 it. Without `--force` git refuses a worktree that holds one (the junction is an untracked file).
 

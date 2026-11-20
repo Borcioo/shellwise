@@ -1,6 +1,6 @@
 # git-unreadable
 
-Ported from baseline-guard. The guard cannot tell what git runs: a variable or a substitution stands
+Ported from the baseline guard. The guard cannot tell what git runs: a variable or a substitution stands
 before or in the subcommand (`git $x worktree remove wt`, `git -C D:\x $s`), a global option's
 value holds one (`--git-dir=$gd`), or a value that Bash splits (or a PowerShell array) is not
 followed by a literal subcommand. Global options with literal values may stand between the two:

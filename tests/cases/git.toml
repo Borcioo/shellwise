@@ -4,9 +4,9 @@
 # enables `policies.git_no_verify` except on rows whose id starts with `policy-off-`; `nocwd-`
 # rows run with no cwd.
 #
-# Rows ported from baseline-guard's tests/test_rules.py carry an id starting with `sg-` (or
+# Rows ported from the baseline guard's tests/test_rules.py carry an id starting with `sg-` (or
 # `nocwd-sg-`); `tests/delete.rs` checks their count per rule against PORTED. Ported, and the
-# baseline-guard lines that name the rule (approximate: counted with grep, so comment lines are in
+# baseline guard lines that name the rule (approximate: counted with grep, so comment lines are in
 # and allow twins with no rule name are out):
 #   git-restore-discards  12 ported (7 deny, 5 allow) of about 19 lines; the rest are the same
 #                         shapes behind a cwd the hook could not follow.
@@ -17,7 +17,7 @@
 #   git-unreadable         6 ported (5 deny, 1 allow) of about 27 lines; dropped: `env -S`/
 #                         `env --chdir` bodies, splats and arrays that carry the subcommand
 #                         (obfuscation; an unread wrapper with a delete is opaque-destructive).
-#   git-worktree-junction  rebuilt on this fixture (baseline-guard builds its own repo with real
+#   git-worktree-junction  rebuilt on this fixture (the baseline guard builds its own repo with real
 #                         worktrees; the suffix lookup through `git worktree list` is not ported,
 #                         so a bare name that is no folder here is a finding).
 # Corpus counts of the shapes (2026-11-19): `git worktree remove` 320, `git checkout --` 73,
@@ -119,7 +119,7 @@ rules = []
 id = "sg-restore-marker"
 os = "any"
 shell = "pwsh"
-command = "git checkout -- b.txt # baseline-guard: allow"
+command = "git checkout -- b.txt # shellwise: allow"
 level = "warn"
 rules = ["git-restore-discards"]
 
@@ -633,7 +633,7 @@ rules = []
 id = "sg-noverify-marker"
 os = "any"
 shell = "pwsh"
-command = "git commit --no-verify -m y # baseline-guard: allow"
+command = "git commit --no-verify -m y # shellwise: allow"
 level = "ok"
 rules = ["git-no-verify"]
 

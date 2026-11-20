@@ -1,5 +1,5 @@
-//! The allow marker: a real trailing comment `# shellwise: allow` (or the transition alias
-//! `# baseline-guard: allow`) at the very end of the command confirms it. It downgrades `break`
+//! The allow marker: a real trailing comment `# shellwise: allow` at the very end of the command
+//! confirms it; any other text is only a comment. It downgrades `break`
 //! and `danger` findings to `ok` and never touches `critical`, the host-limit rules (F7: the
 //! text is too long for the host whatever the agent means) or a failed analysis (without a
 //! parse nothing shows the marker is a comment). Text inside a string, a heredoc or a
@@ -8,8 +8,8 @@
 use crate::ir::{Comment, Script};
 use crate::level::{Level, Verdict};
 
-/// The marker texts after `#`, as written.
-pub const MARKERS: [&str; 2] = ["shellwise: allow", "baseline-guard: allow"];
+/// The marker text after `#`, as written.
+pub const MARKER: &str = "shellwise: allow";
 
 /// Rules the marker never downgrades: the host limits (`too-long`, `inline-script-too-long`)
 /// and the two failure rules.
@@ -28,7 +28,7 @@ const CANNOT_CONFIRM: &str = ", and the allow marker cannot confirm it";
 fn is_marker(c: &Comment, command: &str) -> bool {
     let text = c.text.strip_prefix('#').unwrap_or("").trim();
     c.trailing
-        && MARKERS.contains(&text)
+        && text == MARKER
         && command
             .get(c.span.end..)
             .is_some_and(|rest| rest.trim().is_empty())

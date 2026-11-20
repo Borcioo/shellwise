@@ -2,13 +2,13 @@
 # Bash profile (shell = "gitbash"); each has a twin with shell = "bash" (the POSIX profile) that
 # stays ok. The rows are synthetic: none is a corpus command.
 #
-# baseline-guard rows: 29
-# Rows whose id starts with "sg-" are ported from baseline-guard's tests/test_rules.py (its Bash rows
+# baseline guard rows: 29
+# Rows whose id starts with "sg-" are ported from the baseline guard's tests/test_rules.py (its Bash rows
 # for these rules and its bash-backslash-collapse block). Left out, because another task owns the
 # rule: the 2 marker rows (Task 32), bat-metachar (Task 30), bash-unterminated-quote (2 rows,
 # parse-error), bash-ps-call-operator (dropped, F17) and bash-too-long (Task 25).
 #
-# Levels differ from baseline-guard's deny where the plan lands a rule as warn: msys (the plan), and
+# Levels differ from the baseline guard's deny where the plan lands a rule as warn: msys (the plan), and
 # the landing-rule rules whose corpus replay denies more than 5 ok rows (versioned-php 33,
 # vendor-bin 31). ps-cmdlet (2) and unquoted-backslash-path (0) are break. bash-backslash-collapse
 # is break only for the shapes in PROVEN (printf / echo -e escapes, quoted heredoc bodies, and the
@@ -16,7 +16,7 @@
 #
 # TOML: '...' strings hold backslashes as written; "..." strings write each backslash as \\.
 
-# --- baseline-guard: Bash rows that must deny ---
+# --- baseline guard: Bash rows that must deny ---
 
 [[row]]
 id = "sg-unquoted-path-cd"
@@ -90,7 +90,7 @@ level = "warn"
 rules = ["bash-backslash-collapse"]
 fix = "write the text with the Write tool"
 
-# --- baseline-guard: Bash rows that must allow ---
+# --- baseline guard: Bash rows that must allow ---
 
 [[row]]
 id = "sg-allow-quoted-forward-path"
@@ -191,7 +191,7 @@ command = "sshmux exec dev 'a|b'"
 level = "ok"
 rules = []
 
-# --- baseline-guard: the bash-backslash-collapse block ---
+# --- baseline guard: the bash-backslash-collapse block ---
 
 [[row]]
 id = "sg-collapse-printf"

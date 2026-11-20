@@ -1,8 +1,9 @@
 # Corpus tools
 
 The measurement corpus every shellwise rule is judged against: real Bash and PowerShell tool calls
-from Claude Code transcripts, labelled by what happened, and the current baseline-guard hook replayed
-over them as the baseline. Python 3.11+, stdlib only.
+from Claude Code transcripts, labelled by what happened, and the current baseline guard replayed
+over them as the baseline. The baseline guard is the earlier, rule-per-regex Python guard whose
+verdicts the bench compares against. Python 3.11+, stdlib only.
 
 The corpus holds command text, session ids and machine paths. It lives outside the repo, in the
 folder `$SHELLWISE_CORPUS` names; only counts reach the repo (`docs/baseline.md`).
@@ -49,40 +50,43 @@ duplicates, calls outside the window, no result) and exits 1 when it reads no tr
 ## baseline.py
 
 ```
-git -C <host setup repo> log --diff-filter=A --format=%H -- <baseline_guard.py path>
-git -C <host setup repo> log -1 --format=%cI <that commit>
-git -C <host setup repo> show <that commit>:<baseline_guard.py path> > <scratch>/first_guard.py
-python -I tools/corpus/baseline.py --baseline-guard <baseline_guard.py path> --first-guard <scratch>/first_guard.py \
-    --first-guard-date <that commit's date> --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --out "$SHELLWISE_CORPUS/baseline.jsonl" \
+git -C <guard repo> log --diff-filter=A --format=%H -- <guard module path>
+git -C <guard repo> log -1 --format=%cI <that commit>
+git -C <guard repo> show <that commit>:<guard module path> > <scratch>/first_guard.py
+python -I tools/corpus/baseline.py --baseline-guard <guard module path> --first-guard <scratch>/first_guard.py \
+    --first-guard-date <that commit's date> --hook-name <hook name> --off-env <ENV NAME> --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --out "$SHELLWISE_CORPUS/baseline.jsonl" \
     --report docs/baseline.md --known "$SHELLWISE_CORPUS/known.jsonl"
 ```
 
 Write `first_guard.py` as UTF-8 (in PowerShell, `[IO.File]::WriteAllText` with a UTF-8 encoding).
 
-Loads `baseline_guard.py` by path with `BASELINE_GUARD` unset and no bytecode written, and calls its
-`check()` (`full`) and `check_installed()` (`installed`, what the host setup hooks run) on each row's
+`--hook-name` is the hook name the guard's deny messages carry (`PreToolUse:<Tool> hook error:
+<hook name>: …`, the `denied_by` value), `--off-env` the environment variable that switches the
+guard off. Loads the guard module by path with that variable unset and no
+bytecode written, and calls its `check()` (`full`) and `check_installed()` (`installed`, what its hook
+runs) on each row's
 command and cwd. It never runs a command; some git rules run read-only `git rev-parse` and read the
 disk under the row's cwd. Each row of `baseline.jsonl` is `{"id", "full": [rule…], "installed": [rule…]}`
 (deny findings only).
 
 `--report` writes counts only. `--known` writes a known-answer slice, `{"id", "os", "expected_rules"}`:
-10 rows that baseline-guard denies, spread over different rules, and 10 `ok`, non-destructive rows with no
+10 rows that the baseline guard denies, spread over different rules, and 10 `ok`, non-destructive rows with no
 finding, plus Linux rows up to 2 of each kind when the corpus has them. `os` is read from the cwd the
 way `shellwise bench` reads it (`row_os`, a copy of the bench's rule; `tests/bench_fixture/cwd_shapes.tsv`
 tests both), and the bench fails on a row it replays on another OS. A deny row expects only rules that
 can fire on its tool and OS (`[runs_on]` in `rule_map.toml`, read into `RUNS_ON`, one line of evidence
 per rule; an id not listed counts as Windows-only).
 
-Replaying the `denied-hook` rows with `denied_by = baseline-guard` is a positive control that replay
+Replaying the `denied-hook` rows the baseline guard's hook denied (`denied_by` equal to `--hook-name`) is a positive control that replay
 works, not a coverage target. Each such row that does not replay to a deny today gets a computed cause:
 `target gone` (a git command, the rules that read the disk, whose cwd or a drive path the deny message
 names does not exist now), else `rule narrowed` (a row dated before `--first-guard-date`, which
-baseline-guard at its first commit, `--first-guard`, does not deny either), else `unexplained`. The rows of
+the baseline guard at its first commit, `--first-guard`, does not deny either), else `unexplained`. The rows of
 git commands that do not replay are replayed a second time with the disk check neutralised (every
 folder exists); the report gives both counts.
 
 The run fails (exit 1, one `FAIL:` line each) on 0 rows for a shell, 0 destructive rows, 0 baseline
-denies, 0 baseline-guard hook denies, a replay call that raised, a known slice short of 10 + 10, or more
+denies, 0 baseline guard hook denies (as `--hook-name` names them), a replay call that raised, a known slice short of 10 + 10, or more
 than 5 % of the rows that do not replay being `unexplained`.
 
 ## data/destructive.toml
@@ -95,12 +99,12 @@ clause runs, and matches names case-insensitively.
 
 ## rule_map.toml and real_parse.ps1
 
-`rule_map.toml` maps each baseline-guard rule id to its shellwise id (header in the file). `shellwise bench`
+`rule_map.toml` maps each baseline guard rule id to its shellwise id (header in the file). `shellwise bench`
 compiles it in; every id `baseline.jsonl` or `known.jsonl` names must be in it. A shellwise id that has
 not landed yet is not an error: its `known.jsonl` rows count as not landed until the rule exists.
 `[runs_on]` says on which tools and OSes each mapped rule can fire, read from the rule's gate. The bench
 fails on a `[map]` key without an entry, and on a mapped rule that fires outside its entry on a row
-baseline-guard denies with that id (`full` or `installed`), so a too-narrow entry cannot shrink the known
+the baseline guard denies with that id (`full` or `installed`), so a too-narrow entry cannot shrink the known
 slice silently.
 
 ```
@@ -137,20 +141,20 @@ by up to that many rows; a cwd that does not answer within 500 ms (a share no ho
 gone. System paths are read by the row's OS, so a Linux row's `/usr` is a system folder on a Windows
 host too; the default config's allowed root is this machine's temp folder.
 
-`--config` replays with that integration file alone (the file the host setup installs; no user or repo
-file); a file that does not load, or any finding of its load, stops the run. Without it the default
+`--config` replays with that integration file alone (the file the hook setup installs; no user or
+repo file); a file that does not load, or any finding of its load, stops the run. Without it the default
 config runs.
 
-Parity is counted per installed baseline-guard rule and, for the rows shellwise allows, per key: the
+Parity is counted per installed baseline guard rule and, for the rows shellwise allows, per key: the
 rule, the shape class the bench computes (`mapped-warn`: shellwise's mapped rule names the row below
 break; `mapped-silent`: it says nothing) and the row's label. `--parity-exceptions` reads the file
 Task 35 keeps at `tests/cases/parity_exceptions.toml`:
 
 ```
 [[exception]]
-baseline_guard = "<baseline-guard id>"   # a [map] key
-shape = "mapped-silent"            # or mapped-warn
-label = "ok"                       # ok, failed, denied-hook, denied-permission
+baseline_guard = "<baseline guard id>"   # a [map] key
+shape = "mapped-silent"                  # or mapped-warn
+label = "ok"                             # ok, failed, denied-hook, denied-permission
 expected = <count above 0>
 why = "<reason>"
 ```
@@ -174,7 +178,7 @@ For a base-vs-head diff, dump the base build's run, then run the head build with
 it replays twice and fails when its own two passes differ (the head-vs-head control). The report keeps
 meter 1, the refused-by-the-real-parser line, the parity line and the own line apart; the meters gate
 nothing before Task 35. Exit 1 on 0 rows (or 0 for one shell, or 0 joined to the baseline), an unmapped
-baseline-guard id, a map key without a `runs_on` entry or a rule firing outside it, a config or parity
+baseline guard id, a map key without a `runs_on` entry or a rule firing outside it, a config or parity
 exception file that does not load, `--passes 0`, a missing `known.jsonl` (default: next to the corpus),
 0 known rows checked, a checked known row missing its rule or absent from the corpus, or a moved
 control. The dump's columns are `id`, `level`, `rules`, `raw_hit` and `rule_levels` (`rule:level`
@@ -188,4 +192,4 @@ pairs); `--diff` also reads a dump without the last column, comparing rules by n
 python -I tools/corpus/test_extract.py
 ```
 
-Synthetic transcripts and a fake baseline-guard module in a temp folder; nothing reads real transcripts.
+Synthetic transcripts and a fake baseline guard module in a temp folder; nothing reads real transcripts.

@@ -15,20 +15,20 @@ cryptic error.
 
 Why a new tool: no existing tool lints "will this break" (research 2026-11-18: shellfirm, dcg, Codex
 command_safety, ShellCheck, PSScriptAnalyzer); none handles PowerShell plus Windows junctions; dcg's
-licence excludes anyone acting for Anthropic (not forked, not read for code). The host setup's Python
-baseline-guard proved the rules but hit the limit of a hand-written lexer: about 50 documented gaps, and
+licence excludes anyone acting for Anthropic (not forked, not read for code). The baseline guard (an
+earlier Python guard, one regex per rule) proved the rules but hit the limit of a hand-written lexer: about 50 documented gaps, and
 six review rounds could not make loop-variable values trustworthy. A real parser closes most lexer
 gaps; values only the shell knows stay unknown at check time, so a destructive command with them either
 runs under an execution-time check (the shim, below) or fails closed.
 
 ## Goals (v1)
 
-1. **Replace the host setup's Python baseline-guard** for both tools (PowerShell, Bash): all 24 rule ids it
+1. **Replace the baseline guard** for both tools (PowerShell, Bash): all 24 rule ids it
    holds today (14 installed, counting `git-unreadable`, + 10 in the uninstalled full guard), with the same or better catch rate
    within the false-positive budget below on the real corpus.
-2. **Encode the mechanical traps** of `windows-dev-env` and the "Windows shell" rules, so those prose
-   bullets can be deleted from the host setup (table below). A new rule enters v1 only with at least
-   one real failure in the corpus or a measured trap already written in the skill.
+2. **Encode the mechanical Windows shell traps** the agent host setup documents as prose rules. A
+   new rule enters v1 only with at least one real failure in the corpus or a measured trap already
+   documented there.
 3. **Delete guard with target resolution:** resolve the real target of a recursive delete (literal
    path, `~`, known env vars, globs, the `cd` earlier in the same command, the event's `cwd`), stat
    it, and refuse when it is a drive root, home, the root of the event's `cwd` repo or a parent of
@@ -53,8 +53,6 @@ runs under an execution-time check (the shim, below) or fails closed.
   substitutes the delete receiver, and never changes what the command does.
 - Shim coverage outside Claude Code: `shellwise check` reports a dynamic target as `danger`, as
   before; other adapters can add the shim later.
-- The host setup's shadow gates (commit-gate, Stop shadow, turn evidence, lessons guard): not command
-  lint, they stay in the host setup.
 
 ## Anti-goals (a failure even if it works)
 
@@ -63,7 +61,7 @@ runs under an execution-time check (the shim, below) or fails closed.
     every one listed and justified;
   - **deliberate destructive** (a delete/discard that succeeded and that shellwise would deny, e.g. a
     dynamic target): ≤ 2 per corpus day on average, each with a fix that runs (a literal path).
-- The host setup ends with more prose rules than before, or a second guard running beside it.
+- A second guard running beside shellwise.
 - Slower than the Python hook it replaces (today 64 ms spawn, 223–270 ms bench per hook call).
 - A rule that cannot be tested red (every rule has a deny case and an allow twin).
 - Fail-open on a destructive command because the parser failed.
@@ -84,19 +82,19 @@ runs under an execution-time check (the shim, below) or fails closed.
 
 | | A. Real parsers → shared IR (chosen) | B. PowerShell's own parser via `pwsh` | C. Port the Python lexers |
 |---|---|---|---|
-| How | brush-parser (bash), a fork of tree-sitter-powershell (section "PowerShell grammar fork"), a small cmd tokenizer, lowered to one IR | `Parser::ParseInput` per call | rewrite baseline_guard.py's lexers in Rust |
+| How | brush-parser (bash), a fork of tree-sitter-powershell (section "PowerShell grammar fork"), a small cmd tokenizer, lowered to one IR | `Parser::ParseInput` per call | rewrite the baseline guard's lexers in Rust |
 | Cost per call | a few ms | 300 ms+ (pwsh start) | a few ms |
 | Fidelity | most lexer gaps close; upstream tree-sitter-powershell missed 3 of 4 thresholds (spike), the fork must reach them | exact for PowerShell | inherits every gap |
 | Role | the product | test oracle: differential fuzz A↔B | dropped |
 
-Owner picked A. B stays as the oracle in tests (as baseline-guard already fuzzes against `ParseInput`
-and bash).
+Owner picked A. B stays as the oracle in tests (as the baseline guard already fuzzes against
+`ParseInput` and bash).
 
 ## Decided with the owner
 
 | Topic | Decision |
 |---|---|
-| v1 success | replaces baseline-guard; host setup deletes it and the bullets shellwise encodes |
+| v1 success | replaces the baseline guard |
 | Name | `shellwise` (crate, binary, repo): free on crates.io; the GitHub user `shellwise` is taken (unrelated game-design org), so the repo lives under the owner's org; the nearest namesake is a 4-star Python "AI terminal co-pilot" |
 | Licence | GPL-3.0-or-later |
 | Shells | PowerShell 7 (with a 5.1 dialect flag) and bash (profiles: Git Bash/MSYS, Linux, macOS); cmd only nested |
@@ -106,12 +104,11 @@ and bash).
 | Shim | in v1 (owner, after the spike measured 14.8 dynamic-target deletes per day against meter 2's 2): loaded by an `updatedInput` rewrite in both shells (section "At-execution shim") |
 | PowerShell parser | fork tree-sitter-powershell, fix the measured mechanisms, re-measure with the same thresholds; not reached in about 6 agent hours → a dedicated Rust lexer with `ParseInput` as oracle; upstream contributions only with the owner's OK |
 | Bash parser | brush-parser kept; its two failing gap rows (heredoc delimiter `$'EOF'`, `$(x)`) are parse errors, so they fail closed |
-| Host setup distribution | `shellwise` from PATH; missing binary → hook allows, SessionStart warns once with the install command (`cargo install --path <clone>` until a release exists) |
-| Host setup switch | part of this plan, as its last stage: until shellwise reaches parity on the corpus only the Python guard runs (never both); then one host setup PR switches the hook and deletes the Python rules and the prose |
+| Distribution | `shellwise` from PATH; missing binary → hook allows, SessionStart warns once with the install command (`cargo install --path <clone>` until a release exists) |
+| Switch | until shellwise reaches parity on the corpus only the baseline guard runs (never both); then the hook switches to shellwise |
 | Target machine | this Windows x64 machine; Linux build and tests in WSL in v1; macOS once CI exists (needs the GitHub repo, owner's OK) |
 | `critical` repo root | the root of the repo holding the event's `cwd`, and its ancestors; other folders with `.git` (temp clones, worktrees) are judged by the normal delete guard |
 | False positives | two meters (Anti-goals) |
-| Old marker | `# baseline-guard: allow` is accepted as an alias during the transition (deny texts and skills name it) |
 
 ## Design
 
@@ -204,7 +201,7 @@ in the same command; the event's `cwd`), `lstat` it, then:
 ancestor of any of them; `danger` for a recursive
 delete whose tree holds a reparse point (junction, symlink, mount point) whose target is outside the
 tree, found breadth-first without following links, within a shared time budget (default 8 s, under
-the hook timeout); the git rules keep baseline-guard's semantics (`git checkout <word>` is a discard
+the hook timeout); the git rules keep the baseline guard's semantics (`git checkout <word>` is a discard
 only when the word exists on disk and is not a commit, etc.). Junctions are read with
 `FSCTL_GET_REPARSE_POINT` on Windows; symlinks with `std::fs` everywhere.
 
@@ -366,7 +363,7 @@ whether the shim would have refused a corpus row cannot be replayed, because the
 Monitor tool (which arrives as a Bash event), could replace or drop the shim text. Pass rule (Task 21
 spike step): in each case either the shim text runs or nothing runs. If a case fails the rule, the
 adapter does not rewrite where it can tell the case apart; otherwise the limit is stated here and
-the host setup stage checks that no other installed hook returns `updatedInput`.
+the hook setup must check that no other installed hook returns `updatedInput`.
 
 **Cost.** The host judges the rewritten text. With an allow rule for the whole tool or in
 `bypassPermissions` the rewritten command runs; under fine-grained allow rules (`Bash(rm:*)`)
@@ -414,18 +411,17 @@ the fork's tests.
 
 ### Configuration
 
-TOML, in three layers: an integration file passed with `--config <file>` (how a plugin such as the
-host setup ships its settings to every machine), then the user file, which overrides it, then the repo
+TOML, in three layers: an integration file passed with `--config <file>` (how a plugin ships its
+settings to every machine), then the user file, which overrides it, then the repo
 file. The user file (`<config dir>/shellwise/config.toml`) may raise or lower any rule's level, set
 `dynamic_target`, `shim` (on by default), the walk budget, protected paths, and lists the generic rules need: "gate"
-commands whose output must not be truncated (the host setup puts `my-tool.ps1` and its gate
-commands here), `.bat` launcher names, optional tool paths named in fixes. A repo file
+commands whose output must not be truncated, `.bat` launcher names, optional tool paths named in fixes. A repo file
 (`.shellwise.toml`) may **only raise** levels or add protected paths: a cloned repo cannot switch the
 guard off.
 
 ### Rules v1
 
-Ported from baseline-guard (24): `ps-git-commit-stdin`, `git-restore-discards`, `git-unreadable`,
+Ported from the baseline guard (24): `ps-git-commit-stdin`, `git-restore-discards`, `git-unreadable`,
 `gate-truncated-pipeline` (gate list from config), `bash-backslash-collapse`, `cli-inline-prose`,
 `stale-write-var`, `ps-bare-bash`, `ps-dotnet-relative-path`, `ps-native-nonewline`, `bat-metachar`,
 `ps-bad-parameter`, `git-no-verify` (policy, off unless enabled in config), `git-worktree-junction`
@@ -446,21 +442,6 @@ Landed after the port: `bash-crlf` (warn, `lint` only: a CRLF `.sh` in the Git B
 deadline or `timeout` that ends it) and `follow-unbounded` (warn: `tail -f`, `Get-Content -Wait`
 and the like with nothing that stops them).
 
-### What the host setup deletes when shellwise ships
-
-| Host setup piece | Replaced by |
-|---|---|
-| `tools/baseline-guard/baseline_guard.py` rules, lexers, tests (the commit shadow rule moves to a small handler of its own) | shellwise rules |
-| 8 `PreToolUse` handlers in `the-host-plugin/hooks/hooks.json` | 1 handler, matcher `Bash\|PowerShell`, no `if` |
-| `INSTALL.md` rule tables and ~50 "known gaps" | shellwise docs |
-| windows-dev-env: bash flags on cmdlets, `.bat` metacharacters, `Remove-Item <dir>\*`, automatic variables, stdin scripts, `'""'`, Bash 7.8 KB, `\\` collapse, MSYS mangling, CRLF, junction delete, commit `-F -`, `gh --body` quotes | rule ids above (bullet becomes "shellwise denies it", or goes) |
-| "Windows shell" rule: scripts over ~10 lines through the Write tool | `inline-script-too-long` |
-
-The commit shadow rule (`log_commit` and its helpers in `baseline_guard.py`) moves to its own small
-handler with an `if` on `*commit*`; `tests/test_repo.py` `DuplicateHookTests` counts change with
-the handlers. The exact deletions are the plan's last stage, one host setup PR after parity; prose stays where the agent needs
-it before writing the command (e.g. which shell to choose).
-
 ### Measurement
 
 `tools/corpus/` (in the repo, generic): extracts Bash/PowerShell `tool_use` with their results from
@@ -468,11 +449,11 @@ Claude Code transcripts (main and subagent) into JSONL with a label: `failed` (e
 `denied-hook`, `denied-permission`, `ok`, plus a `destructive` flag set by an independent matcher
 (command names of the delete/discard family, not shellwise's own resolution). The corpus is the
 owner's Claude Code transcripts (at least the last 30 days); the file stays outside the repo, in
-the folder `$SHELLWISE_CORPUS` names. **Baseline:** the current `baseline_guard.py` (`check()` and the installed
+the folder `$SHELLWISE_CORPUS` names. **Baseline:** the current baseline guard (`check()` and the installed
 `check_installed()`) replayed over the same rows, recorded before the first rule is ported. `shellwise bench
 --corpus` reports per rule: catches on `failed`/`denied-*`, denies on `ok` (false positives, each
-listed), parse failures per shell, latency p50/p99, and a differential against baseline-guard on the
-same rows (every baseline-guard deny is a shellwise deny or a listed, justified difference). Positive
+listed), parse failures per shell, latency p50/p99, and a differential against the baseline guard on the
+same rows (every baseline guard deny is a shellwise deny or a listed, justified difference). Positive
 control: a known-answer slice that must produce known findings; 0 rows read fails.
 
 ## Spikes before the plan is fixed
@@ -512,10 +493,9 @@ the grammar fork ~7 h (known-answer control ~1 h, fixes capped at ~6 h), ~400 li
 grammar/scanner changes and ~600 lines of tests; the shim ~14 h: `shim-check` and the shim text ~9 h,
 ~900 lines of Rust and embedded shim text, ~1,300 lines of tests; eligibility, the adapter rewrite
 and its host spike ~5 h, ~500 + ~700 lines. If the fork misses its thresholds, the lexer fallback
-adds ~10 h, ~2,000 + ~1,000 lines. Spikes ~7 h (done); the host setup stage ~6 h: the commit shadow
-keeps the Python lexer parts it needs (~900 lines stay), ~2,000 rule lines and ~40 prose lines go.
+adds ~10 h, ~2,000 + ~1,000 lines. Spikes ~7 h (done).
 Simpler version (~20 h, ~3,000 + ~2,000 lines): PowerShell only, the 13 installed rules and the
-delete guard, no new lint rules. It drops Bash coverage (the Bash handlers would stay in Python, so
-baseline-guard could not be deleted) and the "will it break" additions. A simpler shim (~8 h) wraps
+delete guard, no new lint rules. It drops Bash coverage (the Bash checks would stay in the baseline
+guard, so it could not be retired) and the "will it break" additions. A simpler shim (~8 h) wraps
 only the bare names: it drops the `[IO.*]::Delete` receiver substitution and leaves 204 corpus rows
 (6.6 per day) denied, so meter 2 is not met.

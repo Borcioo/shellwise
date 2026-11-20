@@ -47,7 +47,7 @@ replay's verdicts (every row as Windows): with `--diff` only …b2 moves (down, 
 
 | File | Known answer |
 |---|---|
-| `rule_map.toml` | the fixture's map: three baseline-guard ids, `fixture-unlanded` (maps to a rule that never lands), and a `runs_on` entry for each |
+| `rule_map.toml` | the fixture's map: three baseline guard ids, `fixture-unlanded` (maps to a rule that never lands), and a `runs_on` entry for each |
 | `rule_map_own_line.toml` | the same with `parse-error` as the own-line rule |
 | `parity_exceptions.toml` | one exception: `bash-backslash-collapse`, `mapped-silent`, `ok`, expected 1 (row 0a) |
 

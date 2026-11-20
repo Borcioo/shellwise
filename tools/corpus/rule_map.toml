@@ -1,18 +1,18 @@
-# baseline-guard rule id -> shellwise rule id, read by `shellwise bench` (compiled in; `--rule-map`
+# baseline guard rule id -> shellwise rule id, read by `shellwise bench` (compiled in; `--rule-map`
 # replaces it).
 #
-# [map]               every baseline-guard id that baseline.jsonl (`installed`) or known.jsonl names; a
+# [map]               every baseline guard id that baseline.jsonl (`installed`) or known.jsonl names; a
 #                     missing one stops the bench. A known.jsonl row is checked only once its
 #                     shellwise id is a landed rule (`rules::all()` or `rules::length_rules()`).
 #                     The parity line counts a denied ok row when every rule that denies it maps
-#                     from a rule baseline-guard's installed set also denies that row with.
+#                     from a rule the baseline guard's installed set also denies that row with.
 # own_line_rules      the owner-requested behaviour change (Ruling 99 Q1), reported on its own line
 #                     outside meter 1.
-# [runs_on]           where the shellwise rule each baseline-guard id maps to can fire: tools (Bash,
+# [runs_on]           where the shellwise rule each baseline guard id maps to can fire: tools (Bash,
 #                     PowerShell) and OSes (Windows, Linux), with the gate it was read from. Every
 #                     [map] key needs one. baseline.py's known slice expects a rule only where its
 #                     entry says it fires; the bench fails on a mapped rule that fires outside its
-#                     entry on a row baseline-guard denies with that id.
+#                     entry on a row the baseline guard denies with that id.
 # Parity exceptions are a separate file (`--parity-exceptions`, the format of
 # tests/cases/parity_exceptions.toml).
 
@@ -55,7 +55,7 @@ bash-unterminated-quote = { tools = ["Bash"], os = ["Windows", "Linux"], why = "
 bat-metachar = { tools = ["PowerShell"], os = ["Windows"], why = "is_pwsh and os == Windows, pwsh_lint/bat.rs" }
 ps-bare-bash = { tools = ["PowerShell"], os = ["Windows"], why = "is_pwsh and os == Windows, pwsh_lint/ports.rs" }
 cli-inline-prose = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs" }
-gate-truncated-pipeline = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs (baseline-guard also flags Bash)" }
+gate-truncated-pipeline = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs (the baseline guard also flags Bash)" }
 ps-git-commit-stdin = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs" }
 ps-bad-parameter = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "Facts::for_shell (pwsh), ports.rs" }
 ps-native-nonewline = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "Facts::for_shell (pwsh), ports.rs" }

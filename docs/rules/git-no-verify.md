@@ -1,6 +1,6 @@
 # git-no-verify
 
-Ported from baseline-guard; a policy rule, off unless the config sets `policies.git_no_verify`.
+Ported from the baseline guard; a policy rule, off unless the config sets `policies.git_no_verify`.
 `git commit`, `push`, `merge`, `rebase` or `am` with `--no-verify` (or `-n` where it means that:
 `commit` and `am`) skips the repository's hooks; so does `-c core.hooksPath=…` before the
 subcommand. The last of `--no-verify` and `--verify` wins; a value of `-m`, `--message` and the

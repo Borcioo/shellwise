@@ -2,13 +2,13 @@
 # it fires and an allow twin where it does not. Break rows hold the expected Fix text; warn rows
 # are context only. `oracle` is what pwsh 7.7's ParseInput does with the text.
 #
-# Ported rows: the baseline-guard rows of tests/test_rules.py for the nine installed PowerShell rules
+# Ported rows: the baseline guard rows of tests/test_rules.py for the nine installed PowerShell rules
 # and ps-unix-command (deny rows per rule there: bat-metachar 16, cli-inline-prose 11,
 # gate-truncated-pipeline 17, ps-bad-parameter 9, ps-bare-bash 12, ps-dotnet-relative-path 18,
 # ps-git-commit-stdin 4, ps-native-nonewline 7, ps-unix-command 4, stale-write-var 51). Rows that
 # build their command at run time (a Herd path, a defined test variable, a junction) or that need
-# a configured gate command are not portable here and are left out; the rest keep baseline-guard's
-# text where it is synthetic. Quote and backtick characters outside ASCII are written as \u
+# a configured gate command are not portable here and are left out; the rest keep the baseline
+# guard's text where it is synthetic. Quote and backtick characters outside ASCII are written as \u
 # escapes.
 
 # --- bat-metachar (break, Windows): cmd.exe re-parses a .bat launcher's arguments ---

@@ -1,4 +1,4 @@
-"""Tests for the corpus extractor and the baseline-guard baseline replay.
+"""Tests for the corpus extractor and the baseline guard replay.
 
 Run: python -I tools/corpus/test_extract.py
 Every fixture is synthetic and built in a temp folder; nothing here reads real transcripts.
@@ -80,7 +80,7 @@ class Transcript:
                 f.write((line if isinstance(line, str) else json.dumps(line)) + "\n")
 
 
-HOOK_TEXT = "PreToolUse:PowerShell hook error: baseline-guard: `Remove-Item` here deletes a tree."
+HOOK_TEXT = "PreToolUse:PowerShell hook error: fixture-guard: `Remove-Item` here deletes a tree."
 
 
 def build_projects(root):
@@ -167,7 +167,7 @@ class ExtractTests(unittest.TestCase):
     def test_labels_one_known_answer_each(self):
         cases = [
             ("echo hi", "ok", None),
-            ("Remove-Item -Recurse x", "denied-hook", "baseline-guard"),
+            ("Remove-Item -Recurse x", "denied-hook", "fixture-guard"),
             ("rm -rf x", "denied-permission", "user-rejected"),
             ("rmdir y", "denied-permission", "cancelled"),
             ("ls", "denied-permission", "permission-rule"),
@@ -348,7 +348,20 @@ class DestructiveTests(unittest.TestCase):
         self.assertEqual([r["unless_any"] for r in table], [["-n"], []])
 
 
-FAKE_GUARD = r'''
+def load_baseline():
+    """baseline.py as a module, no bytecode written next to it."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("corpus_baseline", BASELINE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The fake guard's hook name in its deny messages and its off switch (--hook-name, --off-env).
+GUARD_HOOK, GUARD_OFF_ENV = "fixture-guard", "FIXTURE_GUARD_OFF"
+HOOK = "PreToolUse:Bash hook error: %s: " % GUARD_HOOK
+
+FAKE_GUARD = "OFF_ENV = %r\n" % GUARD_OFF_ENV + r'''
 import os
 
 class Finding:
@@ -356,7 +369,7 @@ class Finding:
         self.rule, self.deny, self.message = rule, deny, message
 
 def _rules(cmd, cwd=None):
-    if os.environ.get("BASELINE_GUARD"):
+    if os.environ.get(OFF_ENV):
         return []
     if cmd.startswith(("git disk", "other disk")) and cwd and os.path.isdir(cwd):   # a rule that reads the disk
         return [Finding("git-disk", True, "m")]
@@ -374,17 +387,8 @@ def check_installed(tool, cmd, cwd=None):
 '''
 
 
-# baseline-guard at its first commit: it also denied what is now `old-deny ...`
+# the baseline guard at its first commit: it also denied what is now `old-deny ...`
 FAKE_FIRST = FAKE_GUARD.replace('if cmd.startswith("deny-"):', 'if cmd.startswith(("deny-", "old-deny")):')
-
-
-def load_baseline():
-    """baseline.py as a module, no bytecode written next to it."""
-    sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location("corpus_baseline", BASELINE)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def corpus_row(i, tool, command, label="ok", denied_by=None, destructive=False, excerpt=""):
@@ -418,7 +422,7 @@ class BaselineTests(unittest.TestCase):
     def good_rows(self):
         rows = []
         for k in range(10):
-            rows.append(corpus_row(len(rows), "Bash", "deny-rule%d x" % k, "denied-hook", "baseline-guard"))
+            rows.append(corpus_row(len(rows), "Bash", "deny-rule%d x" % k, "denied-hook", GUARD_HOOK))
         rows.append(corpus_row(len(rows), "PowerShell", "deny-full-only y", "failed"))
         for k in range(10):
             rows.append(corpus_row(len(rows), "PowerShell" if k % 2 else "Bash", "echo ok%d" % k))
@@ -429,13 +433,14 @@ class BaselineTests(unittest.TestCase):
         rows += [dict(corpus_row(0, "Bash", "deny-rule0 again%d" % k, "failed"), id="a%02d" % k) for k in range(5)]
         return rows
 
-    def baseline(self, rows, extra_env=None):
-        env = dict(os.environ, BASELINE_GUARD="off", **(extra_env or {}))
+    def baseline(self, rows, extra_env=None, hook_name=GUARD_HOOK):
+        env = dict(os.environ, **{GUARD_OFF_ENV: "off"}, **(extra_env or {}))
         out = os.path.join(self.tmp.name, "baseline.jsonl")
         report = os.path.join(self.tmp.name, "baseline.md")
         known = os.path.join(self.tmp.name, "known.jsonl")
         code, stdout, stderr = run(BASELINE, "--baseline-guard", self.guard, "--first-guard", self.first,
-                                   "--first-guard-date", iso(10), "--corpus", self.corpus(rows),
+                                   "--first-guard-date", iso(10), "--hook-name", hook_name,
+                                   "--off-env", GUARD_OFF_ENV, "--corpus", self.corpus(rows),
                                    "--out", out, "--report", report, "--known", known, env=env)
         return code, stdout + stderr, out, report, known
 
@@ -454,7 +459,7 @@ class BaselineTests(unittest.TestCase):
         with open(report, encoding="utf-8") as f:
             text = f.read()
         self.assertIn("| deny-full-only | 1 | 0 |", text)
-        self.assertIn("| baseline-guard | 10 |", text)
+        self.assertIn("| baseline guard | 10 |", text)
         self.assertIn("10 of 10", text)
         self.assertNotIn("echo ok", text)
         self.assertNotIn("r000", text)
@@ -468,7 +473,7 @@ class BaselineTests(unittest.TestCase):
         with open(report, encoding="utf-8") as f:
             text = f.read()
         self.assertIn("| other hook | 2 |", text)
-        self.assertIn("| baseline-guard | 10 |", text)
+        self.assertIn("| baseline guard | 10 |", text)
         self.assertNotIn("plugin-alpha", text)
 
     def test_dynamic_target_count(self):
@@ -562,18 +567,23 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL: 0 baseline denies", output)
 
+    def test_fails_on_a_hook_name_no_row_carries(self):
+        code, output, *_ = self.baseline(self.good_rows(), hook_name="fixture-other-hook")
+        self.assertEqual(code, 1, output)
+        self.assertIn("FAIL: 0 baseline guard hook denies to replay", output)
+
     def unreplayed_rows(self):
-        """One baseline-guard hook deny per computed cause, none of which today's guard denies. The rows are older
-        than the first baseline-guard commit (--first-guard-date is 10 days ago)."""
+        """One baseline guard hook deny per computed cause, none of which today's guard denies. The rows are older
+        than the first baseline guard commit (--first-guard-date is 10 days ago)."""
         rows = self.good_rows()
-        hook = "PreToolUse:Bash hook error: baseline-guard: "
+        hook = HOOK
         gone = os.path.join(self.tmp.name, "removed-worktree")
-        rows.append(dict(corpus_row(len(rows), "Bash", "git checkout f", "denied-hook", "baseline-guard",
+        rows.append(dict(corpus_row(len(rows), "Bash", "git checkout f", "denied-hook", GUARD_HOOK,
                                     excerpt=hook + "`git checkout` on f throws away edits."), cwd=gone, ts=iso(30)))
-        rows.append(dict(corpus_row(len(rows), "PowerShell", "git worktree remove x", "denied-hook", "baseline-guard",
+        rows.append(dict(corpus_row(len(rows), "PowerShell", "git worktree remove x", "denied-hook", GUARD_HOOK,
                                     excerpt=hook + "`git worktree remove` deletes through junctions: %s holds a "
                                     "junction." % gone), cwd=self.tmp.name, ts=iso(30)))
-        rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", "baseline-guard",
+        rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", GUARD_HOOK,
                                     excerpt=hook + "something the first version did not deny"), cwd=self.tmp.name,
                          ts=iso(30)))
         return rows
@@ -590,44 +600,44 @@ class BaselineTests(unittest.TestCase):
 
     def test_fails_when_unexplained_share_is_over_five_percent(self):
         rows = self.unreplayed_rows()
-        rows.append(dict(corpus_row(len(rows), "Bash", "old-deny x", "denied-hook", "baseline-guard",
-                                    excerpt="PreToolUse:Bash hook error: baseline-guard: still denied at first commit"),
+        rows.append(dict(corpus_row(len(rows), "Bash", "old-deny x", "denied-hook", GUARD_HOOK,
+                                    excerpt=HOOK + "still denied at first commit"),
                          cwd=self.tmp.name, ts=iso(30)))
         code, output, *_ = self.baseline(rows)
         self.assertEqual(code, 1, output)
-        self.assertIn("FAIL: 1 of 4 baseline-guard hook denies that do not replay are unexplained", output)
+        self.assertIn("FAIL: 1 of 4 baseline guard hook denies that do not replay are unexplained", output)
         self.assertIn("target gone: 2", output)
         self.assertIn("rule narrowed: 1", output)
 
     def test_target_gone_only_for_rules_that_read_the_disk(self):
         # a gone cwd explains a git row, not a row of a rule that never reads the disk
         rows = self.good_rows()
-        rows.append(dict(corpus_row(len(rows), "Bash", "echo cwd-gone", "denied-hook", "baseline-guard",
-                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"),
+        rows.append(dict(corpus_row(len(rows), "Bash", "echo cwd-gone", "denied-hook", GUARD_HOOK,
+                                    excerpt=HOOK + "x"),
                          cwd=os.path.join(self.tmp.name, "removed"), ts=iso(1)))
         code, output, *_ = self.baseline(rows)
         self.assertEqual(code, 1, output)
-        self.assertIn("FAIL: 1 of 1 baseline-guard hook denies that do not replay are unexplained", output)
+        self.assertIn("FAIL: 1 of 1 baseline guard hook denies that do not replay are unexplained", output)
         self.assertIn("unexplained: 1", output)
 
     def test_rule_narrowed_only_before_the_first_commit(self):
-        # the same row, dated after the first baseline-guard commit: narrowing cannot explain it
+        # the same row, dated after the first baseline guard commit: narrowing cannot explain it
         rows = self.good_rows()
-        rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", "baseline-guard",
-                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"), cwd=self.tmp.name,
+        rows.append(dict(corpus_row(len(rows), "Bash", "narrowed x", "denied-hook", GUARD_HOOK,
+                                    excerpt=HOOK + "x"), cwd=self.tmp.name,
                          ts=iso(1)))
         code, output, *_ = self.baseline(rows)
         self.assertEqual(code, 1, output)
-        self.assertIn("FAIL: 1 of 1 baseline-guard hook denies that do not replay are unexplained", output)
+        self.assertIn("FAIL: 1 of 1 baseline guard hook denies that do not replay are unexplained", output)
 
     def test_disk_rule_replays_on_the_real_disk_and_with_the_disk_neutralised(self):
         rows = self.good_rows()
-        rows.append(dict(corpus_row(len(rows), "Bash", "git disk a", "denied-hook", "baseline-guard",
-                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"),
+        rows.append(dict(corpus_row(len(rows), "Bash", "git disk a", "denied-hook", GUARD_HOOK,
+                                    excerpt=HOOK + "x"),
                          cwd=os.path.join(self.tmp.name, "removed"), ts=iso(30)))
         # a row that is not a git command is not replayed a second time, whatever the guard does with the disk
-        rows.append(dict(corpus_row(len(rows), "Bash", "other disk b", "denied-hook", "baseline-guard",
-                                    excerpt="PreToolUse:Bash hook error: baseline-guard: x"),
+        rows.append(dict(corpus_row(len(rows), "Bash", "other disk b", "denied-hook", GUARD_HOOK,
+                                    excerpt=HOOK + "x"),
                          cwd=os.path.join(self.tmp.name, "removed"), ts=iso(30)))
         code, output, out, report, known = self.baseline(rows)
         self.assertEqual(code, 0, output)

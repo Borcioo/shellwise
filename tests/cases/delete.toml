@@ -1120,12 +1120,13 @@ command = 'Remove-Item -Recurse -Force "$x\" # shellwise: allow'
 level = "ok"
 rules = ["delete-empty-expansion"]
 
+# Any other allow text is only a comment: the danger stays.
 [[row]]
-id = "marker-alias-confirms-a-danger"
+id = "marker-other-text-is-a-comment"
 os = "windows"
 shell = "gitbash"
-command = 'rm -rf "$X/" # baseline-guard: allow'
-level = "ok"
+command = 'rm -rf "$X/" # other-guard: allow'
+level = "danger"
 rules = ["delete-empty-expansion"]
 
 # A warn blocks nothing: the marker leaves it as it is.

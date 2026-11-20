@@ -1,6 +1,6 @@
-# baseline-guard baseline
+# Baseline guard replay
 
-Counts only, produced by `tools/corpus/baseline.py` over the corpus `tools/corpus/extract.py` writes (see `tools/corpus/README.md`). `full` is baseline-guard's `check()`, `installed` its `check_installed()` (the rules the host setup hooks run); only deny findings count.
+Counts only, produced by `tools/corpus/baseline.py` over the corpus `tools/corpus/extract.py` writes (see `tools/corpus/README.md`). `full` is the baseline guard's `check()`, `installed` its `check_installed()` (the rules its hook runs); only deny findings count.
 
 ## Corpus read
 
@@ -74,14 +74,14 @@ A deny on an `ok` row is a call that ran without the error the rule predicts: a 
 
 | Hook | Rows |
 |---|---:|
-| baseline-guard | 309 |
+| baseline guard | 309 |
 | other hook | 41 |
 
-## Replay of baseline-guard hook denies
+## Replay of baseline guard hook denies
 
-Rows that baseline-guard denied in the session, replayed today on the real disk: 266 of 309 (86.1 %); with the disk check neutralised: 276 of 309 (89.3 %), where every folder exists and the rows of git commands, which read the disk, are replayed a second time. The check is a positive control: each row that does not replay on the real disk gets a computed cause, and the run fails when more than 5 % of them are unexplained.
+Rows that the baseline guard denied in the session, replayed today on the real disk: 266 of 309 (86.1 %); with the disk check neutralised: 276 of 309 (89.3 %), where every folder exists and the rows of git commands, which read the disk, are replayed a second time. The check is a positive control: each row that does not replay on the real disk gets a computed cause, and the run fails when more than 5 % of them are unexplained.
 
-Rows that no longer replay, by cause: `target gone` = a git command whose cwd, or a drive path the deny message names, does not exist now; `rule narrowed` = a row dated before baseline-guard's first commit in the host setup repo, which that version does not deny either; anything else is `unexplained`.
+Rows that no longer replay, by cause: `target gone` = a git command whose cwd, or a drive path the deny message names, does not exist now; `rule narrowed` = a row dated before the baseline guard's first commit, which that version does not deny either; anything else is `unexplained`.
 
 | Cause | Rows |
 |---|---:|

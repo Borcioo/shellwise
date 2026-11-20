@@ -1,5 +1,5 @@
 //! The git rules: what a git command discards or deletes, and the policy rules ported from
-//! baseline-guard (`git-restore-discards`, `git-worktree-junction`, `git-no-verify`,
+//! the baseline guard (`git-restore-discards`, `git-worktree-junction`, `git-no-verify`,
 //! `git-unreadable`). Subcommands, options and config keys come from the program's `discard`
 //! facts in `data/programs.toml` (`Program::extra`); which flags make a subcommand destructive
 //! from `data/destructive.toml`. `git clean` is judged as a delete inside the folder git runs in.

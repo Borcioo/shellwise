@@ -325,7 +325,7 @@ command = "ssh web-host 'cd public_html && ls'"
 level = "ok"
 rules = []
 
-# --- claude -p without a bound (the host setup catalogue: about 10 retries of 2+ minutes against a dead API) ---
+# --- claude -p without a bound (about 10 retries of 2+ minutes against a dead API) ---
 
 [[row]]
 id = "bash-claude-print-unbounded"

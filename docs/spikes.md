@@ -176,7 +176,7 @@ read as an extra target; 10 with a phantom range command; 2 where a `$(…)` glu
 so the target reads as a static path ending in `$` (the delete guard would judge the wrong, static
 path); 1 member call after a here-string split.
 
-Gap rows (the PowerShell rows of the baseline-guard "Known gaps" list, written as synthetic commands;
+Gap rows (the PowerShell rows of the baseline guard's "Known gaps" list, written as synthetic commands;
 `ParseInput` gave the expected command names on all 24 rows that have one): wrong are a comment
 glued to a number (`1# …` read as a command, its comment lost); U+00A0 and U+3000 as separators
 (kept inside the next command name); U+00A0 before a comment (the comment read as arguments); a
@@ -211,7 +211,7 @@ makes the same way on both sides does not show.
 The one error mismatch: `case` with unparenthesised patterns inside `$(…)`, which brush rejects.
 Of the 33 silent rows, 32 are rows the reference cannot judge: bash prints a heredoc followed by
 `||`/`&&` with the operator at the start of the next line, which no parser reads back (on the 6 of
-them checked by hand, brush's command names for the original were right); 1 is the host setup's own CRLF
+them checked by hand, brush's command names for the original were right); 1 is a CRLF
 normalisation dropping a CR from a `$'…'` word. Heredoc rows: 3,834, 0 error mismatches, 32 silent,
 all of them the printer case. `$'…'` rows: 246, 0 error mismatches, 2 silent (one of each cause).
 The 10 rows bash rejects (unclosed backticks, a heredoc closed by the end of input, which the
@@ -243,8 +243,8 @@ rule.
 The spike binary in hook mode reads a PreToolUse event from stdin, parses `tool_input.command` with
 the parser for `tool_name` and exits 0 with no output. 2,000 sequential spawns per form from one
 Python driver, wall time from spawn to exit, every exit code checked; Defender real-time protection
-on; other Claude sessions were running on the machine. The baseline is the Python guard called as
-`python -I -S baseline_guard.py --pwsh-all` (Python 3.12, the interpreter `py -3` finds), on the same
+on; other Claude sessions were running on the machine. The baseline is the baseline guard called as
+`python -I -S <guard module> --pwsh-all` (Python 3.12, the interpreter `py -3` finds), on the same
 PowerShell event (three commands, one of them a delete). The shell form is Git's `bin\sh.exe -c`.
 
 | Form | p50 ms | p99 ms |

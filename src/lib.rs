@@ -913,11 +913,10 @@ mod tests {
             Level::Danger,
             [
                 "rm -rf x # shellwise: allow",
-                "rm -rf x # baseline-guard: allow",
                 "rm -rf x # shellwise: allow\n",
                 // Critical targets.
                 "rm -rf / # shellwise: allow",
-                "rm -rf ~ # baseline-guard: allow",
+                "rm -rf ~ # shellwise: allow",
                 "Remove-Item -Recurse -Force C:\\ # shellwise: allow",
                 "bash -c 'rm -rf /' # shellwise: allow",
                 // The shell does not read these as a comment.

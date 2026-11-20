@@ -223,7 +223,7 @@ fn parity_per_installed_rule_counts_what_shellwise_allows() {
     assert!(
         b.run
             .stdout
-            .contains("parity bash-too-long: baseline-guard denies 1, shellwise allows 1"),
+            .contains("parity bash-too-long: baseline guard denies 1, shellwise allows 1"),
         "{}",
         b.run.stdout
     );
@@ -343,13 +343,13 @@ fn a_baseline_guard_id_the_map_does_not_name_fails() {
         ..FULL
     };
     bench("unmapped-known", &inputs, &[], &[])
-        .assert_fail("no shellwise id for these baseline-guard ids: fixture-unknown-id");
+        .assert_fail("no shellwise id for these baseline guard ids: fixture-unknown-id");
     let inputs = Inputs {
         baseline: "baseline_unmapped.jsonl",
         ..FULL
     };
     bench("unmapped-baseline", &inputs, &[], &[])
-        .assert_fail("no shellwise id for these baseline-guard ids: fixture-unknown-id");
+        .assert_fail("no shellwise id for these baseline guard ids: fixture-unknown-id");
 }
 
 #[test]
@@ -704,8 +704,8 @@ fn write_jsonl(path: &std::path::Path, rows: &[Value]) -> String {
 }
 
 /// A corpus a test writes into `dir`, with the rows every run needs around `rows`: one row per
-/// shell and a known row (fixture row 4's shape, whose baseline-guard id maps to `parse-error`).
-/// `installed` gives a row's baseline-guard ids. Returns the corpus, baseline and known paths.
+/// shell and a known row (fixture row 4's shape, whose baseline guard id maps to `parse-error`).
+/// `installed` gives a row's baseline guard ids. Returns the corpus, baseline and known paths.
 fn written(dir: &std::path::Path, rows: &[(Value, &[&str])]) -> (String, String, String) {
     let anchor = row("f000000000a1", "Bash", "echo 'fixture-anchor", None, false);
     let pwsh = row(
@@ -914,7 +914,7 @@ fn a_config_file_sets_what_the_bench_measures() {
     .assert_fail("the config did not load");
 }
 
-/// Parity exceptions are keyed by baseline-guard rule, shape class and label: an exception for the
+/// Parity exceptions are keyed by baseline guard rule, shape class and label: an exception for the
 /// `ok` rows of a rule does not explain its `denied-hook` rows.
 #[test]
 fn parity_exceptions_are_keyed_by_shape_and_label() {
@@ -1081,7 +1081,7 @@ fn meter_2_splits_by_line_and_by_rule_family() {
                 ),
                 &[],
             ),
-            // Fixture row 6's shape twice: the real parser refuses one, baseline-guard denies the other.
+            // Fixture row 6's shape twice: the real parser refuses one, the baseline guard denies the other.
             (
                 row(
                     "f000000000e2",
@@ -1131,8 +1131,8 @@ fn meter_2_splits_by_line_and_by_rule_family() {
 }
 
 /// `[runs_on]` in the rule map says where each mapped rule can fire; the known slice trusts it,
-/// so a map key without an entry, or a rule that fires outside its entry on a row baseline-guard
-/// denies with that id, fails the run.
+/// so a map key without an entry, or a rule that fires outside its entry on a row the baseline
+/// guard denies with that id, fails the run.
 #[test]
 fn the_runs_on_table_covers_every_mapped_rule_and_where_it_fires() {
     let dir = scratch("runs-on");

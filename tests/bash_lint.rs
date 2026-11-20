@@ -1,5 +1,5 @@
 //! The Git Bash rules through `analyse`: `tests/cases/bash_lint.toml`. The rows ported from
-//! baseline-guard (`sg-` ids) must number what the file's header says.
+//! the baseline guard (`sg-` ids) must number what the file's header says.
 
 mod case_loader;
 
@@ -25,7 +25,7 @@ fn the_ported_rows_number_what_the_header_says() {
     let text = std::fs::read_to_string(&path).unwrap();
     let want: usize = text
         .lines()
-        .find_map(|l| l.strip_prefix("# baseline-guard rows: "))
+        .find_map(|l| l.strip_prefix("# baseline guard rows: "))
         .expect("the header names the ported row count")
         .trim()
         .parse()
