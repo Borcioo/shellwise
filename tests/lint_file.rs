@@ -837,6 +837,24 @@ fn shellcheck_findings_print_at_the_columns_real_shellcheck_gives() {
     );
 }
 
+/// Real ShellCheck 0.11.0 (`-f gcc`) gives each variable its own pair: two findings of one code on
+/// one line are both kept.
+#[test]
+fn shellcheck_findings_of_one_code_on_one_line_are_all_printed() {
+    let (path, r) = lint_cli("sc_same_line", "two.sh", "echo $a $b\n");
+    assert_eq!(
+        places(&path, &r),
+        [
+            "1:6: warn SC2086",
+            "1:6: warn SC2154",
+            "1:9: warn SC2086",
+            "1:9: warn SC2154"
+        ],
+        "{}",
+        r.stdout
+    );
+}
+
 #[test]
 fn a_shellcheck_error_fails_the_file_and_a_warning_does_not() {
     let (path, r) = lint_cli("sc_levels", "var.sh", "rm $var\n");

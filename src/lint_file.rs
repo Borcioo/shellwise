@@ -218,10 +218,13 @@ pub fn lint_with(
             span: Span::default(),
         }],
     };
+    // Only the shellwise findings are compared: the external linter's own findings of one rule on
+    // one line are distinct (one per variable).
+    let own_count = located.len();
     for mut f in extra {
         f.level = cfg.level(f.rule, f.level);
         let l = locate(&text, f);
-        let seen = located
+        let seen = located[..own_count]
             .iter()
             .any(|o| o.line == l.line && o.finding.rule == l.finding.rule);
         if !seen {
