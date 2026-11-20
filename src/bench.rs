@@ -41,6 +41,8 @@ const OWN_LINE_SHARE: f64 = 0.005;
 const METER_2_PER_DAY: f64 = 2.0;
 /// The header of a `--dump` file.
 const DUMP_HEADER: &str = "id\tlevel\trules\traw_hit";
+/// The stack of the replay thread, as large as the worker `analyse` runs the parse on.
+const REPLAY_STACK: usize = 64 * 1024 * 1024;
 
 #[derive(clap::Args)]
 pub struct BenchArgs {
@@ -153,12 +155,13 @@ struct Replayed {
     level: Level,
     /// Each rule once, at its highest level, in the order the findings name them.
     rules: Vec<(&'static str, Level)>,
-    raw_hit: bool,
+    /// `None` when the raw scan panicked.
+    raw_hit: Option<bool>,
     micros: u64,
 }
 
 impl Replayed {
-    fn from_verdict(v: &Verdict, raw_hit: bool, micros: u64) -> Replayed {
+    fn from_verdict(v: &Verdict, raw_hit: Option<bool>, micros: u64) -> Replayed {
         let mut rules: Vec<(&'static str, Level)> = Vec::new();
         for f in &v.findings {
             match rules.iter_mut().find(|(r, _)| *r == f.rule) {
@@ -256,12 +259,18 @@ fn bench(args: &BenchArgs) -> Result<Vec<String>, String> {
     }
     for tool in [Tool::Bash, Tool::Pwsh] {
         if !rows.iter().any(|(_, t)| *t == tool) {
-            return Err(format!("0 {} rows read from {}", tool.name(), args.corpus.display()));
+            return Err(format!(
+                "0 {} rows read from {}",
+                tool.name(),
+                args.corpus.display()
+            ));
         }
     }
 
-    let installed: HashMap<&str, &Vec<String>> =
-        baseline.iter().map(|b| (b.id.as_str(), &b.installed)).collect();
+    let installed: HashMap<&str, &Vec<String>> = baseline
+        .iter()
+        .map(|b| (b.id.as_str(), &b.installed))
+        .collect();
     let mut unmapped: BTreeSet<&str> = BTreeSet::new();
     for b in &baseline {
         for r in &b.installed {
@@ -284,7 +293,7 @@ fn bench(args: &BenchArgs) -> Result<Vec<String>, String> {
         ));
     }
 
-    let head = replay(&rows, 1);
+    let head = replay(&rows, 1)?;
     let joined = rows
         .iter()
         .filter(|(r, _)| installed.contains_key(r.id.as_str()))
@@ -301,7 +310,7 @@ fn bench(args: &BenchArgs) -> Result<Vec<String>, String> {
     }
     let moves = match &args.diff {
         Some(old) => {
-            let control = replay(&rows, 2);
+            let control = replay(&rows, 2)?;
             let control_moves = compare_passes(&rows, &head, &control);
             if !control_moves.is_empty() {
                 for m in &control_moves {
@@ -403,7 +412,11 @@ fn read_real_parse(path: &Path) -> Result<HashMap<String, bool>, String> {
         }
         let mut cols = line.split('\t');
         let (Some(id), Some(refused)) = (cols.next(), cols.next()) else {
-            return Err(format!("{}: line {}: fewer than 2 columns", path.display(), n + 1));
+            return Err(format!(
+                "{}: line {}: fewer than 2 columns",
+                path.display(),
+                n + 1
+            ));
         };
         let refused = match refused {
             "yes" => true,
@@ -424,8 +437,22 @@ fn read_real_parse(path: &Path) -> Result<HashMap<String, bool>, String> {
     Ok(out)
 }
 
-/// One pass over the corpus, each row through `analyse` with the default config.
-fn replay(rows: &[(&CorpusRow, Tool)], pass: u8) -> Vec<Replayed> {
+/// One pass over the corpus, each row through `analyse` with the default config. The pass runs on
+/// one big-stack thread, as `analyse` runs its own scan, so a deeply nested row cannot end the run
+/// without a report; a panic in the raw scan makes that row's `raw_hit` an error.
+fn replay(rows: &[(&CorpusRow, Tool)], pass: u8) -> Result<Vec<Replayed>, String> {
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .name(format!("replay-{pass}"))
+            .stack_size(REPLAY_STACK)
+            .spawn_scoped(s, || replay_rows(rows, pass))
+            .map_err(|e| format!("the replay thread did not start: {e}"))?
+            .join()
+            .map_err(|_| format!("the replay pass {pass} panicked"))
+    })
+}
+
+fn replay_rows(rows: &[(&CorpusRow, Tool)], pass: u8) -> Vec<Replayed> {
     let cfg = Config::default();
     rows.iter()
         .enumerate()
@@ -437,11 +464,13 @@ fn replay(rows: &[(&CorpusRow, Tool)], pass: u8) -> Vec<Replayed> {
                 cwd: row.cwd.as_ref().map(PathBuf::from),
                 env: EnvView::new(),
                 origin: Origin::CommandLine,
+                problem: None,
             };
             let start = Instant::now();
             let verdict = analyse(&input, &cfg, &Deadline::for_config(start, &cfg));
             let micros = start.elapsed().as_micros() as u64;
-            let raw_hit = scan::raw_destructive(&row.command).is_some();
+            let raw_hit =
+                std::panic::catch_unwind(|| scan::destructive_row(&row.command).is_some()).ok();
             let mut r = Replayed::from_verdict(&verdict, raw_hit, micros);
             perturb(pass, i, &mut r);
             r
@@ -453,7 +482,7 @@ fn replay(rows: &[(&CorpusRow, Tool)], pass: u8) -> Vec<Replayed> {
 /// the second pass, so the head-vs-head control has a known answer.
 #[cfg(feature = "testhooks")]
 fn perturb(pass: u8, index: usize, r: &mut Replayed) {
-    if pass == 2 && index == 0 && rules::testhooks::mode() == "bench-control-move" {
+    if pass == 2 && index == 0 && rules::testhooks::active("bench-control-move") {
         r.level = if r.level == Level::Ok {
             Level::Break
         } else {
@@ -474,7 +503,11 @@ fn write_dump(path: &Path, rows: &[(&CorpusRow, Tool)], head: &[Replayed]) -> Re
             row.id,
             r.level.as_str(),
             r.rule_list(),
-            if r.raw_hit { "yes" } else { "no" }
+            match r.raw_hit {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "error",
+            }
         ));
     }
     fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
@@ -516,7 +549,8 @@ fn diff(
     head: &[Replayed],
     control_moves: usize,
 ) -> Result<Value, String> {
-    let text = fs::read_to_string(old).map_err(|e| format!("cannot read {}: {e}", old.display()))?;
+    let text =
+        fs::read_to_string(old).map_err(|e| format!("cannot read {}: {e}", old.display()))?;
     let mut before: HashMap<&str, (Level, &str)> = HashMap::new();
     for (n, line) in text.lines().enumerate() {
         let line = line.trim_end_matches('\r');
@@ -600,7 +634,7 @@ fn diff(
 enum Line {
     Refused,
     Parity,
-    OwnLine,
+    Own,
     Meter1,
 }
 
@@ -612,10 +646,13 @@ fn line_of(
 ) -> Line {
     if refused == Some(true) {
         Line::Refused
+    } else if deny.is_empty() {
+        // A denied row names no deny rule only when a finding's level is wrong: count it.
+        Line::Meter1
     } else if deny.iter().all(|r| parity.contains(r)) {
         Line::Parity
     } else if deny.iter().all(|r| parity.contains(r) || own.contains(r)) {
-        Line::OwnLine
+        Line::Own
     } else {
         Line::Meter1
     }
@@ -667,6 +704,9 @@ struct Report {
     parity: PerTool,
     own_line: PerTool,
     meter_2: PerTool,
+    /// Whether `--real-parse` was given: without it the refused line is not measured and meter 1
+    /// holds its rows, so it is an upper bound.
+    real_measured: bool,
     /// Denied non-destructive `ok` rows with no `--real-parse` answer (counted on another line).
     real_parse_missing: u64,
     /// `None` without `--real-parse`.
@@ -696,6 +736,7 @@ impl Report {
             parity: PerTool::default(),
             own_line: PerTool::default(),
             meter_2: PerTool::default(),
+            real_measured: real.is_some(),
             real_parse_missing: 0,
             parse_kind_false_deny: real.map(|_| 0),
             parse_kind_unmeasured: 0,
@@ -764,7 +805,7 @@ impl Report {
             let line = match line_of(&v.deny_rules(), &parity, &own, refused) {
                 Line::Refused => &mut r.refused,
                 Line::Parity => &mut r.parity,
-                Line::OwnLine => &mut r.own_line,
+                Line::Own => &mut r.own_line,
                 Line::Meter1 => &mut r.meter_1,
             };
             line.add(tool);
@@ -840,8 +881,13 @@ impl Report {
                 "count": self.meter_1.json(),
                 "budget": meter_1_budget,
                 "within": self.meter_1.total() as f64 <= meter_1_budget,
+                "upper_bound": !self.real_measured,
             },
-            "refused_by_real_parser": self.refused.json(),
+            "refused_by_real_parser": if self.real_measured {
+                self.refused.json()
+            } else {
+                Value::Null
+            },
             "parity": self.parity.json(),
             "own_line": {
                 "rules": map.own_line_rules,
@@ -880,12 +926,21 @@ impl Report {
         line("rows", self.rows);
         println!("days: {}", self.days);
         println!(
-            "meter 1: {} of {} non-destructive ok rows (budget {:.1})",
+            "meter 1: {} of {} non-destructive ok rows (budget {:.1}){}",
             self.meter_1.total(),
             self.ok_non_destructive.total(),
-            self.ok_non_destructive.total() as f64 * METER_1_SHARE
+            self.ok_non_destructive.total() as f64 * METER_1_SHARE,
+            if self.real_measured {
+                ""
+            } else {
+                ", an upper bound: the real-parser line is not measured"
+            }
         );
-        line("refused by the real parser", self.refused);
+        if self.real_measured {
+            line("refused by the real parser", self.refused);
+        } else {
+            println!("refused by the real parser: not measured (pass the real_parse.ps1 output)");
+        }
         line("parity", self.parity);
         line("own line", self.own_line);
         line("meter 2", self.meter_2);

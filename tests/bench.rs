@@ -13,9 +13,12 @@ fn fixture(name: &str) -> String {
     format!("{}/tests/bench_fixture/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
-/// A fresh folder per test, outside the repo, for its report, dump and diff files.
+/// A fresh folder per test, under this build's target dir (never shared with another checkout),
+/// for its report, dump and diff files.
 fn scratch(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("shellwise-bench-tests").join(test);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("bench")
+        .join(test);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the test folder");
     dir
@@ -136,6 +139,7 @@ fn the_meter_lines_have_their_known_answers() {
     assert_eq!(count(&v, "refused_by_real_parser"), (1, 0, 1));
     assert_eq!(count(&v, "parity"), (1, 1, 0));
     assert_eq!(count(&v, "meter_1"), (1, 1, 0));
+    assert_eq!(v["meter_1"]["upper_bound"], false);
     assert_eq!(count(&v, "own_line"), (0, 0, 0));
     assert_eq!(count(&v, "meter_2"), (1, 1, 0));
     assert_eq!(v["meter_2"]["per_day"], 0.5);
@@ -160,7 +164,11 @@ fn per_rule_counts_split_denies_and_warns_by_label() {
     b.assert_code(0);
     let v = b.report();
     let ok = &v["per_rule"]["parse-error"]["ok"];
-    assert_eq!((ok["deny"].as_u64(), ok["warn"].as_u64()), (Some(4), Some(1)), "{v}");
+    assert_eq!(
+        (ok["deny"].as_u64(), ok["warn"].as_u64()),
+        (Some(4), Some(1)),
+        "{v}"
+    );
     // Row 7, the only failed row, is denied under whichever id the destructive arm carries.
     let failed_denies: u64 = v["per_rule"]
         .as_object()
@@ -203,7 +211,7 @@ fn parity_per_installed_rule_counts_what_shellwise_allows() {
 }
 
 #[test]
-fn without_real_parse_answers_the_refused_line_is_empty_and_false_denies_unmeasured() {
+fn without_real_parse_answers_the_refused_line_and_false_denies_are_not_measured() {
     let inputs = Inputs {
         real_parse: None,
         ..FULL
@@ -211,16 +219,19 @@ fn without_real_parse_answers_the_refused_line_is_empty_and_false_denies_unmeasu
     let b = bench("no-real-parse", &inputs, &[], &[]);
     b.assert_code(0);
     let v = b.report();
-    assert_eq!(count(&v, "refused_by_real_parser"), (0, 0, 0), "{v}");
+    assert!(v["refused_by_real_parser"].is_null(), "{v}");
     assert_eq!(count(&v, "meter_1"), (2, 1, 1), "{v}");
+    assert_eq!(v["meter_1"]["upper_bound"], true, "{v}");
     assert_eq!(count(&v, "parity"), (1, 1, 0), "{v}");
     assert!(v["parse_kind_false_deny"].is_null(), "{v}");
     assert_eq!(v["parse_kind_unmeasured"], 4);
-    assert!(
-        b.run.stdout.contains("parse_kind_false_deny: not measured"),
-        "{}",
-        b.run.stdout
-    );
+    for line in [
+        "parse_kind_false_deny: not measured",
+        "refused by the real parser: not measured",
+        "an upper bound",
+    ] {
+        assert!(b.run.stdout.contains(line), "no {line:?}: {}", b.run.stdout);
+    }
 }
 
 #[test]
@@ -431,7 +442,10 @@ fn the_rule_map_names_every_baseline_guard_id() {
     assert_eq!(keys, want);
     assert_eq!(map["bash-unterminated-quote"].as_str(), Some("parse-error"));
     assert_eq!(map["bash-too-long"].as_str(), Some("too-long"));
-    assert_eq!(map["bash-powershell-syntax"].as_str(), Some("bash-ps-cmdlet"));
+    assert_eq!(
+        map["bash-powershell-syntax"].as_str(),
+        Some("bash-ps-cmdlet")
+    );
     let own: Vec<&str> = table["own_line_rules"]
         .as_array()
         .unwrap()
@@ -452,7 +466,9 @@ mod hooks {
         let b = bench("control", &FULL, &["--diff", old.as_str()], &env);
         b.assert_fail("the head-vs-head control moved 1 rows");
         assert!(
-            b.run.stdout.contains("control moved f00000000001 ok[-] -> break[-]"),
+            b.run
+                .stdout
+                .contains("control moved f00000000001 ok[-] -> break[-]"),
             "{}",
             b.run.stdout
         );

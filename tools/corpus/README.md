@@ -85,6 +85,39 @@ into simple commands (heredoc bodies and PowerShell here-strings are text), skip
 `sudo` or `$x =`, scans `bash -c` / `pwsh -Command` / `cmd /c` bodies and the command a `find -exec`
 clause runs, and matches names case-insensitively.
 
+## rule_map.toml and real_parse.ps1
+
+`rule_map.toml` maps each baseline-guard rule id to its shellwise id (header in the file). `shellwise bench`
+compiles it in; every id `baseline.jsonl` or `known.jsonl` names must be in it. A shellwise id that has
+not landed yet is not an error: its `known.jsonl` rows count as not landed until the rule exists.
+
+```
+pwsh -NoProfile -File tools/corpus/real_parse.ps1 -Corpus "$SHELLWISE_CORPUS/corpus.jsonl" -Ids <dump.tsv> -Out <real_parse.tsv>
+```
+
+Runs five known-answer controls, then asks pwsh's parser (`ParseInput`, in process) about each PowerShell
+row and Git Bash's `bash -n` (one process per row, about 0.2 s) about each Bash row. Writes `id`, `refused`
+(`yes`/`no`) and the first error id. `-Ids` with a bench dump keeps only the rows at break or above.
+
+## shellwise bench
+
+```
+shellwise bench --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --baseline "$SHELLWISE_CORPUS/baseline.jsonl" \
+    --out <report.json> [--known <known.jsonl>] [--rule-map <map.toml>] [--real-parse <real_parse.tsv>] \
+    [--dump <dump.tsv>] [--diff <old dump>]
+```
+
+Build it with `--release`: the latency lines are meaningless in a debug build. The order: a first run
+with `--dump`, `real_parse.ps1 -Ids` on that dump, then the run with `--real-parse`. Without
+`--real-parse` the refused-by-the-real-parser line reads "not measured" and meter 1 is an upper bound.
+For a base-vs-head diff, dump the base build's run, then run the head build with `--diff <base dump>`:
+it replays twice and fails when its own two passes differ (the head-vs-head control). The report keeps
+meter 1, the refused-by-the-real-parser line, the parity line and the own line apart; the meters gate
+nothing before Task 35. Exit 1 on 0 rows (or 0 for one shell, or 0 joined to the baseline), an unmapped
+baseline-guard id, a missing `known.jsonl` (default: next to the corpus), 0 known rows checked, a checked
+known row missing its rule or absent from the corpus, or a moved control. The dump and the report name
+row ids: keep them outside the repo.
+
 ## Tests
 
 ```
