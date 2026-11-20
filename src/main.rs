@@ -15,7 +15,8 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use shellwise::adapter::check_json;
-use shellwise::config::Config;
+use shellwise::adapter::claude_code::{self, Event};
+use shellwise::config::{Config, HOOK_MARGIN_MS, MIN_HOOK_TIMEOUT_MS};
 use shellwise::ir::EnvView;
 use shellwise::level::{Finding, Verdict, exit_code};
 use shellwise::{
@@ -29,6 +30,9 @@ const EXIT_IO: i32 = 74;
 /// The config load ends this long after the process start, inside the one deadline
 /// (`hook_timeout_ms` is at least `MIN_HOOK_TIMEOUT_MS`).
 const CONFIG_LOAD_MS: u64 = 1000;
+/// The hook reads its event before the config (the config needs the event's `cwd`), under a
+/// bound no config can undercut.
+const HOOK_READ_MS: u64 = MIN_HOOK_TIMEOUT_MS - HOOK_MARGIN_MS;
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +49,22 @@ struct Cli {
 enum Cmd {
     /// Check one command; exit 0 ok/warn, 1 break, 2 danger, 3 critical.
     Check(CheckArgs),
+    /// Run as an agent host's hook; always exits 0.
+    #[command(subcommand)]
+    Hook(HookCmd),
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// Claude Code PreToolUse: the event on stdin, the host's JSON reply on stdout.
+    ClaudeCode(HookArgs),
+}
+
+#[derive(clap::Args)]
+struct HookArgs {
+    /// An integration config file; the user file overrides it, the repo file only raises.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -100,7 +120,73 @@ fn run(start: Instant) -> i32 {
     };
     match cli.cmd {
         Cmd::Check(args) => run_check(start, args),
+        Cmd::Hook(HookCmd::ClaudeCode(args)) => run_hook(start, args),
     }
+}
+
+/// `hook claude-code`: read the event, ignore a tool that is not a shell, load the config from
+/// the event's `cwd`, analyse, print the reply. Every path exits 0; an unread input denies.
+fn run_hook(start: Instant, args: HookArgs) -> i32 {
+    let bytes = match read_stdin(Deadline::new(start, HOOK_READ_MS)) {
+        Input::Bytes(bytes) if bytes.len() > MAX_READ_BYTES => {
+            return emit(claude_code::reply(
+                &unread("input over the hard size cap"),
+                &Config::default(),
+            ));
+        }
+        Input::Bytes(bytes) => bytes,
+        Input::Unread(reason) => {
+            return emit(claude_code::reply(&unread(reason), &Config::default()));
+        }
+        Input::Error(e) => {
+            eprintln!("shellwise: cannot read stdin: {e}");
+            return emit(claude_code::reply(
+                &unread("stdin could not be read"),
+                &Config::default(),
+            ));
+        }
+    };
+    let os = Os::host();
+    let (shell, command, cwd) = match claude_code::parse_event(&bytes, os) {
+        Event::Ignored => return 0,
+        Event::Malformed(reason) => return emit(claude_code::malformed(&bytes, reason)),
+        Event::Command {
+            shell,
+            command,
+            cwd,
+        } => (shell, command, cwd),
+    };
+    let (cfg, cfg_findings, cfg_problem) = match load_config(start, args.config, cwd.clone()) {
+        Ok((cfg, findings)) => (cfg, findings, None),
+        Err(reason) => (Config::default(), Vec::new(), Some(reason)),
+    };
+    let deadline = test_deadline(start).unwrap_or_else(|| Deadline::for_config(start, &cfg));
+    if let Some(reason) = cfg_problem {
+        eprintln!("shellwise: analysis incomplete ({reason})");
+    }
+    let input = AnalyseInput {
+        bytes: command.as_bytes(),
+        shell,
+        os,
+        cwd,
+        env: claude_code::hook_env(shell, os),
+        origin: Origin::CommandLine,
+        problem: cfg_problem,
+    };
+    let mut findings = analyse(&input, &cfg, &deadline).findings;
+    findings.extend(cfg_findings);
+    emit(claude_code::reply(&Verdict::new(findings), &cfg))
+}
+
+/// Print the hook's reply, if any, as one LF-terminated line; exit 0.
+fn emit(reply: Option<String>) -> i32 {
+    if let Some(mut text) = reply {
+        text.push('\n');
+        let mut stdout = io::stdout().lock();
+        let _ = stdout.write_all(text.as_bytes());
+        let _ = stdout.flush();
+    }
+    0
 }
 
 fn run_check(start: Instant, args: CheckArgs) -> i32 {

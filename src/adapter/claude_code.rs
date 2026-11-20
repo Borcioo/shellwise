@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::Config;
@@ -72,10 +72,9 @@ pub fn parse_event(bytes: &[u8], os: Os) -> Event {
     let Some(shell) = shell_for(tool, os) else {
         return Event::Ignored;
     };
-    let Some(command) = event
+    let Some(ToolInput { command }) = event
         .get("tool_input")
-        .and_then(|input| input.get("command"))
-        .and_then(Value::as_str)
+        .and_then(|input| ToolInput::deserialize(input).ok())
     else {
         return Event::Malformed("the hook event holds no command");
     };
@@ -86,9 +85,15 @@ pub fn parse_event(bytes: &[u8], os: Os) -> Event {
         .map(PathBuf::from);
     Event::Command {
         shell,
-        command: command.to_string(),
+        command,
         cwd,
     }
+}
+
+/// The part of a shell tool's input the check reads; other keys are ignored.
+#[derive(Deserialize)]
+struct ToolInput {
+    command: String,
 }
 
 /// The reply to an event that could not be read: a deny when its raw text holds a destructive
@@ -211,7 +216,7 @@ fn render(decision: Option<&'static str>, verdict: &Verdict) -> String {
         .iter()
         .filter(|f| f.level > Level::Ok)
         .collect();
-    shown.sort_by(|a, b| b.level.cmp(&a.level));
+    shown.sort_by_key(|f| std::cmp::Reverse(f.level));
     let lines: Vec<String> = shown.iter().map(|f| finding_text(f)).collect();
     let mut best = reply_json(decision, &text(&lines, 1));
     for n in 2..=lines.len() {
@@ -436,7 +441,10 @@ mod tests {
         assert_eq!(decision(&v(vec![finding("a", Level::Critical)])), deny);
         let none = Config::default();
         assert_eq!(
-            decision(&reply(&Verdict::new(vec![finding("a", Level::Danger)]), &none)),
+            decision(&reply(
+                &Verdict::new(vec![finding("a", Level::Danger)]),
+                &none
+            )),
             deny
         );
     }
@@ -482,6 +490,24 @@ mod tests {
         assert!(reason.starts_with("shellwise: break big: "), "{reason}");
         assert!(reason.contains("\nFix: "), "{reason}");
         assert!(reason.ends_with(" more findings not shown"), "{reason}");
+        // A control character is the widest JSON escape (`\u0001`, 6 bytes): the first finding
+        // still fits whole, cut to `LINE_LIMIT` characters per line.
+        let ctrl = char::from_u32(0x01).unwrap().to_string();
+        let wide = Finding {
+            rule: "wide",
+            level: Level::Danger,
+            message: ctrl.repeat(5000),
+            fix: Some(ctrl.repeat(5000)),
+            span: Span::default(),
+        };
+        let r = reply(&Verdict::new(vec![wide]), &Config::default()).unwrap();
+        assert!(r.len() <= OUTPUT_LIMIT, "{}", r.len());
+        let reason = parsed(&r)["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(reason.starts_with("shellwise: danger wide: "), "{reason}");
+        assert!(reason.contains("\nFix: "), "{reason}");
         // Every finding that fits is kept.
         let few = (0..3).map(|_| finding("w", Level::Warn)).collect();
         let r = reply(&Verdict::new(few), &Config::default()).unwrap();

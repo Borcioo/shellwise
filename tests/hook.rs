@@ -82,7 +82,10 @@ fn reply(r: &Run) -> Value {
     let v = r.json();
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["hookSpecificOutput"], "{v}");
-    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse", "{v}");
+    assert_eq!(
+        v["hookSpecificOutput"]["hookEventName"], "PreToolUse",
+        "{v}"
+    );
     v["hookSpecificOutput"].clone()
 }
 
@@ -138,7 +141,7 @@ fn a_break_is_a_deny_with_its_fix_line() {
 fn a_danger_is_a_deny_with_its_fix_line() {
     let reason = denied(&hook("PowerShell", &format!("Get-Date ( ; {DESTRUCTIVE}")));
     assert!(
-        reason.starts_with("shellwise: danger parse-error: "),
+        reason.starts_with("shellwise: danger parse-error-destructive: "),
         "{reason}"
     );
     assert!(
@@ -151,7 +154,10 @@ fn a_danger_is_a_deny_with_its_fix_line() {
 fn a_warn_is_context_with_no_decision() {
     let text = context(&hook("PowerShell", "Get-Date ("));
     assert!(text.starts_with("shellwise: warn parse-error: "), "{text}");
-    assert!(text.contains("\nFix: correct the syntax at column"), "{text}");
+    assert!(
+        text.contains("\nFix: correct the syntax at column"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -161,7 +167,7 @@ fn ok_is_no_output() {
         ("PowerShell", "newtool --any x"),
         ("PowerShell", "timeout 60 newtool -x"),
         ("Bash", "echo hi"),
-        ("PowerShell", ""),
+        ("Bash", ""),
     ] {
         silent(&hook(tool, command));
     }
@@ -260,7 +266,11 @@ fn a_200_kb_command_finishes_well_inside_the_hook_timeout() {
     let long = "Get-Date; ".repeat(20 * 1024);
     for tool in ["PowerShell", "Bash"] {
         let r = hook(tool, &long);
-        assert!(r.elapsed < Duration::from_millis(9000), "{tool}: {:?}", r.elapsed);
+        assert!(
+            r.elapsed < Duration::from_millis(9000),
+            "{tool}: {:?}",
+            r.elapsed
+        );
         let out = reply(&r);
         let text = out["permissionDecisionReason"]
             .as_str()
@@ -284,18 +294,93 @@ fn an_event_over_the_read_cap_is_a_deny_unread() {
 }
 
 #[test]
+fn a_malformed_event_at_the_read_cap_still_replies() {
+    // The raw scan of a malformed event runs without the analysis worker: just under the 1 MiB
+    // read cap, with nesting the scan has to walk, the hook still exits 0 with its deny.
+    let head = format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{DESTRUCTIVE}; "#);
+    let unit = format!("${}", ch(0x28));
+    let body = unit.repeat((1024 * 1024 - head.len()) / unit.len());
+    let event = format!("{head}{body}");
+    assert!(event.len() <= 1024 * 1024, "{}", event.len());
+    let reason = denied(&run(HOOK, Some(event.as_bytes()), &[]));
+    assert!(
+        reason.starts_with("shellwise: danger analysis-incomplete: "),
+        "{reason}"
+    );
+}
+
+#[test]
+fn stdin_held_open_is_a_deny_unread_inside_the_read_bound() {
+    // The host writes the event but never closes the pipe: the read ends at its own bound
+    // (`MIN_HOOK_TIMEOUT_MS - HOOK_MARGIN_MS`, 1500 ms), before any config could shorten it.
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    let dir = std::env::temp_dir().join("shellwise-tests-empty");
+    std::fs::create_dir_all(&dir).unwrap();
+    let start = std::time::Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_shellwise"))
+        .args(HOOK)
+        .current_dir(&dir)
+        .env("APPDATA", &dir)
+        .env("XDG_CONFIG_HOME", &dir)
+        .env("HOME", &dir)
+        .env_remove("SHELLWISE_TESTHOOK")
+        .env_remove("SHELLWISE_TESTHOOK_DEADLINE_MS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn shellwise");
+    let mut pipe = child.stdin.take().unwrap();
+    pipe.write_all(&event("Bash", "echo hi", &cwd_of(&dir)))
+        .unwrap();
+    pipe.flush().unwrap();
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let status = child.wait().unwrap();
+    let elapsed = start.elapsed();
+    drop(pipe);
+    let r = Run {
+        code: status.code().unwrap(),
+        stdout,
+        stderr: String::new(),
+        elapsed,
+    };
+    let reason = denied(&r);
+    assert!(
+        reason.contains("stdin still open at the deadline"),
+        "{reason}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1400) && elapsed < Duration::from_millis(2900),
+        "{elapsed:?}"
+    );
+}
+
+#[test]
 fn a_listed_danger_is_an_ask() {
-    let cfg = "ask_instead_of_deny = [\"parse-error\"]\n";
+    let cfg = "ask_instead_of_deny = [\"parse-error-destructive\", \"parse-error\"]\n";
     let danger = format!("Get-Date ( ; {DESTRUCTIVE}");
     let reason = decided(&hook_with_config("ask", cfg, "PowerShell", &danger), "ask");
     assert!(
-        reason.starts_with("shellwise: danger parse-error: "),
+        reason.starts_with("shellwise: danger parse-error-destructive: "),
         "{reason}"
     );
     assert!(reason.contains("\nFix: "), "{reason}");
-    // A break stays a deny: the command fails as written whoever approves it.
+    // A break stays a deny even when its rule is listed: the command fails as written whoever
+    // approves it.
     let d = dq();
-    let r = hook_with_config("ask-break", cfg, "PowerShell", &format!("Write-Output {d}abc"));
+    let r = hook_with_config(
+        "ask-break",
+        cfg,
+        "PowerShell",
+        &format!("Write-Output {d}abc"),
+    );
     denied(&r);
     // A rule not in the list stays a deny.
     let other = "ask_instead_of_deny = [\"analysis-incomplete\"]\n";
@@ -305,7 +390,12 @@ fn a_listed_danger_is_an_ask() {
 #[test]
 fn a_critical_is_a_deny_even_when_its_rule_is_listed() {
     let cfg = "ask_instead_of_deny = [\"parse-error\"]\n[levels]\nparse-error = \"critical\"\n";
-    let reason = denied(&hook_with_config("critical", cfg, "PowerShell", "Get-Date ("));
+    let reason = denied(&hook_with_config(
+        "critical",
+        cfg,
+        "PowerShell",
+        "Get-Date (",
+    ));
     assert!(
         reason.starts_with("shellwise: critical parse-error: "),
         "{reason}"
@@ -332,7 +422,11 @@ fn the_repo_file_is_found_from_the_event_cwd() {
     .unwrap();
     let inner = repo.join("sub");
     std::fs::create_dir_all(&inner).unwrap();
-    let r = run(HOOK, Some(&event("PowerShell", "Get-Date (", &cwd_of(&inner))), &[]);
+    let r = run(
+        HOOK,
+        Some(&event("PowerShell", "Get-Date (", &cwd_of(&inner))),
+        &[],
+    );
     let reason = denied(&r);
     assert!(
         reason.starts_with("shellwise: danger parse-error: "),
@@ -340,7 +434,11 @@ fn the_repo_file_is_found_from_the_event_cwd() {
     );
     // The same event outside the repo stays a warn.
     let outside = folder("repo-outside");
-    let r = run(HOOK, Some(&event("PowerShell", "Get-Date (", &cwd_of(&outside))), &[]);
+    let r = run(
+        HOOK,
+        Some(&event("PowerShell", "Get-Date (", &cwd_of(&outside))),
+        &[],
+    );
     context(&r);
 }
 
