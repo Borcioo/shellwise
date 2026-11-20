@@ -1,0 +1,38 @@
+# inline-script-too-long through analyse, on the line threshold of each shell (pwsh 80 lines, bash
+# 150 lines). The character threshold (6,000 for both) and the host limits are generated in
+# tests/lint_file.rs, because their rows are too long to read here. A row at the threshold is ok and
+# the row one line over is break, with a Fix line that routes the text to a linted file.
+
+[[row]]
+id = "pwsh-80-lines-is-ok"
+os = "any"
+shell = "pwsh"
+command = "Get-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date"
+level = "ok"
+rules = []
+
+[[row]]
+id = "pwsh-81-lines-is-break"
+os = "any"
+shell = "pwsh"
+command = "Get-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date\nGet-Date"
+level = "break"
+rules = ["inline-script-too-long"]
+fix = "shellwise lint"
+
+[[row]]
+id = "bash-150-lines-is-ok"
+os = "any"
+shell = "bash"
+command = "echo hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi"
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-151-lines-is-break"
+os = "any"
+shell = "bash"
+command = "echo hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi\necho hi"
+level = "break"
+rules = ["inline-script-too-long"]
+fix = "shellwise lint"
