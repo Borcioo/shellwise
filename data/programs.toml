@@ -38,6 +38,7 @@ shells = ["bash"]
 kind = ["wrapper"]
 value_options = ["-s", "--signal", "-k", "--kill-after"]
 operands = 1
+bounds_wait = true
 
 [[program]]
 name = "nice"
@@ -167,6 +168,445 @@ name = "cd"
 shells = ["bash"]
 cmd_options = ["/d"]
 fix = "cd <path>"
+
+# --- Programs that wait (Task 33: will-hang, read by src/rules/hang.rs) ---
+# hang_when       options that start the wait; empty = the program always waits
+# hang_unless     options that end or bound the wait (exact, <opt>=<value>, or glued to a short option)
+# hang_stdin      true = feeding stdin (redirect, here-string, pipe, loop) ends the wait
+# hang_bash_only  true = checked in Bash only
+# hang_level      "break" or "warn" (default warn)
+# bounds_wait     true on a wrapper that bounds what it wraps (timeout)
+
+[[program]]
+name = "read"
+shells = ["bash"]
+kind = ["interactive"]
+hang_unless = ["-t", "-u"]
+hang_stdin = true
+hang_level = "break"
+fix = 'set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"'
+
+[[program]]
+name = "read-host"
+shells = ["pwsh"]
+kind = ["interactive"]
+hang_level = "warn"
+fix = "pass the value as a parameter or a variable instead of asking for it"
+
+[[program]]
+name = "ssh"
+kind = ["interactive"]
+hang_unless = ["BatchMode=yes"]
+hang_level = "warn"
+fix = "ssh -o BatchMode=yes <host> '<command>'"
+
+[[program]]
+name = "claude"
+kind = ["interactive"]
+hang_when = ["-p", "--print"]
+hang_bash_only = true
+hang_level = "warn"
+fix = "timeout 120 claude -p <prompt>"
+lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = ["--version", "-v", "--help", "-h"] }
+
+# --- The delete family (Task 32: [program.delete], read by src/rules/delete.rs) ---
+
+[[program]]
+name = "remove-item"
+shells = ["pwsh"]
+kind = ["delete"]
+value_options = ["-Filter", "-Include", "-Exclude", "-Credential", "-Stream", "-ErrorAction", "-ea", "-WarningAction", "-wa", "-InformationAction", "-infa", "-ProgressAction", "-proga", "-ErrorVariable", "-ev", "-WarningVariable", "-wv", "-InformationVariable", "-iv", "-OutVariable", "-ov", "-OutBuffer", "-ob", "-PipelineVariable", "-pv"]
+lint = { tags = ["children-delete"], flag_hints = ["-rf=-Recurse -Force", "-fr=-Recurse -Force", "-Rf=-Recurse -Force"] }
+[program.delete]
+recursive = ["-Recurse"]
+dry_run = ["-WhatIf"]
+target_options = ["-Path", "-LiteralPath"]
+
+[[program]]
+name = "clear-content"
+shells = ["pwsh"]
+kind = ["delete"]
+value_options = ["-Filter", "-Include", "-Exclude", "-Credential", "-Stream", "-ErrorAction", "-ea", "-WarningAction", "-wa", "-ErrorVariable", "-ev", "-OutVariable", "-ov"]
+[program.delete]
+dry_run = ["-WhatIf"]
+target_options = ["-Path", "-LiteralPath"]
+
+[[program]]
+name = "rm"
+kind = ["delete"]
+[program.delete]
+recursive = ["-r", "-R", "--recursive"]
+
+[[program]]
+name = "rmdir"
+kind = ["delete"]
+[program.delete]
+
+[[program]]
+name = "unlink"
+kind = ["delete"]
+[program.delete]
+
+[[program]]
+name = "shred"
+kind = ["delete"]
+[program.delete]
+
+[[program]]
+name = "find"
+[program.delete]
+targets = "leading"
+contents = true
+exec_options = ["-exec", "-execdir", "-ok", "-okdir"]
+exec_ends = [";", "+"]
+
+[[program]]
+name = "xargs"
+shells = ["bash"]
+value_options = ["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace", "--max-lines", "--eof"]
+[program.delete]
+runner = true
+
+[[program]]
+name = "robocopy"
+[program.delete]
+targets = "second"
+always_recursive = true
+slash_options = true
+dry_run = ["/L"]
+
+# --- Code the guard does not read: danger only with a raw destructive match (opaque-destructive) ---
+
+[[program]]
+name = "bash"
+shells = ["bash"]
+kind = ["shell"]
+
+[[program]]
+name = "sh"
+kind = ["shell"]
+
+[[program]]
+name = "zsh"
+kind = ["shell"]
+
+[[program]]
+name = "pwsh"
+kind = ["shell"]
+value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-SettingsFile", "-WindowStyle", "-w", "-CustomPipeName", "-EncodedCommand", "-e", "-ec", "-Version", "-v"]
+lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+
+[[program]]
+name = "powershell"
+kind = ["shell"]
+value_options = ["-ExecutionPolicy", "-ep", "-ex", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
+lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+
+# cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit).
+[[program]]
+name = "cmd"
+kind = ["shell"]
+line_limit = 8191
+fix = "write the command to a file and lint it"
+
+[[program]]
+name = "eval"
+shells = ["bash"]
+kind = ["eval"]
+
+[[program]]
+name = "invoke-expression"
+shells = ["pwsh"]
+kind = ["eval"]
+
+# --- git (Task 32: [program.discard], read by src/rules/git.rs). Subcommands use `words`, not
+# `name`: tests/shape.rs reads every `name` key in the table as a program name. ---
+
+[[program]]
+name = "git"
+lint = { tags = ["git-cli"], global_value_options = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--attr-source", "--shallow-file"], stdin_commit = ["commit"], file_long = ["--file"], file_short = ["F"] }
+[program.discard]
+global_value_options = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--attr-source", "--shallow-file"]
+config_options = ["-c"]
+hook_config_keys = ["core.hookspath"]
+no_verify = "--no-verify"
+verify = "--verify"
+staged = ["--staged", "-S"]
+worktree = ["--worktree", "-W"]
+source_options = ["-s", "--source"]
+hunk_options = ["--ours", "--theirs", "-p", "--patch", "-m", "--merge"]
+branch_options = ["-b", "-B", "--orphan", "--detach", "-d"]
+clean_value_options = ["-e", "--exclude"]
+
+[[program.discard.subcommands]]
+words = "commit"
+action = "hooks"
+no_verify_short = "n"
+value_shorts = "mFCct"
+value_long = ["--message", "--file", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--author", "--date", "--template", "--trailer", "--cleanup", "--pathspec-from-file"]
+
+[[program.discard.subcommands]]
+words = "push"
+action = "hooks"
+value_shorts = "o"
+value_long = ["--repo", "--receive-pack", "--exec", "--push-option"]
+
+[[program.discard.subcommands]]
+words = "merge"
+action = "hooks"
+value_shorts = "mFsX"
+value_long = ["--message", "--file", "--strategy-option", "--into-name", "--cleanup"]
+
+[[program.discard.subcommands]]
+words = "rebase"
+action = "hooks"
+value_shorts = "CxsX"
+value_long = ["--onto", "--strategy-option", "--exec", "--whitespace", "--empty"]
+
+[[program.discard.subcommands]]
+words = "am"
+action = "hooks"
+no_verify_short = "n"
+value_shorts = "Cp"
+value_long = ["--directory", "--exclude", "--include", "--whitespace", "--patch-format", "--resolvemsg", "--quoted-cr", "--empty"]
+
+[[program.discard.subcommands]]
+words = "checkout"
+action = "checkout-paths"
+
+[[program.discard.subcommands]]
+words = "restore"
+action = "restore-paths"
+
+[[program.discard.subcommands]]
+words = "worktree remove"
+action = "worktree-remove"
+
+[[program.discard.subcommands]]
+words = "reset"
+action = "discard"
+
+[[program.discard.subcommands]]
+words = "switch"
+action = "discard"
+
+[[program.discard.subcommands]]
+words = "stash drop"
+action = "discard"
+
+[[program.discard.subcommands]]
+words = "stash clear"
+action = "discard"
+
+[[program.discard.subcommands]]
+words = "clean"
+action = "clean"
+
+# --- PowerShell lint (Task 30). Every rule fact sits in the row's `lint` table (`Program::extra`):
+# `tags` says which rule reads the row; the other keys are that rule's lists. Cmdlet rows are
+# named by the cmdlet (lowercase): the rules look a command up by the cmdlet its alias resolves to.
+
+[[program]]
+name = "bash"
+shells = ["pwsh"]
+kind = ["shell"]
+fix ="& \"$env:ProgramFiles\\Git\\bin\\bash.exe\""
+lint = { tags = ["wsl-bash"] }
+
+[[program]]
+name = "wsl"
+shells = ["pwsh"]
+value_options = ["-d", "--distribution", "-u", "--user", "--cd"]
+lint = { tags = ["wsl-launcher"], exec_flags = ["-e", "--exec"] }
+
+[[program]]
+name = "tee-object"
+shells = ["pwsh"]
+lint = { tags = ["tee-cmdlet"] }
+
+[[program]]
+name = "select-object"
+shells = ["pwsh"]
+lint = { tags = ["truncator"], truncate_params = ["first"] }
+
+[[program]]
+name = "set-content"
+shells = ["pwsh"]
+lint = { tags = ["file-writer"], content_position = ["1"] }
+
+[[program]]
+name = "out-file"
+shells = ["pwsh"]
+lint = { tags = ["file-writer"], append_params = ["append"] }
+
+[[program]]
+name = "get-childitem"
+shells = ["pwsh"]
+lint = { flag_hints = ["-la=-Force", "-al=-Force", "-lh=-Force", "-lah=-Force", "-alh=-Force", "-ltr=-Force"] }
+
+[[program]]
+name = "select-string"
+shells = ["pwsh"]
+lint = { flag_hints = ["-A#=-Context 0,"] }
+
+[[program]]
+name = "set-location"
+shells = ["pwsh"]
+lint = { flag_hints = ["/d=", "/D="] }
+
+[[program]]
+name = "gh"
+shells = ["pwsh"]
+lint = { tags = ["prose-cli"], prose_subcommands = ["pr", "issue", "release"], prose_flags = ["--body=--body-file", "-b=--body-file", "--notes=--notes-file", "-n=--notes-file", "--title", "-t"] }
+
+[[program]]
+name = "rg"
+shells = ["pwsh"]
+fix = "--files-without-match"
+lint = { follow_flags = ["-L"] }
+
+[[program]]
+name = "stop-process"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], name_params = ["name"] }
+
+[[program]]
+name = "taskkill"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], name_flags = ["/IM"] }
+
+[[program]]
+name = "pkill"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], always = ["yes"] }
+
+[[program]]
+name = "killall"
+shells = ["pwsh"]
+lint = { tags = ["process-stop"], always = ["yes"] }
+
+[[program]]
+name = "python"
+shells = ["pwsh"]
+aliases = { pwsh_windows = ["python3", "py"], pwsh_posix = ["python3"] }
+lint = { tags = ["interpreter"], stdin_args = ["-"] }
+
+[[program]]
+name = "node"
+shells = ["pwsh"]
+lint = { tags = ["interpreter"], stdin_args = ["-"] }
+
+[[program]]
+name = "php"
+shells = ["pwsh"]
+lint = { tags = ["interpreter"], stdin_args = ["-"] }
+
+# ps-unix-command: Unix tools PowerShell does not have; `fix` names the PowerShell way.
+
+[[program]]
+name = "head"
+shells = ["pwsh"]
+fix = "Select-Object -First N"
+lint = { tags = ["unix-only", "truncator"] }
+
+[[program]]
+name = "tail"
+shells = ["pwsh"]
+fix = "Select-Object -Last N"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "grep"
+shells = ["pwsh"]
+fix = "Select-String or rg"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "sed"
+shells = ["pwsh"]
+fix = "the -replace operator"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "awk"
+shells = ["pwsh"]
+fix = "ForEach-Object with -split"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "wc"
+shells = ["pwsh"]
+fix = "Measure-Object -Line"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "which"
+shells = ["pwsh"]
+fix = "Get-Command"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "touch"
+shells = ["pwsh"]
+fix = "New-Item -ItemType File"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "xargs"
+shells = ["pwsh"]
+value_options = ["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace", "--max-lines", "--eof"]
+fix = "ForEach-Object"
+lint = { tags = ["unix-only"] }
+[program.delete]
+runner = true
+
+[[program]]
+name = "cut"
+shells = ["pwsh"]
+fix = "ForEach-Object with -split"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "less"
+shells = ["pwsh"]
+fix = "plain output"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "export"
+shells = ["pwsh"]
+fix = "$env:NAME = 'value'"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "source"
+shells = ["pwsh"]
+fix = "dot-sourcing (. .\\file.ps1)"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "basename"
+shells = ["pwsh"]
+fix = "Split-Path -Leaf"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "dirname"
+shells = ["pwsh"]
+fix = "Split-Path -Parent"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "realpath"
+shells = ["pwsh"]
+fix = "Resolve-Path"
+lint = { tags = ["unix-only"] }
+
+[[program]]
+name = "uniq"
+shells = ["pwsh"]
+fix = "Sort-Object -Unique"
+lint = { tags = ["unix-only"] }
 
 # --- The Git Bash path conversion (bash-msys-path-mangle) ---
 

@@ -678,12 +678,56 @@ mod tests {
 
     #[test]
     fn lookup_folds_case_for_powershell_on_every_os() {
-        let t = load("[[program]]\nname = \"remove-item\"\nshells = [\"pwsh\"]\n").unwrap();
-        assert_eq!(t.programs.len(), 1);
         for os in [Os::Windows, Os::Posix] {
-            assert!(folds_case(Shell::Pwsh, os), "{os:?}");
+            let p = lookup("Remove-Item", Shell::Pwsh, os).map(|p| p.name.as_str());
+            assert_eq!(p, Some("remove-item"), "{os:?}");
         }
-        assert!(!folds_case(POSIX, Os::Posix));
+        assert!(lookup("RM", POSIX, Os::Posix).is_none());
+    }
+
+    /// The facts Tasks 30–33 read from `extra`, each through `lookup` in the shell it is for.
+    #[test]
+    fn the_rows_other_tasks_need_keep_their_keys() {
+        let key = |typed: &str, shell: Shell, path: &[&str]| -> Option<toml::Value> {
+            let p = lookup(typed, shell, Os::Windows)?;
+            let (first, rest) = path.split_first()?;
+            let mut v = p.extra.get(*first)?.clone();
+            for k in rest {
+                v = v.get(*k)?.clone();
+            }
+            Some(v)
+        };
+        let int = |v: Option<toml::Value>| v.and_then(|v| v.as_integer());
+        let yes = |v: Option<toml::Value>| v.and_then(|v| v.as_bool()) == Some(true);
+        // Task 31: the cmd.exe line limit, in both shells.
+        assert_eq!(int(key("cmd.exe", Shell::Pwsh, &["line_limit"])), Some(8191));
+        assert_eq!(int(key("cmd", GIT_BASH, &["line_limit"])), Some(8191));
+        // Task 33: wait facts.
+        assert!(yes(key("timeout", GIT_BASH, &["bounds_wait"])));
+        assert!(yes(key("read", GIT_BASH, &["hang_stdin"])));
+        assert!(key("Read-Host", Shell::Pwsh, &["hang_level"]).is_some());
+        assert!(key("read", Shell::Pwsh, &["hang_stdin"]).is_none());
+        // Task 32: delete and discard tables.
+        assert!(key("rm", GIT_BASH, &["delete", "recursive"]).is_some());
+        assert!(yes(key("xargs", Shell::Pwsh, &["delete", "runner"])));
+        assert!(key("git", GIT_BASH, &["discard", "subcommands"]).is_some());
+        // Task 30: lint tables, merged into the rows above where both name the program.
+        assert!(key("git", Shell::Pwsh, &["discard", "subcommands"]).is_some());
+        assert!(key("git", Shell::Pwsh, &["lint", "tags"]).is_some());
+        assert!(key("Remove-Item", Shell::Pwsh, &["delete", "recursive"]).is_some());
+        assert!(key("remove-item", Shell::Pwsh, &["lint", "flag_hints"]).is_some());
+        assert!(key("claude", Shell::Pwsh, &["lint", "config_env"]).is_some());
+        assert!(key("claude", GIT_BASH, &["hang_when"]).is_some());
+        assert!(key("xargs", Shell::Pwsh, &["lint", "tags"]).is_some());
+        assert!(key("xargs", GIT_BASH, &["lint"]).is_none());
+        // A pwsh-only Fix line stays out of bash.
+        let fix = |typed: &str, shell: Shell| lookup(typed, shell, Os::Windows)?.fix.clone();
+        assert!(fix("bash", Shell::Pwsh).is_some());
+        assert_eq!(fix("bash", GIT_BASH), None);
+        assert_eq!(
+            lookup("py", Shell::Pwsh, Os::Windows).map(|p| p.name.as_str()),
+            Some("python")
+        );
     }
 
     #[test]
