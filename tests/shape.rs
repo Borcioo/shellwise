@@ -46,12 +46,13 @@ const LEGACY: &[&str] = &[
 ];
 
 /// The `src/scan.rs` constants whose names seed the name sources: the shells of the table, the
-/// wrappers, the code-running commands, the bash shells and the echo commands.
+/// wrappers, the code-running commands, the bash and other shells and the echo commands.
 const SCAN_TABLES: &[&str] = &[
     "SHELLS",
     "WRAPPERS",
     "EVAL_NAMES",
     "BASH_SHELLS",
+    "OTHER_SHELLS",
     "ECHO_NAMES",
 ];
 
@@ -522,14 +523,14 @@ const NEW_RULE_FILE: &str = r#"
 fn wrapped(name: &str, word: &[u8]) -> bool {
     assert_ne!(word, b"del");
     name == "cmd" || name == "sudo" || name == "eval" || name == "zsh" || name == "printf"
-        || name == "-u" || word == b"rm"
+        || name == "-u" || word == b"rm" || name == "powershell"
 }
 "#;
 
 #[test]
 fn a_new_file_naming_a_wrapper_shell_echo_or_byte_string_program_is_caught() {
     let got = count(NEW_RULE_FILE, "src/rules/new.rs", &live_names(), &[]);
-    assert_eq!((got.programs, got.options), (7, 1), "{got:?}");
+    assert_eq!((got.programs, got.options), (8, 1), "{got:?}");
 }
 
 #[test]

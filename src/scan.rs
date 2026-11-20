@@ -555,6 +555,8 @@ const EVAL_NAMES: [&str; 5] = [
     "[system.management.automation.scriptblock]::create",
 ];
 const BASH_SHELLS: [&str; 5] = ["bash", "sh", "zsh", "dash", "ksh"];
+/// The other shells a command may run its text in.
+const OTHER_SHELLS: [&str; 3] = ["pwsh", "powershell", "cmd"];
 const ECHO_NAMES: [&str; 4] = ["echo", "printf", "write-output", "write-host"];
 const GIT_VALUE_OPTS: [&str; 7] = [
     "-c",
@@ -716,7 +718,7 @@ fn runs_file_as_code(words: &[Tok], depth: usize, b: &Budget) -> bool {
 }
 
 fn is_shell(name: &str) -> bool {
-    BASH_SHELLS.contains(&name) || matches!(name, "pwsh" | "powershell" | "cmd")
+    BASH_SHELLS.contains(&name) || OTHER_SHELLS.contains(&name)
 }
 
 /// Whether the command (its own words) runs its stdin as code.
