@@ -2,6 +2,7 @@
 name = "shellwise"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100"
 description = "Command guard and lint for shell commands written by AI coding agents"
 license = "GPL-3.0-or-later"
 readme = "README.md"
