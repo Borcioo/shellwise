@@ -4,7 +4,7 @@
 //! facts in `data/programs.toml` (`Program::extra`); which flags make a subcommand destructive
 //! from `data/destructive.toml`. `git clean` is judged as a delete inside the folder git runs in.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use serde::Deserialize;
@@ -815,7 +815,7 @@ fn restore(
     let list = names.join(" ");
     // The whole tree: a path that is the repo root, or `.` where git runs in a folder the guard
     // cannot place (it may be the root). Danger (Ruling 122 (c)).
-    let repo = scene.repo().ok().flatten();
+    let repo = scene.repo_spellings().unwrap_or_default();
     let whole = paths.iter().any(|w| {
         match resolve::target(
             w,
@@ -825,9 +825,7 @@ fn restore(
             scene.ctx.fs,
             scene.ctx.deadline,
         ) {
-            Target::Paths(ps) => repo
-                .as_ref()
-                .is_some_and(|root| ps.iter().any(|p| same_path(scene, p, root))),
+            Target::Paths(ps) => ps.iter().any(|p| same_path(scene, p, &repo)),
             _ => literal(w).is_some_and(|t| t.len() == 1 && t.starts_with('.')),
         }
     });
@@ -870,10 +868,12 @@ fn restore(
     ))
 }
 
-/// `a` and `b` name the same folder by their compared text.
-fn same_path(scene: &Scene, a: &Path, b: &Path) -> bool {
+/// `a` and one of the spellings `b` name the same folder by their compared text.
+fn same_path(scene: &Scene, a: &Path, b: &[PathBuf]) -> bool {
     let os = scene.ctx.input.os;
-    resolve::path_key(&a.to_string_lossy(), os) == resolve::path_key(&b.to_string_lossy(), os)
+    let key = resolve::path_key(&a.to_string_lossy(), os);
+    b.iter()
+        .any(|b| resolve::path_key(&b.to_string_lossy(), os) == key)
 }
 
 /// `git clean -f` deletes untracked files inside the folder git runs in, or inside the
@@ -959,17 +959,16 @@ fn clean(
     }
     // A pathspec of the whole tree: `:/` (the top of the repo, wherever git runs) or one that
     // names the repo root (`.` there).
-    let repo = scene.repo().ok().flatten();
+    let repo = scene.repo_spellings().unwrap_or_default();
     let mut whole = false;
     for w in specs {
         let top = literal(w).is_some_and(|t| matches!(t.as_str(), ":/" | ":/." | ":(top)"));
         whole |= top
-            || repo.as_ref().is_some_and(|root| {
-                matches!(
+            || (!repo.is_empty()
+                && matches!(
                     resolve::target(w, git_loc, &scene.env, DeleteBy::Native, scene.ctx.fs, scene.ctx.deadline),
-                    Target::Paths(ps) if ps.iter().any(|p| same_path(scene, p, root))
-                )
-            });
+                    Target::Paths(ps) if ps.iter().any(|p| same_path(scene, p, &repo))
+                ));
         if top {
             continue;
         }

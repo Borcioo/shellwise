@@ -313,6 +313,70 @@ fn the_fixture_is_removed_when_its_tests_end() {
     assert_eq!(counts, [0, 0], "left in the temp folder: {left:?}");
 }
 
+/// The 8.3 short spelling of `p`, which exists, by `GetShortPathNameW`.
+#[cfg(windows)]
+fn short_path(p: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let name: Vec<u16> = p.as_os_str().encode_wide().chain([0]).collect();
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: `name` is NUL-terminated; `buf` is writable for the length passed.
+    let n = unsafe { GetShortPathNameW(name.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    assert!(
+        n > 0 && (n as usize) < buf.len(),
+        "GetShortPathNameW {p:?}: {}",
+        std::io::Error::last_os_error()
+    );
+    buf.truncate(n as usize);
+    PathBuf::from(OsString::from_wide(&buf))
+}
+
+/// A `TEMP` given in its 8.3 short spelling, as on GitHub's Windows runners
+/// (`C:\LONGFO~1\Temp`): the fixture then lies under the short spelling while the paths the
+/// rules resolve are long, and every row still reads as with a long `TEMP`.
+#[cfg(windows)]
+#[test]
+fn the_rows_hold_with_a_short_temp_spelling() {
+    let long = std::env::temp_dir().join(format!("shellwise-short-temp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&long);
+    mkdir(&long);
+    let short = short_path(&long);
+    if short
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&long.to_string_lossy())
+    {
+        let _ = std::fs::remove_dir_all(&long);
+        // Straight to stderr: the test host setup captures `println!` of a passing test.
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "SKIP the_rows_hold_with_a_short_temp_spelling: {long:?} has no 8.3 short name (8.3 names are off on this volume)"
+        );
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let mut wrong = Vec::new();
+    for test in ["delete_rows", "git_rows"] {
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", test, "--test-threads=1"])
+            .env("TEMP", &short)
+            .env("TMP", &short)
+            .env("TMPDIR", &short)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !(out.status.success() && stdout.contains("test result: ok. 1 passed;")) {
+            wrong.push(format!(
+                "{test} with TEMP={short:?}: {stdout} {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&long);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 // ---------------------------------------------------------------- running a row
 
 /// The config of a row: the fixture's allowed root and protected path, and the no-verify

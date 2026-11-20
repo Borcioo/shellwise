@@ -622,6 +622,22 @@ pub(crate) struct Scene<'a> {
     multi: Vec<Assigned>,
     home: Option<PathBuf>,
     repo: Option<Result<Option<PathBuf>, TimedOut>>,
+    /// Every spelling of the home folder and of the protected paths (`resolve::spellings`),
+    /// read once when a delete first needs them.
+    named: Option<Named>,
+    /// Every spelling of each allowed root, in `allowed_roots` order, then `scratch_dir`.
+    roots: Option<Vec<Vec<PathBuf>>>,
+    /// Every spelling of the repo root, once it is found.
+    repo_spelled: Option<Vec<PathBuf>>,
+    /// Every spelling of the cwd, the project outside any repo.
+    cwd_spelled: Option<Vec<PathBuf>>,
+}
+
+/// The home folder's and the protected paths' spellings.
+#[derive(Clone, Default)]
+struct Named {
+    home: Vec<PathBuf>,
+    protected: Vec<PathBuf>,
 }
 
 /// How a delete treats one target.
@@ -647,7 +663,66 @@ impl<'a> Scene<'a> {
             // folder critical paths are compared with.
             home: ctx.input.env.home().map(PathBuf::from),
             repo: None,
+            named: None,
+            roots: None,
+            repo_spelled: None,
+            cwd_spelled: None,
         }
+    }
+
+    fn spell(&self, roots: &[PathBuf]) -> Vec<Vec<PathBuf>> {
+        resolve::spellings(roots, self.ctx.fs, self.ctx.deadline, self.os())
+    }
+
+    /// Every spelling of the home folder and of the protected paths.
+    fn named(&mut self) -> Named {
+        if self.named.is_none() {
+            let home = self.spell(&self.home.iter().cloned().collect::<Vec<_>>());
+            let protected = self.spell(&self.ctx.cfg.protected);
+            self.named = Some(Named {
+                home: home.into_iter().flatten().collect(),
+                protected: protected.into_iter().flatten().collect(),
+            });
+        }
+        self.named.clone().unwrap_or_default()
+    }
+
+    /// The spellings `p` is compared with: only the given ones when `p` is a share or device
+    /// path, which the guard reads nothing for (Ruling 114(f)).
+    fn named_for(&mut self, p: &Path) -> Named {
+        if resolve::is_network_or_device(p, self.os()) {
+            return Named {
+                home: self.home.iter().cloned().collect(),
+                protected: self.ctx.cfg.protected.clone(),
+            };
+        }
+        self.named()
+    }
+
+    /// The repo root's spellings `p` is compared with, as `named_for` chooses them.
+    fn repo_for(&mut self, p: &Path) -> Result<Vec<PathBuf>, TimedOut> {
+        if resolve::is_network_or_device(p, self.os()) {
+            return Ok(self.repo()?.into_iter().collect());
+        }
+        self.repo_spellings()
+    }
+
+    /// Every spelling of the repo root; empty outside any repo.
+    pub fn repo_spellings(&mut self) -> Result<Vec<PathBuf>, TimedOut> {
+        let Some(root) = self.repo()? else {
+            return Ok(Vec::new());
+        };
+        if self.repo_spelled.is_none() {
+            let spelled = self.spell(&[root]).into_iter().flatten().collect();
+            self.repo_spelled = Some(spelled);
+        }
+        Ok(self.repo_spelled.clone().unwrap_or_default())
+    }
+
+    /// `p` is the repo root, by any of its spellings (`repo_for`).
+    fn is_repo_root(&mut self, p: &Path) -> Result<bool, TimedOut> {
+        let key = self.key(p);
+        Ok(self.repo_for(p)?.iter().any(|r| self.key(r) == key))
     }
 
     pub fn location(&self) -> Location {
@@ -695,9 +770,19 @@ impl<'a> Scene<'a> {
         self.repo.clone().unwrap_or(Ok(None))
     }
 
-    /// The project: the repo root of the cwd, or the cwd itself outside any repo (F14).
-    fn project(&mut self) -> Result<Option<PathBuf>, TimedOut> {
-        Ok(self.repo()?.or_else(|| self.ctx.input.cwd.clone()))
+    /// Every spelling of the project: the repo root of the cwd, or the cwd itself outside any
+    /// repo (F14); `None` with neither.
+    fn project(&mut self) -> Result<Option<Vec<PathBuf>>, TimedOut> {
+        if self.repo()?.is_some() {
+            return self.repo_spellings().map(Some);
+        }
+        let Some(cwd) = self.ctx.input.cwd.clone() else {
+            return Ok(None);
+        };
+        if self.cwd_spelled.is_none() {
+            self.cwd_spelled = Some(self.spell(&[cwd]).into_iter().flatten().collect());
+        }
+        Ok(self.cwd_spelled.clone())
     }
 
     /// Why deleting `p` is critical. Deleting inside the repo root (`contents`, as in
@@ -706,36 +791,29 @@ impl<'a> Scene<'a> {
     /// On a network or device path only the lexical match runs: no file-system call there
     /// (Ruling 114(f)).
     pub fn critical(&mut self, p: &Path, contents: bool) -> Result<Option<&'static str>, TimedOut> {
-        let cfg = self.ctx.cfg;
+        let Named { home, protected } = self.named_for(p);
         // The lexical match first, so it never waits on the repo lookup. Deleting inside the
         // repo root stays exempt (a protected path inside it makes it an ancestor of one);
         // when the lookup that tells times out, the lexical reason stands.
-        if let Some(reason) =
-            resolve::critical_reason(p, None, self.home.as_deref(), &cfg.protected, self.os())
-        {
-            let inside_root =
-                contents && matches!(self.repo(), Ok(Some(r)) if self.key(&r) == self.key(p));
+        if let Some(reason) = resolve::critical_reason_of(p, &[], &home, &protected, self.os()) {
+            let inside_root = contents && matches!(self.is_repo_root(p), Ok(true));
             return Ok((!inside_root).then_some(reason));
         }
-        let repo = self.repo()?;
-        let (home, protected) = (self.home.as_deref(), &cfg.protected);
+        let repo = self.repo_for(p)?;
         let reason = if resolve::is_network_or_device(p, self.os()) {
-            resolve::critical_reason(p, repo.as_deref(), home, protected, self.os())
+            resolve::critical_reason_of(p, &repo, &home, &protected, self.os())
         } else {
-            resolve::critical_by_identity(
+            resolve::critical_by_identity_of(
                 p,
-                repo.as_deref(),
-                home,
-                protected,
+                &repo,
+                &home,
+                &protected,
                 self.ctx.fs,
                 self.ctx.deadline,
                 self.os(),
             )?
         };
-        if contents
-            && reason.is_some()
-            && repo.as_deref().is_some_and(|r| self.key(r) == self.key(p))
-        {
+        if contents && reason.is_some() && self.is_repo_root(p)? {
             return Ok(None);
         }
         Ok(reason)
@@ -743,22 +821,22 @@ impl<'a> Scene<'a> {
 
     /// Why deleting `p` is critical with the cwd's repo root left out, by text and by identity:
     /// whether any other reason holds for a linked worktree that is that root.
-    pub fn critical_but_the_repo(&self, p: &Path) -> Result<Option<&'static str>, TimedOut> {
-        let (home, protected) = (self.home.as_deref(), &self.ctx.cfg.protected);
+    pub fn critical_but_the_repo(&mut self, p: &Path) -> Result<Option<&'static str>, TimedOut> {
+        let Named { home, protected } = self.named_for(p);
         if resolve::is_network_or_device(p, self.os()) {
-            return Ok(resolve::critical_reason(
+            return Ok(resolve::critical_reason_of(
                 p,
-                None,
-                home,
-                protected,
+                &[],
+                &home,
+                &protected,
                 self.os(),
             ));
         }
-        resolve::critical_by_identity(
+        resolve::critical_by_identity_of(
             p,
-            None,
-            home,
-            protected,
+            &[],
+            &home,
+            &protected,
             self.ctx.fs,
             self.ctx.deadline,
             self.os(),
@@ -788,18 +866,22 @@ impl<'a> Scene<'a> {
         // The default root, the analysing process's temp folder, stands for the temp folder of
         // the environment the check sees (the same folder in the hook; a synthetic one in the
         // bench).
-        let process_temp = std::env::temp_dir();
-        let env_temp = self.env_temp();
-        let roots: Vec<PathBuf> = cfg
-            .allowed_roots
-            .iter()
-            .map(|r| match &env_temp {
-                Some(t) if *r == process_temp => t.clone(),
-                _ => r.clone(),
-            })
-            .chain(cfg.scratch_dir.clone())
-            .collect();
-        for root in &roots {
+        if self.roots.is_none() {
+            let process_temp = std::env::temp_dir();
+            let env_temp = self.env_temp();
+            let given: Vec<PathBuf> = cfg
+                .allowed_roots
+                .iter()
+                .map(|r| match &env_temp {
+                    Some(t) if *r == process_temp => t.clone(),
+                    _ => r.clone(),
+                })
+                .chain(cfg.scratch_dir.clone())
+                .collect();
+            self.roots = Some(self.spell(&given));
+        }
+        let roots = self.roots.clone().unwrap_or_default();
+        for root in roots.iter().flatten() {
             let rk = self.key(root);
             if rk == key && !how.contents {
                 return Some(finding(
@@ -825,11 +907,12 @@ impl<'a> Scene<'a> {
             match self.project() {
                 Err(TimedOut) => return Some(self.timeout(span, shown)),
                 Ok(Some(project)) => {
-                    let pk = self.key(&project);
-                    let inside =
-                        (key != pk && is_within(&key, &pk, os)) || (how.contents && key == pk);
+                    let keys: Vec<String> = project.iter().map(|r| self.key(r)).collect();
+                    let is_root = keys.contains(&key);
+                    let inside = (!is_root && keys.iter().any(|pk| is_within(&key, pk, os)))
+                        || (how.contents && is_root);
                     if !inside {
-                        return Some(outside(p, key == pk, span));
+                        return Some(outside(p, is_root, span));
                     }
                 }
                 Ok(None) => return Some(outside(p, false, span)),
@@ -1043,22 +1126,20 @@ impl<'a> Scene<'a> {
         else {
             return None;
         };
-        let cfg = self.ctx.cfg;
         for p in paths {
-            let home = self.home.clone();
-            if let Some(reason) =
-                resolve::critical_reason(&p, None, home.as_deref(), &cfg.protected, self.os())
+            let Named { home, protected } = self.named_for(&p);
+            if let Some(reason) = resolve::critical_reason_of(&p, &[], &home, &protected, self.os())
             {
                 return Some(critical_contents(&p, reason, span));
             }
             // A folder above the repo root (`../*` from it) is judged path by path, as the
             // delete of each match; a lookup that times out may have been the root.
-            let root = match self.repo() {
-                Ok(Some(root)) => root,
-                Ok(None) => continue,
+            let root = match self.repo_for(&p) {
+                Ok(root) if root.is_empty() => continue,
+                Ok(root) => root,
                 Err(TimedOut) => return Some(self.lookup_timeout(how, span, &text)),
             };
-            if self.key(&root) == self.key(&p) {
+            if root.iter().any(|r| self.key(r) == self.key(&p)) {
                 // A PowerShell wildcard leaves a hidden `.git` without -Force (Ruling 127); a
                 // `.git` without the Hidden attribute (WSL git, a copied repo) it takes (R1-6).
                 let git = p.join(".git");
@@ -1067,13 +1148,8 @@ impl<'a> Scene<'a> {
                 if !takes_git {
                     return Some(repo_contents(&p, span));
                 }
-                let reason = resolve::critical_reason(
-                    &git,
-                    Some(&root),
-                    home.as_deref(),
-                    &cfg.protected,
-                    self.os(),
-                )?;
+                let reason =
+                    resolve::critical_reason_of(&git, &root, &home, &protected, self.os())?;
                 return Some(critical(&git, reason, span));
             }
         }
@@ -1139,20 +1215,15 @@ impl<'a> Scene<'a> {
         // A repo lookup that runs out of time leaves a match that needs it unknown: danger.
         let hit = if Path::new(&folder).is_absolute() || folder.starts_with(['/', '\\']) {
             let p = PathBuf::from(&folder);
-            let home = self.home.clone();
-            let protected = &self.ctx.cfg.protected;
-            let lexical = resolve::critical_reason(&p, None, home.as_deref(), protected, self.os())
+            let Named { home, protected } = self.named_for(&p);
+            let lexical = resolve::critical_reason_of(&p, &[], &home, &protected, self.os())
                 .or_else(|| self.msys_system(&folder).then_some(SYSTEM_FOLDER));
             let reason = match lexical {
                 Some(r) => Some(r),
-                None => match self.repo() {
-                    Ok(repo) => resolve::critical_reason(
-                        &p,
-                        repo.as_deref(),
-                        home.as_deref(),
-                        protected,
-                        self.os(),
-                    ),
+                None => match self.repo_for(&p) {
+                    Ok(repo) => {
+                        resolve::critical_reason_of(&p, &repo, &home, &protected, self.os())
+                    }
                     Err(TimedOut) => return Some(self.lookup_timeout(how, span, shown)),
                 },
             };
@@ -1265,19 +1336,14 @@ impl<'a> Scene<'a> {
         } else {
             return None;
         };
-        let repo = match self.repo() {
+        let repo = match self.repo_for(&path) {
             Ok(repo) => repo,
             // The lookup that would place `.git` ran out of time: it may be the repo's.
             Err(TimedOut) if git_spelling => return Some((w.to_string(), "repo's .git")),
-            Err(TimedOut) => None,
+            Err(TimedOut) => Vec::new(),
         };
-        let reason = resolve::critical_reason(
-            &path,
-            repo.as_deref(),
-            self.home.as_deref(),
-            &self.ctx.cfg.protected,
-            self.os(),
-        )?;
+        let Named { home, protected } = self.named_for(&path);
+        let reason = resolve::critical_reason_of(&path, &repo, &home, &protected, self.os())?;
         Some((w.to_string(), reason))
     }
 
@@ -1760,5 +1826,436 @@ fn walk_word(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::fs::{Fs, Meta, SharedFs};
+    use crate::{CheckInput, Deadline, Origin};
+    use std::collections::BTreeMap;
+    use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    const SHORT_HOME: &str = r"C:\LONGHO~1";
+    const LONG_HOME: &str = r"C:\longhomefolder";
+    const SHORT_TEMP: &str = r"C:\LONGHO~1\Temp";
+    const LONG_TEMP: &str = r"C:\longhomefolder\Temp";
+    const SHORT_REPO: &str = r"C:\LONGHO~1\proj";
+    const LONG_REPO: &str = r"C:\longhomefolder\proj";
+    const SHORT_KEEP: &str = r"C:\LONGHO~1\keep";
+    const LONG_KEEP: &str = r"C:\longhomefolder\keep";
+    const SHORT_REPO_KEEP: &str = r"C:\LONGHO~1\proj\keep";
+    const LONG_REPO_KEEP: &str = r"C:\longhomefolder\proj\keep";
+    /// How long a hanging `long_path` waits: past the hang test's 3 s bound.
+    const HANG: Duration = Duration::from_secs(5);
+
+    /// A Windows tree where the folders in `long` have an 8.3 short spelling (key) that
+    /// `long_path` expands; any other `long_path` is refused, and `hang` makes it wait `HANG`
+    /// first.
+    /// `SHORT_REPO` holds a `.git` under its short spelling, as a cwd from a short `TEMP` does.
+    struct ShortNames {
+        long: BTreeMap<String, String>,
+        hang: bool,
+        /// How many times `long_path` was asked.
+        long_calls: AtomicUsize,
+    }
+
+    impl ShortNames {
+        fn shared(hang: bool) -> Arc<ShortNames> {
+            let long = [
+                (SHORT_HOME, LONG_HOME),
+                (SHORT_TEMP, LONG_TEMP),
+                (SHORT_REPO, LONG_REPO),
+                (SHORT_KEEP, LONG_KEEP),
+                (SHORT_REPO_KEEP, LONG_REPO_KEEP),
+            ]
+            .into_iter()
+            .map(|(s, l)| (s.to_string(), l.to_string()))
+            .collect();
+            Arc::new(ShortNames {
+                long,
+                hang,
+                long_calls: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl Fs for ShortNames {
+        fn lstat(&self, p: &Path) -> io::Result<Meta> {
+            if p == Path::new(SHORT_REPO).join(".git") || p == Path::new(LONG_REPO).join(".git") {
+                return Ok(Meta {
+                    is_dir: true,
+                    is_file: false,
+                    is_symlink: false,
+                });
+            }
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        }
+        fn read_dir(&self, _p: &Path) -> io::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        fn link_target(&self, _p: &Path) -> io::Result<Option<PathBuf>> {
+            Ok(None)
+        }
+        fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
+            self.long_calls.fetch_add(1, Ordering::SeqCst);
+            // Bounded, so a call made without the deadline fails the hang test's time bound
+            // instead of hanging it.
+            if self.hang {
+                std::thread::sleep(HANG);
+            }
+            self.long
+                .get(p.to_string_lossy().as_ref())
+                .map(PathBuf::from)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+
+    /// The delete and git rules' findings on a PowerShell `command` (the real parser), analysed as
+    /// Windows with `TEMP` set to `temp` and the default config, whose temp root stands for it.
+    fn rules_of(
+        command: &str,
+        temp: &str,
+        cwd: Option<&str>,
+        fs: &SharedFs,
+        ms: u64,
+    ) -> Vec<&'static str> {
+        rules_in(Shell::Pwsh, command, &vars(temp, HOME), cwd, &[], fs, ms)
+    }
+
+    /// A home folder unrelated to every row's paths.
+    const HOME: &str = r"C:\Home\u";
+
+    /// `TEMP` and `TMP` set to `temp`, `USERPROFILE` to `home`.
+    fn vars<'a>(temp: &'a str, home: &'a str) -> [(&'static str, &'a str); 3] {
+        [("TEMP", temp), ("TMP", temp), ("USERPROFILE", home)]
+    }
+
+    /// `rules_of` in `shell` (PowerShell or Git Bash), with the environment `vars` and
+    /// `protected` as the protected paths.
+    fn rules_in(
+        shell: Shell,
+        command: &str,
+        vars: &[(&str, &str)],
+        cwd: Option<&str>,
+        protected: &[&str],
+        fs: &SharedFs,
+        ms: u64,
+    ) -> Vec<&'static str> {
+        levels_in(shell, command, vars, cwd, protected, fs, ms)
+            .into_iter()
+            .map(|(rule, _)| rule)
+            .collect()
+    }
+
+    /// `rules_in` with each finding's level.
+    fn levels_in(
+        shell: Shell,
+        command: &str,
+        vars: &[(&str, &str)],
+        cwd: Option<&str>,
+        protected: &[&str],
+        fs: &SharedFs,
+        ms: u64,
+    ) -> Vec<(&'static str, Level)> {
+        let os = Os::Windows;
+        let script = match shell {
+            Shell::Bash(profile) => crate::parse::bash::parse(command, profile).unwrap(),
+            _ => crate::parse::pwsh::parse(command, shell, os).unwrap(),
+        };
+        let env = resolve::env_view(
+            shell,
+            os,
+            vars.iter().map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+        let input = CheckInput {
+            shell,
+            os,
+            command,
+            cwd: cwd.map(PathBuf::from),
+            env,
+            origin: Origin::CommandLine,
+        };
+        let cfg = Config {
+            protected: protected.iter().map(PathBuf::from).collect(),
+            ..Config::default()
+        };
+        let deadline = Deadline::new(Instant::now(), ms);
+        let ctx = Ctx {
+            input: &input,
+            script: &script,
+            parse_error: None,
+            cfg: &cfg,
+            fs,
+            deadline: &deadline,
+        };
+        let mut out = Vec::new();
+        DeleteRule.check(&ctx, &mut out);
+        crate::rules::git::GitRule.check(&ctx, &mut out);
+        out.iter().map(|f| (f.rule, f.level)).collect()
+    }
+
+    /// A root given short is matched by text where the command spells it long, as given long:
+    /// the repo root a delete names, and the home folder a word with an unread variable taken
+    /// as empty names.
+    #[test]
+    fn a_short_root_matches_a_long_spelling_in_the_command() {
+        let home = LONG_HOME.replace('\\', "/");
+        let repo_root = format!(r"Remove-Item -Recurse -Force {LONG_REPO}");
+        let empty = format!(r#"rm -rf "${{X}}{home}""#);
+        let bash = Shell::Bash(crate::BashProfile::GitBash);
+        // The home row runs outside any repo, whose root lies inside the home folder.
+        same_at_danger(&[
+            (
+                "the repo root itself",
+                Shell::Pwsh,
+                &repo_root,
+                true,
+                DELETE_CRITICAL,
+            ),
+            (
+                "an empty variable before the home folder",
+                bash,
+                &empty,
+                false,
+                DELETE_EMPTY_EXPANSION,
+            ),
+        ]);
+    }
+
+    /// The home folder given short is matched where code the guard does not read names it
+    /// long. Windows hosts only: the raw word is read as a path by the host's
+    /// `Path::is_absolute`, so on a POSIX host `C:\…` names no path at all.
+    #[cfg(windows)]
+    #[test]
+    fn a_short_home_matches_a_long_spelling_in_unread_code() {
+        let opaque = format!(r#"Invoke-Expression "Remove-Item -Recurse -Force {LONG_HOME}""#);
+        same_at_danger(&[(
+            "unread code naming the home folder",
+            Shell::Pwsh,
+            &opaque,
+            false,
+            OPAQUE_DESTRUCTIVE,
+        )]);
+    }
+
+    /// Each row (name, shell, command, in the repo, rule) reads the same with every root given
+    /// short as given long, and the long reading holds `rule` at danger or above.
+    fn same_at_danger(rows: &[(&str, Shell, &str, bool, &str)]) {
+        let fs: SharedFs = ShortNames::shared(false);
+        let other = r"C:\OTHERH~1\Temp";
+        let mut wrong = Vec::new();
+        for &(name, shell, command, in_repo, rule) in rows {
+            let long = levels_in(
+                shell,
+                command,
+                &vars(other, LONG_HOME),
+                in_repo.then_some(LONG_REPO),
+                &[],
+                &fs,
+                5000,
+            );
+            let short = levels_in(
+                shell,
+                command,
+                &vars(other, SHORT_HOME),
+                in_repo.then_some(SHORT_REPO),
+                &[],
+                &fs,
+                5000,
+            );
+            let danger = long.iter().any(|(r, l)| *r == rule && *l >= Level::Danger);
+            if short != long || !danger {
+                wrong.push(format!("{name}: short {short:?}, long {long:?} (want the same, {rule} at danger or above)"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A temp root or project given in its 8.3 short spelling holds a target given long, as
+    /// it does given long; an unrelated short-looking name the file system does not expand
+    /// holds nothing.
+    #[test]
+    fn a_short_spelling_of_a_root_holds_its_long_spelling() {
+        let fs: SharedFs = ShortNames::shared(false);
+        let inside = format!(r"Remove-Item {LONG_TEMP}\build.log");
+        let itself = format!(r"Remove-Item -Recurse {LONG_TEMP}");
+        let in_repo = format!(r"Remove-Item {LONG_REPO}\build.log");
+        let other = r"C:\OTHERH~1\Temp";
+        let rows: [(&str, &str, Option<&str>, &[&str]); 7] = [
+            ("long temp root", LONG_TEMP, None, &[]),
+            ("short temp root", SHORT_TEMP, None, &[]),
+            (
+                "unrelated short name",
+                other,
+                None,
+                &[DELETE_OUTSIDE_PROJECT],
+            ),
+            (
+                "short temp root itself",
+                SHORT_TEMP,
+                None,
+                &[DELETE_ALLOWED_ROOT],
+            ),
+            ("long project", other, Some(LONG_REPO), &[]),
+            ("short project", other, Some(SHORT_REPO), &[]),
+            (
+                "short project, other folder",
+                other,
+                Some(r"C:\OTHERH~1\proj"),
+                &[DELETE_OUTSIDE_PROJECT],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, temp, cwd, want) in rows {
+            let command = match name {
+                "short temp root itself" => &itself,
+                _ if cwd.is_some() => &in_repo,
+                _ => &inside,
+            };
+            let got = rules_of(command, temp, cwd, &fs, 5000);
+            if got != want {
+                wrong.push(format!("{name}: {got:?} (want {want:?})"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A row: its name, shell, command, the cwd given long and short, the protected path given
+    /// long and short, and the rules it wants with either spelling.
+    type ProtectedRow<'a> = (
+        &'a str,
+        Shell,
+        &'a str,
+        [Option<&'a str>; 2],
+        [&'a str; 2],
+        &'a [&'a str],
+    );
+
+    /// A protected path given in its 8.3 short spelling is matched by text against a target
+    /// spelled long, as given long: the glob over its contents is critical, and a contents
+    /// delete of the repo root that holds it stays exempt.
+    #[test]
+    fn a_short_spelling_of_a_protected_path_reads_as_its_long_spelling() {
+        let fs: SharedFs = ShortNames::shared(false);
+        let pwsh = Shell::Pwsh;
+        let bash = Shell::Bash(crate::BashProfile::GitBash);
+        let glob = format!(r"Remove-Item -Recurse -Force {LONG_KEEP}\*");
+        let find = format!("find {} -name '*.o' -delete", LONG_REPO.replace('\\', "/"));
+        let other = r"C:\OTHERH~1\Temp";
+        let rows: [ProtectedRow; 2] = [
+            (
+                "glob over a protected folder's contents",
+                pwsh,
+                &glob,
+                [None, None],
+                [LONG_KEEP, SHORT_KEEP],
+                &[DELETE_CRITICAL],
+            ),
+            (
+                "contents delete of the repo root holding a protected path",
+                bash,
+                &find,
+                [Some(LONG_REPO), Some(SHORT_REPO)],
+                [LONG_REPO_KEEP, SHORT_REPO_KEEP],
+                &[],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, shell, command, cwd, protected, want) in rows {
+            for (spelling, i) in [("long", 0), ("short", 1)] {
+                let env = vars(other, HOME);
+                let got = rules_in(shell, command, &env, cwd[i], &[protected[i]], &fs, 5000);
+                if got != want {
+                    wrong.push(format!("{name}, {spelling}: {got:?} (want {want:?})"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A share or device target, or a cwd on a share, reads no spelling of any root (Ruling
+    /// 114(f)): with every root given short, the verdict is the one every root given long
+    /// gives, and `long_path` is never asked.
+    #[test]
+    fn a_share_target_reads_no_spelling_of_a_root() {
+        let pwsh = Shell::Pwsh;
+        let bash = Shell::Bash(crate::BashProfile::GitBash);
+        // (row, shell, command, cwd given long and short)
+        let rows: [(&str, Shell, &str, [&str; 2]); 3] = [
+            (
+                "share target",
+                pwsh,
+                r"Remove-Item -Recurse -Force \\192.0.2.1\share\x",
+                [LONG_REPO, SHORT_REPO],
+            ),
+            (
+                "git clean in an admin share named from a repo",
+                pwsh,
+                r"git -C \\localhost\C$\sometool-build clean -fdx",
+                [LONG_REPO, SHORT_REPO],
+            ),
+            (
+                "git clean in an admin-share cwd",
+                bash,
+                "git clean -fdx",
+                [r"\\localhost\C$", r"\\localhost\C$"],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, shell, command, cwd) in rows {
+            let long_fs: SharedFs = ShortNames::shared(false);
+            let long_env = vars(LONG_TEMP, LONG_HOME);
+            let want = rules_in(
+                shell,
+                command,
+                &long_env,
+                Some(cwd[0]),
+                &[LONG_KEEP],
+                &long_fs,
+                5000,
+            );
+            let short = ShortNames::shared(false);
+            let short_fs: SharedFs = short.clone();
+            let short_env = vars(SHORT_TEMP, SHORT_HOME);
+            let got = rules_in(
+                shell,
+                command,
+                &short_env,
+                Some(cwd[1]),
+                &[SHORT_KEEP],
+                &short_fs,
+                5000,
+            );
+            let calls = short.long_calls.load(Ordering::SeqCst);
+            if got != want || calls != 0 {
+                wrong.push(format!(
+                    "{name}: {got:?} (want {want:?}), {calls} long_path calls"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A `long_path` that does not return before the deadline leaves the short root
+    /// unrecognised (today's verdict), and the check ends within the deadline.
+    #[test]
+    fn a_short_root_whose_expansion_hangs_stays_unrecognised() {
+        let fs: SharedFs = ShortNames::shared(true);
+        let start = Instant::now();
+        let got = rules_of(
+            &format!(r"Remove-Item {LONG_TEMP}\build.log"),
+            SHORT_TEMP,
+            None,
+            &fs,
+            300,
+        );
+        let took = start.elapsed();
+        assert!(took < Duration::from_secs(3), "the check took {took:?}");
+        assert_eq!(got, [DELETE_OUTSIDE_PROJECT]);
     }
 }

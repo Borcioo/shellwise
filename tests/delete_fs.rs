@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use shellwise::config::Config;
 use shellwise::fs::resolve::{env_view, path_key};
+use shellwise::fs::{Fs, RealFs};
 use shellwise::level::Level;
 use shellwise::testhooks::FS_CALLS;
 use shellwise::{AnalyseInput, BashProfile, Deadline, Origin, Os, Shell, analyse};
@@ -19,7 +20,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Fixture {
-        let root = std::env::temp_dir().join(format!("shellwise-delete-fs-{}", std::process::id()));
+        // Under the long spelling of the temp folder: a short `TEMP` (`RUNNER~1`) would make
+        // every row expand an 8.3 name of a local folder, a call this test does not judge.
+        let temp = RealFs.long_path(&std::env::temp_dir()).unwrap();
+        let root = temp.join(format!("shellwise-delete-fs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["repo/.git", "repo/build", "home"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();

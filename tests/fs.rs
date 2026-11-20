@@ -996,7 +996,9 @@ fn globs_expand_against_the_folder_and_time_out_with_it() {
     let loc = Location::new(shell, Os::host(), Some(&t.root));
     let env = EnvView::new();
     let glob = |pat: &str| word_at(vec![WordPart::Glob(pat.to_string())], 0);
-    let s = |names: &[&str]| Target::Paths(names.iter().map(|n| t.root.join(n)).collect());
+    // A glob's matches are spelled long, as the file system expands a short temp folder.
+    let long_root = RealFs.long_path(&t.root).unwrap();
+    let s = |names: &[&str]| Target::Paths(names.iter().map(|n| long_root.join(n)).collect());
     assert_eq!(resolve(&glob("*"), &loc, &env), s(&["a1", "a2", "b1"]));
     assert_eq!(resolve(&glob("a*"), &loc, &env), s(&["a1", "a2"]));
     assert_eq!(resolve(&glob("nope*"), &loc, &env), s(&[]));

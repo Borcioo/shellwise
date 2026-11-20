@@ -176,6 +176,27 @@ pub fn critical_reason(
     protected: &[PathBuf],
     os: Os,
 ) -> Option<&'static str> {
+    critical_reason_of(
+        p,
+        &cwd_repo
+            .map(Path::to_path_buf)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        &home.map(Path::to_path_buf).into_iter().collect::<Vec<_>>(),
+        protected,
+        os,
+    )
+}
+
+/// `critical_reason` with every spelling of the repo root and the home folder (`spellings`):
+/// a path that equals or holds any of them is critical.
+pub fn critical_reason_of(
+    p: &Path,
+    cwd_repo: &[PathBuf],
+    home: &[PathBuf],
+    protected: &[PathBuf],
+    os: Os,
+) -> Option<&'static str> {
     let text = p.to_string_lossy();
     let canon = Canon::parse(&text, os);
     if canon.is_root() {
@@ -199,15 +220,19 @@ pub fn critical_reason(
     };
     let key = key_of(&text);
     // Matched by text too, so a device spelling (`\\?\C:\…\.git`) needs no file-system call.
-    let git_dir = cwd_repo.map(repo_git);
+    let git_dirs: Vec<PathBuf> = cwd_repo.iter().map(|r| repo_git(r)).collect();
     let named: Vec<(&Path, &'static str, &'static str)> = home
-        .map(|h| (h, "home folder", "ancestor of the home folder"))
-        .into_iter()
-        .chain(cwd_repo.map(|r| (r, REPO_ROOT, "ancestor of the repo root")))
+        .iter()
+        .map(|h| (h.as_path(), "home folder", "ancestor of the home folder"))
         .chain(
-            git_dir
-                .as_deref()
-                .map(|g| (g, REPO_GIT, "ancestor of the repo root")),
+            cwd_repo
+                .iter()
+                .map(|r| (r.as_path(), REPO_ROOT, "ancestor of the repo root")),
+        )
+        .chain(
+            git_dirs
+                .iter()
+                .map(|g| (g.as_path(), REPO_GIT, "ancestor of the repo root")),
         )
         .chain(protected.iter().map(|p| {
             (
@@ -272,20 +297,42 @@ pub fn critical_by_identity(
     deadline: &Deadline,
     os: Os,
 ) -> Result<Option<&'static str>, TimedOut> {
-    if let Some(r) = critical_reason(p, cwd_repo, home, protected, os) {
+    critical_by_identity_of(
+        p,
+        &cwd_repo
+            .map(Path::to_path_buf)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        &home.map(Path::to_path_buf).into_iter().collect::<Vec<_>>(),
+        protected,
+        fs,
+        deadline,
+        os,
+    )
+}
+
+/// `critical_by_identity` with every spelling of the repo root and the home folder: the text
+/// match sees each spelling; the identity match reads only the first of those two (the one
+/// given), since every spelling names the same file.
+pub fn critical_by_identity_of(
+    p: &Path,
+    cwd_repo: &[PathBuf],
+    home: &[PathBuf],
+    protected: &[PathBuf],
+    fs: &SharedFs,
+    deadline: &Deadline,
+    os: Os,
+) -> Result<Option<&'static str>, TimedOut> {
+    if let Some(r) = critical_reason_of(p, cwd_repo, home, protected, os) {
         return Ok(Some(r));
     }
     let p = p.to_path_buf();
     let mut named: Vec<(PathBuf, &'static str, &'static str)> = Vec::new();
-    if let Some(h) = home {
-        named.push((
-            h.to_path_buf(),
-            "home folder",
-            "ancestor of the home folder",
-        ));
+    if let Some(h) = home.first() {
+        named.push((h.clone(), "home folder", "ancestor of the home folder"));
     }
-    if let Some(r) = cwd_repo {
-        named.push((r.to_path_buf(), REPO_ROOT, "ancestor of the repo root"));
+    if let Some(r) = cwd_repo.first() {
+        named.push((r.clone(), REPO_ROOT, "ancestor of the repo root"));
         named.push((repo_git(r), REPO_GIT, "ancestor of the repo root"));
     }
     for x in protected {
@@ -318,6 +365,53 @@ pub fn critical_by_identity(
         }
         Ok(None)
     })?
+}
+
+/// Every spelling of each of `roots` (folders from the environment or the config) that a
+/// resolved path may use: the root as given, then, on Windows when it holds an 8.3 short name
+/// (`RUNNER~1`), its long spelling, which is how a resolved target spells it. One bounded call
+/// reads them all, only when some root looks short; a share or device path is never read
+/// (Ruling 114(f)). A root that does not exist, cannot be read or is not reached before the
+/// deadline keeps its given spelling alone.
+pub fn spellings(
+    roots: &[PathBuf],
+    fs: &SharedFs,
+    deadline: &Deadline,
+    os: Os,
+) -> Vec<Vec<PathBuf>> {
+    let mut out: Vec<Vec<PathBuf>> = roots.iter().map(|r| vec![r.clone()]).collect();
+    if os != Os::Windows {
+        return out;
+    }
+    let short: Vec<(usize, PathBuf)> = roots
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| looks_short(&r.to_string_lossy()) && !is_network_or_device(r, os))
+        .map(|(i, r)| (i, r.clone()))
+        .collect();
+    if short.is_empty() {
+        return out;
+    }
+    let fs = Arc::clone(fs);
+    let d = *deadline;
+    let found = bounded(deadline, move || {
+        let mut longs = Vec::new();
+        for (i, r) in short {
+            if d.expired() {
+                break;
+            }
+            if let Ok(long) = fs.long_path(&r) {
+                longs.push((i, canonical(&long.to_string_lossy(), os)));
+            }
+        }
+        longs
+    });
+    for (i, long) in found.unwrap_or_default() {
+        if path_key(&long, os) != path_key(&roots[i].to_string_lossy(), os) {
+            out[i].push(PathBuf::from(long));
+        }
+    }
+    out
 }
 
 /// A Windows share, volume or device path (`\\srv\share`, `\\?\UNC\…`, `\\.\PhysicalDrive0`):
