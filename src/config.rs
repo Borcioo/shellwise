@@ -28,6 +28,24 @@ pub struct Policies {
     pub git_no_verify: bool,
 }
 
+/// The default `limits.git_bash_command`: the boundary measured on a short home path (7672) with
+/// room for a home path about 40 characters longer, which the Bash tool's wrapper holds four times.
+pub const GIT_BASH_COMMAND_LIMIT: usize = 7500;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    /// The escaped length from which `too-long` denies a Git Bash command line.
+    pub git_bash_command: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits {
+            git_bash_command: GIT_BASH_COMMAND_LIMIT,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Rule id → level, from the integration and user files (raised or lowered).
@@ -52,6 +70,10 @@ pub struct Config {
     /// Levels the repo file raised: a floor under `levels` and the rule's default. Read rule
     /// levels through `Config::level`, never from `levels` alone.
     pub repo_floor: HashMap<String, Level>,
+    /// Where the `too-long` Fix line says to write the command; else a per-user temp folder.
+    pub scratch_dir: Option<PathBuf>,
+    /// Host limits. Integration and user files only.
+    pub limits: Limits,
 }
 
 impl Default for Config {
@@ -79,6 +101,8 @@ impl Default for Config {
             tool_paths: HashMap::new(),
             policies: Policies::default(),
             repo_floor: HashMap::new(),
+            scratch_dir: None,
+            limits: Limits::default(),
         }
     }
 }
@@ -169,12 +193,20 @@ impl Config {
                 "protected" => paths(value, dir).map(|v| self.protected = v),
                 "gate_commands" => strings(value).map(|v| self.gate_commands = v),
                 "bat_launchers" => strings(value).map(|v| self.bat_launchers = v),
+                "scratch_dir" => value
+                    .as_str()
+                    .map(|s| self.scratch_dir = Some(dir.join(s)))
+                    .ok_or_else(|| "expected a string".to_string()),
                 "tool_paths" => {
                     self.apply_tool_paths(value, dir, layer, out);
                     Ok(())
                 }
                 "policies" => {
                     self.apply_policies(value, layer, out);
+                    Ok(())
+                }
+                "limits" => {
+                    self.apply_limits(value, layer, out);
                     Ok(())
                 }
                 _ => Err("unknown key".to_string()),
@@ -235,6 +267,27 @@ impl Config {
             match (name.as_str(), v.as_bool()) {
                 ("git_no_verify", Some(b)) => self.policies.git_no_verify = b,
                 ("git_no_verify", None) => out.push(invalid_key(layer, &key, "expected a boolean")),
+                _ => out.push(invalid_key(layer, &key, "unknown key")),
+            }
+        }
+    }
+
+    fn apply_limits(&mut self, value: &toml::Value, layer: Layer, out: &mut Vec<Finding>) {
+        let Some(t) = value.as_table() else {
+            out.push(invalid_key(layer, "limits", "expected a table"));
+            return;
+        };
+        for (name, v) in t {
+            let key = format!("limits.{name}");
+            let n = v
+                .as_integer()
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|&n| n > 0);
+            match (name.as_str(), n) {
+                ("git_bash_command", Some(n)) => self.limits.git_bash_command = n,
+                ("git_bash_command", None) => {
+                    out.push(invalid_key(layer, &key, "expected a positive integer"))
+                }
                 _ => out.push(invalid_key(layer, &key, "unknown key")),
             }
         }
@@ -445,4 +498,80 @@ fn repo_ignored(key: &str, why: &str) -> Finding {
         CONFIG_REPO_IGNORED,
         format!("repo config key `{key}` is ignored: {why}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder of this test's own under the temp dir, holding one file; removed when dropped,
+    /// also when the test fails.
+    struct TempFile {
+        dir: PathBuf,
+        path: PathBuf,
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn file(tag: &str, name: &str, text: &str) -> TempFile {
+        let dir =
+            std::env::temp_dir().join(format!("shellwise-config-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        TempFile { dir, path }
+    }
+
+    #[test]
+    fn scratch_dir_is_read_from_the_user_file_relative_to_it() {
+        let user = file("scratch-user", "config.toml", "scratch_dir = 'work'\n");
+        let (cfg, out) = Config::load(None, Some(&user.path), None);
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(cfg.scratch_dir, Some(user.dir.join("work")));
+
+        let bad = file("scratch-bad", "config.toml", "scratch_dir = 1\n");
+        let (cfg, out) = Config::load(None, Some(&bad.path), None);
+        assert_eq!(cfg.scratch_dir, None);
+        assert!(out.iter().any(|f| f.rule == CONFIG_INVALID), "{out:?}");
+    }
+
+    #[test]
+    fn a_repo_file_cannot_set_scratch_dir_or_limits() {
+        let text = "scratch_dir = 'work'\n[limits]\ngit_bash_command = 9000\n";
+        let repo = file("scratch-repo", REPO_FILE, text);
+        let (cfg, out) = Config::load(None, None, Some(&repo.path));
+        assert_eq!(cfg.scratch_dir, None);
+        assert_eq!(cfg.limits.git_bash_command, GIT_BASH_COMMAND_LIMIT);
+        let ignored = out.iter().filter(|f| f.rule == CONFIG_REPO_IGNORED).count();
+        assert_eq!(ignored, 2, "{out:?}");
+    }
+
+    #[test]
+    fn the_git_bash_limit_is_read_from_the_user_file() {
+        assert_eq!(Config::default().limits.git_bash_command, 7500);
+        let user = file(
+            "limit-user",
+            "config.toml",
+            "[limits]\ngit_bash_command = 7672\n",
+        );
+        let (cfg, out) = Config::load(None, Some(&user.path), None);
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(cfg.limits.git_bash_command, 7672);
+
+        for bad in ["0", "-1", "'7000'"] {
+            let text = format!("[limits]\ngit_bash_command = {bad}\n");
+            let user = file("limit-bad", "config.toml", &text);
+            let (cfg, out) = Config::load(None, Some(&user.path), None);
+            assert_eq!(cfg.limits.git_bash_command, 7500, "{bad}");
+            assert!(
+                out.iter().any(|f| f.rule == CONFIG_INVALID),
+                "{bad}: {out:?}"
+            );
+        }
+    }
 }
