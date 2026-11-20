@@ -706,6 +706,24 @@ fn a_git_bash_command_over_the_escaped_limit_is_too_long_once() {
         "{}",
         v.findings[0].message
     );
+    // The cmd branch counts pwsh's launch (a quoted path in place of the word); Git Bash starts
+    // cmd otherwise (measured: a typed `cmd //c echo a...` runs at 8168), so it is not applied
+    // there even when the Git Bash limit is raised past it.
+    let raised = Config {
+        limits: shellwise::config::Limits {
+            git_bash_command: 20_000,
+        },
+        ..Config::default()
+    };
+    let runs = format!("cmd //c echo {}", "a".repeat(8168 - 13));
+    assert_eq!(runs.len(), 8168);
+    let v = check_with(
+        Shell::Bash(BashProfile::GitBash),
+        Os::Windows,
+        &runs,
+        &raised,
+    );
+    assert!(!rules_of(&v).contains(&"too-long"), "{:?}", rules_of(&v));
 }
 
 // --- the spawned binary ---
