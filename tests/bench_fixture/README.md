@@ -42,4 +42,5 @@ answer on purpose (`real_parse_missing`, `parse_kind_unmeasured`).
 | `known_default_map.jsonl` | row 4 under the compiled-in map: checked, passes |
 | `corpus_empty.jsonl`, `corpus_bash_only.jsonl` | 0 rows, 0 PowerShell rows: exit 1 |
 | `baseline_unjoined.jsonl` | 0 rows joined: exit 1 |
+| `real_parse_unjoined.tsv`, `old_dump_unjoined.tsv` | well-formed, but no id is in the corpus: exit 1 (`corpus_empty.jsonl` serves as the empty file for both flags) |
 | `old_dump.tsv` | `--diff`: row 1 down (break → ok), row 3 up (ok → break), row 2 unchanged, 7 rows missing in it |

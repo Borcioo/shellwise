@@ -293,6 +293,12 @@ fn bench(args: &BenchArgs) -> Result<Vec<String>, String> {
         ));
     }
 
+    if let (Some(answers), Some(path)) = (&real, &args.real_parse)
+        && !rows.iter().any(|(r, _)| answers.contains_key(&r.id))
+    {
+        return Err(format!("0 rows of {} joined to the corpus", path.display()));
+    }
+
     let head = replay(&rows, 1)?;
     let joined = rows
         .iter()
@@ -613,6 +619,9 @@ fn diff(
             "new_level": r.level.as_str(),
             "new_rules": new_rules,
         }));
+    }
+    if up + down + changed + unchanged == 0 {
+        return Err(format!("0 rows of {} joined to the corpus", old.display()));
     }
     let missing_in_new = before.keys().filter(|id| !seen.contains(*id)).count();
     Ok(json!({

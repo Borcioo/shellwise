@@ -351,6 +351,50 @@ fn zero_rows_joined_to_the_baseline_fails() {
 }
 
 #[test]
+fn a_real_parse_file_that_is_empty_or_joins_no_row_fails() {
+    let inputs = Inputs {
+        real_parse: Some("corpus_empty.jsonl"),
+        ..FULL
+    };
+    bench("real-empty", &inputs, &[], &[]).assert_fail("0 rows read from");
+    let inputs = Inputs {
+        real_parse: Some("real_parse_unjoined.tsv"),
+        ..FULL
+    };
+    bench("real-unjoined", &inputs, &[], &[])
+        .assert_fail("real_parse_unjoined.tsv joined to the corpus");
+}
+
+#[test]
+fn an_old_dump_that_is_empty_or_joins_no_row_fails() {
+    let empty = fixture("corpus_empty.jsonl");
+    bench("diff-empty", &FULL, &["--diff", empty.as_str()], &[]).assert_fail("0 rows read from");
+    let unjoined = fixture("old_dump_unjoined.tsv");
+    bench("diff-unjoined", &FULL, &["--diff", unjoined.as_str()], &[])
+        .assert_fail("old_dump_unjoined.tsv joined to the corpus");
+}
+
+#[test]
+fn the_latency_is_reported_per_shell() {
+    let b = bench("latency", &FULL, &[], &[]);
+    b.assert_code(0);
+    let v = b.report();
+    for shell in ["Bash", "PowerShell"] {
+        let (p50, p99) = (
+            v["latency_ms"][shell]["p50"].as_f64().unwrap(),
+            v["latency_ms"][shell]["p99"].as_f64().unwrap(),
+        );
+        // Every row runs the parse on a worker thread, so no row takes 0 ms.
+        assert!(p50 > 0.0 && p99 >= p50, "{shell}: p50 {p50} p99 {p99}");
+        assert!(
+            b.run.stdout.contains(&format!("latency {shell}: p50 ")),
+            "{}",
+            b.run.stdout
+        );
+    }
+}
+
+#[test]
 fn the_dump_holds_one_line_per_row_with_the_raw_hit() {
     let b = bench("dump", &FULL, &["--dump", "{dir}/dump.tsv"], &[]);
     b.assert_code(0);

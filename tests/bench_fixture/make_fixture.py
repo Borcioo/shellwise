@@ -66,3 +66,6 @@ write("old_dump.tsv", ["id\tlevel\trules\traw_hit",
                        "f00000000001\tbreak\tparse-error\tno",
                        "f00000000002\tok\t-\tno",
                        "f00000000003\tok\t-\tno"])
+# Well-formed files that join to no corpus row: each must fail, not report a measured 0.
+write("real_parse_unjoined.tsv", ["id\trefused\terror_id", "f000000000ff\tyes\tfixture"])
+write("old_dump_unjoined.tsv", ["id\tlevel\trules\traw_hit", "f000000000ff\tok\t-\tno"])
