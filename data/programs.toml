@@ -13,7 +13,7 @@
 #                                     "interactive", "launcher"
 # value_options  = ["-s"]             options that take the next word as their value
 # fix            = "..."              the Fix line text a rule about this program prints; `<path>`
-#                                     and the like are filled in by the rule
+#                                     and the like are filled in by the rule (`<command>`: the command as typed)
 #
 # Wrapper facts (kind = "wrapper"; `programs::strip_wrappers` reads them):
 # operands       = 1                  words before the wrapped command that are not options
@@ -220,7 +220,7 @@ value_options = ["-a", "-d", "-i", "-n", "-N", "-p", "-t", "-u"]
 hang_unless = ["-t", "-u"]
 hang_stdin = true
 hang_level = "break"
-fix = 'feed read its input on the same line: append <<< "<value>" to the read command'
+fix = 'feed read its input on the same line: <command> <<< "<value>"'
 loop_role = ["wait"]
 loop_wait_when = ["-t"]
 

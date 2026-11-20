@@ -711,7 +711,7 @@ impl<'a> Scene<'a> {
         // repo root stays exempt (a protected path inside it makes it an ancestor of one);
         // when the lookup that tells times out, the lexical reason stands.
         if let Some(reason) =
-            resolve::critical_reason(p, None, self.home.as_deref(), &cfg.protected)
+            resolve::critical_reason(p, None, self.home.as_deref(), &cfg.protected, self.os())
         {
             let inside_root =
                 contents && matches!(self.repo(), Ok(Some(r)) if self.key(&r) == self.key(p));
@@ -720,7 +720,7 @@ impl<'a> Scene<'a> {
         let repo = self.repo()?;
         let (home, protected) = (self.home.as_deref(), &cfg.protected);
         let reason = if resolve::is_network_or_device(p, self.os()) {
-            resolve::critical_reason(p, repo.as_deref(), home, protected)
+            resolve::critical_reason(p, repo.as_deref(), home, protected, self.os())
         } else {
             resolve::critical_by_identity(
                 p,
@@ -729,6 +729,7 @@ impl<'a> Scene<'a> {
                 protected,
                 self.ctx.fs,
                 self.ctx.deadline,
+                self.os(),
             )?
         };
         if contents
@@ -818,7 +819,7 @@ impl<'a> Scene<'a> {
     fn links(&mut self, p: &Path, how: How, span: Span, shown: &str) -> Option<Finding> {
         let shell = self.ctx.input.shell;
         if how.recursive && !how.contents {
-            return match walk::outside_links(p, self.ctx.fs, self.ctx.deadline) {
+            return match walk::outside_links(p, self.ctx.fs, self.ctx.deadline, self.os()) {
                 WalkResult::Clean => None,
                 WalkResult::Outside(links) => {
                     let first = links.first().map(|l| l.path.clone()).unwrap_or_default();
@@ -996,7 +997,7 @@ impl<'a> Scene<'a> {
         for p in paths {
             let home = self.home.clone();
             if let Some(reason) =
-                resolve::critical_reason(&p, None, home.as_deref(), &cfg.protected)
+                resolve::critical_reason(&p, None, home.as_deref(), &cfg.protected, self.os())
             {
                 return Some(critical_contents(&p, reason, span));
             }
@@ -1014,8 +1015,13 @@ impl<'a> Scene<'a> {
                     return Some(repo_contents(&p, span));
                 }
                 let git = p.join(".git");
-                let reason =
-                    resolve::critical_reason(&git, Some(&root), home.as_deref(), &cfg.protected)?;
+                let reason = resolve::critical_reason(
+                    &git,
+                    Some(&root),
+                    home.as_deref(),
+                    &cfg.protected,
+                    self.os(),
+                )?;
                 return Some(critical(&git, reason, span));
             }
         }
@@ -1083,14 +1089,18 @@ impl<'a> Scene<'a> {
             let p = PathBuf::from(&folder);
             let home = self.home.clone();
             let protected = &self.ctx.cfg.protected;
-            let lexical = resolve::critical_reason(&p, None, home.as_deref(), protected)
+            let lexical = resolve::critical_reason(&p, None, home.as_deref(), protected, self.os())
                 .or_else(|| self.msys_system(&folder).then_some(SYSTEM_FOLDER));
             let reason = match lexical {
                 Some(r) => Some(r),
                 None => match self.repo() {
-                    Ok(repo) => {
-                        resolve::critical_reason(&p, repo.as_deref(), home.as_deref(), protected)
-                    }
+                    Ok(repo) => resolve::critical_reason(
+                        &p,
+                        repo.as_deref(),
+                        home.as_deref(),
+                        protected,
+                        self.os(),
+                    ),
                     Err(TimedOut) => return Some(self.lookup_timeout(how, span, shown)),
                 },
             };
@@ -1214,6 +1224,7 @@ impl<'a> Scene<'a> {
             repo.as_deref(),
             self.home.as_deref(),
             &self.ctx.cfg.protected,
+            self.os(),
         )?;
         Some((w.to_string(), reason))
     }
@@ -1285,7 +1296,7 @@ impl<'a> Scene<'a> {
             .unwrap_or_default();
         // A literal root or system path is critical wherever the shell stands.
         if let Some(text) = literal(word) {
-            let reason = resolve::critical_reason(Path::new(&text), None, None, &[])
+            let reason = resolve::critical_reason(Path::new(&text), None, None, &[], self.os())
                 .or_else(|| self.msys_system(&text).then_some(SYSTEM_FOLDER));
             if let Some(reason) = reason {
                 return Some(critical(Path::new(&text), reason, span));

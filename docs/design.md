@@ -435,14 +435,16 @@ Ported from baseline-guard (24): `ps-git-commit-stdin`, `git-restore-discards`, 
 `ps-unix-command`, `bash-too-long`, `bash-unterminated-quote`.
 
 New candidates, each entering v1 only with corpus evidence: `ps-remove-trailing-star`,
-`ps-assign-automatic`, `ps-stdin-script-nonascii`, `ps-empty-native-arg` (`'""'`), `bash-crlf`,
+`ps-assign-automatic`, `ps-stdin-script-nonascii`, `ps-empty-native-arg` (`'""'`),
 `ps51-syntax` (pwsh-only syntax under the 5.1 dialect), `dash-leading-arg` (a literal file argument
 starting with `-` before any `--`), `inline-script-too-long` (warn; the fix carries a ready script
 template and the command to run it by path).
 
-Landed after the port (owner decisions): `wait-loop-unbounded` (break: a loop that waits, or whose
-condition is always true, with no counter, deadline or `timeout` that ends it) and
-`follow-unbounded` (warn: `tail -f`, `Get-Content -Wait` and the like with nothing that stops them).
+Landed after the port: `bash-crlf` (warn, `lint` only: a CRLF `.sh` in the Git Bash profile),
+`ps-alias-shadow` (warn: a PowerShell function a built-in alias outranks), and by owner decision
+`wait-loop-unbounded` (break: a loop that waits, or whose condition is always true, with no counter,
+deadline or `timeout` that ends it) and `follow-unbounded` (warn: `tail -f`, `Get-Content -Wait`
+and the like with nothing that stops them).
 
 ### What the host setup deletes when shellwise ships
 

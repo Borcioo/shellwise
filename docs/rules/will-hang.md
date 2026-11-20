@@ -10,7 +10,7 @@ without a finding.
 
 | Shape | Level | Why | Fix |
 |---|---|---|---|
-| Bash `read` with no input: no `-t` or `-u` (alone or in a cluster such as `-rt 5`), no input redirect on stdin (`<`, `0<`, `<&`, here-string, here-document), not after a pipe, not in the background, not inside a compound command or a function | `break` | `read` waits on stdin, which stays open and empty. Probed in Git Bash: it waits until the outer timer. | `feed read its input on the same line: append <<< "<value>" to the read command` |
+| Bash `read` with no input: no `-t` or `-u` (alone or in a cluster such as `-rt 5`), no input redirect on stdin (`<`, `0<`, `<&`, here-string, here-document), not after a pipe, not in the background, not inside a compound command or a function | `break` | `read` waits on stdin, which stays open and empty. Probed in Git Bash: it waits until the outer timer. | `feed read its input on the same line: <command> <<< "<value>"`, with the command as typed |
 | Bash `claude -p` or `claude --print` with no `timeout` before it | `warn` | Against an unreachable API it retries about 10 times at 2 minutes or more each. | `timeout 120 claude -p <prompt>` |
 
 PowerShell's `Read-Host` and ssh without `BatchMode` are not findings: in the PowerShell tool a
@@ -22,7 +22,7 @@ prompt fails at once, and no ssh wait was shown.
 read x
 ```
 
-`break`: `Fix: feed read its input on the same line: append <<< "<value>" to the read command`
+`break`: `Fix: feed read its input on the same line: read x <<< "<value>"`
 
 ```bash
 v=$(read y)

@@ -179,6 +179,18 @@ fn a_function_an_alias_outranks_is_a_warn_in_a_ps1_file() {
     assert_eq!(report.exit_code(), 0);
 }
 
+/// D2: `stale-write-var` reads command lines only. In a script the variable a `New-Variable` line
+/// binds is there for the next line: the binary passes the file.
+#[test]
+fn a_ps1_that_binds_a_variable_with_new_variable_then_writes_it_passes() {
+    let d = folder("new_variable");
+    let path = d.join("write.ps1");
+    std::fs::write(&path, "New-Variable v 1\nSet-Content a.txt $v\n").unwrap();
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    assert_eq!(r.stdout, format!("{}: ok\n", path.display()));
+}
+
 /// A wait loop with no bound hangs a script as it hangs a command line: break in `lint` too.
 #[test]
 fn an_unbounded_wait_loop_in_a_sh_file_is_a_break() {

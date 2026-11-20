@@ -133,9 +133,9 @@ recorded cwd is not a folder here cannot fire a rule that reads the disk (a repo
 critical, a junction, a `.bat` launcher found on disk). The report counts those rows per OS
 (`rows_cwd_missing`, printed as `cwd gone here, replayed on <OS>`) and lists the rules that read the
 disk on this run, with the finding ids they gave (`disk_reading_rules`): their counts are lower bounds
-by up to that many rows. The resolver also reads system paths by the host's OS (`Os::host()`), so a
-Linux row's system path reads differently on a Windows host, and the default config's allowed root is
-this machine's temp folder.
+by up to that many rows; a cwd that does not answer within 500 ms (a share no host answers) counts as
+gone. System paths are read by the row's OS, so a Linux row's `/usr` is a system folder on a Windows
+host too; the default config's allowed root is this machine's temp folder.
 
 `--config` replays with that integration file alone (the file the host setup installs; no user or repo
 file); a file that does not load, or any finding of its load, stops the run. Without it the default

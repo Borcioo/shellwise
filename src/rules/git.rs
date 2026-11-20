@@ -617,63 +617,66 @@ fn worktree_remove(
                 "no folder of that name is here, and git may match it to a registered worktree by its name",
             )),
             Some(false) => None,
-            Some(true) => match walk::outside_links(&p, scene.ctx.fs, scene.ctx.deadline) {
-                WalkResult::Clean => None,
-                WalkResult::Outside(links) => {
-                    let link = links.first().map(|l| l.path.clone()).unwrap_or_default();
-                    let unlink = if is_pwsh(shell) {
-                        format!("[IO.Directory]::Delete('{}')", link.display())
-                    } else {
-                        format!("rm '{}'", link.display().to_string().replace('\\', "/"))
-                    };
-                    let fix = format!(
-                        "remove each link inside it first with `{unlink}` in a command of its own, then remove the worktree"
-                    );
-                    Some(if forced {
-                        finding(
-                            GIT_WORKTREE_JUNCTION,
-                            Level::Danger,
-                            format!(
-                                "`git worktree remove --force` deletes through junctions: `{}` holds `{}`, so git would empty its target",
-                                p.display(),
-                                link.display()
-                            ),
-                            fix,
-                            call.span(),
-                        )
-                    } else {
-                        warn(
-                            GIT_WORKTREE_JUNCTION,
-                            format!(
-                                "`{}` holds the junction `{}`: git refuses to remove it without --force, and with --force it would empty the junction's target",
-                                p.display(),
-                                link.display()
-                            ),
-                            Some(fix),
-                            call.span(),
-                        )
-                    })
+            Some(true) => {
+                match walk::outside_links(&p, scene.ctx.fs, scene.ctx.deadline, scene.ctx.input.os)
+                {
+                    WalkResult::Clean => None,
+                    WalkResult::Outside(links) => {
+                        let link = links.first().map(|l| l.path.clone()).unwrap_or_default();
+                        let unlink = if is_pwsh(shell) {
+                            format!("[IO.Directory]::Delete('{}')", link.display())
+                        } else {
+                            format!("rm '{}'", link.display().to_string().replace('\\', "/"))
+                        };
+                        let fix = format!(
+                            "remove each link inside it first with `{unlink}` in a command of its own, then remove the worktree"
+                        );
+                        Some(if forced {
+                            finding(
+                                GIT_WORKTREE_JUNCTION,
+                                Level::Danger,
+                                format!(
+                                    "`git worktree remove --force` deletes through junctions: `{}` holds `{}`, so git would empty its target",
+                                    p.display(),
+                                    link.display()
+                                ),
+                                fix,
+                                call.span(),
+                            )
+                        } else {
+                            warn(
+                                GIT_WORKTREE_JUNCTION,
+                                format!(
+                                    "`{}` holds the junction `{}`: git refuses to remove it without --force, and with --force it would empty the junction's target",
+                                    p.display(),
+                                    link.display()
+                                ),
+                                Some(fix),
+                                call.span(),
+                            )
+                        })
+                    }
+                    WalkResult::Unreadable(at) => {
+                        let message = format!(
+                            "this removes the worktree `{}`, and the guard cannot read `{}` inside it to tell whether a junction there leads outside it",
+                            p.display(),
+                            at.display()
+                        );
+                        Some(if forced {
+                            finding(
+                                delete::WALK_UNREADABLE,
+                                Level::Danger,
+                                message,
+                                CONFIRM_FIX.to_string(),
+                                call.span(),
+                            )
+                        } else {
+                            warn(delete::WALK_UNREADABLE, message, None, call.span())
+                        })
+                    }
+                    WalkResult::Timeout => Some(scene.timeout(call.span(), &text)),
                 }
-                WalkResult::Unreadable(at) => {
-                    let message = format!(
-                        "this removes the worktree `{}`, and the guard cannot read `{}` inside it to tell whether a junction there leads outside it",
-                        p.display(),
-                        at.display()
-                    );
-                    Some(if forced {
-                        finding(
-                            delete::WALK_UNREADABLE,
-                            Level::Danger,
-                            message,
-                            CONFIRM_FIX.to_string(),
-                            call.span(),
-                        )
-                    } else {
-                        warn(delete::WALK_UNREADABLE, message, None, call.span())
-                    })
-                }
-                WalkResult::Timeout => Some(scene.timeout(call.span(), &text)),
-            },
+            }
         };
         worst = max_finding(worst, found);
     }

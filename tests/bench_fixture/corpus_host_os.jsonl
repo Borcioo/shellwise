@@ -1,0 +1,3 @@
+{"id": "f000000000c1", "session": "fixture", "ts": "2026-11-01T10:00:00.000Z", "tool": "Bash", "command": "rm -rf /usr fixture-dir", "cwd": "/fixture/proj", "cli_version": "0.0.0", "label": "ok", "denied_by": null, "destructive": false, "error_excerpt": ""}
+{"id": "f000000000c2", "session": "fixture", "ts": "2026-11-01T10:00:00.000Z", "tool": "PowerShell", "command": "Get-Date -Format fixture", "cwd": "C:\\fixture\\proj", "cli_version": "0.0.0", "label": "ok", "denied_by": null, "destructive": false, "error_excerpt": ""}
+{"id": "f00000000004", "session": "fixture", "ts": "2026-11-01T10:00:00.000Z", "tool": "Bash", "command": "echo 'fixture-parity", "cwd": null, "cli_version": "0.0.0", "label": "ok", "denied_by": null, "destructive": false, "error_excerpt": ""}

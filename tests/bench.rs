@@ -558,6 +558,27 @@ fn each_row_replays_on_the_os_its_cwd_names() {
     }
 }
 
+/// E1: the critical folders of a replayed row are those of the row's OS, not the host's: a Linux
+/// `rm -rf /usr` is critical on a Windows host too.
+#[test]
+fn a_linux_row_deletes_a_linux_system_folder_on_any_host() {
+    let inputs = Inputs {
+        corpus: "corpus_host_os.jsonl",
+        baseline: "baseline_host_os.jsonl",
+        known: "known.jsonl",
+        rule_map: Some("rule_map.toml"),
+        real_parse: None,
+    };
+    let b = bench("host_os", &inputs, &["--dump", "{dir}/dump.tsv"], &[]);
+    b.assert_code(0);
+    let text = std::fs::read_to_string(b.dir.join("dump.tsv")).unwrap();
+    let line = "f000000000c1\tcritical\tdelete-critical\t";
+    assert!(
+        text.lines().any(|l| l.starts_with(line)),
+        "no {line:?}: {text}"
+    );
+}
+
 #[test]
 fn the_diff_counts_the_moved_rows_per_os() {
     let inputs = Inputs {

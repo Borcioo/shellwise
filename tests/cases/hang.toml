@@ -37,7 +37,7 @@ shell = "bash"
 command = 'read -r name'
 level = "break"
 rules = ["will-hang"]
-fix = 'feed read its input on the same line: append <<< "<value>" to the read command'
+fix = 'feed read its input on the same line: read -r name <<< "<value>"'
 
 [[row]]
 id = "bash-read-prompt-value-looks-like-an-option"
@@ -1080,3 +1080,12 @@ shell = "bash"
 command = "nohup tail -f run.log"
 level = "warn"
 rules = ["follow-unbounded"]
+# The Fix carries the command's own text, a redirect included.
+[[row]]
+id = "bash-read-fix-keeps-a-redirect"
+os = "any"
+shell = "bash"
+command = 'read x 2>/dev/null'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input on the same line: read x 2>/dev/null <<< "<value>"'

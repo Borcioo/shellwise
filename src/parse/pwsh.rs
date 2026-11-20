@@ -273,6 +273,23 @@ struct Lexed {
     /// False when the text holds what this reading does not model (text after a here-string
     /// header): then it names no kind.
     sure: bool,
+    /// Where a quote closed a string it did not open the way an author would mean: a typographic
+    /// quote closing a string another quote opened (`'it’s'`), and a `\"` closing a double-quoted
+    /// string (PowerShell's escape is the backtick).
+    closers: Closers,
+}
+
+/// The quotes that closed a string an author likely meant to go on, as byte offsets in order.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Closers {
+    pub typographic: Vec<usize>,
+    /// A `\"` and whether it closed the string (`true`) or, followed by a quote, kept it open.
+    pub backslash: Vec<(usize, bool)>,
+}
+
+/// Where quotes closed strings in `src` the way the author likely did not mean (see `Closers`).
+pub fn quote_closers(src: &str) -> Closers {
+    lex(src).closers
 }
 
 /// The first character of the bare word being read, and whether it holds a `=`.
@@ -322,6 +339,13 @@ fn lex(src: &str) -> Lexed {
     let b: Vec<(usize, char)> = src.char_indices().collect();
     let mut stack = vec![S::Out(WordStart::default())];
     let mut code = Vec::new();
+    let mut closers = Closers::default();
+    // A typographic quote that closes a string a plain quote opened, or the other way round;
+    // a typographic pair (`‘a’`) is what the author meant.
+    let odd_close = |open_at: usize, c: char| {
+        let opener = src[open_at..].chars().next().unwrap_or(c);
+        opener.is_ascii() != c.is_ascii()
+    };
     let mut i = 0;
     let line_start = |i: usize| i > 0 && b[i - 1].1 == '\n';
     while i < b.len() {
@@ -407,6 +431,7 @@ fn lex(src: &str) -> Lexed {
                                 open: None,
                                 code,
                                 sure: false,
+                                closers,
                             };
                         };
                         let quote = next.expect("checked above");
@@ -474,11 +499,14 @@ fn lex(src: &str) -> Lexed {
                     _ => code.push((at, c)),
                 }
             }
-            S::Single(_) => {
+            S::Single(open_at) => {
                 if is_single_quote(c) {
                     if next.is_some_and(is_single_quote) {
                         i += 1;
                     } else {
+                        if odd_close(open_at, c) {
+                            closers.typographic.push(at);
+                        }
                         stack.pop();
                     }
                 }
@@ -497,9 +525,23 @@ fn lex(src: &str) -> Lexed {
                         i += 1;
                     }
                 } else if is_double_quote(c) {
+                    let after_backslash = c == '"' && i > 0 && b[i - 1].1 == '\\';
                     if next.is_some_and(is_double_quote) {
+                        // `\""`: PowerShell reads `\""` as a backslash and one quote, so the
+                        // string the author meant to close goes on.
+                        if after_backslash && matches!(top, S::Double(_)) {
+                            closers.backslash.push((at - 1, false));
+                        }
                         i += 1;
                     } else {
+                        if let S::Double(open_at) = top {
+                            if odd_close(open_at, c) {
+                                closers.typographic.push(at);
+                            }
+                            if after_backslash {
+                                closers.backslash.push((at - 1, true));
+                            }
+                        }
                         stack.pop();
                     }
                 }
@@ -534,6 +576,7 @@ fn lex(src: &str) -> Lexed {
         open,
         code,
         sure: true,
+        closers,
     }
 }
 

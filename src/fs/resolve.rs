@@ -164,15 +164,15 @@ pub fn path_key(p: &str, os: Os) -> String {
 
 /// Why deleting `p` (recursively) is critical, or `None`. `home` is the profile folder from
 /// the hook's environment, not `EnvView::home` (which a command can make dynamic);
-/// `cwd_repo` is the root of the repo holding the event's `cwd`. Compared on the host's
+/// `cwd_repo` is the root of the repo holding the event's `cwd`. Compared on `os`'s
 /// rules: ignoring case on Windows, after canonicalising separators and `\\?\`.
 pub fn critical_reason(
     p: &Path,
     cwd_repo: Option<&Path>,
     home: Option<&Path>,
     protected: &[PathBuf],
+    os: Os,
 ) -> Option<&'static str> {
-    let os = Os::host();
     let text = p.to_string_lossy();
     let canon = Canon::parse(&text, os);
     if canon.is_root() {
@@ -267,8 +267,9 @@ pub fn critical_by_identity(
     protected: &[PathBuf],
     fs: &SharedFs,
     deadline: &Deadline,
+    os: Os,
 ) -> Result<Option<&'static str>, TimedOut> {
-    if let Some(r) = critical_reason(p, cwd_repo, home, protected) {
+    if let Some(r) = critical_reason(p, cwd_repo, home, protected, os) {
         return Ok(Some(r));
     }
     let p = p.to_path_buf();

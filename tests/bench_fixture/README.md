@@ -65,3 +65,4 @@ write their corpus, baseline and known slice into their own folder at run time.
 | `baseline_unjoined.jsonl` | 0 rows joined: exit 1 |
 | `real_parse_unjoined.tsv`, `old_dump_unjoined.tsv` | well-formed, but no id is in the corpus: exit 1 (`corpus_empty.jsonl` serves as the empty file for both flags) |
 | `old_dump.tsv` | `--diff`: row 1 down (break → ok), row 3 up (ok → break), row 2 unchanged, 7 rows missing in it |
+| `corpus_host_os.jsonl`, `baseline_host_os.jsonl` | a Linux `rm -rf /usr` (…c1), a Windows PowerShell row (…c2) and row 4: …c1 is critical on any host |

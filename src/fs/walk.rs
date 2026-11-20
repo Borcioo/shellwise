@@ -42,19 +42,18 @@ pub enum WalkResult {
 }
 
 /// Walk `root` breadth first without following any link, on a worker bounded by `deadline`.
-pub fn outside_links(root: &Path, fs: &SharedFs, deadline: &Deadline) -> WalkResult {
+pub fn outside_links(root: &Path, fs: &SharedFs, deadline: &Deadline, os: Os) -> WalkResult {
     let root = root.to_path_buf();
     let fs = Arc::clone(fs);
     let d = *deadline;
-    bounded(deadline, move || walk(&root, fs.as_ref(), &d)).unwrap_or(WalkResult::Timeout)
+    bounded(deadline, move || walk(&root, fs.as_ref(), &d, os)).unwrap_or(WalkResult::Timeout)
 }
 
 fn not_found(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::NotFound
 }
 
-fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline) -> WalkResult {
-    let os = Os::host();
+fn walk(root: &Path, fs: &dyn Fs, deadline: &Deadline, os: Os) -> WalkResult {
     let mut ancestors: Vec<&Path> = root.ancestors().skip(1).collect();
     ancestors.reverse();
     for a in ancestors {

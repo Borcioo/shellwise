@@ -5,8 +5,8 @@
 //! synthetic environment of that OS (`WINDOWS_ENV`, `POSIX_ENV`), never the machine's own. The
 //! result still depends on the machine that runs it: the rules read this machine's disk (a row
 //! whose cwd is gone here cannot fire a rule that reads the disk: `rows_cwd_missing`,
-//! `disk_reading_rules`), the resolver reads system paths by the host's OS (`Os::host()`), and the
-//! default config's allowed root is this machine's temp folder. The report keeps four lines apart
+//! `disk_reading_rules`; system paths are read by the row's OS), and the default config's allowed
+//! root is this machine's temp folder. The report keeps four lines apart
 //! (Global Constraints, F8): meter 1, rows the real shell's parser also refuses, parity denials
 //! baseline-guard already makes, and the own line of the owner-requested length rule; then meter 2
 //! (split by those lines and by rule family), `parse_kind_false_deny`, per rule × label counts,
@@ -735,8 +735,12 @@ fn check_runs_on(
         .collect()
 }
 
+/// How long one cwd read may take: a share no host answers makes `is_dir` wait for the network.
+const CWD_READ_MS: u64 = 500;
+
 /// Rows whose recorded cwd is not a folder on this machine, per OS: a rule that reads the disk
-/// cannot fire on them. Each distinct cwd is read once.
+/// cannot fire on them. Each distinct cwd is read once, under `CWD_READ_MS`; one that does not
+/// answer in time counts as gone.
 fn cwd_missing(rows: &[(&CorpusRow, Tool)]) -> BTreeMap<&'static str, PerTool> {
     let mut gone: HashMap<&str, bool> = HashMap::new();
     let mut out: BTreeMap<&'static str, PerTool> = [Os::Windows, Os::Posix]
@@ -746,7 +750,11 @@ fn cwd_missing(rows: &[(&CorpusRow, Tool)]) -> BTreeMap<&'static str, PerTool> {
         let Some(cwd) = row.cwd.as_deref().filter(|c| !c.is_empty()) else {
             continue;
         };
-        let is_gone = *gone.entry(cwd).or_insert_with(|| !Path::new(cwd).is_dir());
+        let is_gone = *gone.entry(cwd).or_insert_with(|| {
+            let path = PathBuf::from(cwd);
+            let bound = Deadline::new(Instant::now(), CWD_READ_MS);
+            !shellwise::fs::bounded(&bound, move || path.is_dir()).unwrap_or(false)
+        });
         if is_gone {
             let os = os_name(CwdShape::of(Some(cwd)).os());
             out.entry(os).or_default().add(*tool);
@@ -2101,6 +2109,30 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, 12, "rows read from cwd_shapes.tsv");
+    }
+
+    /// R2-5: a cwd on a share no host answers (a documentation address) is read under a bound:
+    /// the bench does not stall on it, and the row counts as a cwd gone here.
+    #[cfg(windows)]
+    #[test]
+    fn a_cwd_no_host_answers_is_read_under_a_bound() {
+        let row = CorpusRow {
+            id: "unc".to_string(),
+            ts: String::new(),
+            tool: "Bash".to_string(),
+            command: "ls".to_string(),
+            cwd: Some(r"\\192.0.2.1\share\repo".to_string()),
+            label: "ok".to_string(),
+            destructive: false,
+        };
+        let start = Instant::now();
+        let missing = cwd_missing(&[(&row, Tool::Bash)]);
+        let took = start.elapsed();
+        assert!(
+            took.as_millis() < u128::from(CWD_READ_MS) + 1500,
+            "took {took:?}"
+        );
+        assert_eq!(missing[os_name(Os::Windows)].bash, 1);
     }
 
     fn paths(v: &[&str]) -> Target {
