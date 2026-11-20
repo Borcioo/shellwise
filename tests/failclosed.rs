@@ -11,7 +11,35 @@ const CHECK: &[&str] = &["check", "--shell", "pwsh", "--json"];
 /// Assert `danger` from `analysis-incomplete`, wherever the span is.
 fn assert_failed(r: &common::Run) {
     assert_eq!(r.code, 2, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
-    assert_eq!(r.json()["findings"][0]["rule"], "analysis-incomplete");
+    let findings = r.json()["findings"].clone();
+    let incomplete = findings
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["rule"] == "analysis-incomplete");
+    assert_eq!(incomplete.unwrap()["level"], "danger", "{findings}");
+}
+
+/// A command this long is also `inline-script-too-long` (break, run before the size cap): assert
+/// that finding first and `analysis-incomplete` at `level` after it, and the exit code of the two.
+/// With `needle`, the incomplete finding's span covers it in `command`.
+fn assert_inline_then_incomplete(r: &common::Run, level: &str, hit: Option<(&str, &str)>) {
+    let code = if level == "danger" { 2 } else { 1 };
+    assert_eq!(r.code, code, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
+    let v = r.json();
+    let findings = v["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2, "{v}");
+    assert_eq!(findings[0]["rule"], "inline-script-too-long", "{v}");
+    assert_eq!(findings[1]["rule"], "analysis-incomplete", "{v}");
+    assert_eq!(findings[1]["level"], level, "{v}");
+    if let Some((command, needle)) = hit {
+        let start = findings[1]["span"]["start"].as_u64().unwrap() as usize;
+        let end = findings[1]["span"]["end"].as_u64().unwrap() as usize;
+        assert!(
+            command.get(start..end).is_some_and(|s| s.contains(needle)),
+            "span {start}..{end} misses {needle:?}"
+        );
+    }
 }
 
 #[test]
@@ -19,16 +47,16 @@ fn input_over_the_size_cap_fails_closed() {
     let mut cmd = "(".repeat(200 * 1024);
     cmd.push_str("rm -rf x");
     let r = run(CHECK, Some(cmd.as_bytes()), &[]);
-    assert_failclosed_danger(&r, &cmd, "rm -rf x");
+    assert_inline_then_incomplete(&r, "danger", Some((&cmd, "rm -rf x")));
 
     // Nothing destructive in the raw text.
     let mut nested = "(".repeat(200 * 1024);
     nested.push_str("Get-Date");
-    assert_incomplete_warn(&run(CHECK, Some(nested.as_bytes()), &[]));
+    assert_inline_then_incomplete(&run(CHECK, Some(nested.as_bytes()), &[]), "warn", None);
 
     let mut plain = " ".repeat(200 * 1024);
     plain.push_str("echo hi");
-    assert_incomplete_warn(&run(CHECK, Some(plain.as_bytes()), &[]));
+    assert_inline_then_incomplete(&run(CHECK, Some(plain.as_bytes()), &[]), "warn", None);
 
     // Padding past the cap with an allow marker must not clear a delete of `/`.
     let mut marked = " ".repeat(64 * 1024 + 1);
@@ -38,20 +66,26 @@ fn input_over_the_size_cap_fails_closed() {
 
 #[test]
 fn size_cap_is_64_kib() {
-    // A command at the cap is analysed: from the temp folder (an allowed root) no rule flags the
-    // delete in pwsh or bash, which the raw scan still names. One byte more fails closed.
+    // A command at the cap is analysed: from the temp folder (an allowed root) only the inline
+    // length rule speaks, while the raw scan still names the delete in pwsh or bash. One byte
+    // more fails closed.
     let tail = "; Remove-Item -Recurse -Force x";
     let at_cap = format!("{}{tail}", " ".repeat(64 * 1024 - tail.len()));
     assert_eq!(at_cap.len(), 64 * 1024);
     let temp = std::env::temp_dir().to_string_lossy().into_owned();
     let in_temp = [CHECK, &["--cwd", temp.as_str()]].concat();
-    assert_ok(&run(&in_temp, Some(at_cap.as_bytes()), &[]));
+    let r = run(&in_temp, Some(at_cap.as_bytes()), &[]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    let rules: Vec<String> = r.json()["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["rule"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(rules, ["inline-script-too-long"], "{}", r.stdout);
     let over = format!(" {at_cap}");
-    assert_failclosed_danger(
-        &run(CHECK, Some(over.as_bytes()), &[]),
-        &over,
-        "Remove-Item -Recurse -Force x",
-    );
+    let r = run(CHECK, Some(over.as_bytes()), &[]);
+    assert_inline_then_incomplete(&r, "danger", Some((&over, "Remove-Item -Recurse -Force x")));
 }
 
 #[test]
@@ -75,17 +109,13 @@ fn chained_env_split_strings_get_a_verdict() {
     // Each `env -S` link nests one more command. The invalid byte forces the fail path, where the
     // raw scan must still finish in time; past its depth limit the scan cannot read the tail, so
     // only the tail that names a command of the destructive table is danger, printed as JSON.
-    for (tail, code) in [("rm -rf x", 2), ("echo hi", 0)] {
+    // At 63,000 characters the command is also `inline-script-too-long` (break, first).
+    for (tail, level) in [("rm -rf x", "danger"), ("echo hi", "warn")] {
         let mut cmd = "env -S ".repeat(9000).into_bytes();
         cmd.extend_from_slice(tail.as_bytes());
         cmd.extend_from_slice(b" #\xff");
         let r = run(&["check", "--shell", "bash", "--json"], Some(&cmd), &[]);
-        assert_eq!(
-            r.code, code,
-            "{tail}: stdout {:?} stderr {:?}",
-            r.stdout, r.stderr
-        );
-        assert_eq!(r.json()["findings"][0]["rule"], "analysis-incomplete");
+        assert_inline_then_incomplete(&r, level, None);
         // The default deadline is 8 s; one more second covers the process start.
         assert!(
             r.elapsed < std::time::Duration::from_secs(9),
@@ -230,12 +260,14 @@ mod hooks {
     fn deep_nesting_is_checked_on_a_big_stack() {
         // A deeply nested command must not overflow the worker's stack (the hook rule recurses).
         // The parse refuses the nesting, and the rules still run on the parse error.
+        // At 10,008 characters it is also `inline-script-too-long` (break, first).
         let cmd = format!("{}Get-Date", "(".repeat(10_000));
         let r = hook("recurse", &cmd);
-        assert_eq!(r.code, 0, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
+        assert_eq!(r.code, 1, "stdout {:?} stderr {:?}", r.stdout, r.stderr);
         let v = r.json();
         let findings = v["findings"].as_array().unwrap();
-        assert_eq!(findings.len(), 1, "{v}");
-        assert_eq!(findings[0]["rule"], "parse-error", "{v}");
+        assert_eq!(findings.len(), 2, "{v}");
+        assert_eq!(findings[0]["rule"], "inline-script-too-long", "{v}");
+        assert_eq!(findings[1]["rule"], "parse-error", "{v}");
     }
 }

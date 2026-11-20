@@ -302,12 +302,15 @@ kind = ["shell"]
 value_options = ["-ExecutionPolicy", "-ep", "-ex", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
 
-# cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit).
+# cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit). pwsh
+# starts it as "C:\WINDOWS\system32\cmd.exe" (29 characters with the quotes) in place of the typed
+# word: a typed `cmd /c echo …` of 8166 characters is refused (measured with pwsh 7.7).
 [[program]]
 name = "cmd"
 kind = ["shell"]
 line_limit = 8191
-fix = "write the command to a file and lint it"
+launch_path_units = 29
+fix = "delete the leading cmd /c and run the program directly from PowerShell, which starts command lines up to 32766 characters"
 
 [[program]]
 name = "eval"
