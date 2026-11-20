@@ -12,8 +12,8 @@ trying to get around it.
 
 [![ci](https://github.com/Borcioo/shellwise/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Borcioo/shellwise/actions/workflows/ci.yml)
 
-Status: the first version is in final review. There is no release yet; build it from source.
-`develop` holds the current code, `main` will hold released versions.
+Status: early. Version 0.1.0 is the first release; expect rough edges and please report wrong
+verdicts. `main` holds released versions, `develop` the current code.
 
 ## What it catches
 
@@ -55,7 +55,21 @@ text is named in the reason.
 
 ## Install
 
-Build from source; `rustup` installs the toolchain `rust-toolchain.toml` pins:
+Download the archive for your system from the
+[latest release](https://github.com/Borcioo/shellwise/releases/latest), unpack it and put
+`shellwise` (`shellwise.exe` on Windows) somewhere stable. Each archive comes with a `.sha256`
+file.
+
+| System | Archive |
+|---|---|
+| Windows (x64) | `shellwise-v<version>-x86_64-pc-windows-msvc.zip` |
+| Linux (x64) | `shellwise-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS (Apple silicon) | `shellwise-v<version>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `shellwise-v<version>-x86_64-apple-darwin.tar.gz` |
+
+The macOS builds are compiled in CI but not tested there yet.
+
+Or build from source; `rustup` installs the toolchain `rust-toolchain.toml` pins:
 
 ```
 git clone https://github.com/Borcioo/shellwise
@@ -63,10 +77,7 @@ cd shellwise
 cargo build --release
 ```
 
-Prebuilt binaries for Windows, Linux and macOS will be attached to each
-[release](https://github.com/Borcioo/shellwise/releases) once the first one is out.
-
-The binary is `target/release/shellwise` (`shellwise.exe` on Windows). It needs no service, no
+The built binary is `target/release/shellwise` (`shellwise.exe` on Windows). It needs no service, no
 network and no interpreter.
 
 ### Claude Code hook
