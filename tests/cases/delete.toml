@@ -1,0 +1,1037 @@
+# The delete guard (Ruling 98(2), F14), the opaque-destructive rule and the allow marker,
+# through analyse. `tests/delete.rs` runs every row against a fixture tree:
+#
+#   FX_REPO       a repo (holds `.git`): the default cwd. Inside it: `build/x.o`, `src/a.txt`,
+#                 `clean/f.txt`, `linked/out` (a junction or symlink to FX_OUTSIDE/target),
+#                 `jn` (a junction or symlink to FX_OUTSIDE/target).
+#   FX_NOREPO     a folder outside any repo, with `sub/f.txt`: the cwd of `norepo-` rows.
+#   FX_OUTSIDE    outside the project: `data/f.txt`, `target/keep.txt`.
+#   FX_ALLOWED    the one allowed root (`cfg.allowed_roots`, and `TEMP`/`TMP` in the env):
+#                 `tmp1/f.txt`, `box/out` (a link to FX_OUTSIDE/target).
+#   FX_HOME       the home folder (`USERPROFILE` and `HOME` in the env).
+#   FX_PROTECTED  `cfg.protected`.
+#   FX_ROOT       the folder holding all of them.
+#
+# The runner replaces each FX_ name with its path (forward slashes for bash rows). A row whose
+# id starts with `nocwd-` runs with no cwd. Every path the fixture uses has no space.
+# The rows are synthetic and ranked by the corpus counts of their shapes (2026-11-19, 50,862
+# rows): `git worktree remove` 320, `[IO.Directory]::Delete` 260, `Remove-Item` with
+# `-ErrorAction` 215, `Remove-Item -Recurse` 199, `rm -rf` 152, `rm <file>` 141,
+# `[IO.File]::Delete` 100, `rm -rf $VAR` 59, `Remove-Item a,b` 32, `bash -c` with `rm` 19,
+# `find -exec rm` 13, `find -delete` 9, `Remove-Item` fed by a pipeline 9, `robocopy /MIR` 8,
+# `xargs rm` 0. Obfuscation-only shapes get no row (Ruling 91).
+
+# ---------------------------------------------------------------- [IO.Directory]::Delete (260)
+
+[[row]]
+id = "ps-dirdelete-clean-tree"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('build', $true)"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-dirdelete-full-path-inside"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('FX_REPO\\build\\', $true)"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-dirdelete-the-junction-itself"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('jn')"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-dirdelete-tree-with-a-junction"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('linked', $true)"
+level = "danger"
+rules = ["delete-through-link"]
+fix = "[IO.Directory]::Delete('"
+
+[[row]]
+id = "ps-dirdelete-outside"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('FX_OUTSIDE\\data', $true)"
+level = "danger"
+rules = ["delete-outside-project"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "ps-dirdelete-inside-the-allowed-root"
+os = "windows"
+shell = "pwsh"
+command = "[System.IO.Directory]::Delete('FX_ALLOWED\\tmp1', $true)"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-dirdelete-the-allowed-root-itself"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('FX_ALLOWED', $true)"
+level = "danger"
+rules = ["delete-allowed-root"]
+fix = "delete only what you made inside it"
+
+[[row]]
+id = "ps-dirdelete-program-files"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('C:\\Program Files\\nodejs', $true)"
+level = "critical"
+rules = ["delete-critical"]
+fix = "each by its full path"
+
+[[row]]
+id = "ps-dirdelete-drive-root"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('D:\\', $true)"
+level = "critical"
+rules = ["delete-critical"]
+fix = "each by its full path"
+
+[[row]]
+id = "ps-dirdelete-home"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('FX_HOME', $true)"
+level = "critical"
+rules = ["delete-critical"]
+fix = "each by its full path"
+
+[[row]]
+id = "ps-dirdelete-repo-root"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('FX_REPO', $true)"
+level = "critical"
+rules = ["delete-critical"]
+fix = "each by its full path"
+
+[[row]]
+id = "ps-dirdelete-dynamic"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete($dir, $true)"
+level = "danger"
+rules = ["dynamic-target"]
+fix = "write the path literally"
+
+# ---------------------------------------------------------------- [IO.File]::Delete (100)
+
+[[row]]
+id = "ps-filedelete-inside"
+os = "windows"
+shell = "pwsh"
+command = "[IO.File]::Delete('src\\a.txt')"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-filedelete-outside"
+os = "windows"
+shell = "pwsh"
+command = "[IO.File]::Delete('FX_OUTSIDE\\data\\f.txt')"
+level = "danger"
+rules = ["delete-outside-project"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "ps-filedelete-below-a-junction"
+os = "windows"
+shell = "pwsh"
+command = "[IO.File]::Delete('jn\\keep.txt')"
+level = "danger"
+rules = ["delete-through-link"]
+
+# ---------------------------------------------------------------- Remove-Item (199, 215)
+
+[[row]]
+id = "ps-ri-recurse-clean"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-recurse-erroraction"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force clean -ErrorAction SilentlyContinue"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-ea-alias"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item build -Recurse -Force -ea 0"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-missing-folder-inside"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force .\\tmp-not-there"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-path-parameter"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Path build -Recurse -Force"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-children-glob"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force build\\*"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-the-repo-root-as-dot"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ."
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-outside-by-parent"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ..\\outside\\data"
+level = "danger"
+rules = ["delete-outside-project"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "ps-ri-tree-with-a-junction"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force linked"
+level = "danger"
+rules = ["delete-through-link"]
+fix = "[IO.Directory]::Delete('"
+
+[[row]]
+id = "ps-ri-literalpath-home"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -LiteralPath FX_HOME -Recurse -Force"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-protected"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force FX_PROTECTED"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-programdata"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force C:\\ProgramData\\SomeTool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-whatif-deletes-nothing"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force FX_HOME -WhatIf"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-temp-child"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force $env:TEMP\\tmp1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-temp-itself"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force $env:TEMP"
+level = "danger"
+rules = ["delete-allowed-root"]
+
+[[row]]
+id = "ps-ri-variable-set-in-the-command"
+os = "windows"
+shell = "pwsh"
+command = "$d = 'build'; Remove-Item -Recurse -Force $d"
+level = "danger"
+rules = ["dynamic-target"]
+fix = "write the path literally"
+
+[[row]]
+id = "ps-ri-fed-by-a-pipeline"
+os = "windows"
+shell = "pwsh"
+command = "Get-ChildItem build -Filter *.o | Remove-Item -Force"
+level = "danger"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-in-foreach"
+os = "windows"
+shell = "pwsh"
+command = "Get-ChildItem build | ForEach-Object { Remove-Item $_.FullName -Recurse -Force }"
+level = "danger"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-after-set-location-up"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location ..; Remove-Item -Recurse -Force outside\\data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-ri-after-cd-into-src"
+os = "windows"
+shell = "pwsh"
+command = "cd src; Remove-Item -Recurse -Force ..\\build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-after-cd-to-a-variable"
+os = "windows"
+shell = "pwsh"
+command = "cd $dir; Remove-Item -Recurse -Force build"
+level = "danger"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-after-making-a-junction"
+os = "windows"
+shell = "pwsh"
+command = "New-Item -ItemType Junction -Path box2 -Target ..\\outside; Remove-Item -Recurse -Force box2"
+level = "danger"
+rules = ["delete-unknown-location"]
+fix = "use the full path"
+
+[[row]]
+id = "nocwd-ps-ri-relative"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force build"
+level = "danger"
+rules = ["delete-unknown-location"]
+
+# Aliases (18)
+
+[[row]]
+id = "ps-alias-ri-prefix-parameters"
+os = "windows"
+shell = "pwsh"
+command = "ri -r -fo build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-alias-rm-outside"
+os = "windows"
+shell = "pwsh"
+command = "rm -r -fo ..\\outside\\data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-alias-del-a-file"
+os = "windows"
+shell = "pwsh"
+command = "del src\\a.txt"
+level = "ok"
+rules = []
+
+# Lists (32; Review Focus 3: a comma list is no longer critical)
+
+[[row]]
+id = "ps-list-both-clean"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force build, clean"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-list-with-a-drive-root"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force build,C:\\"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-list-one-outside"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item build, ..\\outside\\data -Recurse"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-list-dynamic-and-critical"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse $dir,C:\\"
+level = "critical"
+rules = ["delete-critical"]
+
+# robocopy /MIR (8): the destination is deleted to match
+
+[[row]]
+id = "ps-robocopy-mirror-inside"
+os = "windows"
+shell = "pwsh"
+command = "robocopy src build /MIR /NFL /NDL"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-robocopy-mirror-outside"
+os = "windows"
+shell = "pwsh"
+command = "robocopy src ..\\outside\\data /MIR"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-robocopy-copy-only"
+os = "windows"
+shell = "pwsh"
+command = "robocopy src ..\\outside\\data /E"
+level = "ok"
+rules = []
+
+# Code the guard does not read (19)
+
+[[row]]
+id = "ps-pwsh-command-with-a-delete"
+os = "windows"
+shell = "pwsh"
+command = 'pwsh -NoProfile -Command "Remove-Item -Recurse -Force build"'
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "run the delete as a plain command"
+
+[[row]]
+id = "ps-pwsh-command-plain"
+os = "windows"
+shell = "pwsh"
+command = 'pwsh -NoProfile -Command "Get-Date"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-delete-text-in-a-string"
+os = "windows"
+shell = "pwsh"
+command = "Write-Output 'Remove-Item -Recurse C:\\'"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- Git Bash: rm (152, 141, 59)
+
+[[row]]
+id = "gb-rm-rf-clean"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-rm-files-inside"
+os = "windows"
+shell = "gitbash"
+command = "rm -f build/x.o src/a.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-rm-children-glob"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf build/*"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-rm-rf-the-repo-root"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ."
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-outside"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "gb-rm-rf-home"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ~"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-below-home"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ~/.cache/sometool"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-rm-rf-slash"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-drive-root"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /d/"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-windows-folder"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /c/Windows/Temp/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-rm-rf-variable"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "$OUT_DIR"'
+level = "danger"
+rules = ["dynamic-target"]
+fix = "write the path literally"
+
+[[row]]
+id = "gb-rm-rf-variable-set-in-the-command"
+os = "windows"
+shell = "gitbash"
+command = 'd=build; rm -rf "$d"'
+level = "danger"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-rm-rf-inside-the-allowed-root"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf FX_ALLOWED/tmp1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-rm-rf-the-allowed-root-itself"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf FX_ALLOWED"
+level = "danger"
+rules = ["delete-allowed-root"]
+
+[[row]]
+id = "gb-rm-rf-a-link-in-the-allowed-root"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf FX_ALLOWED/box"
+level = "danger"
+rules = ["delete-through-link"]
+fix = "rm '"
+
+[[row]]
+id = "gb-rm-rf-tree-with-a-junction"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf linked"
+level = "danger"
+rules = ["delete-through-link"]
+
+[[row]]
+id = "gb-rm-rf-ancestor-of-the-repo"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf FX_ROOT"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-cd-up-then-rm"
+os = "windows"
+shell = "gitbash"
+command = "cd .. && rm -rf outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# find (13, 9) and xargs (0)
+
+[[row]]
+id = "gb-find-delete-in-a-folder"
+os = "windows"
+shell = "gitbash"
+command = "find build -name '*.o' -delete"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-find-delete-from-the-repo-root"
+os = "windows"
+shell = "gitbash"
+command = "find . -name '*.pyc' -delete"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-find-exec-rm"
+os = "windows"
+shell = "gitbash"
+command = "find build -type f -name '*.o' -exec rm -f {} +"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-find-delete-outside"
+os = "windows"
+shell = "gitbash"
+command = "find ../outside -name '*.log' -delete"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-find-delete-from-slash"
+os = "windows"
+shell = "gitbash"
+command = "find / -name '*.tmp' -delete"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-find-without-delete"
+os = "windows"
+shell = "gitbash"
+command = "find . -name '*.o' -type f"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-xargs-rm"
+os = "windows"
+shell = "gitbash"
+command = "find build -name '*.o' | xargs rm -f"
+level = "danger"
+rules = ["dynamic-target"]
+
+# Wrappers and unknown tools (Ruling 91a(3))
+
+[[row]]
+id = "gb-timeout-wrapping-rm"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-unknown-tool"
+os = "windows"
+shell = "gitbash"
+command = "newtool --any x"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-known-wrapper-unknown-tool"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 newtool -x"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-wrapper-unknown-option-no-delete"
+os = "windows"
+shell = "gitbash"
+command = "timeout --weird 60 newtool -x"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-wrapper-unknown-option-with-rm"
+os = "windows"
+shell = "gitbash"
+command = "timeout --weird 60 rm -rf build"
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "gb-bash-c-dynamic-text"
+os = "windows"
+shell = "gitbash"
+command = 'bash -c "$script_text"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-bash-c-with-rm"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf build && make'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-echo-of-a-delete"
+os = "windows"
+shell = "gitbash"
+command = "echo 'rm -rf /'"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- no repo (F14)
+
+[[row]]
+id = "norepo-rm-rf-a-child"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf sub"
+level = "ok"
+rules = []
+
+[[row]]
+id = "norepo-rm-rf-the-cwd-itself"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ."
+level = "danger"
+rules = ["delete-outside-project"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "norepo-rm-rf-a-sibling"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "norepo-ps-ri-the-cwd-itself"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ."
+level = "danger"
+rules = ["delete-outside-project"]
+
+# ---------------------------------------------------------------- POSIX
+
+[[row]]
+id = "px-rm-rf-clean"
+os = "posix"
+shell = "bash"
+command = "rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "px-rm-rf-usr"
+os = "posix"
+shell = "bash"
+command = "rm -rf /usr/local/lib/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-sudo-rm-rf-etc"
+os = "posix"
+shell = "bash"
+command = "sudo rm -rf /etc/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-slash"
+os = "posix"
+shell = "bash"
+command = "rm -rf /"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-home"
+os = "posix"
+shell = "bash"
+command = "rm -rf ~"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-symlinked-tree"
+os = "posix"
+shell = "bash"
+command = "rm -rf linked"
+level = "danger"
+rules = ["delete-through-link"]
+
+[[row]]
+id = "px-rm-rf-allowed"
+os = "posix"
+shell = "bash"
+command = "rm -rf FX_ALLOWED/tmp1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "px-rm-rf-outside"
+os = "posix"
+shell = "bash"
+command = "rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# ---------------------------------------------------------------- the marker (Review Focus 4)
+
+[[row]]
+id = "marker-confirms-a-danger"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ..\\outside\\data # shellwise: allow"
+level = "ok"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "marker-alias-confirms-a-danger"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ../outside/data # baseline-guard: allow"
+level = "ok"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "marker-confirms-a-dynamic-target"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "$OUT_DIR" # shellwise: allow'
+level = "ok"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "marker-confirms-opaque-destructive"
+os = "windows"
+shell = "gitbash"
+command = "timeout --weird 60 rm -rf build # shellwise: allow"
+level = "ok"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "marker-does-not-touch-critical"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force C:\\ # shellwise: allow"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "marker-does-not-touch-critical-bash"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ~ # shellwise: allow"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "marker-inside-a-string"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ..\\outside\\data; Write-Output '# shellwise: allow'"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "marker-inside-a-here-string"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ..\\outside\\data\n@'\n# shellwise: allow\n'@ | Out-Null"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "marker-inside-a-heredoc"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ../outside/data; cat <<'EOF'\n# shellwise: allow\nEOF"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "marker-on-its-own-line"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ../outside/data\n# shellwise: allow"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "marker-before-another-command"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf ../outside/data # shellwise: allow\nrm -rf ../outside/target"
+level = "danger"
+rules = ["delete-outside-project", "delete-outside-project"]
+
+[[row]]
+id = "marker-on-a-parse-error"
+os = "windows"
+shell = "pwsh"
+command = "Get-Date ( ; Remove-Item -Recurse x # shellwise: allow"
+level = "danger"
+rules = ["parse-error"]
+
+# ---------------------------------------------------------------- one row per further table row
+
+[[row]]
+id = "ps-clear-content-outside"
+os = "windows"
+shell = "pwsh"
+command = "Clear-Content ..\\outside\\data\\f.txt"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-clear-content-inside"
+os = "windows"
+shell = "pwsh"
+command = "Clear-Content src\\a.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-rmdir-outside"
+os = "windows"
+shell = "gitbash"
+command = "rmdir ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-unlink-outside"
+os = "windows"
+shell = "gitbash"
+command = "unlink ../outside/data/f.txt"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-shred-outside"
+os = "windows"
+shell = "gitbash"
+command = "shred -u ../outside/data/f.txt"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-sh-c-with-rm"
+os = "windows"
+shell = "gitbash"
+command = "sh -c 'rm -rf build; make all'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "px-zsh-c-with-rm"
+os = "posix"
+shell = "bash"
+command = "zsh -c 'rm -rf build; make all'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-powershell-command-with-a-delete"
+os = "windows"
+shell = "pwsh"
+command = 'powershell -NoProfile -Command "Remove-Item -Recurse -Force build"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-cmd-rd-s"
+os = "windows"
+shell = "pwsh"
+command = "cmd /c rd /s /q build"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-cmd-del-s"
+os = "windows"
+shell = "pwsh"
+command = "cmd /c del /s /q build\\x.o"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-cmd-plain"
+os = "windows"
+shell = "pwsh"
+command = "cmd /c ver"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-eval-with-rm"
+os = "windows"
+shell = "gitbash"
+command = 'eval "rm -rf build"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-invoke-expression-with-a-delete"
+os = "windows"
+shell = "pwsh"
+command = "Invoke-Expression 'Remove-Item -Recurse -Force build'"
+level = "danger"
+rules = ["opaque-destructive"]
