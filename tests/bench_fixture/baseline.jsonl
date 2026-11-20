@@ -1,0 +1,10 @@
+{"id": "f00000000001", "full": [], "installed": []}
+{"id": "f00000000002", "full": [], "installed": []}
+{"id": "f00000000003", "full": [], "installed": []}
+{"id": "f00000000004", "full": ["bash-unterminated-quote"], "installed": ["bash-unterminated-quote"]}
+{"id": "f00000000005", "full": [], "installed": []}
+{"id": "f00000000006", "full": [], "installed": []}
+{"id": "f00000000007", "full": [], "installed": []}
+{"id": "f00000000008", "full": [], "installed": []}
+{"id": "f00000000009", "full": ["bash-too-long"], "installed": ["bash-too-long"]}
+{"id": "f0000000000a", "full": ["bash-backslash-collapse"], "installed": ["bash-backslash-collapse"]}

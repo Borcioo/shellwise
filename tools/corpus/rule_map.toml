@@ -1,0 +1,42 @@
+# baseline-guard rule id -> shellwise rule id, read by `shellwise bench` (compiled in; `--rule-map`
+# replaces it).
+#
+# [map]               every baseline-guard id that baseline.jsonl (`installed`) or known.jsonl names; a
+#                     missing one stops the bench. A known.jsonl row is checked only once its
+#                     shellwise id is a landed rule (`rules::all()` or `rules::length_rules()`).
+#                     The parity line counts a denied ok row when every rule that denies it maps
+#                     from a rule baseline-guard's installed set also denies that row with.
+# own_line_rules      the owner-requested behaviour change (Ruling 99 Q1), reported on its own line
+#                     outside meter 1.
+# [[parity_exception]] rows of one installed rule that shellwise allows on purpose:
+#                     baseline_guard = "<id>", shape = "<named shape class>", expected = <count>,
+#                     why = "<reason>". Keyed by rule and shape class with its expected count, never
+#                     by corpus ids (F9). It lands with the rule that narrows the shape (Task 29 for
+#                     the bash-backslash-collapse narrowing); none has landed yet.
+
+own_line_rules = ["inline-script-too-long"]
+
+[map]
+# Installed (check_installed), with their port task.
+bash-backslash-collapse = "bash-backslash-collapse"   # Task 29, narrowed (Ruling 99 Q2)
+bash-too-long = "too-long"                            # Task 25
+bat-metachar = "bat-metachar"                         # Task 30
+cli-inline-prose = "cli-inline-prose"                 # Task 30
+gate-truncated-pipeline = "gate-truncated-pipeline"   # Task 30
+git-no-verify = "git-no-verify"                       # Task 32
+git-restore-discards = "git-restore-discards"         # Task 32
+git-unreadable = "git-unreadable"                     # Task 32
+git-worktree-junction = "git-worktree-junction"       # Task 32
+ps-bad-parameter = "ps-bad-parameter"                 # Task 30
+ps-bare-bash = "ps-bare-bash"                         # Task 30
+ps-dotnet-relative-path = "ps-dotnet-relative-path"   # Task 30
+ps-git-commit-stdin = "ps-git-commit-stdin"           # Task 30
+ps-native-nonewline = "ps-native-nonewline"           # Task 30
+stale-write-var = "stale-write-var"                   # Task 30
+# Full set only (check), named by known.jsonl.
+bash-msys-path-mangle = "bash-msys-path-mangle"       # Task 29
+bash-powershell-syntax = "bash-ps-cmdlet"             # Task 29 merges it into bash-ps-cmdlet
+bash-unterminated-quote = "parse-error"               # Task 22
+bash-vendor-bin-shebang = "bash-vendor-bin-shebang"   # Task 29
+bash-versioned-php = "bash-versioned-php"             # Task 29
+ps-unix-command = "ps-unix-command"                   # Task 30

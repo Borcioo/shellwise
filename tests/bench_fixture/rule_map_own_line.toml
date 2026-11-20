@@ -1,0 +1,16 @@
+# The fixture rule map with parse-error on the own line: the ids its baseline and known rows name, one id that never lands, and
+# one parity exception.
+
+own_line_rules = ["parse-error"]
+
+[map]
+bash-unterminated-quote = "parse-error"
+bash-too-long = "too-long"
+bash-backslash-collapse = "bash-backslash-collapse"
+fixture-unlanded = "fixture-no-such-rule"
+
+[[parity_exception]]
+baseline_guard = "bash-backslash-collapse"
+shape = "fixture-shape"
+expected = 1
+why = "the fixture's known answer for a named shape class"
