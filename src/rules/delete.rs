@@ -494,7 +494,10 @@ fn cmdlet_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
             p.words.push(w.clone());
             continue;
         };
-        let inline = lead.split_once(':').map(|(_, v)| v.to_string());
+        // `-Path: C:\x` is one word; PowerShell binds the value without the blank.
+        let inline = lead
+            .split_once(':')
+            .map(|(_, v)| v.trim_start_matches([' ', '\t']).to_string());
         let whole = literal(w);
         if pwsh_matches(&facts.dry_run, lead) {
             p.dry_run = true;

@@ -531,7 +531,8 @@ fn param_token(t: &str) -> Option<(&str, Option<&str>)> {
         return None;
     }
     Some(match rest.split_once(':') {
-        Some((n, v)) => (n, Some(v)),
+        // `-Path: C:\x` is one word; PowerShell binds the value without the blank.
+        Some((n, v)) => (n, Some(v.trim_start_matches([' ', '\t']))),
         None => (rest, None),
     })
 }
