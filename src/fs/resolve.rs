@@ -304,6 +304,13 @@ pub fn critical_by_identity(
     })?
 }
 
+/// A Windows share, volume or device path (`\\srv\share`, `\\?\UNC\…`, `\\.\PhysicalDrive0`):
+/// the guard makes no file-system call on one (a call may hang on the network or send the
+/// user's credentials to the server, Ruling 114(f)). A verbatim drive path (`\\?\C:\x`) is none.
+pub fn is_network_or_device(p: &Path, os: Os) -> bool {
+    os == Os::Windows && Canon::parse(&p.to_string_lossy(), os).prefix.starts_with("\\\\")
+}
+
 const REPO_GIT: &str = "repo's .git, which holds every commit";
 
 /// The `.git` folder (or the file of a worktree) of the repo rooted at `root`. Deleting it is

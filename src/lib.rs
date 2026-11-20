@@ -33,6 +33,11 @@ pub const ANALYSIS_INCOMPLETE: &str = "analysis-incomplete";
 const OFF_VAR: &str = "SHELLWISE";
 const OFF_VALUE: &str = "off";
 
+/// `SHELLWISE=off` is set: every caller lets the command through unread.
+pub fn turned_off() -> bool {
+    std::env::var_os(OFF_VAR).is_some_and(|v| v == OFF_VALUE)
+}
+
 /// The stack of the thread that parses and runs the rules.
 const WORKER_STACK: usize = 64 * 1024 * 1024;
 
@@ -133,7 +138,7 @@ impl Deadline {
 /// `problem`, invalid UTF-8, input over `MAX_INPUT_BYTES`, a panic, a dead worker, a parser that
 /// failed itself and the deadline make the analysis incomplete (`incomplete`).
 pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdict {
-    if std::env::var_os(OFF_VAR).is_some_and(|v| v == OFF_VALUE) {
+    if turned_off() {
         return Verdict::new(Vec::new());
     }
     if input.bytes.len() > MAX_READ_BYTES {

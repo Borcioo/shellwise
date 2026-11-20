@@ -13,11 +13,12 @@ pub const MARKERS: [&str; 2] = ["shellwise: allow", "baseline-guard: allow"];
 
 /// Rules the marker never downgrades: the host limits (`too-long`, `inline-script-too-long`)
 /// and the two failure rules.
-const NOT_CONFIRMABLE: [&str; 4] = [
+const NOT_CONFIRMABLE: [&str; 5] = [
     super::length::TOO_LONG,
     // Task 31's rule; its constant replaces this text when it lands.
     "inline-script-too-long",
     super::parse_error::PARSE_ERROR,
+    super::parse_error::PARSE_ERROR_DESTRUCTIVE,
     crate::ANALYSIS_INCOMPLETE,
 ];
 

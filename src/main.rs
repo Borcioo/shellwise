@@ -131,6 +131,10 @@ fn run(start: Instant) -> i32 {
 /// `hook claude-code`: read the event, ignore a tool that is not a shell, load the config from
 /// the event's `cwd`, analyse, print the reply. Every path exits 0; an unread input denies.
 fn run_hook(start: Instant, args: HookArgs) -> i32 {
+    // Before the event is read: an unread or malformed event is let through too.
+    if shellwise::turned_off() {
+        return 0;
+    }
     let os = Os::host();
     let bytes = match read_stdin(Deadline::new(start, HOOK_READ_MS)) {
         Input::Bytes(bytes) if bytes.len() > MAX_READ_BYTES => {

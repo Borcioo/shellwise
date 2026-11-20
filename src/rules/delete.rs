@@ -589,8 +589,11 @@ impl<'a> Scene<'a> {
     pub fn repo(&mut self) -> Result<Option<PathBuf>, TimedOut> {
         if self.repo.is_none() {
             let found = match &self.ctx.input.cwd {
-                Some(cwd) => resolve::repo_root(cwd, self.ctx.fs, self.ctx.deadline),
-                None => Ok(None),
+                Some(cwd) if !resolve::is_network_or_device(cwd, self.os()) => {
+                    resolve::repo_root(cwd, self.ctx.fs, self.ctx.deadline)
+                }
+                // On a share the guard looks for no repo: the project is the cwd itself.
+                _ => Ok(None),
             };
             self.repo = Some(found);
         }
@@ -627,6 +630,13 @@ impl<'a> Scene<'a> {
 
     /// The finding for one resolved path, or `None` when deleting it is ok.
     pub fn judge_path(&mut self, p: &Path, how: How, span: Span, shown: &str) -> Option<Finding> {
+        if resolve::is_network_or_device(p, self.os()) {
+            return Some(self.unknown_location(
+                span,
+                shown,
+                "it is a network or device path, which the guard does not read",
+            ));
+        }
         match self.critical(p, how.contents) {
             Err(TimedOut) => return Some(self.timeout(span, shown)),
             Ok(Some(reason)) => return Some(critical(p, reason, span)),

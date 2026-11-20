@@ -89,6 +89,43 @@ fn unlink(link: &Path) {
     let _ = std::fs::remove_file(link);
 }
 
+/// A folder nobody may list: the walk of a recursive delete above it cannot read it.
+const LOCKED: &str = "repo/locked/inner";
+
+#[cfg(windows)]
+fn icacls(p: &Path, args: &[&str]) {
+    // `*S-1-1-0` is Everyone: a deny for it holds for the account the tests run as.
+    let out = std::process::Command::new("icacls")
+        .arg(p)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "icacls {p:?} {args:?}: {out:?}");
+}
+
+fn lock(p: &Path) {
+    #[cfg(windows)]
+    icacls(p, &["/deny", "*S-1-1-0:(RD)"]);
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+}
+
+fn unlock(p: &Path) {
+    if !p.exists() {
+        return;
+    }
+    #[cfg(windows)]
+    icacls(p, &["/remove:d", "*S-1-1-0"]);
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
 const LINKS: [(&str, &str); 4] = [
     ("repo/linked/out", "outside/target"),
     ("repo/jn", "outside/target"),
@@ -109,6 +146,7 @@ fn fixture() -> &'static Fixture {
             for (link, _) in LINKS {
                 unlink(&fx.at(link));
             }
+            unlock(&fx.at(LOCKED));
             std::fs::remove_dir_all(&fx.root).unwrap();
         }
         for dir in [
@@ -142,6 +180,8 @@ fn fixture() -> &'static Fixture {
         for (link, target) in LINKS {
             dir_link(&fx.at(link), &fx.at(target));
         }
+        touch(&fx.at(&format!("{LOCKED}/f.txt")));
+        lock(&fx.at(LOCKED));
         if let Some(repo) = fx.at("norepo").ancestors().find(|d| d.join(".git").exists()) {
             panic!("the non-repo fixture lies inside the repo {repo:?}");
         }
@@ -167,12 +207,17 @@ fn config(row: &Row) -> Config {
     cfg
 }
 
+const UNC_CWD: &str = r"\\192.0.2.1\share\repo";
+
 fn cwd(row: &Row) -> Option<PathBuf> {
     let fx = fixture();
     if row.id.starts_with("nocwd-") {
         None
     } else if row.id.starts_with("norepo-") {
         Some(fx.at("norepo"))
+    } else if row.id.starts_with("unccwd-") {
+        // A documentation address no host answers: a file-system call there runs out of time.
+        Some(PathBuf::from(UNC_CWD))
     } else {
         Some(fx.at("repo"))
     }
@@ -278,6 +323,64 @@ fn ported_rows_keep_their_count() {
     }
 }
 
+/// Every finding id the two rules report (`tests/rules_meta.rs` sees only each rule's own id).
+const FINDING_IDS: [&str; 14] = [
+    shellwise::rules::delete::DELETE_CRITICAL,
+    shellwise::rules::delete::DELETE_THROUGH_LINK,
+    shellwise::rules::delete::DELETE_OUTSIDE_PROJECT,
+    shellwise::rules::delete::DELETE_ALLOWED_ROOT,
+    shellwise::rules::delete::DELETE_UNKNOWN_LOCATION,
+    shellwise::rules::delete::DYNAMIC_TARGET,
+    shellwise::rules::delete::WALK_TIMEOUT,
+    shellwise::rules::delete::WALK_UNREADABLE,
+    shellwise::rules::delete::OPAQUE_DESTRUCTIVE,
+    shellwise::rules::git::GIT_RESTORE_DISCARDS,
+    shellwise::rules::git::GIT_WORKTREE_JUNCTION,
+    shellwise::rules::git::GIT_DISCARD,
+    shellwise::rules::git::GIT_NO_VERIFY,
+    shellwise::rules::git::GIT_UNREADABLE,
+];
+
+/// `walk-timeout` is reported only when a walk sees the deadline pass while the worker still
+/// answers before it: `analyse` waits on the same deadline, so the verdict is then
+/// `analysis-incomplete`, danger from the raw scan of the delete. No row can pin that race.
+const NO_ROW: [&str; 1] = [shellwise::rules::delete::WALK_TIMEOUT];
+
+#[test]
+fn every_finding_id_has_a_deny_row_a_row_without_it_and_a_doc() {
+    let mut rows: Vec<toml::Value> = Vec::new();
+    for name in ["delete.toml", "git.toml"] {
+        let path = format!("{}/tests/cases/{name}", env!("CARGO_MANIFEST_DIR"));
+        let table: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        rows.extend(table["row"].as_array().unwrap().iter().cloned());
+    }
+    assert!(rows.len() > 100, "{} rows", rows.len());
+    let fires = |r: &toml::Value, id: &str| {
+        r["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x.as_str() == Some(id))
+    };
+    let mut wrong = Vec::new();
+    for id in FINDING_IDS {
+        let doc = format!("{}/docs/rules/{id}.md", env!("CARGO_MANIFEST_DIR"));
+        if !Path::new(&doc).is_file() {
+            wrong.push(format!("{id}: no doc"));
+        }
+        if NO_ROW.contains(&id) {
+            continue;
+        }
+        let deny = rows
+            .iter()
+            .any(|r| fires(r, id) && ["danger", "critical"].contains(&r["level"].as_str().unwrap()));
+        if !deny || rows.iter().all(|r| fires(r, id)) {
+            wrong.push(format!("{id}: no deny row, or no row without it"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 // ---------------------------------------------------------------- the marker's exemptions
 
 fn found(rule: &'static str, level: Level) -> Finding {
@@ -304,6 +407,7 @@ fn the_marker_confirms_only_break_and_danger_of_other_rules() {
         ("too-long", Level::Break, Level::Break),
         ("inline-script-too-long", Level::Break, Level::Break),
         ("parse-error", Level::Danger, Level::Danger),
+        ("parse-error-destructive", Level::Danger, Level::Danger),
         ("analysis-incomplete", Level::Danger, Level::Danger),
     ];
     for (rule, before, after) in table {
@@ -354,6 +458,101 @@ fn the_marker_does_not_confirm_too_long() {
     let v = analyse(&input, &Config::default(), &Deadline::new(Instant::now(), 8000));
     assert_eq!(v.level, Level::Break, "{v:?}");
     assert!(v.findings.iter().any(|f| f.rule == "too-long"), "{v:?}");
+}
+
+// ---------------------------------------------------------------- the spawned callers
+
+/// A PreToolUse event for the Bash tool as the host sends it.
+fn bash_event(command: &str, cwd: &Path) -> Vec<u8> {
+    serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "t",
+        "cwd": cwd.to_string_lossy(),
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command, "description": "d"},
+        "tool_use_id": "u",
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// The hook's deny reason, or "" when it let the command through.
+fn reason(r: &common::Run) -> String {
+    assert_eq!(r.code, 0, "the hook exits 0: {} {}", r.stdout, r.stderr);
+    if r.stdout.trim().is_empty() {
+        return String::new();
+    }
+    r.json()["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The fixture's home in the variables each OS reads it from.
+fn home_env() -> [(&'static str, String); 2] {
+    let home = fixture().at("home").to_string_lossy().into_owned();
+    [("USERPROFILE", home.clone()), ("HOME", home)]
+}
+
+fn env_refs<'a>(env: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    env.iter().map(|(k, v)| (*k, v.as_str())).collect()
+}
+
+const HOOK: [&str; 2] = ["hook", "claude-code"];
+
+#[test]
+fn the_hook_judges_a_delete_from_the_event_cwd() {
+    let fx = fixture();
+    let in_repo = common::run(&HOOK, Some(&bash_event("rm -rf .", &fx.at("repo"))), &[]);
+    let why = reason(&in_repo);
+    assert!(
+        why.starts_with("shellwise: critical delete-critical"),
+        "{why} | {} | {}",
+        in_repo.stdout,
+        in_repo.stderr
+    );
+    // Outside any repo the same text deletes the cwd, which the hook's default allowed root (the
+    // temp folder holding the fixture) holds: no critical.
+    let outside = common::run(&HOOK, Some(&bash_event("rm -rf .", &fx.at("norepo"))), &[]);
+    assert_eq!(reason(&outside), "", "{}", outside.stdout);
+}
+
+#[test]
+fn the_hook_resolves_the_home_folder_from_its_own_environment() {
+    let fx = fixture();
+    let env = home_env();
+    let r = common::run(&HOOK, Some(&bash_event("rm -rf ~", &fx.at("repo"))), &env_refs(&env));
+    let why = reason(&r);
+    assert!(why.starts_with("shellwise: critical delete-critical"), "{why}");
+}
+
+#[test]
+fn check_resolves_the_home_folder_from_its_own_environment() {
+    let fx = fixture();
+    let env = home_env();
+    let repo = fx.at("repo").to_string_lossy().into_owned();
+    let args = ["check", "--shell", "bash", "--json", "--cwd", &repo, "--", "rm -rf ~"];
+    let r = common::run(&args, None, &env_refs(&env));
+    assert_eq!(r.code, 3, "{} {}", r.stdout, r.stderr);
+    assert_eq!(r.json()["findings"][0]["rule"], "delete-critical", "{}", r.stdout);
+}
+
+#[test]
+fn shellwise_off_lets_the_hook_through_unread() {
+    let fx = fixture();
+    let event = bash_event("rm -rf /", &fx.at("repo"));
+    // Over the hard cap: denied unread, before `analyse` runs.
+    let unread = bash_event(&"a".repeat(shellwise::MAX_READ_BYTES), &fx.at("repo"));
+    // Controls: the guard is on.
+    for input in [event.as_slice(), unread.as_slice()] {
+        assert!(!reason(&common::run(&HOOK, Some(input), &[])).is_empty());
+    }
+    for input in [event.as_slice(), unread.as_slice()] {
+        let off = common::run(&HOOK, Some(input), &[("SHELLWISE", "off")]);
+        assert_eq!((off.code, off.stdout.as_str()), (0, ""), "{}", off.stderr);
+    }
 }
 
 // ---------------------------------------------------------------- SHELLWISE=off
