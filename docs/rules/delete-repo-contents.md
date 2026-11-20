@@ -7,11 +7,14 @@ PowerShell wildcard without `-Force` (`.git` is hidden). A glob that takes `.git
 PowerShell wildcard with `-Force`) is `delete-critical`, and so is the repo root itself.
 
 After a `cd`, the glob is read in the folder the shell is surely in (Ruling 127): a literal folder
-that exists on disk, read before any command in the text that may delete or discard; a Bash
-`cd X || exit` (no `!` in the command); in PowerShell `$ErrorActionPreference = 'Stop'` or
-`-ErrorAction Stop` on the location command (no `trap` in the command). After any other form
-(`cd X; …` to a missing folder, `set -e`, `cd X || return`) a `cd` that fails leaves the shell in
-the old folder, so a glob there may still be the repo root's.
+that exists on disk, when every statement before the `cd` is known to leave the disk alone (a bare
+assignment, a plain location move, or a read-only program such as `echo`, `ls`, `git status`,
+`Get-ChildItem`, with no redirect or substitution: any other command may have removed the
+folder); a Bash `cd X || exit` (no `!` in the command); in PowerShell
+`$ErrorActionPreference = 'Stop'` or `-ErrorAction Stop` on the location command (no `trap` in
+the command). After any other form (`cd X; …` to a missing folder, `set -e`, `cd X || return`,
+`mv build old; cd build; …`) a `cd` that fails leaves the shell in the old folder, so a glob
+there may still be the repo root's.
 
 Level `danger`: the trailing allow marker confirms it.
 
@@ -24,6 +27,7 @@ intended, run the same command again with ` # shellwise: allow` at its end`
 rm -rf *        # from the repo root
 rm -rf ./*
 cd nosuch; rm -rf *
+mv build old; cd build; rm -rf *
 ```
 
 ```powershell
@@ -36,6 +40,7 @@ Remove-Item -Recurse *
 rm -rf build/*
 rm -rf *        # from a folder inside the repo, or outside any repo
 cd build; rm -rf *
+echo start; cd build; rm -rf *
 cd nosuch || exit 1; rm -rf *
 ```
 

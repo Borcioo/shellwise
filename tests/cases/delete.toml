@@ -3019,8 +3019,7 @@ rules = ["delete-empty-expansion"]
 
 # ---------------------------------------------------------------- Task 34 C2 (Ruling 127): a certain `cd`
 # A `cd` leaves no fallback to the old folder only in forms the execution oracle proves
-# (F:\Temp\shellwise-t34\W2\fix\oracle\oracle.out, Git Bash 5.2.37 in the Bash tool's
-# `… && eval '…' && pwd -P` shape, pwsh 7.7 and Windows PowerShell 5.1 in the tool's
+# (Git Bash 5.2.37 in the Bash tool's `… && eval '…' && pwd -P` shape, pwsh 7.7 and Windows PowerShell 5.1 in the tool's
 # Invoke-Expression launcher): Bash `cd X || exit`, pwsh `$ErrorActionPreference = 'Stop'` and
 # `-ErrorAction Stop`, and a literal folder that exists on disk when nothing before it may change
 # the disk. `nosuch` exists nowhere, `build` is in the repo.
@@ -3158,8 +3157,9 @@ command = 'cd . && cd build; rm -rf *'
 level = "danger"
 rules = ["delete-repo-contents"]
 
-# Before the `cd`: commands that delete nothing leave the disk as the guard read it; a delete, a
-# .NET delete or unread destructive code may have removed the folder.
+# Deny by default: the read holds only after statements known to leave the disk alone (a bare
+# assignment, a plain location move, a program `src/fs/leaves_disk.txt` lists, each with no
+# redirect, substitution or script block). Any other may have removed or moved the folder.
 [[row]]
 id = "gb-cd-existing-after-cd"
 os = "windows"
@@ -3172,17 +3172,243 @@ rules = []
 id = "gb-cd-existing-after-echo"
 os = "windows"
 shell = "gitbash"
-command = 'echo hi; cd build; rm -rf *'
+command = 'echo start; cd build; rm -rf *'
 level = "ok"
 rules = []
+
+[[row]]
+id = "gb-cd-existing-after-an-assignment"
+os = "windows"
+shell = "gitbash"
+command = 'X=1; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-git-status"
+os = "windows"
+shell = "gitbash"
+command = 'git status; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-write-output"
+os = "windows"
+shell = "pwsh"
+command = "Write-Output start; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+# One row per other program the list holds.
+[[row]]
+id = "gb-cd-existing-after-printf"
+os = "windows"
+shell = "gitbash"
+command = 'printf x; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-pwd"
+os = "windows"
+shell = "gitbash"
+command = 'pwd; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-ls"
+os = "windows"
+shell = "gitbash"
+command = 'ls -la; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-cat"
+os = "windows"
+shell = "gitbash"
+command = 'cat notes.txt; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-test"
+os = "windows"
+shell = "gitbash"
+command = 'test -d build; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-true"
+os = "windows"
+shell = "gitbash"
+command = 'true; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-git-log"
+os = "windows"
+shell = "gitbash"
+command = 'git log -1; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-git-diff"
+os = "windows"
+shell = "gitbash"
+command = 'git diff --stat; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-git-rev-parse"
+os = "windows"
+shell = "gitbash"
+command = 'git rev-parse HEAD; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-write-host"
+os = "windows"
+shell = "pwsh"
+command = "Write-Host start; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-get-childitem"
+os = "windows"
+shell = "pwsh"
+command = "Get-ChildItem build; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-get-content"
+os = "windows"
+shell = "pwsh"
+command = "Get-Content notes.txt; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-test-path"
+os = "windows"
+shell = "pwsh"
+command = "Test-Path build; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-get-location"
+os = "windows"
+shell = "pwsh"
+command = "Get-Location; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-git-stash"
+os = "windows"
+shell = "gitbash"
+command = 'git stash; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# A sourced script may move the shell anywhere: today's verdict.
+[[row]]
+id = "gb-cd-existing-after-source"
+os = "windows"
+shell = "gitbash"
+command = 'source env.sh; cd build; rm -rf *'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-cd-existing-after-a-method-call"
+os = "windows"
+shell = "pwsh"
+command = "[IO.File]::Copy('a', 'b'); cd build; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
 
 [[row]]
 id = "gb-cd-existing-after-a-program"
 os = "windows"
 shell = "gitbash"
 command = 'touch x; cd build; rm -rf *'
-level = "ok"
-rules = []
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-move"
+os = "windows"
+shell = "gitbash"
+command = 'mv build old; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-git-clean"
+os = "windows"
+shell = "gitbash"
+command = 'git clean -fdx; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents", "git-discard"]
+
+[[row]]
+id = "gb-cd-existing-after-a-script"
+os = "windows"
+shell = "gitbash"
+command = './script.sh; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-make-clean"
+os = "windows"
+shell = "gitbash"
+command = 'make clean; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-redirect"
+os = "windows"
+shell = "gitbash"
+command = 'echo hi > out.txt; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-substitution-argument"
+os = "windows"
+shell = "gitbash"
+command = 'echo $(rm -rf build); cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "ps-cd-existing-after-a-delay-bind-block"
+os = "windows"
+shell = "pwsh"
+command = "Get-ChildItem | Get-Content -Path { Remove-Item build -Recurse -Force; 'x' }; cd build; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-unknown-location", "delete-critical"]
+
+[[row]]
+id = "ps-cd-existing-after-copy-item"
+os = "windows"
+shell = "pwsh"
+command = "Copy-Item a b; cd build; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
 
 [[row]]
 id = "gb-cd-existing-after-unread-delete"
@@ -3260,8 +3486,8 @@ command = 'cd build | cat; rm -rf *'
 level = "danger"
 rules = ["delete-repo-contents"]
 
-# `exit 1 2` fails ("too many arguments"); `cd … || exit 1 &` runs the whole list in the
-# background.
+# An `exit` with two words is left unread (the oracle ran forms with one word or none);
+# `cd … || exit 1 &` runs the whole list in the background.
 [[row]]
 id = "gb-cd-missing-or-exit-with-two-words"
 os = "windows"
@@ -3490,7 +3716,7 @@ command = "cd build && Remove-Item -Recurse -Force *"
 level = "ok"
 rules = []
 
-# Ruling 127 (oracle F:\Temp\shellwise-t34\W2\fix\oracle\glob-git.out): a PowerShell wildcard
+# Ruling 127 (oracle, pwsh 7.7): a PowerShell wildcard
 # takes the hidden `.git` only with -Force; without it the repo root's contents are danger.
 [[row]]
 id = "ps-ri-repo-contents-without-force"

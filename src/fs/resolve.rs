@@ -735,6 +735,9 @@ pub struct Location {
     /// Where a `cd` target is read on disk (Ruling 127): a literal folder that exists takes the
     /// `cd`. `None` (no `use_disk`): nothing is read.
     disk: Option<Disk>,
+    /// Every statement so far is known to leave the disk as a read finds it (`leaves_disk`):
+    /// until one is not, a `cd` target read on disk is still there when the `cd` runs.
+    disk_as_read: bool,
 
     /// PowerShell: `$ErrorActionPreference = 'Stop'` holds here, so a failing location change
     /// ends the command.
@@ -763,9 +766,6 @@ pub struct Location {
 struct Disk {
     fs: SharedFs,
     deadline: Deadline,
-    /// The offset of the first command that may delete or discard: a `cd` at or after it may
-    /// find its folder gone.
-    first_change: Option<usize>,
 }
 
 impl std::fmt::Debug for Disk {
@@ -1113,6 +1113,7 @@ impl Location {
             defined: Vec::new(),
             aliases: Vec::new(),
             disk: None,
+            disk_as_read: true,
 
             stop_on_error: false,
             may_trap: true,
@@ -1131,13 +1132,12 @@ impl Location {
 
     /// Read a literal `cd` target on `fs` within `deadline` (Ruling 127): a folder that exists
     /// takes the `cd`, with no fallback to the old folder. A read that times out, fails or names
-    /// a network or device path changes nothing, and so does a `cd` at or after `first_change`,
-    /// the offset of the first command that may delete or discard (the folder may be gone then).
-    pub fn use_disk(&mut self, fs: &SharedFs, deadline: &Deadline, first_change: Option<usize>) {
+    /// a network or device path changes nothing, and so does a `cd` after any statement not known
+    /// to leave the disk alone (`leaves_disk`: the folder may be gone by then).
+    pub fn use_disk(&mut self, fs: &SharedFs, deadline: &Deadline) {
         self.disk = Some(Disk {
             fs: Arc::clone(fs),
             deadline: *deadline,
-            first_change,
         });
     }
 
@@ -1228,7 +1228,7 @@ impl Location {
         let [Elem::Cmd(c)] = p.elems.as_slice() else {
             return false;
         };
-        // `exit a b` fails ("too many arguments") and the shell goes on.
+        // Only the forms the oracle ran with one word or none; `exit 1 2` is left unread.
         !is_pwsh(self.shell)
             && p.chain != Some(ChainOp::Background)
             && literal(&c.name).as_deref() == Some("exit")
@@ -1279,6 +1279,21 @@ impl Location {
                 self.after_nested(moves)
             }
         }
+        self.disk_as_read &= self.leaves_disk(stmt);
+    }
+
+    /// `stmt` is known to leave the disk alone (deny by default): one pipeline of plain commands,
+    /// each a bare assignment, a plain location move or a program `LEAVES_DISK` lists, with no
+    /// redirect, substitution or script block (a delay-bind block runs). An alias or function
+    /// that reuses a listed name is defined by a statement of its own, which is none of these.
+    fn leaves_disk(&self, stmt: &Stmt) -> bool {
+        let Stmt::Pipeline(p) = stmt else {
+            return false;
+        };
+        p.elems.iter().all(|e| match e {
+            Elem::Cmd(c) => command_leaves_disk(c),
+            Elem::Method(_) | Elem::Expr(_) => false,
+        })
     }
 
     fn after_nested(&mut self, changes: bool) {
@@ -1308,11 +1323,6 @@ impl Location {
             && !matches!(self.prev, Some(ChainOp::And | ChainOp::Or))
             && p.chain != Some(ChainOp::Background);
         let exits = self.exit_follows && !self.may_negate;
-        let at = p.elems.first().map(|e| match e {
-            Elem::Cmd(c) => c.span.start,
-            Elem::Method(m) => m.span.start,
-            Elem::Expr(w) => w.span.start,
-        });
         self.halts = false;
         self.msys_target = None;
         let pushes = self.stack.len();
@@ -1332,7 +1342,7 @@ impl Location {
         }
         if let Some(new) = changed {
             // Ruling 127: a move the shell cannot go on without leaves no old folder.
-            let sure = runs && (self.halts || exits || self.on_disk(&new, at));
+            let sure = runs && (self.halts || exits || self.on_disk(&new));
             if sure {
                 if self.stack.len() > pushes
                     && let Some(top) = self.stack.last_mut()
@@ -1393,20 +1403,16 @@ impl Location {
         }
     }
 
-    /// Every folder of `new` exists on disk now, read within the deadline, and the move at `at`
-    /// comes before any command that may delete or discard. A link, a share or device path, a
-    /// read error or a timeout: no.
-    fn on_disk(&self, new: &Dirs, at: Option<usize>) -> bool {
+    /// Every folder of `new` exists on disk now, read within the deadline, and every statement
+    /// before the move leaves the disk alone. A link, a share or device path, a read error or a
+    /// timeout: no.
+    fn on_disk(&self, new: &Dirs) -> bool {
         let Some(disk) = &self.disk else {
             return false;
         };
-        let before_change = match (at, disk.first_change) {
-            (Some(a), Some(f)) => a < f,
-            (_, None) => true,
-            (None, Some(_)) => false,
-        };
-        if !before_change || self.os != Os::host() || new.unknown.is_some() || new.known.is_empty()
-        {
+        // An unknown candidate needs no check: it dominates the folders read from it, whether
+        // the old folder stays a candidate or not.
+        if !self.disk_as_read || self.os != Os::host() || new.known.is_empty() {
             return false;
         }
         let paths: Vec<PathBuf> = new.known.iter().map(PathBuf::from).collect();
@@ -2081,6 +2087,48 @@ const LOCATION_COMMANDS: [&str; 13] = [
     "invoke-expression",
     "iex",
 ];
+
+/// The programs a `cd` disk read may follow (Ruling 127), as data: each leaves the disk alone.
+const LEAVES_DISK: &str = include_str!("leaves_disk.txt");
+
+/// One command of a statement `Location::leaves_disk` reads.
+fn command_leaves_disk(c: &SimpleCommand) -> bool {
+    let plain = |w: &Word| {
+        !w.parts
+            .iter()
+            .any(|p| matches!(p, WordPart::Subst(_) | WordPart::Block(_)))
+    };
+    if !c.redirects.is_empty()
+        || !c.args.iter().all(plain)
+        || !c.assigns.iter().all(|(_, w)| plain(w))
+    {
+        return false;
+    }
+    if c.name.parts.is_empty() {
+        return true;
+    }
+    // A name that is no literal (`$X`) is listed nowhere. The first eight location commands are
+    // the plain moves; `source`, `eval` and the rest run code.
+    let raw = raw_name(c);
+    LOCATION_COMMANDS[..8].contains(&raw.as_str()) || listed_leaves_disk(&raw, &c.args)
+}
+
+/// `raw` (as `raw_name` gives it) given `args` is a line of `LEAVES_DISK`: the name alone, or
+/// the name and the literal first argument the line asks for.
+fn listed_leaves_disk(raw: &str, args: &[Word]) -> bool {
+    let first = args.first().and_then(literal);
+    LEAVES_DISK
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .any(|line| {
+            let mut words = line.split_whitespace();
+            words.next() == Some(raw)
+                && match words.next() {
+                    None => true,
+                    Some(sub) => first.as_deref() == Some(sub),
+                }
+        })
+}
 
 /// How a pwsh command outside `LOCATION_COMMANDS` moves the shell.
 enum PwshMove {
