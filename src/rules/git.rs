@@ -297,17 +297,12 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
         .iter()
         .position(|t| t.as_deref() == Some("--"))
         .unwrap_or(rest_lits.len());
-    // Not the value of an option that takes one (`checkout -b "$BRANCH"`, `clean -e "$P"`,
-    // `switch -c "$BRANCH"`).
+    // Not the value of an option of this subcommand that takes one (`checkout -b "$BRANCH"`,
+    // `clean -e "$P"`, `switch -c "$BRANCH"`); a word after a flag (`clean -d $OPTS`) still counts.
     let value_of = |j: usize| {
         j > 0
             && rest_lits[j - 1].as_deref().is_some_and(|t| {
-                facts
-                    .branch_options
-                    .iter()
-                    .chain(&facts.clean_value_options)
-                    .chain(&sub.value_long)
-                    .any(|o| o == t)
+                sub.value_long.iter().any(|o| o == t)
                     || t.strip_prefix('-')
                         .is_some_and(|c| c.chars().count() == 1 && sub.value_shorts.contains(c))
             })

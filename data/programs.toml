@@ -401,6 +401,8 @@ value_long = ["--directory", "--exclude", "--include", "--whitespace", "--patch-
 [[program.discard.subcommands]]
 words = "checkout"
 action = "checkout-paths"
+value_shorts = "bB"
+value_long = ["--orphan"]
 long_options = ["--guess", "--overlay", "--quiet", "--recurse-submodules", "--progress", "--merge", "--conflict", "--detach", "--track", "--force", "--orphan", "--overwrite-ignore", "--ignore-other-worktrees", "--ours", "--theirs", "--patch", "--unified", "--inter-hunk-context", "--ignore-skip-worktree-bits", "--pathspec-from-file", "--pathspec-file-nul", "--no-guess", "--no-overlay", "--no-quiet", "--no-recurse-submodules", "--no-progress", "--no-merge", "--no-conflict", "--no-detach", "--no-track", "--no-force", "--no-orphan", "--no-overwrite-ignore", "--no-ignore-other-worktrees", "--no-patch", "--no-ignore-skip-worktree-bits", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
 
 [[program.discard.subcommands]]
@@ -437,6 +439,8 @@ action = "discard"
 [[program.discard.subcommands]]
 words = "clean"
 action = "clean"
+value_shorts = "e"
+value_long = ["--exclude"]
 long_options = ["--quiet", "--dry-run", "--force", "--interactive", "--exclude", "--no-quiet", "--no-dry-run", "--no-force", "--no-interactive"]
 
 # --- PowerShell lint (Task 30). Every rule fact sits in the row's `lint` table (`Program::extra`):

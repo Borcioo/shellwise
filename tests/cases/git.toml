@@ -937,6 +937,39 @@ command = 'git switch -q "$MODE"'
 level = "warn"
 rules = ["git-unreadable"]
 
+# `-d` takes a value on `checkout` only: on `clean` the next word may be `-f`.
+[[row]]
+id = "clean-a-word-after-a-flag-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git clean -d $OPTS"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "checkout-a-word-after-detach-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git checkout -d $OPTS"
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "clean-dry-run-excluding-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git clean -n -e "$KEEP"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "checkout-reset-a-branch-from-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git checkout -B "$BRANCH"'
+level = "ok"
+rules = []
+
 [[row]]
 id = "switch-an-ambiguous-prefix"
 os = "any"
