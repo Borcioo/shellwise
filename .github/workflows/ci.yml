@@ -50,7 +50,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             bin: shellwise
-          - os: macos-13
+          # Cross-compiled on the Apple silicon runner.
+          - os: macos-latest
             target: x86_64-apple-darwin
             bin: shellwise
     steps:
