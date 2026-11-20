@@ -344,31 +344,49 @@ pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, Simp
     current
 }
 
-/// How many words the option `v` of `wrapper` takes, from its table row; `None` when the row
-/// does not list it. A long option may carry its value after `=`. A short cluster is flags,
-/// then at most one value option, whose value is the rest of the word or, as its last letter,
-/// the next word (`-Eu root`).
-fn option_words(wrapper: &Program, v: &str) -> Option<usize> {
-    let value = |o: &str| wrapper.value_options.iter().any(|x| x == o);
-    let flag = |o: &str| wrapper.flag_options.iter().any(|x| x == o);
+/// What one option word of a wrapper does, from the wrapper's table row.
+enum WrapperOption {
+    /// It takes this many words, itself included.
+    Words(usize),
+    /// The wrapper runs nothing (`command -v`).
+    RunsNothing,
+    /// The row does not list it: it may take a value.
+    Unknown,
+}
+
+/// Read the option word `v` (an exact flag is taken before). A long option may carry its value
+/// after `=`. A short cluster is flags and run-nothing letters, then at most one value option,
+/// whose value is the rest of the word or, as its last letter, the next word (`-Eu root`):
+/// letters after a value option are its value (`-udeploy`), never options.
+fn read_option(wrapper: &Program, v: &str) -> WrapperOption {
+    let has = |list: &[String], o: &str| list.iter().any(|x| x == o);
+    let value = |o: &str| has(&wrapper.value_options, o);
+    let flag = |o: &str| has(&wrapper.flag_options, o);
     if v.starts_with("--") {
+        let name = v.split_once('=').map_or(v, |(n, _)| n);
+        if has(&wrapper.no_run_options, name) {
+            return WrapperOption::RunsNothing;
+        }
         return match v.split_once('=') {
-            Some((name, _)) => (value(name) || flag(name)).then_some(1),
-            None if value(v) => Some(2),
-            None => flag(v).then_some(1),
+            Some(_) if value(name) || flag(name) => WrapperOption::Words(1),
+            None if value(v) => WrapperOption::Words(2),
+            _ => WrapperOption::Unknown,
         };
     }
     let letters: Vec<char> = v.chars().skip(1).collect();
     for (k, c) in letters.iter().enumerate() {
         let o = format!("-{c}");
+        if has(&wrapper.no_run_options, &o) {
+            return WrapperOption::RunsNothing;
+        }
         if value(&o) {
-            return Some(if k + 1 == letters.len() { 2 } else { 1 });
+            return WrapperOption::Words(if k + 1 == letters.len() { 2 } else { 1 });
         }
         if !flag(&o) {
-            return None;
+            return WrapperOption::Unknown;
         }
     }
-    Some(1)
+    WrapperOption::Words(1)
 }
 
 /// The command one wrapper runs, or `None` when it runs none.
@@ -403,16 +421,10 @@ fn unwrap_once(
             // Also `env -`, which has no letter.
             i += 1;
         } else if options && v.len() > 1 && v.starts_with('-') {
-            if wrapper
-                .no_run_options
-                .iter()
-                .any(|o| Program::option_matches(&v, o))
-            {
-                return None;
-            }
-            match option_words(wrapper, &v) {
-                Some(n) => i += n,
-                None => {
+            match read_option(wrapper, &v) {
+                WrapperOption::Words(n) => i += n,
+                WrapperOption::RunsNothing => return None,
+                WrapperOption::Unknown => {
                     unknown_option = true;
                     i += 1;
                 }
@@ -719,6 +731,8 @@ mod tests {
             "sudo -Eq rm x",
             "sudo --frobnicate=1 rm x",
             "env -S 'rm -rf x'",
+            "sudo -e f",
+            "sudo --edit f",
         ] {
             let script = parse(src);
             let c = strip_wrappers(first(&script), GIT_BASH, Os::Windows);

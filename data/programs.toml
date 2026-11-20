@@ -65,7 +65,7 @@ shells = ["bash"]
 kind = ["wrapper"]
 value_options = ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type", "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user"]
 flag_options = ["-A", "--askpass", "-b", "--background", "-B", "--bell", "-E", "--preserve-env", "-H", "--set-home", "-i", "--login", "-k", "--reset-timestamp", "-n", "--non-interactive", "-P", "--preserve-groups", "-S", "--stdin", "-s", "--shell"]
-no_run_options = ["-l", "--list", "-v", "--validate", "-V", "--version", "-K", "--remove-timestamp", "-e", "--edit"]
+no_run_options = ["-l", "--list", "-v", "--validate", "-V", "--version", "-K", "--remove-timestamp"]
 assignments = true
 
 [[program]]

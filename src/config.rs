@@ -364,8 +364,12 @@ pub fn user_file() -> Option<PathBuf> {
 }
 
 /// `.shellwise.toml` at the root of the repo holding `cwd` (the nearest ancestor with a `.git`
-/// folder or file); `None` outside a repo.
+/// folder or file); `None` outside a repo, and for a cwd on a share or device path, which is
+/// not read (Ruling 114(f)).
 pub fn repo_file(cwd: &Path) -> Option<PathBuf> {
+    if crate::fs::resolve::is_network_or_device(cwd, crate::Os::host()) {
+        return None;
+    }
     let cwd = std::path::absolute(cwd).ok()?;
     cwd.ancestors()
         .find(|dir| dir.join(".git").symlink_metadata().is_ok())
@@ -543,6 +547,17 @@ mod tests {
         let (cfg, out) = Config::load(None, Some(&bad.path), None);
         assert_eq!(cfg.scratch_dir, None);
         assert!(out.iter().any(|f| f.rule == CONFIG_INVALID), "{out:?}");
+    }
+
+    /// Ruling 114(f): a cwd on a share is not read for its repo. `192.0.2.1` is a documentation
+    /// address no host answers, so a look there takes the SMB timeout (seconds).
+    #[cfg(windows)]
+    #[test]
+    fn a_cwd_on_a_share_is_not_read_for_a_repo_file() {
+        let start = std::time::Instant::now();
+        assert_eq!(repo_file(Path::new(r"\\192.0.2.1\share\repo\src")), None);
+        let ms = start.elapsed().as_millis();
+        assert!(ms < 200, "{ms} ms");
     }
 
     #[test]

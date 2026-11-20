@@ -759,6 +759,50 @@ level = "danger"
 rules = ["delete-outside-project"]
 
 [[row]]
+id = "gb-timeout-long-value-then-rm-outside"
+os = "any"
+shell = "bash"
+command = "timeout --kill-after 5 60 rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# A value glued to a short option is no cluster of letters: `deploy` holds the letters of the
+# no-run options `-e` and `-l`, and still sudo runs rm as user deploy.
+[[row]]
+id = "gb-sudo-glued-user-rm-home"
+os = "any"
+shell = "bash"
+command = "sudo -udeploy rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-sudo-glued-user-rm-outside"
+os = "any"
+shell = "bash"
+command = "sudo -udeploy rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-sudo-list"
+os = "any"
+shell = "bash"
+command = "sudo -l"
+level = "ok"
+rules = []
+
+# `-e` runs an editor on the named files: not a command the guard reads.
+[[row]]
+id = "gb-sudo-edit-is-unread"
+os = "any"
+shell = "bash"
+command = "sudo -e rm -rf FX_HOME"
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
+
+[[row]]
 id = "gb-timeout-glued-short-value-then-rm-outside"
 os = "any"
 shell = "bash"
