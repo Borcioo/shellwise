@@ -1,19 +1,34 @@
-//! `too-long`: a command line Git Bash cuts. The Bash tool runs `bash.exe -c <wrapper>`, where the
-//! wrapper holds the command inside `eval '…'` with each `'` written as `'"'"'`, and Git Bash keeps
-//! only the first 8186 characters of that text. A command cut inside the quote runs none of it
-//! (`unexpected EOF`); one cut after it runs, but the wrapper's own tail is lost. The rule runs on
-//! the raw text, before the size cap and the parse (`rules::length_rules`), so it still fires on a
-//! command over `MAX_INPUT_BYTES`. The limit is `limits.git_bash_command` from the config.
+//! `too-long`: a command line its host cuts or refuses. The rule runs on the raw text, before the
+//! size cap and the parse (`rules::length_rules`), so it still fires on a command over
+//! `MAX_INPUT_BYTES`. It reports the first limit the command is over, once:
+//!
+//! - Git Bash. The Bash tool runs `bash.exe -c <wrapper>`, where the wrapper holds the command
+//!   inside `eval '…'` with each `'` written as `'"'"'`, and Git Bash keeps only the first 8186
+//!   characters of that text. A command cut inside the quote runs none of it (`unexpected EOF`);
+//!   one cut after it runs, but the wrapper's own tail is lost. The limit is
+//!   `limits.git_bash_command` from the config.
+//! - A PowerShell command that starts a program with a `line_limit` in `data/programs.toml`
+//!   (`cmd /c …`, Windows only). pwsh starts the program with its full path in place of the typed
+//!   word (`launch_path_units` of the row), and the program refuses a longer line; cmd prints
+//!   "The command line is too long." and nothing runs, with exit 0 in the PowerShell tool.
+//!
+//! The PowerShell tool's own text has no limit here: the tool passes it in an environment
+//! variable, not on the command line, and scripts of 100,000 characters run.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Ctx, Rule, Scope};
+use crate::config::Config;
 use crate::level::{Finding, Level, Span};
-use crate::{BashProfile, Shell};
+use crate::{BashProfile, Os, Shell};
 
 pub const TOO_LONG: &str = "too-long";
+
+/// The `extra` keys of a program row this rule reads.
+const LINE_LIMIT: &str = "line_limit";
+const LAUNCH_PATH_UNITS: &str = "launch_path_units";
 
 /// The length of the command once the wrapper has escaped it: UTF-16 units, as the Windows command
 /// line counts them, and four more for each `'` (written as `'"'"'`).
@@ -33,30 +48,15 @@ impl Rule for TooLong {
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
-        if ctx.input.shell != Shell::Bash(BashProfile::GitBash) {
-            return;
-        }
         let command = ctx.input.command;
-        let escaped = escaped_len(command);
-        let limit = ctx.cfg.limits.git_bash_command;
-        if escaped < limit {
+        let Some((message, fix)) = git_bash(ctx).or_else(|| program_line(ctx)) else {
             return;
-        }
-        let file = scratch_file(ctx);
-        let shell_file = if file.contains(' ') {
-            format!("'{file}'")
-        } else {
-            file.clone()
         };
         out.push(Finding {
             rule: TOO_LONG,
             level: Level::Break,
-            message: format!(
-                "the command is {escaped} characters once the Bash tool escapes it, at or over the Git Bash limit of {limit}: Git Bash would cut it, so it would fail or lose its end"
-            ),
-            fix: Some(format!(
-                "write the command to {file} with the Write tool, run shellwise lint {shell_file}, then run bash {shell_file}"
-            )),
+            message,
+            fix: Some(fix),
             span: Span {
                 start: 0,
                 end: command.len(),
@@ -65,14 +65,106 @@ impl Rule for TooLong {
     }
 }
 
+/// The message and Fix line when the Bash tool's escaped command is at or over the Git Bash limit.
+fn git_bash(ctx: &Ctx) -> Option<(String, String)> {
+    if ctx.input.shell != Shell::Bash(BashProfile::GitBash) {
+        return None;
+    }
+    let escaped = escaped_len(ctx.input.command);
+    let limit = ctx.cfg.limits.git_bash_command;
+    if escaped < limit {
+        return None;
+    }
+    Some((
+        format!(
+            "the command is {escaped} characters once the Bash tool escapes it, at or over the Git Bash limit of {limit}: Git Bash would cut it, so it would fail or lose its end"
+        ),
+        route_fix(ctx.cfg, ctx.input.shell),
+    ))
+}
+
+/// The message and Fix line when a PowerShell command starts a program whose command line would
+/// be over the program's `line_limit`, counting the full path pwsh starts it by.
+fn program_line(ctx: &Ctx) -> Option<(String, String)> {
+    let input = ctx.input;
+    if input.os != Os::Windows || !matches!(input.shell, Shell::Pwsh | Shell::Powershell5) {
+        return None;
+    }
+    let (word, rest) = leading_word(input.command)?;
+    let program = crate::programs::lookup(word, input.shell, input.os)?;
+    let units_of = |key: &str| {
+        program
+            .extra
+            .get(key)
+            .and_then(|v| v.as_integer())
+            .and_then(|n| usize::try_from(n).ok())
+    };
+    let limit = units_of(LINE_LIMIT)?;
+    // pwsh puts the program's path in place of everything up to the end of its word.
+    let line = rest.encode_utf16().count() + units_of(LAUNCH_PATH_UNITS).unwrap_or(0);
+    if line <= limit {
+        return None;
+    }
+    let fix = program.fix.clone()?;
+    Some((
+        format!(
+            "{} gets a command line of {line} characters, over its limit of {limit}: it refuses it and nothing runs",
+            program.name
+        ),
+        fix,
+    ))
+}
+
+/// The first word of the command, without its quotes and without a leading call operator, and the
+/// text after it.
+fn leading_word(text: &str) -> Option<(&str, &str)> {
+    let mut rest = text;
+    loop {
+        rest = rest.trim_start();
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (token, after) = rest.split_at(end);
+        if token.is_empty() {
+            return None;
+        }
+        if token != "&" {
+            return Some((token.trim_matches(|c| c == '"' || c == '\''), after));
+        }
+        rest = after;
+    }
+}
+
+/// The Fix line of both length rules: write the command to a file of its own (Ruling 109), lint
+/// the file, run it with the shell's runner. The path has forward slashes, so Git Bash reads it as
+/// written, and is single-quoted where a shell reads it when it holds a space.
+pub fn route_fix(cfg: &Config, shell: Shell) -> String {
+    let ext = match shell {
+        Shell::Bash(_) => ".sh",
+        Shell::Pwsh | Shell::Powershell5 => ".ps1",
+    };
+    let file = scratch_file(cfg, ext);
+    let shell_file = if file.contains(' ') {
+        format!("'{file}'")
+    } else {
+        file.clone()
+    };
+    let write = format!(
+        "write the command to {file} with the Write tool, run shellwise lint {shell_file}, then run"
+    );
+    match shell {
+        Shell::Bash(_) => format!("{write} bash {shell_file}"),
+        Shell::Pwsh => format!("{write} pwsh -NoProfile -File {shell_file}"),
+        Shell::Powershell5 => format!("{write} powershell -NoProfile -File {shell_file}"),
+    }
+}
+
 /// Calls in this process so far, so two calls in one clock tick get two names.
 static CALLS: AtomicU64 = AtomicU64::new(0);
 
-/// A script file of its own for this call, `command-<pid>-<time>-<n>.sh`, in `scratch_dir` or else a
-/// per-user folder under the temp dir, so parallel agents never write the same file. Forward slashes,
-/// so Git Bash can use it as written.
-fn scratch_file(ctx: &Ctx) -> String {
-    let dir = match &ctx.cfg.scratch_dir {
+/// A script file of its own for this call, `command-<pid>-<time>-<n><ext>`, in `scratch_dir` or
+/// else a per-user folder under the temp dir, so parallel agents never write the same file. Forward
+/// slashes, so Git Bash can use it as written.
+fn scratch_file(cfg: &Config, ext: &str) -> String {
+    let dir = match &cfg.scratch_dir {
         Some(dir) => dir.clone(),
         None => user_temp_dir(),
     };
@@ -80,7 +172,7 @@ fn scratch_file(ctx: &Ctx) -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_micros() as u64);
     let n = CALLS.fetch_add(1, Ordering::Relaxed);
-    let name = format!("command-{:x}-{time:x}-{n}.sh", std::process::id());
+    let name = format!("command-{:x}-{time:x}-{n}{ext}", std::process::id());
     dir.join(name).to_string_lossy().replace('\\', "/")
 }
 

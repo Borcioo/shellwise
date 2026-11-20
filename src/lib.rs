@@ -11,6 +11,7 @@ pub mod config;
 pub mod fs;
 pub mod ir;
 pub mod level;
+pub mod lint_file;
 pub mod parse;
 pub mod programs;
 pub mod rules;

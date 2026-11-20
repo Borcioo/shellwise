@@ -71,8 +71,9 @@ runs under an execution-time check (the shim, below) or fails closed.
 ## Constraints
 
 - Rust, single static binary, Windows x64 first; Linux and macOS build and pass the same tests.
-- Licence **MIT OR Apache-2.0**. Dependencies with compatible licences only (checked by
-  `cargo deny`). Nothing from dcg.
+- Licence **GPL-3.0-or-later**, so the GPL ShellCheck port rshellcheck-core can be linked in
+  process. Dependencies with GPL-3.0-compatible licences only (checked by `cargo deny`). Nothing
+  from dcg.
 - Public repo: no absolute paths, personal or client names in code, docs or fixtures; synthetic
   fixtures only, the real corpus stays outside the repo. Creating the GitHub repo, publishing to
   crates.io and every release need the owner's explicit OK each time.
@@ -97,7 +98,7 @@ and bash).
 |---|---|
 | v1 success | replaces baseline-guard; host setup deletes it and the bullets shellwise encodes |
 | Name | `shellwise` (crate, binary, repo): free on crates.io; the GitHub user `shellwise` is taken (unrelated game-design org), so the repo lives under the owner's org; the nearest namesake is a 4-star Python "AI terminal co-pilot" |
-| Licence | MIT OR Apache-2.0 |
+| Licence | GPL-3.0-or-later |
 | Shells | PowerShell 7 (with a 5.1 dialect flag) and bash (profiles: Git Bash/MSYS, Linux, macOS); cmd only nested |
 | Levels | `ok`, `warn`, `break`, `danger`, `critical` (below) |
 | Dynamic words in a destructive command | configurable; default deny; in the Claude Code adapter a shim-eligible one runs under the shim |

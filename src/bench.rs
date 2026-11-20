@@ -30,8 +30,9 @@ use shellwise::config::Config;
 use shellwise::fs::resolve::env_view;
 use shellwise::ir::EnvView;
 use shellwise::level::{Level, Verdict};
+use shellwise::rules::inline_length;
 use shellwise::rules::parse_error::PARSE_ERROR;
-use shellwise::{AnalyseInput, Deadline, Origin, Os, Shell, analyse, rules, scan};
+use shellwise::{AnalyseInput, BashProfile, Deadline, Origin, Os, Shell, analyse, rules, scan};
 
 /// The rule map every run uses unless `--rule-map` names another.
 const RULE_MAP: &str = include_str!("../tools/corpus/rule_map.toml");
@@ -1113,6 +1114,14 @@ impl Report {
         }
         line("parity", self.parity);
         line("own line", self.own_line);
+        let (p, b) = (
+            inline_length::threshold(Shell::Pwsh),
+            inline_length::threshold(Shell::Bash(BashProfile::GitBash)),
+        );
+        println!(
+            "inline-script-too-long thresholds: PowerShell over {} lines or {} characters, Bash over {} lines or {} characters",
+            p.lines, p.chars, b.lines, b.chars
+        );
         line("meter 2", self.meter_2);
         match self.parse_kind_false_deny {
             Some(n) => println!(

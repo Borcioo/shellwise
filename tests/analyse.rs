@@ -170,7 +170,11 @@ mod hooks {
         assert_eq!(r.code, 1, "{}", r.stdout);
         assert_eq!(
             rules(&r),
-            ["testhook-length", "analysis-incomplete"],
+            [
+                "inline-script-too-long",
+                "testhook-length",
+                "analysis-incomplete"
+            ],
             "{}",
             r.stdout
         );
