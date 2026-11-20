@@ -81,6 +81,7 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     rules.extend(bash_lint::rules());
     rules.extend(pwsh_lint::rules());
     rules.push(Box::new(hang::HangRule));
+    rules.push(Box::new(hang::AliasShadowRule));
     #[cfg(feature = "testhooks")]
     rules.push(Box::new(testhooks::TestHook));
     rules

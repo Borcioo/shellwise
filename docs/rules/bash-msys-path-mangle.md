@@ -11,7 +11,7 @@ Programs that take Linux paths (`docker`, `docker-compose`, `wsl`, `kubectl`, `p
 | the command, or the text before it, sets `MSYS_NO_PATHCONV` or `MSYS2_ARG_CONV_EXCL` | no finding |
 | the path is written `//var/www` | no finding |
 
-`warn`, because 173 `ok` corpus rows match: many of these commands still work. Git Bash only.
+`warn`, because 249 `ok` corpus rows match: many of these commands still work. Git Bash only.
 
 ## Deny
 

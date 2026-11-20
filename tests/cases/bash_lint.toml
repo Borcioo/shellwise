@@ -780,3 +780,156 @@ shell = "bash"
 command = 'ls C:\work\app'
 level = "ok"
 rules = []
+
+# D3: each Fix line was pasted into real Git Bash 5.2.37 (F:\Temp\shellwise-t34\W3\fix\gitbash-fix\):
+# `%NAME%` becomes `$NAME`, a leading `~` stays outside the quotes, and no trailing space is left
+# inside them.
+[[row]]
+id = "cd-slash-d-cmd-variable"
+os = "any"
+shell = "gitbash"
+command = 'cd /d %USERPROFILE%\proj'
+level = "break"
+rules = ["bash-cd-slash-d"]
+fix = 'cd "$USERPROFILE/proj"'
+
+[[row]]
+id = "cd-slash-d-tilde"
+os = "any"
+shell = "gitbash"
+command = 'cd /d ~\proj'
+level = "break"
+rules = ["bash-cd-slash-d"]
+fix = 'cd ~/"proj"'
+
+[[row]]
+id = "cd-slash-d-trailing-backslash"
+os = "any"
+shell = "gitbash"
+command = 'cd /d C:\proj\ '
+level = "break"
+rules = ["bash-cd-slash-d", "bash-unquoted-backslash-path"]
+fix = 'cd "C:/proj/"'
+
+[[row]]
+id = "cd-slash-d-drive-root"
+os = "any"
+shell = "gitbash"
+command = 'cd /d C:\ '
+level = "break"
+rules = ["bash-cd-slash-d", "bash-unquoted-backslash-path"]
+fix = 'cd "C:/"'
+
+# The second finding's Fix line: no trailing space after the path either.
+[[row]]
+id = "unquoted-path-trailing-backslash"
+os = "any"
+shell = "gitbash"
+command = 'ls C:\work\ '
+level = "break"
+rules = ["bash-unquoted-backslash-path"]
+fix = "write C:/work/ with forward slashes"
+
+# D7: a redirect target, an assignment prefix and the words of a `for` loop lose their backslashes
+# too (Git Bash: `echo hi > C:\work\out.txt` writes `C:workout.txt`).
+[[row]]
+id = "unquoted-path-redirect-target"
+os = "any"
+shell = "gitbash"
+command = 'echo hi > C:\work\out.txt'
+level = "break"
+rules = ["bash-unquoted-backslash-path"]
+fix = "write C:/work/out.txt with forward slashes"
+
+[[row]]
+id = "unquoted-path-assignment-prefix"
+os = "any"
+shell = "gitbash"
+command = 'P=C:\work\x make build'
+level = "break"
+rules = ["bash-unquoted-backslash-path"]
+fix = "C:/work/x with forward slashes"
+
+[[row]]
+id = "unquoted-path-loop-words"
+os = "any"
+shell = "gitbash"
+command = 'for f in C:\a C:\b; do ls "$f"; done'
+level = "break"
+rules = ["bash-unquoted-backslash-path"]
+fix = "write C:/a with forward slashes"
+
+[[row]]
+id = "unquoted-path-allow-quoted-redirect-target"
+os = "any"
+shell = "gitbash"
+command = 'echo hi > "C:\work\out.txt"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unquoted-path-allow-quoted-assignment"
+os = "any"
+shell = "gitbash"
+command = 'P="C:\work\x" make build'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unquoted-path-allow-forward-loop-words"
+os = "any"
+shell = "gitbash"
+command = 'for f in C:/a C:/b; do ls "$f"; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unquoted-path-redirect-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'echo hi > C:\work\out.txt'
+level = "ok"
+rules = []
+
+# D9 (rows only, at their current level; low plausibility): bash bounds a read under TMOUT
+# (rc 142), `env read` fails at once (127), an earlier `exec <` feeds it (documented limit), and
+# `a:\ ` is no drive path. Each is a false deny the rule keeps for now.
+[[row]]
+id = "d9-unquoted-path-letter-colon-escaped-space"
+os = "any"
+shell = "gitbash"
+command = 'echo a:\ b'
+level = "break"
+rules = ["bash-unquoted-backslash-path"]
+
+# Surviving mutants of the slice D review. D01/D04: a line continuation inside a quoted
+# substitution gives its words the outer word's span (an inexact origin), which may still read as
+# one quoted word. For `cd /d` the span-order guard (exact_spans) keeps the rule silent rather
+# than print a Fix line built from the whole outer word; for an unquoted path the one-word guard
+# and the quote tracking do (a missed break, kept).
+[[row]]
+id = "d01-cd-slash-d-with-an-inexact-span-is-silent"
+os = "any"
+shell = "gitbash"
+command = "echo \"$(cd /d \\\nD:/x && ls)\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "d04-unquoted-path-with-an-inexact-span-is-silent"
+os = "any"
+shell = "gitbash"
+command = "echo \"$(echo a \\\n; ls C:\\x)\""
+level = "ok"
+rules = []
+
+
+# D04: the inner command has no arguments, so its name's span cannot be checked against them; the
+# one-word guard keeps the rule from reading the whole outer word (a missed break, kept).
+[[row]]
+id = "d04-unquoted-path-command-name-with-an-inexact-span-is-silent"
+os = "any"
+shell = "gitbash"
+command = "echo $(echo a \\\n; C:\\x)"
+level = "ok"
+rules = []

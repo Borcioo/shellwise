@@ -4,7 +4,7 @@ The command does not parse. The level depends on the kind of error the parser fo
 
 | Kind | Level | Why |
 |---|---|---|
-| An unclosed quote (`'`, `"`, a PowerShell here-string, or a Bash backtick) | `break` | The shell refuses the whole text and runs none of it. This is the only finding. |
+| An unclosed quote (`'`, `"`, a PowerShell here-string, or a Bash backtick) | `break` | PowerShell refuses the whole text and runs none of it: this is the only finding. Bash refuses the text from the command holding the quote on, but first runs every complete command before it (an execution oracle with marker files shows it for `bash -c`, `eval` and the Bash tool's wrapper): the rules check those commands, and their findings stand at their own level next to the break. |
 | PowerShell: an empty pipe element (`a \| \| b`, a `\|` at the end, a piped `foreach`/`for`/`while`/`if`/`switch` statement) | `break` | pwsh refuses the text (`EmptyPipeElement`). |
 | PowerShell: a parameter glued to a comma (`git log -L1,2:f.txt`) | `break` | pwsh reads `-L1` as a parameter and finds no argument before the comma (`MissingArgument`). |
 | An unclosed quote inside a Bash backtick substitution | `warn` | `bash -n` does not parse inside backticks, so the refusal is not proven. |
@@ -73,7 +73,18 @@ foreach ($x in 1,2) { $x } | Out-Host
 rm -rf "x
 ```
 
-`break`, and no other finding: the shell refuses the text, so the delete never runs.
+`break`, and no other finding: the quote is in the first command, so the delete never runs.
+
+```bash
+git reset --hard
+git commit -m "wip
+```
+
+`danger` from `git-discard` next to the `break`: Bash runs line 1 before it reads the open quote.
+A complete command counts only when it ends at a line end: nothing runs when the quote's command
+started earlier (`if` still open, a line ending in `\`, `&&` or `|`). When the parser cannot
+place the command ends, a raw destructive match in the lines before the quote's line is `danger`
+from `parse-error-destructive`.
 
 ## Allow
 

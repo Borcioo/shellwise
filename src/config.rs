@@ -228,7 +228,7 @@ impl Config {
             return;
         };
         for (rule, v) in t {
-            match level(v) {
+            match level(v).and_then(|l| known_rule(rule).map(|()| l)) {
                 Ok(l) => {
                     self.levels.insert(rule.clone(), l);
                 }
@@ -323,7 +323,7 @@ impl Config {
         };
         for (rule, v) in t {
             let key = format!("levels.{rule}");
-            let l = match level(v) {
+            let l = match level(v).and_then(|l| known_rule(rule).map(|()| l)) {
                 Ok(l) => l,
                 Err(why) => {
                     out.push(invalid_key(Layer::Repo, &key, &why));
@@ -451,6 +451,15 @@ fn level(v: &toml::Value) -> Result<Level, String> {
     all.into_iter()
         .find(|l| l.as_str() == s)
         .ok_or_else(|| format!("unknown level {s:?}"))
+}
+
+/// A `[levels]` key must name a rule: a typo (`parse_error`) would otherwise set nothing, silently.
+fn known_rule(id: &str) -> Result<(), String> {
+    if crate::is_rule_id(id) {
+        Ok(())
+    } else {
+        Err("no rule has this id".to_string())
+    }
 }
 
 fn millis(v: &toml::Value) -> Result<u64, String> {

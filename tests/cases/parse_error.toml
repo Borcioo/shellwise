@@ -1054,3 +1054,256 @@ command = "if true; then cat <<$'A'\nhello\nA"
 level = "warn"
 rules = ["parse-error"]
 oracle = "refuses"
+
+# --- Bash runs the complete commands before an unclosed quote (Ruling 126) ---
+# Execution oracle F:\Temp\shellwise-t34\W3\fix\oracle\ (marker files; Git Bash 5.2.37 and Linux
+# bash 5.1.16; `bash -c`, `eval` and the Bash tool's wrapper all agree): each complete command
+# before the line where the unclosed quote's command starts runs, so its findings stand at their
+# own level next to the break. Nothing runs when the quote is on the first line, inside a
+# construct still open (`if`), or on a line joined to the one before (`\`, `&&`, `|`).
+
+[[row]]
+id = "gb-critical-delete-on-line-1-then-an-unclosed-quote"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /\necho \"abc"
+level = "critical"
+rules = ["parse-error", "delete-critical"]
+fix = 'close the " opened at line 2, column 6'
+oracle = "refuses"
+
+[[row]]
+id = "px-critical-delete-on-line-1-then-an-unclosed-quote"
+os = "posix"
+shell = "bash"
+command = "rm -rf /\necho \"abc"
+level = "critical"
+rules = ["parse-error", "delete-critical"]
+fix = 'close the " opened at line 2, column 6'
+oracle = "refuses"
+
+# Ruling 106(c): lowering parse-error lowers neither the delete nor the level.
+[[row]]
+id = "gb-critical-delete-before-an-unclosed-quote-with-parse-error-at-warn"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf /\necho \"abc"
+level = "critical"
+rules = ["parse-error", "delete-critical"]
+config = "[levels]\nparse-error = \"warn\"\n"
+oracle = "refuses"
+
+[[row]]
+id = "px-critical-delete-before-an-unclosed-quote-with-parse-error-at-warn"
+os = "posix"
+shell = "bash"
+command = "rm -rf /\necho \"abc"
+level = "critical"
+rules = ["parse-error", "delete-critical"]
+config = "[levels]\nparse-error = \"warn\"\n"
+oracle = "refuses"
+
+[[row]]
+id = "bash-git-reset-hard-then-a-commit-message-with-an-open-quote"
+os = "any"
+shell = "bash"
+command = "git reset --hard origin/main\ngit commit -m \"wip"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+fix = 'close the " opened at line 2, column 15'
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-line-1-before-an-unclosed-single-quote"
+os = "any"
+shell = "bash"
+command = "git reset --hard\necho 'abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-line-1-before-an-unclosed-ansi-c-quote"
+os = "any"
+shell = "bash"
+command = "git reset --hard\necho $'abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-line-1-before-an-unclosed-backtick"
+os = "any"
+shell = "bash"
+command = "git reset --hard\necho `date"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-line-1-before-a-quote-left-open-in-a-substitution"
+os = "any"
+shell = "bash"
+command = "git reset --hard\necho \"$(echo 'a)\""
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-lines-1-and-2-before-an-unclosed-quote-on-line-3"
+os = "any"
+shell = "bash"
+command = "git reset --hard\necho ok\nx=\"abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-a-closed-if-before-an-unclosed-quote"
+os = "any"
+shell = "bash"
+command = "if true; then\ngit reset --hard\nfi\necho \"abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-a-closed-heredoc-before-an-unclosed-quote"
+os = "any"
+shell = "bash"
+command = "cat <<EOF >/dev/null\nbody\nEOF\ngit reset --hard\necho 'abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+# The line before the error ends no command, an earlier one does: the cut walks back to it.
+[[row]]
+id = "bash-runs-line-1-before-an-if-left-open-around-the-quote"
+os = "any"
+shell = "bash"
+command = "git reset --hard\nif true; then\necho \"abc\nfi"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-runs-line-1-before-a-continued-line"
+os = "any"
+shell = "bash"
+command = "git reset --hard\necho a \\\necho \"abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+# The allow marker on line 1 is no marker of the command: it does not end the text.
+[[row]]
+id = "bash-a-marker-on-line-1-does-not-confirm-what-runs-before-an-unclosed-quote"
+os = "any"
+shell = "bash"
+command = "git reset --hard # shellwise: allow\necho \"abc"
+level = "danger"
+rules = ["parse-error", "git-discard"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-the-command-on-the-error-line-does-not-run"
+os = "any"
+shell = "bash"
+command = "echo ok\ngit reset --hard; echo \"abc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-one-line-before-an-unclosed-quote-does-not-run"
+os = "any"
+shell = "bash"
+command = "git reset --hard; echo \"abc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-nothing-runs-inside-an-open-if"
+os = "any"
+shell = "bash"
+command = "if true; then\ngit reset --hard\necho \"abc\nfi"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-nothing-runs-before-a-line-continuation"
+os = "any"
+shell = "bash"
+command = "git reset --hard \\\necho \"abc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-nothing-runs-before-an-and-at-the-line-end"
+os = "any"
+shell = "bash"
+command = "git reset --hard &&\necho \"abc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "bash-nothing-runs-before-a-pipe-at-the-line-end"
+os = "any"
+shell = "bash"
+command = "git reset --hard |\necho \"abc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# PowerShell runs none of it, for every deny kind (oracle pw-kinds.ps1: -File, -Command, iex).
+[[row]]
+id = "pwsh-a-delete-on-line-1-before-an-unclosed-quote-does-not-run"
+os = "any"
+shell = "pwsh"
+command = "git reset --hard\nWrite-Output \"abc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-delete-on-line-1-before-an-open-here-string-does-not-run"
+os = "any"
+shell = "pwsh"
+command = "git reset --hard\n$t = @'\nabc"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-delete-on-line-1-before-an-empty-pipe-element-does-not-run"
+os = "any"
+shell = "pwsh"
+command = "git reset --hard\nGet-Date | | Out-Null"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-delete-on-line-1-before-a-missing-argument-does-not-run"
+os = "any"
+shell = "pwsh"
+command = "git reset --hard\ntool -a,b"
+level = "break"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# q34 (slice A, outside its slice; row only, at its current level): a heredoc whose body holds
+# quote characters, inside a double-quoted `$( )`. `bash -n` accepts it; our parser reads it as
+# a parse error that is no deny kind, so it is warn. The fix belongs in src/parse/bash.rs.
+[[row]]
+id = "q34-heredoc-with-quotes-in-a-quoted-substitution-is-warn"
+os = "any"
+shell = "bash"
+command = "echo \"$(cat <<EOF\n'\"\nEOF\n)\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"

@@ -30,6 +30,19 @@ pub const MAX_READ_BYTES: usize = 1024 * 1024;
 /// The rule id of every analysis that did not finish for a reason other than a parse error.
 pub const ANALYSIS_INCOMPLETE: &str = "analysis-incomplete";
 
+include!(concat!(env!("OUT_DIR"), "/rule_docs.rs"));
+
+/// Whether a finding can carry `id`: a rule documented in `docs/rules/` (every rule is, a test
+/// checks it), or a ShellCheck code `SC<n>`.
+pub fn is_rule_id(id: &str) -> bool {
+    // The spelling `shellcheck.rs` gives a code.
+    let shellcheck = id
+        .get(2..)
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|n| format!("SC{n}") == id);
+    shellcheck || RULE_DOCS.binary_search_by(|(k, _)| (*k).cmp(id)).is_ok()
+}
+
 /// `SHELLWISE=off` turns the whole check off; any other value leaves it on.
 const OFF_VAR: &str = "SHELLWISE";
 const OFF_VALUE: &str = "off";
@@ -157,7 +170,7 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
     };
     let mut findings = match length_stage(&check, cfg, deadline) {
         Ok(found) => levels(found, cfg).findings,
-        Err(reason) => return levels(incomplete(&command, reason).findings, cfg),
+        Err(reason) => return levels(incomplete_within(&command, reason, deadline).findings, cfg),
     };
     let problem = if let Some(reason) = input.problem {
         Some(reason)
@@ -237,6 +250,13 @@ fn checked(
         reason,
     );
     levels(verdict.findings, cfg)
+}
+
+/// `incomplete` with the raw scan on a worker under `deadline` (`bounded_scan`): a scan that does
+/// not answer in time is `warn`, as one that does not finish.
+pub fn incomplete_within(command: &str, reason: &str, deadline: &Deadline) -> Verdict {
+    let hit = bounded_scan(Arc::new(command.to_string()), deadline);
+    incomplete_from(hit, command, reason)
 }
 
 /// How long the raw scan may run past the deadline. The deadline ends 1500 ms before the hook
@@ -321,8 +341,10 @@ fn run_checker(
 }
 
 /// Parse the command and run every rule whose scope covers its origin. On a parse error the
-/// rules see an empty script and the error. A deny kind is the only finding: the shell refuses
-/// the text, so nothing in it runs. A parser that failed itself is `Err` with its reason.
+/// rules see an empty script and the error. A deny kind is the only finding of the whole text:
+/// the shell refuses the text from the error on. PowerShell then runs none of it; Bash runs the
+/// complete commands before it, so the rules also run on those, and their findings stand at
+/// their own level. A parser that failed itself is `Err` with its reason.
 fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdict, &'static str> {
     let parsed = match input.shell {
         Shell::Pwsh | Shell::Powershell5 => {
@@ -337,11 +359,40 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
             _ => (Script::default(), Some(e)),
         },
     };
+    let mut findings = run_rules(input, &script, parse_error.as_ref(), cfg, deadline);
+    let deny = parse_error
+        .as_ref()
+        .filter(|e| rules::parse_error::is_deny_kind(&e.kind, input.command, input.shell));
+    if let Some(e) = deny {
+        findings.retain(|f| f.rule == rules::parse_error::PARSE_ERROR);
+        if let Shell::Bash(profile) = input.shell {
+            let ran = ran_before(input, e, profile, &mut findings, cfg, deadline);
+            findings.extend(ran);
+        }
+    }
+    // The config levels, then the marker: a level the marker lowered is never raised again.
+    let verdict = levels(findings, cfg);
+    Ok(rules::marker::apply(
+        &script,
+        input.command,
+        parse_error.is_some(),
+        verdict,
+    ))
+}
+
+/// Every rule whose scope covers the input's origin, over `script`.
+fn run_rules(
+    input: &CheckInput,
+    script: &Script,
+    parse_error: Option<&parse::ParseError>,
+    cfg: &Config,
+    deadline: &Deadline,
+) -> Vec<Finding> {
     let fs = rule_fs();
     let ctx = rules::Ctx {
         input,
-        script: &script,
-        parse_error: parse_error.as_ref(),
+        script,
+        parse_error,
         cfg,
         fs: &fs,
         deadline,
@@ -352,20 +403,43 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
             rule.check(&ctx, &mut findings);
         }
     }
-    if parse_error
-        .as_ref()
-        .is_some_and(|e| rules::parse_error::is_deny_kind(&e.kind, input.command, input.shell))
-    {
-        findings.retain(|f| f.rule == rules::parse_error::PARSE_ERROR);
+    findings
+}
+
+/// The findings of what Bash runs before the deny-kind error `e`: the rules over the complete
+/// commands before it, or, when the parser cannot read them, a raw destructive match there. The
+/// `parse-error` finding in `deny` then says Bash runs those lines.
+fn ran_before(
+    input: &CheckInput,
+    e: &parse::ParseError,
+    profile: BashProfile,
+    deny: &mut [Finding],
+    cfg: &Config,
+    deadline: &Deadline,
+) -> Vec<Finding> {
+    use rules::parse_error::{BashRan, bash_ran_before, ran_before_message, unread_before};
+    let (end, script) = match bash_ran_before(input.command, e.span.start, profile, deadline) {
+        BashRan::Nothing => return Vec::new(),
+        BashRan::Commands { end, script } => (end, Some(script)),
+        BashRan::Unread { end } => (end, None),
+    };
+    for f in deny.iter_mut() {
+        f.message = ran_before_message(&f.message, input.command, end, script.is_some());
     }
-    // The config levels, then the marker: a level the marker lowered is never raised again.
-    let verdict = levels(findings, cfg);
-    Ok(rules::marker::apply(
-        &script,
-        input.command,
-        parse_error.is_some(),
-        verdict,
-    ))
+    let before = &input.command[..end];
+    match script {
+        Some(script) => {
+            let prefix = CheckInput {
+                command: before,
+                ..input.clone()
+            };
+            run_rules(&prefix, &script, None, cfg, deadline)
+        }
+        None => scan::destructive_row(before)
+            .map(|hit| unread_before(e, input.command, hit))
+            .into_iter()
+            .collect(),
+    }
 }
 
 #[cfg(feature = "testhooks")]

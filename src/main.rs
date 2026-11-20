@@ -10,7 +10,7 @@ use std::panic;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -29,8 +29,8 @@ mod shellcheck;
 const EXIT_USAGE: i32 = 64;
 /// Exit code when the input cannot be read.
 const EXIT_IO: i32 = 74;
-/// The config load ends this long after the process start, inside the one deadline
-/// (`hook_timeout_ms` is at least `MIN_HOOK_TIMEOUT_MS`).
+/// The config load ends this long after it starts (the process start; for the hook, the end of
+/// the event read), inside the one deadline (`hook_timeout_ms` is at least `MIN_HOOK_TIMEOUT_MS`).
 const CONFIG_LOAD_MS: u64 = 1000;
 /// The hook reads its event before the config (the config needs the event's `cwd`), under a
 /// bound no config can undercut.
@@ -65,7 +65,7 @@ enum Cmd {
     Lint(LintArgs),
 }
 
-include!(concat!(env!("OUT_DIR"), "/rule_docs.rs"));
+use shellwise::RULE_DOCS;
 
 /// `explain <id>`: the rule's doc, embedded at build time.
 fn run_explain(id: &str) -> i32 {
@@ -73,6 +73,17 @@ fn run_explain(id: &str) -> i32 {
         Ok(i) => {
             let mut stdout = io::stdout().lock();
             let _ = stdout.write_all(RULE_DOCS[i].1.as_bytes());
+            let _ = stdout.flush();
+            0
+        }
+        // Any other rule id is a ShellCheck code, which `lint` reports for a Bash file.
+        Err(_) if shellwise::is_rule_id(id) => {
+            let mut stdout = io::stdout().lock();
+            let _ = writeln!(
+                stdout,
+                "# {id}\n\nA ShellCheck check that `shellwise lint` runs on a Bash file (`warn`). \
+                 Its page: https://www.shellcheck.net/wiki/{id}"
+            );
             let _ = stdout.flush();
             0
         }
@@ -168,7 +179,7 @@ fn run(start: Instant) -> i32 {
 /// `lint <file>`: the shellwise rules for a file (`lint_file`), and ShellCheck's for a Bash one.
 /// The config loads from the current directory; one that does not load refuses the run.
 fn run_lint(start: Instant, args: LintArgs) -> i32 {
-    let cfg = match load_config(start, args.config, None) {
+    let cfg = match load_config(Deadline::new(start, CONFIG_LOAD_MS), args.config, None) {
         Ok((cfg, findings)) => {
             for f in findings {
                 eprintln!(
@@ -235,14 +246,18 @@ fn run_hook(start: Instant, args: HookArgs) -> i32 {
     };
     let (shell, command, cwd) = match claude_code::parse_event(&bytes, os) {
         Event::Ignored => return 0,
-        Event::Malformed(reason) => return emit(claude_code::malformed(&bytes, reason)),
+        Event::Malformed(reason) => {
+            let deadline = Deadline::new(start, HOOK_READ_MS);
+            return emit(claude_code::malformed(&bytes, reason, &deadline));
+        }
         Event::Command {
             shell,
             command,
             cwd,
         } => (shell, command, cwd),
     };
-    let (cfg, cfg_findings, cfg_problem) = match load_config(start, args.config, cwd.clone()) {
+    let budget = hook_config_budget(start, Instant::now());
+    let (cfg, cfg_findings, cfg_problem) = match load_config(budget, args.config, cwd.clone()) {
         Ok((cfg, findings)) => (cfg, findings, None),
         Err(reason) => (Config::default(), Vec::new(), Some(reason)),
     };
@@ -287,8 +302,9 @@ fn emit(reply: Option<String>) -> i32 {
 fn run_check(start: Instant, args: CheckArgs) -> i32 {
     // The config comes first: the one deadline (and the stdin read under it) takes its budget. A
     // config that does not load leaves the defaults and fails the analysis closed below.
+    let budget = Deadline::new(start, CONFIG_LOAD_MS);
     let (cfg, cfg_findings, cfg_problem) =
-        match load_config(start, args.config.clone(), args.cwd.clone()) {
+        match load_config(budget, args.config.clone(), args.cwd.clone()) {
             Ok((cfg, findings)) => (cfg, findings, None),
             Err(reason) => (Config::default(), Vec::new(), Some(reason)),
         };
@@ -323,16 +339,24 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
     finish(analyse(&input, &cfg, &deadline), cfg_findings, &args)
 }
 
-/// Load the config layers (`Config::discover`) on a worker thread, waiting at most
-/// `CONFIG_LOAD_MS` from the process start. `check` passes `--config` and `--cwd`; the
-/// `hook claude-code` adapter passes its `--config` and the event's `cwd`. `Err` is a fail-closed
-/// reason.
+/// The hook's config budget: `CONFIG_LOAD_MS` from the end of the event read (`read_done`), so an
+/// event that arrives late is not a config that did not load, but never past `HOOK_READ_MS` from
+/// the process start, the earliest deadline any config can set.
+fn hook_config_budget(start: Instant, read_done: Instant) -> Deadline {
+    let end = (read_done + Duration::from_millis(CONFIG_LOAD_MS))
+        .min(start + Duration::from_millis(HOOK_READ_MS));
+    let ms = end.saturating_duration_since(start).as_millis();
+    Deadline::new(start, u64::try_from(ms).unwrap_or(HOOK_READ_MS))
+}
+
+/// Load the config layers (`Config::discover`) on a worker thread, waiting at most until
+/// `budget`. `check` passes `--config` and `--cwd`; the `hook claude-code` adapter passes its
+/// `--config` and the event's `cwd`. `Err` is a fail-closed reason.
 fn load_config(
-    start: Instant,
+    budget: Deadline,
     integration: Option<PathBuf>,
     cwd: Option<PathBuf>,
 ) -> Result<(Config, Vec<Finding>), &'static str> {
-    let budget = Deadline::new(start, CONFIG_LOAD_MS);
     let (tx, rx) = mpsc::channel();
     let job = move || {
         if testhook_is("config-sleep") {
@@ -459,4 +483,30 @@ fn test_deadline(start: Instant) -> Option<Deadline> {
 #[cfg(not(feature = "testhooks"))]
 fn test_deadline(_start: Instant) -> Option<Deadline> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hook_config_budget_starts_at_the_read_and_ends_by_the_read_bound() {
+        let start = Instant::now();
+        // (event read after ms, budget from the process start)
+        for (read_ms, want) in [
+            (0, 1000),
+            (300, 1300),
+            (499, 1499),
+            (1200, 1500),
+            (1500, 1500),
+        ] {
+            let budget = hook_config_budget(start, start + Duration::from_millis(read_ms));
+            let left = budget.remaining().as_millis() as i64;
+            let want_left = want as i64 - start.elapsed().as_millis() as i64;
+            assert!(
+                (left - want_left).abs() <= 20,
+                "read {read_ms}: {left} ms left, want about {want_left}"
+            );
+        }
+    }
 }

@@ -163,6 +163,59 @@ fn a_variable_followed_by_a_colon_in_a_ps1_file_is_ps_var_colon() {
     assert!(lint(&fixture("ok.ps1")).unwrap().findings.is_empty());
 }
 
+/// D4: the alias-shadow shape is a finding of its own in a script file too.
+#[test]
+fn a_function_an_alias_outranks_is_a_warn_in_a_ps1_file() {
+    let d = folder("alias_shadow");
+    let path = d.join("helpers.ps1");
+    std::fs::write(
+        &path,
+        "function md { New-Item -ItemType Directory -Path $args[0] }\nmd out\n",
+    )
+    .unwrap();
+    let report = lint(&path).unwrap();
+    assert_eq!(ids(&report), ["ps-alias-shadow"]);
+    assert_eq!(report.level, Level::Warn);
+    assert_eq!(report.exit_code(), 0);
+}
+
+/// D6: Git Bash drops the CR of a CRLF script and runs it (Linux bash reads `$'\r'`). In the Git
+/// Bash profile (a Windows host) a CRLF `.sh` gets one warn, and the shellwise rules and the
+/// external linter read its LF twin.
+#[cfg(windows)]
+#[test]
+fn a_crlf_sh_is_one_warn_in_the_git_bash_profile() {
+    let d = folder("crlf");
+    let path = d.join("build.sh");
+    std::fs::write(
+        &path,
+        "#!/bin/bash\r\nif true; then\r\n  echo \"$1 'x\"\r\nfi\r\n",
+    )
+    .unwrap();
+    let saw_cr = Cell::new(false);
+    let report = lint_file::lint_with(
+        &path,
+        &Config::default(),
+        &Deadline::new(Instant::now(), 8000),
+        &|text, _| {
+            saw_cr.set(text.contains('\r'));
+            Vec::new()
+        },
+    )
+    .unwrap();
+    assert_eq!(ids(&report), ["bash-crlf"], "{report:?}");
+    assert_eq!(report.level, Level::Warn);
+    assert_eq!(report.findings[0].line, 1);
+    assert!(!saw_cr.get(), "the external linter got the CRs");
+    // Control: the LF twin is clean, and a CRLF .ps1 is no finding (PowerShell reads CRLF).
+    let lf = d.join("lf.sh");
+    std::fs::write(&lf, "#!/bin/bash\nif true; then\n  echo \"$1 'x\"\nfi\n").unwrap();
+    assert!(lint(&lf).unwrap().findings.is_empty());
+    let ps = d.join("crlf.ps1");
+    std::fs::write(&ps, "Get-Date\r\nGet-Date\r\n").unwrap();
+    assert!(lint(&ps).unwrap().findings.is_empty());
+}
+
 #[test]
 fn a_line_and_column_count_from_1_in_characters() {
     // Two lines; the quote opens after a two-byte character on the second.
@@ -856,7 +909,7 @@ fn shellcheck_findings_of_one_code_on_one_line_are_all_printed() {
 }
 
 #[test]
-fn a_shellcheck_error_fails_the_file_and_a_warning_does_not() {
+fn a_shellcheck_error_and_a_warning_are_warn_and_pass_the_file() {
     // The delete guard's warn about the unread target sits beside ShellCheck's.
     let (path, r) = lint_cli("sc_levels", "var.sh", "rm $var\n");
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
@@ -870,15 +923,18 @@ fn a_shellcheck_error_fails_the_file_and_a_warning_does_not() {
         "{}",
         r.stdout
     );
-    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line.
+    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line. ShellCheck
+    // gives no one-step Fix line, so an error is warn (D5).
     let (path, r) = lint_cli(
         "sc_levels_error",
         "test.sh",
         "if [[$1 == x]]; then echo y; fi\n",
     );
-    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
     assert!(
-        places(&path, &r).iter().any(|p| p.contains(": break SC")),
+        places(&path, &r)
+            .iter()
+            .any(|p| p.contains(": warn SC1035")),
         "{}",
         r.stdout
     );

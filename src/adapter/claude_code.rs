@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::fs::resolve::env_view;
 use crate::ir::EnvView;
 use crate::level::{Finding, Level, Verdict};
-use crate::{BashProfile, Os, Shell, incomplete};
+use crate::{BashProfile, Deadline, Os, Shell, incomplete_within};
 
 /// The host refuses or files away hook output past 10,000 characters (CR bytes included). The
 /// reply stays below this many bytes, which is never fewer than its characters.
@@ -139,10 +139,11 @@ struct ToolInput {
 
 /// The reply to an event that could not be read: a deny when its raw text holds a destructive
 /// command (or the raw scan does not finish), otherwise no output, because nothing shows a
-/// command would run. The raw text is read through `scan_text` first.
-pub fn malformed(bytes: &[u8], reason: &str) -> Option<String> {
+/// command would run. The raw text is read through `scan_text` first, and scanned under
+/// `deadline` (`incomplete_within`).
+pub fn malformed(bytes: &[u8], reason: &str, deadline: &Deadline) -> Option<String> {
     let raw = scan_text(&String::from_utf8_lossy(bytes));
-    let verdict = incomplete(&raw, reason);
+    let verdict = incomplete_within(&raw, reason, deadline);
     if verdict.level >= Level::Danger {
         Some(render(Some(DENY), &verdict))
     } else {
@@ -307,6 +308,11 @@ fn cut(line: &str) -> String {
 mod tests {
     use super::*;
     use crate::level::Span;
+
+    /// A deadline far enough off for any scan.
+    fn later() -> Deadline {
+        Deadline::new(std::time::Instant::now(), 8000)
+    }
 
     fn finding(rule: &'static str, level: Level) -> Finding {
         Finding {
@@ -597,7 +603,12 @@ mod tests {
 
     #[test]
     fn a_malformed_event_denies_only_destructive_raw_text() {
-        let r = malformed(b"{\"tool_input\":{\"command\":\"rm -rf x\"", "reason").unwrap();
+        let r = malformed(
+            b"{\"tool_input\":{\"command\":\"rm -rf x\"",
+            "reason",
+            &later(),
+        )
+        .unwrap();
         let v = parsed(&r);
         assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
         let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
@@ -607,14 +618,17 @@ mod tests {
             reason.starts_with("shellwise: danger analysis-incomplete: "),
             "{reason}"
         );
-        assert_eq!(malformed(b"{\"tool_input\":{\"command\":\"ls\"", "r"), None);
+        assert_eq!(
+            malformed(b"{\"tool_input\":{\"command\":\"ls\"", "r", &later()),
+            None
+        );
         // A destructive second line of a multi-line command, and an escaped letter.
         for raw in [
             r#"{"tool_input":{"command":"echo a\nrm -rf x"#,
             r#"{"tool_input":{"command":"echo a\r\nrm -rf x"#,
             r#"{"tool_input":{"command":"echo a; \u0072m -rf x"#,
         ] {
-            assert!(malformed(raw.as_bytes(), "r").is_some(), "{raw}");
+            assert!(malformed(raw.as_bytes(), "r", &later()).is_some(), "{raw}");
         }
     }
 
