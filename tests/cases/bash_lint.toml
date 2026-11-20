@@ -1,0 +1,686 @@
+# The Git Bash rules (src/rules/bash_lint.rs), through analyse. Every rule fires only for the Git
+# Bash profile (shell = "gitbash"); each has a twin with shell = "bash" (the POSIX profile) that
+# stays ok. The rows are synthetic: none is a corpus command.
+#
+# baseline-guard rows: 29
+# Rows whose id starts with "sg-" are ported from baseline-guard's tests/test_rules.py (its Bash rows
+# for these rules and its bash-backslash-collapse block). Left out, because another task owns the
+# rule: the 2 marker rows (Task 32), bat-metachar (Task 30), bash-unterminated-quote (2 rows,
+# parse-error), bash-ps-call-operator (dropped, F17) and bash-too-long (Task 25).
+#
+# Levels differ from baseline-guard's deny where the plan lands a rule as warn: msys (173 ok rows),
+# and the landing-rule rules whose draft counts exceed 5 ok rows (ps-cmdlet, versioned-php,
+# vendor-bin, unquoted-backslash-path). bash-backslash-collapse is break only for the shapes in
+# PROVEN (printf / echo -e escapes and heredoc bodies) and warn for every other `\\`.
+#
+# TOML: '...' strings hold backslashes as written; "..." strings write each backslash as \\.
+
+# --- baseline-guard: Bash rows that must deny ---
+
+[[row]]
+id = "sg-unquoted-path-cd"
+os = "any"
+shell = "gitbash"
+command = 'cd X:\src\x && git status'
+level = "warn"
+rules = ["bash-unquoted-backslash-path"]
+fix = "write X:/src/x with forward slashes"
+
+[[row]]
+id = "sg-unquoted-path-git-c"
+os = "any"
+shell = "gitbash"
+command = 'git -C X:\src\timer status'
+level = "warn"
+rules = ["bash-unquoted-backslash-path"]
+fix = "write X:/src/timer with forward slashes"
+
+[[row]]
+id = "sg-cd-slash-d"
+os = "any"
+shell = "gitbash"
+command = 'cd /d X:\src\x && dotnet test'
+level = "break"
+rules = ["bash-cd-slash-d", "bash-unquoted-backslash-path"]
+fix = 'cd "X:/src/x"'
+
+[[row]]
+id = "sg-ps-cmdlet"
+os = "any"
+shell = "gitbash"
+command = 'Get-ChildItem -Path C:/x -Recurse | Select-Object -First 5'
+level = "warn"
+rules = ["bash-ps-cmdlet"]
+fix = "run this in the PowerShell tool"
+
+[[row]]
+id = "sg-versioned-php"
+os = "any"
+shell = "gitbash"
+command = 'cd D:/x && php83 -l a.php'
+level = "warn"
+rules = ["bash-versioned-php"]
+fix = "call the php.exe of that version by its full path"
+
+[[row]]
+id = "sg-vendor-bin"
+os = "any"
+shell = "gitbash"
+command = 'vendor/bin/pint --dirty 2>&1 | tail -5'
+level = "warn"
+rules = ["bash-vendor-bin-shebang"]
+fix = "php vendor/bin/pint"
+
+[[row]]
+id = "sg-msys-path-mangle"
+os = "any"
+shell = "gitbash"
+command = 'docker exec web php /var/www/html/x.php'
+level = "warn"
+rules = ["bash-msys-path-mangle"]
+fix = "prefix MSYS_NO_PATHCONV=1"
+
+[[row]]
+id = "sg-collapse-program-path"
+os = "any"
+shell = "gitbash"
+command = 'X:\\src\\x\\tool.exe --help'
+level = "warn"
+rules = ["bash-backslash-collapse"]
+fix = "write the text with the Write tool"
+
+# --- baseline-guard: Bash rows that must allow ---
+
+[[row]]
+id = "sg-allow-quoted-forward-path"
+os = "any"
+shell = "gitbash"
+command = 'cd "X:/src/x" && git status'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-cd-slash-d-alone"
+os = "any"
+shell = "gitbash"
+command = 'cd /d && ls'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-cd-slash-d-redirect"
+os = "any"
+shell = "gitbash"
+command = 'cd /d 2>/dev/null; ls'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-grep-alternation"
+os = "any"
+shell = "gitbash"
+command = "grep -n 'a\\|b' file.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-printf-one-backslash"
+os = "any"
+shell = "gitbash"
+command = "printf '%s\\n' \"$(git rev-parse HEAD)\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-msys-opt-out"
+os = "any"
+shell = "gitbash"
+command = 'MSYS_NO_PATHCONV=1 docker exec web php /var/www/html/x.php'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-heredoc-apostrophe"
+os = "any"
+shell = "gitbash"
+command = '''
+python - <<'EOF'
+print("it's fine")
+EOF'''
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-escaped-double-quote"
+os = "any"
+shell = "gitbash"
+command = 'echo "a \" b"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-php-filter"
+os = "any"
+shell = "gitbash"
+command = 'php artisan test --filter="Foo Bar|Baz"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-php-loop"
+os = "any"
+shell = "gitbash"
+command = 'for f in *.php; do php -l "$f"; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-subshell-count"
+os = "any"
+shell = "gitbash"
+command = 'x=$( (cd sub && ls) | wc -l ); echo $x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-unknown-tool"
+os = "any"
+shell = "gitbash"
+command = "sshmux exec dev 'a|b'"
+level = "ok"
+rules = []
+
+# --- baseline-guard: the bash-backslash-collapse block ---
+
+[[row]]
+id = "sg-collapse-printf"
+os = "any"
+shell = "gitbash"
+command = "printf '%s' 'a\\\\b'"
+level = "break"
+rules = ["bash-backslash-collapse"]
+fix = "write the text with the Write tool to <file> and run bash <file>"
+
+[[row]]
+id = "sg-collapse-quoted-heredoc"
+os = "any"
+shell = "gitbash"
+command = '''
+python - <<'EOF'
+print('a\\nb')
+EOF'''
+level = "break"
+rules = ["bash-backslash-collapse"]
+fix = "write the text with the Write tool"
+
+[[row]]
+id = "sg-collapse-echo-var"
+os = "any"
+shell = "gitbash"
+command = 'echo "a\\$x"'
+level = "warn"
+rules = ["bash-backslash-collapse"]
+fix = "write the text with the Write tool"
+
+[[row]]
+id = "sg-collapse-echo-double-quoted"
+os = "any"
+shell = "gitbash"
+command = 'echo "a\\b"'
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "sg-collapse-echo-unquoted"
+os = "any"
+shell = "gitbash"
+command = 'echo a\\b'
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "sg-collapse-sed-class"
+os = "any"
+shell = "gitbash"
+command = "sed -i 's/_i/_i\\\\d+/g' rulediff.cjs"
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "sg-collapse-python-c"
+os = "any"
+shell = "gitbash"
+command = "python -c 'print(\"a\\\\nb\")'"
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "sg-allow-grep-one-backslash"
+os = "any"
+shell = "gitbash"
+command = "grep -n 'a\\d' f.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "sg-allow-printf-newline"
+os = "any"
+shell = "gitbash"
+command = "printf 'a\\nb'"
+level = "ok"
+rules = []
+
+# --- bash-backslash-collapse: each narrowed shape, its warn twin and the POSIX twin ---
+
+[[row]]
+id = "collapse-echo-e"
+os = "any"
+shell = "gitbash"
+command = "echo -e 'a\\\\tb'"
+level = "break"
+rules = ["bash-backslash-collapse"]
+fix = "write the text with the Write tool"
+
+[[row]]
+id = "collapse-echo-ne-cluster"
+os = "any"
+shell = "gitbash"
+command = "echo -ne 'x\\\\n' > out.txt"
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-echo-n-then-e"
+os = "any"
+shell = "gitbash"
+command = "echo -n -e 'col1\\\\tcol2'"
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-echo-e-after-text-is-warn"
+os = "any"
+shell = "gitbash"
+command = "echo x -e 'a\\\\tb'"
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-quoted-heredoc-to-a-file"
+os = "any"
+shell = "gitbash"
+command = '''
+cat <<'EOF' > notes.txt
+path C:\\tmp
+EOF'''
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-expanding-heredoc-is-warn"
+os = "any"
+shell = "gitbash"
+command = '''
+cat <<EOF > notes.txt
+path C:\\tmp
+EOF'''
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-printf-behind-a-wrapper"
+os = "any"
+shell = "gitbash"
+command = "timeout 30 printf 'a\\\\b'"
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-printf-behind-a-dynamic-timeout"
+os = "any"
+shell = "gitbash"
+command = "timeout \"$T\" printf 'a\\\\b'"
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-printf-in-a-substitution"
+os = "any"
+shell = "gitbash"
+command = "x=$(printf 'a\\\\b'); echo \"$x\""
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-sed-word-class-is-warn"
+os = "any"
+shell = "gitbash"
+command = "sed -E 's/\\\\w+/x/' notes.txt"
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-grep-pair-is-warn"
+os = "any"
+shell = "gitbash"
+command = "grep -c 'a\\\\.b' notes.txt"
+level = "warn"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-posix-is-ok"
+os = "any"
+shell = "bash"
+command = "printf '%s' 'a\\\\b'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "collapse-posix-heredoc-is-ok"
+os = "any"
+shell = "bash"
+command = '''
+cat <<EOF > notes.txt
+path C:\\tmp
+EOF'''
+level = "ok"
+rules = []
+
+# --- bash-msys-path-mangle ---
+
+[[row]]
+id = "msys-volume-list"
+os = "any"
+shell = "gitbash"
+command = 'docker run --rm -v /data:/data img ls'
+level = "warn"
+rules = ["bash-msys-path-mangle"]
+fix = "write the leading slash as //"
+
+[[row]]
+id = "msys-option-value"
+os = "any"
+shell = "gitbash"
+command = 'docker --config=/etc/docker ps'
+level = "warn"
+rules = ["bash-msys-path-mangle"]
+
+[[row]]
+id = "msys-wsl"
+os = "any"
+shell = "gitbash"
+command = 'wsl ls /home'
+level = "warn"
+rules = ["bash-msys-path-mangle"]
+
+[[row]]
+id = "msys-behind-a-wrapper"
+os = "any"
+shell = "gitbash"
+command = 'timeout 60 kubectl exec pod -- ls /tmp'
+level = "warn"
+rules = ["bash-msys-path-mangle"]
+
+[[row]]
+id = "msys-allow-double-slash"
+os = "any"
+shell = "gitbash"
+command = 'docker exec web ls //var/www'
+level = "ok"
+rules = []
+
+[[row]]
+id = "msys-allow-env-opt-out"
+os = "any"
+shell = "gitbash"
+command = 'env MSYS_NO_PATHCONV=1 docker exec web ls /var/www'
+level = "ok"
+rules = []
+
+[[row]]
+id = "msys-allow-exported-opt-out"
+os = "any"
+shell = "gitbash"
+command = 'export MSYS_NO_PATHCONV=1; docker exec web ls /var/www'
+level = "ok"
+rules = []
+
+[[row]]
+id = "msys-allow-no-path"
+os = "any"
+shell = "gitbash"
+command = "docker ps --format '{{.Names}}'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "msys-allow-msys-program"
+os = "any"
+shell = "gitbash"
+command = 'ls /var/log'
+level = "ok"
+rules = []
+
+[[row]]
+id = "msys-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'docker exec web ls /var/www'
+level = "ok"
+rules = []
+
+# --- bash-ps-cmdlet ---
+
+[[row]]
+id = "ps-cmdlet-piped"
+os = "any"
+shell = "gitbash"
+command = 'Get-Content notes.txt | head -5'
+level = "warn"
+rules = ["bash-ps-cmdlet"]
+fix = "run this in the PowerShell tool"
+
+[[row]]
+id = "ps-cmdlet-second-command"
+os = "any"
+shell = "gitbash"
+command = 'ls; Select-String -Pattern x notes.txt'
+level = "warn"
+rules = ["bash-ps-cmdlet"]
+
+[[row]]
+id = "ps-cmdlet-lowercase"
+os = "any"
+shell = "gitbash"
+command = 'get-childitem .'
+level = "warn"
+rules = ["bash-ps-cmdlet"]
+
+[[row]]
+id = "ps-cmdlet-allow-as-argument"
+os = "any"
+shell = "gitbash"
+command = 'echo Get-Content'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cmdlet-allow-dashed-program"
+os = "any"
+shell = "gitbash"
+command = 'docker-compose up -d'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cmdlet-allow-unknown-dashed-tool"
+os = "any"
+shell = "gitbash"
+command = 'git-lfs version'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cmdlet-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'Get-Content notes.txt'
+level = "ok"
+rules = []
+
+# --- bash-versioned-php ---
+
+[[row]]
+id = "versioned-php-alone"
+os = "any"
+shell = "gitbash"
+command = 'php84 -v'
+level = "warn"
+rules = ["bash-versioned-php"]
+fix = "call the php.exe of that version by its full path"
+
+[[row]]
+id = "versioned-php-exe-uppercase"
+os = "any"
+shell = "gitbash"
+command = 'PHP82.EXE -v'
+level = "warn"
+rules = ["bash-versioned-php"]
+
+[[row]]
+id = "versioned-php-allow-plain"
+os = "any"
+shell = "gitbash"
+command = 'php -v'
+level = "ok"
+rules = []
+
+[[row]]
+id = "versioned-php-allow-full-path"
+os = "any"
+shell = "gitbash"
+command = '/c/herd/bin/php84/php.exe -v'
+level = "ok"
+rules = []
+
+[[row]]
+id = "versioned-php-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'php83 -v'
+level = "ok"
+rules = []
+
+# --- bash-vendor-bin-shebang ---
+
+[[row]]
+id = "vendor-bin-dot-slash"
+os = "any"
+shell = "gitbash"
+command = './vendor/bin/phpunit --filter Foo'
+level = "warn"
+rules = ["bash-vendor-bin-shebang"]
+fix = "php ./vendor/bin/phpunit"
+
+[[row]]
+id = "vendor-bin-allow-through-php"
+os = "any"
+shell = "gitbash"
+command = 'php vendor/bin/phpunit'
+level = "ok"
+rules = []
+
+[[row]]
+id = "vendor-bin-allow-bat"
+os = "any"
+shell = "gitbash"
+command = 'vendor/bin/phpunit.bat'
+level = "ok"
+rules = []
+
+[[row]]
+id = "vendor-bin-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'vendor/bin/pint'
+level = "ok"
+rules = []
+
+# --- bash-cd-slash-d ---
+
+[[row]]
+id = "cd-slash-d-forward-path"
+os = "any"
+shell = "gitbash"
+command = 'cd /d D:/x && ls'
+level = "break"
+rules = ["bash-cd-slash-d"]
+fix = 'cd "D:/x"'
+
+[[row]]
+id = "cd-slash-d-uppercase-quoted"
+os = "any"
+shell = "gitbash"
+command = 'cd /D "D:/x"'
+level = "break"
+rules = ["bash-cd-slash-d"]
+fix = 'cd "D:/x"'
+
+[[row]]
+id = "cd-slash-d-allow-plain-cd"
+os = "any"
+shell = "gitbash"
+command = 'cd D:/x && ls'
+level = "ok"
+rules = []
+
+[[row]]
+id = "cd-slash-d-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'cd /d D:/x'
+level = "ok"
+rules = []
+
+# --- bash-unquoted-backslash-path ---
+
+[[row]]
+id = "unquoted-path-argument"
+os = "any"
+shell = "gitbash"
+command = 'ls C:\Users\dev\notes'
+level = "warn"
+rules = ["bash-unquoted-backslash-path"]
+fix = "write C:/Users/dev/notes with forward slashes"
+
+[[row]]
+id = "unquoted-path-allow-double-quoted"
+os = "any"
+shell = "gitbash"
+command = 'ls "C:\Users\dev"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unquoted-path-allow-single-quoted"
+os = "any"
+shell = "gitbash"
+command = "ls 'C:\\Users\\dev'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "unquoted-path-allow-forward-slashes"
+os = "any"
+shell = "gitbash"
+command = 'ls C:/Users/dev'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unquoted-path-posix-is-ok"
+os = "any"
+shell = "bash"
+command = 'ls C:\Users\dev'
+level = "ok"
+rules = []
