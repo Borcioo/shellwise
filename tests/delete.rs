@@ -489,9 +489,10 @@ fn the_marker_does_not_confirm_too_long() {
 #[test]
 fn a_configured_level_applies_to_the_length_stage_and_to_an_incomplete_analysis() {
     let mut cfg = Config::default();
-    cfg.levels.insert("too-long".to_string(), Level::Warn);
+    // Danger: neither finding's default level here.
+    cfg.levels.insert("too-long".to_string(), Level::Danger);
     cfg.levels
-        .insert("analysis-incomplete".to_string(), Level::Warn);
+        .insert("analysis-incomplete".to_string(), Level::Danger);
     let long = format!("echo {}", "a".repeat(8000));
     for (text, problem, rule) in [
         (long.as_str(), None, "too-long"),
@@ -512,7 +513,7 @@ fn a_configured_level_applies_to_the_length_stage_and_to_an_incomplete_analysis(
         };
         let v = analyse(&input, &cfg, &Deadline::new(Instant::now(), 8000));
         let f = v.findings.iter().find(|f| f.rule == rule);
-        assert_eq!(f.map(|f| f.level), Some(Level::Warn), "{rule}: {v:?}");
+        assert_eq!(f.map(|f| f.level), Some(Level::Danger), "{rule}: {v:?}");
     }
 }
 

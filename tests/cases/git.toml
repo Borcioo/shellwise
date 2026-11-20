@@ -292,6 +292,14 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "checkout-new-branch-from-a-variable"
+os = "any"
+shell = "bash"
+command = 'git checkout -b "$BRANCH"'
+level = "ok"
+rules = []
+
+[[row]]
 id = "worktree-remove-force-the-home-folder"
 os = "any"
 shell = "pwsh"

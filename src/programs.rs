@@ -311,21 +311,27 @@ pub fn lookup(typed: &str, shell: Shell, os: Os) -> Option<&'static Program> {
 /// The command `cmd` runs once its wrappers are read: `timeout 60 rm x` reads as `rm x`, with the
 /// assignments of `env A=1 …` and `sudo A=1 …` added to the command's own. `cmd` itself when its
 /// name is no wrapper, when a wrapper runs nothing (`command -v rm`, `nohup` alone) or when its
-/// name is not static. A wrapped name that is not static gives an opaque command.
+/// name is not static. A wrapped name that is not static gives an opaque command, and so does a
+/// wrapper still in front after `MAX_WRAPPERS` strips: a command may sit behind it.
 pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, SimpleCommand> {
     let env = EnvView::new();
+    let wrapper_of = |c: &SimpleCommand| {
+        c.name
+            .static_value(&env)
+            .and_then(|name| lookup(&name, shell, os).filter(|p| p.is(Kind::Wrapper)))
+    };
     let mut current = Cow::Borrowed(cmd);
     for _ in 0..MAX_WRAPPERS {
-        let Some(name) = current.name.static_value(&env) else {
-            break;
-        };
-        let Some(wrapper) = lookup(&name, shell, os).filter(|p| p.is(Kind::Wrapper)) else {
-            break;
+        let Some(wrapper) = wrapper_of(&current) else {
+            return current;
         };
         match unwrap_once(&current, wrapper, shell, os) {
             Some(next) => current = Cow::Owned(next),
-            None => break,
+            None => return current,
         }
+    }
+    if wrapper_of(&current).is_some() {
+        current.to_mut().opaque = true;
     }
     current
 }
@@ -341,6 +347,8 @@ fn unwrap_once(
     let mut assigns = cmd.assigns.clone();
     let mut operands = wrapper.operands;
     let mut options = true;
+    // An option the table does not list: it may take a value, which shifts every word after it.
+    let mut unknown_option = false;
     let mut i = 0;
     while let Some(w) = cmd.args.get(i) {
         let Some(v) = w.static_value(&env) else {
@@ -367,6 +375,7 @@ fn unwrap_once(
             i += if wrapper.value_options.contains(&v) {
                 2
             } else {
+                unknown_option = true;
                 1
             };
         } else if let Some((name, value)) = assignment(&v).filter(|_| wrapper.assignments) {
@@ -398,7 +407,10 @@ fn unwrap_once(
     } else {
         canonical(&typed, shell, os)
     };
-    let opaque = cmd.opaque || name.is_dynamic() || canonical.is_none();
+    // After an unknown option a name no table knows may be that option's value or an operand
+    // (`timeout --weird v 60 rm x` reads `60`): the command it runs is not known.
+    let unplaced = unknown_option && lookup(&typed, shell, os).is_none();
+    let opaque = cmd.opaque || name.is_dynamic() || canonical.is_none() || unplaced;
     Some(SimpleCommand {
         span: Span {
             start: name.span.start,

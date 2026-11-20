@@ -739,6 +739,82 @@ rules = ["delete-outside-project"]
 fix = "# shellwise: allow"
 
 # The wrapped command cannot be determined, and the text names a delete.
+# A wrapper still in front once the strip stops may hide a delete: past the strip's depth limit
+# (16 wrappers), or after an option the table does not know whose value took the operand slot.
+# Either reads as code the guard cannot read, whatever the target.
+[[row]]
+id = "gb-wrapper-past-the-depth-limit-rm-home"
+os = "any"
+shell = "bash"
+command = "nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup rm -rf FX_HOME"
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "gb-wrapper-past-the-depth-limit-rm-build"
+os = "any"
+shell = "bash"
+command = "nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup rm -rf build"
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
+
+# The twins: at the depth limit the strip still reaches the delete, and a wrapper that runs
+# nothing stays quiet.
+[[row]]
+id = "gb-wrapper-at-the-depth-limit-rm-build"
+os = "any"
+shell = "bash"
+command = "nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup nohup rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-bare-wrapper"
+os = "any"
+shell = "bash"
+command = "nohup"
+level = "ok"
+rules = []
+
+# `--weird` is no timeout option the table knows: if it takes a value, `60` would be the command.
+# A command name no table knows after an unknown option is unread.
+[[row]]
+id = "gb-timeout-unknown-option-then-an-unknown-command"
+os = "any"
+shell = "bash"
+command = "timeout --weird v 60 rm -rf build"
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "gb-timeout-unknown-option-then-a-known-command"
+os = "any"
+shell = "bash"
+command = "timeout --foreground 60 rm -rf build"
+level = "ok"
+rules = []
+
+# With no unknown option the operand slots are placed: an unknown tool runs, and `rm` is its
+# argument, not a command.
+[[row]]
+id = "gb-wrapper-then-an-unknown-tool-with-delete-words"
+os = "any"
+shell = "bash"
+command = "nice mytool rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-timeout-unknown-option-without-a-delete"
+os = "any"
+shell = "bash"
+command = "timeout --weird v 60 make"
+level = "ok"
+rules = []
+
 [[row]]
 id = "gb-wrapper-unreadable-command-with-rm"
 os = "windows"
@@ -1455,12 +1531,30 @@ command = "command -v rm"
 level = "ok"
 rules = []
 
+# Only an option that runs nothing (`-v`, `-V`) stops the strip: `command -p` still runs rm.
+[[row]]
+id = "gb-command-p-rm-rf-home"
+os = "any"
+shell = "bash"
+command = "command -p rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
 # PowerShell aliases are read as the cmdlet they stand for.
 [[row]]
 id = "ps-ri-alias-outside"
 os = "windows"
 shell = "pwsh"
 command = "ri -Recurse -Force ..\\outside\\data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# `-LiteralPath:<value>` glued to its parameter is a target too.
+[[row]]
+id = "ps-ri-inline-literal-path-outside"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -LiteralPath:'..\\outside\\data'"
 level = "danger"
 rules = ["delete-outside-project"]
 
