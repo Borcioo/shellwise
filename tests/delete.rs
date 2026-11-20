@@ -31,8 +31,10 @@ impl Fixture {
     }
 
     /// The FX_ names, longest first so none is replaced inside another.
-    fn names(&self) -> [(&'static str, PathBuf); 7] {
+    fn names(&self) -> [(&'static str, PathBuf); 9] {
         [
+            ("FX_LINKED", self.at(LINKED)),
+            ("FX_MAIN", self.at("main")),
             ("FX_PROTECTED", self.at("protected")),
             ("FX_OUTSIDE", self.at("outside")),
             ("FX_ALLOWED", self.at("allowed")),
@@ -64,6 +66,26 @@ fn mkdir(p: &Path) {
 fn touch(p: &Path) {
     mkdir(p.parent().unwrap());
     std::fs::write(p, b"x").unwrap_or_else(|e| panic!("write {p:?}: {e}"));
+}
+
+/// A linked worktree of the real repo FX_MAIN, where the host setup puts its own (item 5).
+const LINKED: &str = "main/.claude/worktrees/lw";
+
+/// `git` with `args` in `dir`, which must succeed. The identity is passed per call, so no
+/// config is read or written.
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    assert!(out.status.success(), "git {args:?} in {dir:?}: {out:?}");
 }
 
 /// Give `p` the Hidden attribute on Windows; elsewhere a dot name is hidden already.
@@ -226,6 +248,19 @@ fn fixture() -> Arc<Fixture> {
         // `git init` on Windows hides `.git`; the `plaingit-` repo keeps it plain, as WSL git
         // or a copied repo leaves it (R1-6).
         hide(&fx.at("repo/.git"));
+        // A real repo with a real linked worktree: its `.git` is a file naming the main one's.
+        mkdir(&fx.at("main"));
+        git(&fx.at("main"), &["init", "-q"]);
+        git(
+            &fx.at("main"),
+            &["commit", "-q", "--allow-empty", "-m", "init"],
+        );
+        let linked = LINKED.trim_start_matches("main/");
+        git(
+            &fx.at("main"),
+            &["worktree", "add", "-q", "--detach", linked],
+        );
+        assert!(fx.at(LINKED).join(".git").is_file());
         touch(&fx.at(&format!("{LOCKED}/f.txt")));
         lock(&fx.at(LOCKED));
         if let Some(repo) = fx
@@ -286,6 +321,10 @@ fn config(row: &Row) -> Config {
         ..Config::default()
     };
     cfg.policies.git_no_verify = !row.id.starts_with("policy-off-");
+    // A protected path inside the linked worktree (item 5).
+    if row.id.starts_with("linkedwt-protected-") {
+        cfg.protected.push(fx.at(LINKED).join("keep"));
+    }
     if row.id.starts_with("scratch-") {
         cfg.scratch_dir = Some(fx.at("outside"));
     }
@@ -302,6 +341,10 @@ fn cwd(row: &Row) -> Option<PathBuf> {
         None
     } else if row.id.starts_with("norepo-") {
         Some(fx.at("norepo"))
+    } else if row.id.starts_with("linkedwt-") {
+        Some(fx.at(LINKED))
+    } else if row.id.starts_with("mainwt-") {
+        Some(fx.at("main"))
     } else if row.id.starts_with("plaingit-") {
         Some(fx.at("plaingit"))
     } else if row.id.starts_with("admincwd-") {

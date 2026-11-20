@@ -1001,3 +1001,98 @@ shell = "pwsh"
 command = "git restore --stag src/a.txt"
 level = "ok"
 rules = []
+# ---------------------------------------------------------------- item 5 (Ruling 132): a linked worktree
+# `linkedwt-` rows run with the cwd inside FX_LINKED, a real linked worktree of the real repo
+# FX_MAIN (`mainwt-` rows run there). `git worktree remove` never touches the main repository's
+# `.git` and refuses a dirty tree without --force: removing a linked worktree, the cwd's own
+# included, is ok, and with --force a warn that uncommitted work in it is lost. A delete that
+# bypasses git, and the main working tree as the target, stay critical.
+[[row]]
+id = "linkedwt-gb-remove-itself-after-cd-to-main-force"
+os = "windows"
+shell = "gitbash"
+command = "cd FX_MAIN && git log --oneline -1; git worktree remove --force .claude/worktrees/lw; git branch -D fix/x | tail -1"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "linkedwt-gb-remove-itself-after-cd-to-main"
+os = "windows"
+shell = "gitbash"
+command = "cd FX_MAIN && git worktree remove .claude/worktrees/lw"
+level = "ok"
+rules = []
+
+[[row]]
+id = "linkedwt-remove-itself-absolute-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "linkedwt-remove-itself-absolute"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove FX_LINKED"
+level = "ok"
+rules = []
+
+[[row]]
+id = "linkedwt-remove-itself-relative-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "mainwt-remove-a-linked-worktree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force .claude/worktrees/lw"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "mainwt-remove-a-linked-worktree"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove .claude/worktrees/lw"
+level = "ok"
+rules = []
+
+# Twins: a delete that bypasses git keeps its verdict; the main working tree stays critical.
+[[row]]
+id = "linkedwt-gb-rm-rf-itself"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "mainwt-remove-the-main-working-tree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_MAIN"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "linkedwt-remove-the-main-working-tree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_MAIN"
+level = "critical"
+rules = ["delete-critical"]
+
+# A linked worktree that holds a protected path stays critical for that reason.
+[[row]]
+id = "linkedwt-protected-remove-itself-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]

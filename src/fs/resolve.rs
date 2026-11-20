@@ -162,6 +162,9 @@ pub fn path_key(p: &str, os: Os) -> String {
 
 // ------------------------------------------------------------------ critical folders
 
+/// The reason `critical_reason` gives for the cwd's repo root itself.
+pub const REPO_ROOT: &str = "repo root";
+
 /// Why deleting `p` (recursively) is critical, or `None`. `home` is the profile folder from
 /// the hook's environment, not `EnvView::home` (which a command can make dynamic);
 /// `cwd_repo` is the root of the repo holding the event's `cwd`. Compared on `os`'s
@@ -200,7 +203,7 @@ pub fn critical_reason(
     let named: Vec<(&Path, &'static str, &'static str)> = home
         .map(|h| (h, "home folder", "ancestor of the home folder"))
         .into_iter()
-        .chain(cwd_repo.map(|r| (r, "repo root", "ancestor of the repo root")))
+        .chain(cwd_repo.map(|r| (r, REPO_ROOT, "ancestor of the repo root")))
         .chain(
             git_dir
                 .as_deref()
@@ -282,7 +285,7 @@ pub fn critical_by_identity(
         ));
     }
     if let Some(r) = cwd_repo {
-        named.push((r.to_path_buf(), "repo root", "ancestor of the repo root"));
+        named.push((r.to_path_buf(), REPO_ROOT, "ancestor of the repo root"));
         named.push((repo_git(r), REPO_GIT, "ancestor of the repo root"));
     }
     for x in protected {

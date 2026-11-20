@@ -523,6 +523,19 @@ fn is_dir(scene: &Scene, p: &Path) -> Option<bool> {
         .map(|r| r.unwrap_or(false))
 }
 
+/// Whether `p` is a linked worktree's root: its `.git` is a file (`gitdir: …`), where the main
+/// working tree's is a folder. A read that fails or times out: no.
+fn is_linked_worktree(scene: &Scene, p: &Path) -> bool {
+    let fs = Arc::clone(scene.ctx.fs);
+    let git = p.join(".git");
+    matches!(
+        bounded(scene.ctx.deadline, move || fs
+            .lstat(&git)
+            .map(|m| m.is_file)),
+        Ok(Ok(true))
+    )
+}
+
 /// Whether `p` exists now (`None` when the deadline passed).
 fn exists(scene: &Scene, p: &Path) -> Option<bool> {
     let fs = Arc::clone(scene.ctx.fs);
@@ -606,6 +619,10 @@ fn worktree_remove(
     for p in paths {
         match scene.critical(&p, false) {
             Err(_) => return Some(scene.timeout(call.span(), &text)),
+            // A linked worktree that is the cwd's repo root (Ruling 132): git removes only the
+            // worktree and its entry, never the main repository's `.git`.
+            // Only that reason: a protected path inside it stays critical.
+            Ok(Some(reason)) if reason == resolve::REPO_ROOT && is_linked_worktree(scene, &p) => {}
             Ok(Some(reason)) => return Some(delete::critical(&p, reason, call.span())),
             Ok(None) => {}
         }
@@ -620,6 +637,18 @@ fn worktree_remove(
             Some(true) => {
                 match walk::outside_links(&p, scene.ctx.fs, scene.ctx.deadline, scene.ctx.input.os)
                 {
+                    WalkResult::Clean if forced => Some(warn(
+                        GIT_DISCARD,
+                        format!(
+                            "`git worktree remove --force` removes `{}` with any uncommitted or untracked work in it, which is lost",
+                            p.display()
+                        ),
+                        Some(
+                            "commit or stash the work first, or drop --force so git refuses a worktree that holds changes"
+                                .to_string(),
+                        ),
+                        call.span(),
+                    )),
                     WalkResult::Clean => None,
                     WalkResult::Outside(links) => {
                         let link = links.first().map(|l| l.path.clone()).unwrap_or_default();
