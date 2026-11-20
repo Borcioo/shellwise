@@ -747,8 +747,11 @@ fn real_fs_walk_reports_a_mount_inside_the_tree() {
     );
     match outside_links(Path::new("/dev"), &fs, &far(), Os::host()) {
         WalkResult::Outside(links) => assert!(
-            links.iter().any(|l| l.kind == LinkKind::MountPoint
-                && [Path::new("/dev/shm"), Path::new("/dev/pts")].contains(&l.path.as_path())),
+            // Which mounts the capped list names depends on the host (`/dev/shm`, `/dev/pts`,
+            // `/dev/mqueue`, `/dev/hugepages`): any mount point below `/dev` proves the report.
+            links
+                .iter()
+                .any(|l| l.kind == LinkKind::MountPoint && l.path.starts_with("/dev/")),
             "{links:?}"
         ),
         other => panic!("{other:?}"),
