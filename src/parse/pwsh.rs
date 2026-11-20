@@ -319,8 +319,9 @@ fn unclosed_quote(src: &str) -> Option<(QuoteKind, usize)> {
         }
         i += 1;
     }
-    // A comment inside `$(` runs to the end and hides the `)`: PowerShell reports the paren.
-    if matches!(stack.last(), Some(S::Line)) && stack.iter().any(|s| matches!(s, S::Sub(_))) {
+    // A comment left open at the end sits on `Out` (no quote open) or inside `$(`, where it hides
+    // the `)`: PowerShell reports the paren, not the quote.
+    if matches!(stack.last(), Some(S::Line)) {
         return None;
     }
     stack.iter().rev().find_map(|s| match *s {
