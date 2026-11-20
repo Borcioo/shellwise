@@ -720,14 +720,16 @@ command = "timeout --weird 60 newtool -x"
 level = "ok"
 rules = []
 
-# Ruling 111: past an unknown wrapper option the delete is read and judged by the delete levels.
+# An option the wrapper's table row does not list may take a value, so every word after it is a
+# guess: the command is unread, whatever name follows (coordinator review after Ruling 111).
 [[row]]
 id = "gb-wrapper-unknown-option-with-rm"
 os = "windows"
 shell = "gitbash"
 command = "timeout --weird 60 rm -rf build"
-level = "ok"
-rules = []
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
 
 [[row]]
 id = "gb-wrapper-unknown-option-with-rm-outside"
@@ -735,7 +737,108 @@ os = "windows"
 shell = "gitbash"
 command = "timeout --weird 60 rm -rf ../outside/data"
 level = "danger"
+rules = ["opaque-destructive"]
+fix = "# shellwise: allow"
+
+# The options the tools' own help lists are read: flags, values glued to a long option (`=`) or
+# to a short one, short clusters (the last letter may take the next word), and `-` for env.
+[[row]]
+id = "gb-timeout-flags-then-rm-outside"
+os = "any"
+shell = "bash"
+command = "timeout --preserve-status -v 60 rm -rf ../outside/data"
+level = "danger"
 rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-timeout-glued-long-value-then-rm-outside"
+os = "any"
+shell = "bash"
+command = "timeout --signal=KILL 60 rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-timeout-glued-short-value-then-rm-outside"
+os = "any"
+shell = "bash"
+command = "timeout -sKILL 60 rm -rf ../outside/data"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "gb-nice-glued-value-rm-home"
+os = "any"
+shell = "bash"
+command = "nice -n5 rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-sudo-flag-rm-home"
+os = "any"
+shell = "bash"
+command = "sudo -E rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-sudo-cluster-ending-in-a-value-option-rm-home"
+os = "any"
+shell = "bash"
+command = "sudo -Eu root rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-sudo-command-timeout-rm-home"
+os = "any"
+shell = "bash"
+command = "sudo -T 5 rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+# `-l` lists what the user may run and runs nothing; `-U` and `-R` take a value before it.
+[[row]]
+id = "gb-sudo-list-other-user"
+os = "any"
+shell = "bash"
+command = "sudo -U bob -l rm -rf FX_HOME"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-sudo-list-in-a-chroot"
+os = "any"
+shell = "bash"
+command = "sudo -R /srv -l rm -rf FX_HOME"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-env-dash-rm-home"
+os = "any"
+shell = "bash"
+command = "env - rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-env-ignore-environment-rm-home"
+os = "any"
+shell = "bash"
+command = "env -i rm -rf FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+# `-S` splits its value into the command: the guard does not read it.
+[[row]]
+id = "gb-env-split-string-rm"
+os = "any"
+shell = "bash"
+command = "env -S 'rm -rf build'"
+level = "danger"
+rules = ["opaque-destructive"]
 fix = "# shellwise: allow"
 
 # The wrapped command cannot be determined, and the text names a delete.

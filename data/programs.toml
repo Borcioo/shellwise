@@ -20,6 +20,9 @@
 #                                     (`timeout DURATION cmd`)
 # assignments    = true               `NAME=value` words before the command are assignments to it
 # no_run_options = ["-v"]             with one of these the wrapper runs nothing (`command -v x`)
+# flag_options   = ["-p"]             options that take no value; with value_options and
+#                                     no_run_options, from the tool's own help. Any other option
+#                                     makes the wrapped command unread: it may take a value.
 #
 # Rule facts:
 # escapes        = "always"           the program turns `\\` into `\` itself: "always" (printf) or
@@ -37,6 +40,7 @@ name = "timeout"
 shells = ["bash"]
 kind = ["wrapper"]
 value_options = ["-s", "--signal", "-k", "--kill-after"]
+flag_options = ["--preserve-status", "--foreground", "-v", "--verbose"]
 operands = 1
 bounds_wait = true
 
@@ -46,24 +50,29 @@ shells = ["bash"]
 kind = ["wrapper"]
 value_options = ["-n", "--adjustment"]
 
+# `-S` (`--split-string`) is listed nowhere on purpose: its value is the command.
 [[program]]
 name = "env"
 shells = ["bash"]
 kind = ["wrapper"]
 value_options = ["-u", "--unset", "-C", "--chdir", "-a", "--argv0"]
+flag_options = ["-", "-i", "--ignore-environment", "-0", "--null", "-v", "--debug", "--block-signal", "--default-signal", "--ignore-signal", "--list-signal-handling"]
 assignments = true
 
 [[program]]
 name = "sudo"
 shells = ["bash"]
 kind = ["wrapper"]
-value_options = ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type"]
+value_options = ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type", "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user"]
+flag_options = ["-A", "--askpass", "-b", "--background", "-B", "--bell", "-E", "--preserve-env", "-H", "--set-home", "-i", "--login", "-k", "--reset-timestamp", "-n", "--non-interactive", "-P", "--preserve-groups", "-S", "--stdin", "-s", "--shell"]
+no_run_options = ["-l", "--list", "-v", "--validate", "-V", "--version", "-K", "--remove-timestamp", "-e", "--edit"]
 assignments = true
 
 [[program]]
 name = "command"
 shells = ["bash"]
 kind = ["wrapper"]
+flag_options = ["-p"]
 no_run_options = ["-v", "-V"]
 
 [[program]]
