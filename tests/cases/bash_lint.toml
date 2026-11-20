@@ -8,10 +8,11 @@
 # rule: the 2 marker rows (Task 32), bat-metachar (Task 30), bash-unterminated-quote (2 rows,
 # parse-error), bash-ps-call-operator (dropped, F17) and bash-too-long (Task 25).
 #
-# Levels differ from baseline-guard's deny where the plan lands a rule as warn: msys (173 ok rows),
-# and the landing-rule rules whose draft counts exceed 5 ok rows (ps-cmdlet, versioned-php,
-# vendor-bin, unquoted-backslash-path). bash-backslash-collapse is break only for the shapes in
-# PROVEN (printf / echo -e escapes and heredoc bodies) and warn for every other `\\`.
+# Levels differ from baseline-guard's deny where the plan lands a rule as warn: msys (the plan), and
+# the landing-rule rules whose corpus replay denies more than 5 ok rows (versioned-php 33,
+# vendor-bin 31). ps-cmdlet (2) and unquoted-backslash-path (0) are break. bash-backslash-collapse
+# is break only for the shapes in PROVEN (printf / echo -e escapes, quoted heredoc bodies, and the
+# expanding-heredoc pairs whose bytes change) and warn for every other `\\`.
 #
 # TOML: '...' strings hold backslashes as written; "..." strings write each backslash as \\.
 
@@ -22,7 +23,7 @@ id = "sg-unquoted-path-cd"
 os = "any"
 shell = "gitbash"
 command = 'cd X:\src\x && git status'
-level = "warn"
+level = "break"
 rules = ["bash-unquoted-backslash-path"]
 fix = "write X:/src/x with forward slashes"
 
@@ -31,7 +32,7 @@ id = "sg-unquoted-path-git-c"
 os = "any"
 shell = "gitbash"
 command = 'git -C X:\src\timer status'
-level = "warn"
+level = "break"
 rules = ["bash-unquoted-backslash-path"]
 fix = "write X:/src/timer with forward slashes"
 
@@ -49,7 +50,7 @@ id = "sg-ps-cmdlet"
 os = "any"
 shell = "gitbash"
 command = 'Get-ChildItem -Path C:/x -Recurse | Select-Object -First 5'
-level = "warn"
+level = "break"
 rules = ["bash-ps-cmdlet"]
 fix = "run this in the PowerShell tool"
 
@@ -350,6 +351,27 @@ EOF'''
 level = "break"
 rules = ["bash-backslash-collapse"]
 
+# The backquote is written as the code point U+0060.
+[[row]]
+id = "collapse-expanding-heredoc-before-a-backquote"
+os = "any"
+shell = "gitbash"
+command = "cat <<EOF > notes.txt\nrev a\\\\\u0060git rev-parse HEAD\u0060\nEOF"
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-expanding-heredoc-at-a-line-end"
+os = "any"
+shell = "gitbash"
+command = '''
+cat <<EOF > notes.txt
+path C:\\
+next
+EOF'''
+level = "break"
+rules = ["bash-backslash-collapse"]
+
 [[row]]
 id = "collapse-sed-single-backslash-class-is-ok"
 os = "any"
@@ -507,7 +529,7 @@ id = "ps-cmdlet-piped"
 os = "any"
 shell = "gitbash"
 command = 'Get-Content notes.txt | head -5'
-level = "warn"
+level = "break"
 rules = ["bash-ps-cmdlet"]
 fix = "run this in the PowerShell tool"
 
@@ -516,7 +538,7 @@ id = "ps-cmdlet-second-command"
 os = "any"
 shell = "gitbash"
 command = 'ls; Select-String -Pattern x notes.txt'
-level = "warn"
+level = "break"
 rules = ["bash-ps-cmdlet"]
 
 [[row]]
@@ -524,7 +546,7 @@ id = "ps-cmdlet-lowercase"
 os = "any"
 shell = "gitbash"
 command = 'get-childitem .'
-level = "warn"
+level = "break"
 rules = ["bash-ps-cmdlet"]
 
 [[row]]
@@ -532,7 +554,7 @@ id = "ps-cmdlet-behind-a-wrapper"
 os = "any"
 shell = "gitbash"
 command = 'timeout 5 Get-Content notes.txt'
-level = "warn"
+level = "break"
 rules = ["bash-ps-cmdlet"]
 
 [[row]]
@@ -723,7 +745,7 @@ id = "unquoted-path-argument"
 os = "any"
 shell = "gitbash"
 command = 'ls C:\Users\dev\notes'
-level = "warn"
+level = "break"
 rules = ["bash-unquoted-backslash-path"]
 fix = "write C:/Users/dev/notes with forward slashes"
 

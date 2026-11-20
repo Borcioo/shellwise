@@ -291,8 +291,9 @@ fn converted(word: &str) -> bool {
 
 // --- bash-ps-cmdlet ------------------------------------------------------------------------
 
-/// Warn by the landing rule: the draft matcher counted 47 `ok` rows (Task 29 plan).
-pub const PS_CMDLET_LEVEL: Level = Level::Warn;
+/// Break by the landing rule: the corpus replay denies 2 `ok` rows (both a cmdlet that failed
+/// behind `2>/dev/null`).
+pub const PS_CMDLET_LEVEL: Level = Level::Break;
 
 const PS_CMDLET_FIX: &str = "run this in the PowerShell tool";
 
@@ -525,9 +526,8 @@ fn forward_slashes(text: &str) -> String {
 
 // --- bash-unquoted-backslash-path ----------------------------------------------------------
 
-/// Warn by the landing rule until the replay counts it: a draft matcher counted 87 `ok` rows
-/// (it did not tell quoted words from unquoted ones).
-pub const UNQUOTED_PATH_LEVEL: Level = Level::Warn;
+/// Break by the landing rule: the corpus replay denies 0 `ok` rows.
+pub const UNQUOTED_PATH_LEVEL: Level = Level::Break;
 
 pub struct UnquotedBackslashPath;
 

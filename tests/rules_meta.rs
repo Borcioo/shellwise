@@ -24,10 +24,8 @@ fn root() -> &'static Path {
 /// for the deny row. An id leaves the list when its default becomes a deny level.
 const WARN_DEFAULT: &[&str] = &[
     "bash-msys-path-mangle",
-    "bash-ps-cmdlet",
     "bash-versioned-php",
     "bash-vendor-bin-shebang",
-    "bash-unquoted-backslash-path",
 ];
 
 fn is_deny(level: &str) -> bool {

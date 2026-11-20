@@ -5,13 +5,12 @@ folder `X:srcx`. A Windows path in a Bash command needs forward slashes or quote
 
 | Case | Level |
 |---|---|
-| a command word or argument holding `X:\` outside quotes | `warn` by default |
+| a command word or argument holding `X:\` outside quotes | `break` |
 | the path in `"…"` or `'…'`, or written with `/` | no finding |
 | `X:\\` (two backslashes) | no finding here: see `bash-backslash-collapse` |
 
-The level follows the landing rule: a draft matcher that did not tell quoted words from unquoted
-ones counted 87 `ok` rows, so it starts as `warn` (`UNQUOTED_PATH_LEVEL`) until the replay counts
-the rule itself. Git Bash only.
+The level follows the landing rule: the corpus replay denies 0 `ok` rows, so it is `break`
+(`UNQUOTED_PATH_LEVEL`). Git Bash only.
 
 ## Deny
 
@@ -19,7 +18,7 @@ the rule itself. Git Bash only.
 cd X:\src\x && git status
 ```
 
-`warn`: `Fix: write X:/src/x with forward slashes`
+`break`: `Fix: write X:/src/x with forward slashes`
 
 ## Allow
 
