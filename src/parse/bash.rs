@@ -1447,8 +1447,8 @@ impl Lower {
                 names.extend(first_arg..cmd.args.len())
             }
             Some("printf" | "test" | "[") => {
-                for i in first_arg..cmd.args.len() {
-                    match cmd.args[i].static_value(&env).as_deref() {
+                for (i, arg) in cmd.args.iter().enumerate().skip(first_arg) {
+                    match arg.static_value(&env).as_deref() {
                         Some("-v") if target == Some("printf") => picked.push(i + 1),
                         Some("-v") => names.push(i + 1),
                         Some(v) if target == Some("printf") && v.starts_with("-v") => {
@@ -1460,8 +1460,8 @@ impl Lower {
             }
             // `wait -p NAME`, `-pNAME`, `-np NAME`: bash assigns NAME.
             Some("wait") => {
-                for i in first_arg..cmd.args.len() {
-                    match cmd.args[i].static_value(&env) {
+                for (i, arg) in cmd.args.iter().enumerate().skip(first_arg) {
+                    match arg.static_value(&env) {
                         Some(v) if v.len() > 1 && v.starts_with('-') && v.contains('p') => {
                             picked.push(if v.ends_with('p') { i + 1 } else { i })
                         }

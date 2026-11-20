@@ -14,6 +14,8 @@ pub mod ps_var_colon;
 
 pub mod hang;
 
+pub mod inline_length;
+
 pub mod pwsh_lint;
 
 pub struct Ctx<'a> {
@@ -58,6 +60,7 @@ pub trait Rule {
 pub fn length_rules() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(length::TooLong),
+        Box::new(inline_length::InlineScriptRule),
         #[cfg(feature = "testhooks")]
         Box::new(testhooks::LengthHook),
     ]
