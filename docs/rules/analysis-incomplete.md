@@ -12,7 +12,7 @@ The analysis did not finish for a reason other than a parse error:
 
 | Case | Level |
 |---|---|
-| The raw-text scan names a command of the destructive table | `danger` |
+| The raw-text scan names a command of the destructive table, or a .NET `Delete()` call (`(Get-Item x).Delete()`) | `danger` |
 | The raw-text scan finds only text it cannot read (a pipe into a shell, nesting past its depth limit, an encoded body) | `warn` |
 | The raw-text scan itself did not finish | `warn` |
 | Otherwise | `warn` |

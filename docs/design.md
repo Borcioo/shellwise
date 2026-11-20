@@ -176,12 +176,14 @@ The highest finding wins; all findings are listed. Exit 64+ is a usage or intern
   identifies and a real-shell probe confirms the shell refuses: an unclosed quote (outside the
   PowerShell exceptions in `docs/rules/parse-error.md`). Any other parse error is `warn`, or
   `danger` under its own id `parse-error-destructive` when the raw-text scan finds a command of
-  the destructive table; a level configured for `parse-error` does not lower it.
+  the destructive table or a .NET `Delete()` call; a level configured for `parse-error` does
+  not lower it.
 - An analysis that does not finish for any other reason (a panic, a parser that failed itself,
   input over 64 KiB, invalid UTF-8, the deadline, a worker that did not start or ended without a
   result, a config that did not load) → `analysis-incomplete`: `danger` when the raw-text scan
-  finds a command of the destructive table, `warn` otherwise. A region the scan cannot read (a
-  pipe into a shell, nesting past its depth limit, an encoded body) is no destructive match, and
+  finds a command of the destructive table or a .NET `Delete()` call, `warn` otherwise. A region
+  the scan cannot read (a pipe into a shell, nesting past its depth limit, an encoded body) is no
+  destructive match, and
   a scan that does not finish is `warn` too. Only input that cannot be scanned at all (over 1 MiB,
   or stdin still open at the deadline) is `danger` unread. The scan runs only on this path; started
   when the deadline has run out, it still gets 500 ms of the 1500 ms the deadline leaves before

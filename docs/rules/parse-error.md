@@ -10,8 +10,9 @@ The command does not parse. The level depends on the kind of error the parser fo
 | An unclosed quote inside a Bash backtick substitution | `warn` | `bash -n` does not parse inside backticks, so the refusal is not proven. |
 | Any other kind | `warn` | Context only: the shell may still accept and run it. |
 
-Any other kind whose raw text names a command of the destructive table is `danger` under its own
-rule, `parse-error-destructive`, so a level configured here does not lower it.
+Any other kind whose raw text names a command of the destructive table or a .NET `Delete()` call
+is `danger` under its own rule, `parse-error-destructive`, so a level configured here does not
+lower it.
 
 Inside a PowerShell double-quoted string, `$(…)` is code with its own quotes: the `'` in
 `"$("it's")"` is closed.

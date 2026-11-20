@@ -361,9 +361,9 @@ const MAX_QUOTED: usize = 80;
 const SPLIT_FIX: &str = "split the command into simpler calls so each can be checked";
 
 /// The verdict when the analysis cannot finish for `reason`: `danger` when the raw-text scan
-/// names a command of the destructive table, and `warn` otherwise, also when the scan finds only
-/// a region it cannot read or does not finish. The allow marker has no effect here: without a
-/// parse nothing shows it is a comment.
+/// names a command of the destructive table or a .NET `Delete()` call, and `warn` otherwise, also
+/// when the scan finds only a region it cannot read or does not finish. The allow marker has no
+/// effect here: without a parse nothing shows it is a comment.
 pub fn incomplete(command: &str, reason: &str) -> Verdict {
     incomplete_with(command, reason, scan::destructive_row)
 }

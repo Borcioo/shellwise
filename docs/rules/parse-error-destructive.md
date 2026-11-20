@@ -1,8 +1,9 @@
 # parse-error-destructive
 
 The command does not parse, the error is not a kind the shell is proven to refuse (see
-`parse-error`), and its raw text names a command of the destructive table (`data/destructive.toml`):
-`danger`. Nothing proves the shell refuses the text, and part of it may delete.
+`parse-error`), and its raw text names a command of the destructive table (`data/destructive.toml`)
+or a .NET `Delete()` call (`(Get-Item x).Delete()`): `danger`. Nothing proves the shell refuses
+the text, and part of it may delete.
 
 A part of the text the raw scan cannot read (a pipe into a shell, nesting past its depth limit, an
 encoded body) is no destructive match: such a parse error is `parse-error` at `warn`.

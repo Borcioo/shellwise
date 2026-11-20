@@ -1,8 +1,8 @@
 //! The raw-text destructive scan used on every fail-closed path. It needs no parser: it splits the
 //! text into simple commands leniently, once in the bash and once in the PowerShell reading, and
 //! matches the names and flags of `data/destructive.toml` from every shell. On an incomplete
-//! analysis or a parse error a hit on a table row makes the verdict `danger` and names the
-//! command; a region the scan cannot read, with no row behind it, does not.
+//! analysis or a parse error a hit on a table row, or a .NET `Delete()` call, makes the verdict
+//! `danger` and names the command; a region the scan cannot read does not.
 
 use std::borrow::Cow;
 use std::cell::Cell;
