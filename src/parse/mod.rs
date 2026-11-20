@@ -4,6 +4,7 @@
 use crate::level::Span;
 
 pub mod bash;
+pub mod cmd;
 pub mod pwsh;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

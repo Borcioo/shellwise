@@ -26,6 +26,16 @@ const WARN_DEFAULT: &[&str] = &[
     "bash-msys-path-mangle",
     "bash-versioned-php",
     "bash-vendor-bin-shebang",
+    "ps-unix-command",
+    "pwsh-file-list-arg",
+    "ps-kill-wrapper",
+    "ps-auto-variable",
+    "ps-remove-item-star",
+    "ps-stdin-script",
+    "ps-empty-arg",
+    "rg-follow-L",
+    "wsl-argv-rejoin",
+    "claude-cmd-live-config",
 ];
 
 fn is_deny(level: &str) -> bool {
