@@ -159,6 +159,25 @@ pub fn resolve_assigned(
         }
     });
     mark_assigned_except(&mut probe, script, command, &plain);
+    // Top-level plain assignments of any value whose statement assigns nothing else: one a later
+    // unconditional assignment replaces is skipped by the final marks (`X=$(pwd); X=/`). In
+    // PowerShell an expression in the value runs in place and may assign other names.
+    let mut top_plain: Vec<(String, usize, Span)> = Vec::new();
+    for st in &script.stmts {
+        let Stmt::Pipeline(p) = st else { continue };
+        let Some((c, name, value)) = plain_assignment(p, command, pwsh, &declares) else {
+            continue;
+        };
+        let only_itself = value.parts.iter().all(|part| match part {
+            WordPart::Var(n) => !n.contains('='),
+            WordPart::Subst(_) => !pwsh,
+            _ => true,
+        });
+        if only_itself {
+            top_plain.push((key(&name), c.span.start, c.span));
+        }
+    }
+    let mut replaced: Vec<Span> = Vec::new();
     // In order, each value built only from names valid at every use.
     let mut everywhere: Vec<String> = Vec::new();
     let mut held: Vec<Assigned> = Vec::new();
@@ -177,14 +196,15 @@ pub fn resolve_assigned(
                 .filter(|(n, _)| *n == k)
                 .map(|(_, at)| *at)
                 .collect();
-            // Assignments before it are allowed when each is a top-level literal one (a plain
-            // assignment or a loop over a literal list) and this one runs whatever came before
-            // it (no `&&` or `||` in front): the name holds this value from here on.
-            let earlier_literal = mine
-                .iter()
-                .filter(|at| **at < c.at)
-                .all(|at| naive.iter().any(|n| n.at == *at && key(&n.name) == k));
-            let replaces = c.unconditional && earlier_literal;
+            // Assignments before it are allowed when each is a top-level one (a literal one or
+            // loop, or a `top_plain` statement) and this one runs whatever came before it (no
+            // `&&` or `||` in front): the name holds this value from here on. One that may run
+            // later (a function body) does not let it hold.
+            let earlier_top = mine.iter().filter(|at| **at < c.at).all(|at| {
+                naive.iter().any(|n| n.at == *at && key(&n.name) == k)
+                    || top_plain.iter().any(|(n, t, _)| *t == *at && *n == k)
+            });
+            let replaces = c.unconditional && earlier_top;
             if (mine.iter().any(|at| *at < c.at) && !replaces)
                 || probe.is_assigned(&c.name)
                 || KEPT.contains(&k.to_ascii_lowercase().trim_start_matches("env:"))
@@ -223,6 +243,12 @@ pub fn resolve_assigned(
                 && mine_used.iter().all(|s| a.holds_at(*s))
             {
                 known.set(&a.name, &a.values[0]);
+                replaced.extend(
+                    top_plain
+                        .iter()
+                        .filter(|(n, at, _)| *n == k && *at < c.at)
+                        .map(|(_, _, s)| *s),
+                );
                 everywhere.push(k);
             } else {
                 held.push(a.clone());
@@ -235,6 +261,7 @@ pub fn resolve_assigned(
     for c in &naive {
         env.set(&c.name, &c.values[0]);
     }
+    let skip: Vec<Span> = skip.into_iter().chain(replaced).collect();
     mark_assigned_except(env, script, command, &skip);
     for c in &naive {
         if !everywhere.contains(&key(&c.name)) {

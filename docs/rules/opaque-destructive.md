@@ -13,16 +13,21 @@ name, as in `r""m`; in the same
 statement: not a wrapper's switch such as Git Bash's `//c`, not a `cd` before or after it) spells
 a protected location literally: an absolute path that is
 a drive root, `/`, a system folder, the home folder, the repo root or a protected path (or an
-ancestor of one), `~` or `$HOME`, or `.git` from the repo root (Ruling 122 (b)). Level `warn`
-otherwise.
+ancestor of one), `~` or `$HOME`, or `.git` from the repo root (Ruling 122 (b)); in Git Bash also
+a rooted path with no drive under an MSYS system folder (`/usr`) and a `/<letter>/` drive path
+(`/c/` is the drive root). A `.git` spelling is danger too when the repo lookup that would place
+it ran out of time. Level `warn` otherwise.
 
-`Fix: run the delete as a plain command of its own so the guard can check it` (danger: `or, if
-this is intended, run the same command again with ` # shellwise: allow` at its end`)
+`Fix: run the delete as a plain command of its own so the guard can check it` (danger: `Fix: run
+the delete as a plain command of its own, or, if this is intended, run the same command again
+with ` # shellwise: allow` at its end`)
 
 ## Deny
 
 ```bash
 bash -c 'rm -rf "$HOME" && make'
+bash -c 'builtin rm -rf ~'
+bash -c 'rm -rf /c/'      # Git Bash
 ```
 
 ## Warns

@@ -90,7 +90,7 @@ shell = "pwsh"
 command = "[IO.Directory]::Delete('C:\\Program Files\\nodejs', $true)"
 level = "critical"
 rules = ["delete-critical"]
-fix = "each by its full path"
+fix = "ask the user"
 
 [[row]]
 id = "ps-dirdelete-drive-root"
@@ -318,14 +318,22 @@ level = "ok"
 rules = []
 
 # After `;` the delete also runs when the `cd` fails, from the repo root: `..\build` is then
-# outside the project.
+# outside the project. A folder that exists on disk takes the `cd` (Ruling 127).
 [[row]]
 id = "ps-ri-after-cd-into-src-or-not"
 os = "windows"
 shell = "pwsh"
-command = "cd src; Remove-Item -Recurse -Force ..\\build"
+command = "cd nosuch; Remove-Item -Recurse -Force ..\\build"
 level = "warn"
 rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-ri-after-cd-into-existing-src"
+os = "windows"
+shell = "pwsh"
+command = "cd src; Remove-Item -Recurse -Force ..\\build"
+level = "ok"
+rules = []
 
 [[row]]
 id = "ps-ri-after-cd-to-a-variable"
@@ -2933,3 +2941,990 @@ shell = "gitbash"
 command = 'for X in a /; do :; done; X=build; rm -rf "$X"'
 level = "warn"
 rules = ["dynamic-target"]
+
+# ---------------------------------------------------------------- Task 34 C1: `${X:?}`
+# `${X:?}` (the operator right after the name) stops the command when X is empty or unset: no
+# empty-expansion candidate. `${X?}` passes an empty X, and `${X:-a:?b}` is a default.
+[[row]]
+id = "gb-required-var-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "${BUILD_DIR:?}"/*'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-required-var-slash"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "${BUILD_DIR:?}/"'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-required-var-with-message"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "${BUILD_DIR:?build dir unset}"/*'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-required-var-unquoted"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ${BUILD_DIR:?}/*'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-required-var-under-home"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf ~/"${X:?}"'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "px-required-var-contents"
+os = "posix"
+shell = "bash"
+command = 'rm -rf "${BUILD_DIR:?}"/*'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-set-check-var-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "${BUILD_DIR?}"/*'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-default-holding-the-operator"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "${BUILD_DIR:-a:?b}"/*'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-empty-default-contents"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "${BUILD_DIR:-}"/*'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+# ---------------------------------------------------------------- Task 34 C2 (Ruling 127): a certain `cd`
+# A `cd` leaves no fallback to the old folder only in forms the execution oracle proves
+# (F:\Temp\shellwise-t34\W2\fix\oracle\oracle.out, Git Bash 5.2.37 in the Bash tool's
+# `… && eval '…' && pwd -P` shape, pwsh 7.7 and Windows PowerShell 5.1 in the tool's
+# Invoke-Expression launcher): Bash `cd X || exit`, pwsh `$ErrorActionPreference = 'Stop'` and
+# `-ErrorAction Stop`, and a literal folder that exists on disk when nothing before it may change
+# the disk. `nosuch` exists nowhere, `build` is in the repo.
+[[row]]
+id = "gb-cd-missing-or-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || exit 1; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-missing-or-bare-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || exit; rm -rf ./*'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-missing-or-exit-on-its-line"
+os = "windows"
+shell = "gitbash"
+command = "cd nosuch || exit 1\nrm -rf *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-missing-then-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# The oracle: `return` outside a function fails and the next command runs in the old folder.
+[[row]]
+id = "gb-cd-missing-or-return"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || return; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# The oracle: the Bash tool runs the command inside an `&&` list, where `set -e` is ignored.
+[[row]]
+id = "gb-cd-missing-after-set-e"
+os = "windows"
+shell = "gitbash"
+command = 'set -e; cd nosuch; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# The IR does not tell a brace group from a subshell, whose `exit` leaves only the subshell.
+[[row]]
+id = "gb-cd-missing-or-group-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || { echo no; exit 1; }; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# An `exit` in a pipeline runs in a subshell.
+[[row]]
+id = "gb-cd-missing-or-piped-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || exit 1 | cat; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# The `cd` itself may not run.
+[[row]]
+id = "gb-cd-missing-after-or-or-exit"
+os = "windows"
+shell = "gitbash"
+command = 'test -d x || cd nosuch || exit 1; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-or-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd build || exit 1; rm -rf ./*'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-or-return"
+os = "windows"
+shell = "gitbash"
+command = 'cd build || return; rm -rf *'
+level = "ok"
+rules = []
+
+# `set` is no command the guard knows leaves the disk as it read it (a `programs.toml` fact
+# would): today's verdict.
+[[row]]
+id = "gb-cd-existing-after-set-e"
+os = "windows"
+shell = "gitbash"
+command = 'set -e; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-or-group-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd build || { echo no; exit 1; }; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-then-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd build; rm -rf *'
+level = "ok"
+rules = []
+
+# What the guard read on disk may be gone when the `cd` runs.
+[[row]]
+id = "gb-cd-existing-after-a-delete"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf build; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-and"
+os = "windows"
+shell = "gitbash"
+command = 'cd . && cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# Statements before the `cd` that leave the disk as the guard read it (an assignment alone, a
+# location move: one row per name), and their twins that may change it.
+[[row]]
+id = "gb-cd-existing-after-cd"
+os = "windows"
+shell = "gitbash"
+command = 'cd .; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-chdir"
+os = "windows"
+shell = "pwsh"
+command = "chdir .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-sl"
+os = "windows"
+shell = "pwsh"
+command = "sl .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-set-location"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-pushd"
+os = "windows"
+shell = "gitbash"
+command = 'pushd .; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-push-location"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location .; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-popd"
+os = "windows"
+shell = "gitbash"
+command = 'pushd .; popd; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-after-pop-location"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location .; Pop-Location; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-echo"
+os = "windows"
+shell = "gitbash"
+command = 'echo hi; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-an-assignment"
+os = "windows"
+shell = "gitbash"
+command = 'X=1; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-a-program"
+os = "windows"
+shell = "gitbash"
+command = 'touch x; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-substitution"
+os = "windows"
+shell = "gitbash"
+command = 'X=$(rm -rf build); cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-after-a-redirect"
+os = "windows"
+shell = "gitbash"
+command = 'cd . > log.txt; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "ps-cd-existing-after-a-cd-program"
+os = "windows"
+shell = "pwsh"
+command = ".\\cd.exe .; cd FX_REPO\\build; Remove-Item -Recurse -Force *"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "gb-cd-existing-after-a-group"
+os = "windows"
+shell = "gitbash"
+command = '{ echo hi; }; cd build; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# A function named `exit` is no exit: its call may move the shell anywhere.
+[[row]]
+id = "gb-cd-missing-or-a-defined-exit"
+os = "windows"
+shell = "gitbash"
+command = 'exit() { :; }; cd nosuch || exit; rm -rf *'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# `cd nosuch && exit` skips the exit when the `cd` fails.
+[[row]]
+id = "gb-cd-missing-and-exit"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch && exit; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# `source` runs code: the disk may have changed.
+[[row]]
+id = "gb-cd-absolute-after-source"
+os = "windows"
+shell = "gitbash"
+command = 'source x; cd FX_REPO/build; rm -rf *'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# A `cd` in the background or in a pipeline runs in a subshell.
+[[row]]
+id = "gb-cd-existing-in-the-background"
+os = "windows"
+shell = "gitbash"
+command = 'cd build & rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-existing-in-a-pipeline"
+os = "windows"
+shell = "gitbash"
+command = 'cd build | cat; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# `exit 1 2` fails ("too many arguments"); `cd … || exit 1 &` runs the whole list in the
+# background.
+[[row]]
+id = "gb-cd-missing-or-exit-with-two-words"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || exit 1 2; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "gb-cd-missing-or-exit-in-the-background"
+os = "windows"
+shell = "gitbash"
+command = 'cd nosuch || exit 1 & rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+# A link is no folder `lstat` vouches for.
+[[row]]
+id = "gb-cd-link-then-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd jn; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "ps-eap-stop-cd-missing"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Stop'; cd nosuch; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-eap-stop-on-its-line"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = \"stop\"\nSet-Location nosuch\nRemove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps5-eap-stop-cd-missing"
+os = "windows"
+shell = "powershell5"
+command = "$ErrorActionPreference = 'Stop'; cd nosuch; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ea-stop-cd-missing"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location nosuch -ErrorAction Stop; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ea-colon-stop-cd-missing"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location nosuch -ErrorAction:Stop; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ea-alias-stop-cd-missing"
+os = "windows"
+shell = "pwsh"
+command = "sl nosuch -ea Stop; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-push-ea-stop-missing"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location nosuch -ErrorAction Stop; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-missing-then-star"
+os = "windows"
+shell = "pwsh"
+command = "cd nosuchdir; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-eap-stop-under-a-trap"
+os = "windows"
+shell = "pwsh"
+command = "trap { continue }; $ErrorActionPreference = 'Stop'; cd nosuch; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-eap-stop-then-continue"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Stop'; $ErrorActionPreference = 'Continue'; cd nosuch; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-eap-stop-in-the-global-scope"
+os = "windows"
+shell = "pwsh"
+command = "$global:ErrorActionPreference = 'Stop'; cd nosuch; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-eap-stop-then-set-variable"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Stop'; Set-Variable ErrorActionPreference Continue; cd nosuch; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-eap-continue-literal"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Continue'; cd nosuch; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+# The push surely ran, so the pop is back in the repo root, where `*` with -Force takes `.git`.
+[[row]]
+id = "ps-push-ea-stop-then-pop"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location nosuch -ErrorAction Stop; Pop-Location; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-eap-stop-in-a-child-scope"
+os = "windows"
+shell = "pwsh"
+command = "& { $ErrorActionPreference = 'Stop' }; cd nosuch; Remove-Item -Recurse -Force *"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-eap-stop-then-ea-silently"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Stop'; cd nosuch -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force *"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# A variable is the path, so the preference holds: a failing `cd $d` ends the command.
+[[row]]
+id = "ps-eap-stop-cd-var-git"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Stop'; cd $d; Remove-Item -Recurse -Force .git"
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ea-silently-cd-missing"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location nosuch -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force *"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# The oracle: in the PowerShell tool `cd nosuch || exit 1` goes on in the old folder.
+[[row]]
+id = "ps-cd-missing-or-exit"
+os = "windows"
+shell = "pwsh"
+command = "cd nosuch || exit 1; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ea-stop-in-try-catch"
+os = "windows"
+shell = "pwsh"
+command = "try { cd nosuch -ErrorAction Stop } catch {}; Remove-Item -Recurse -Force *"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-eap-stop-cd-existing"
+os = "windows"
+shell = "pwsh"
+command = "$ErrorActionPreference = 'Stop'; cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ea-stop-cd-existing-object-files"
+os = "windows"
+shell = "pwsh"
+command = "Set-Location build -ErrorAction Stop; Remove-Item -Recurse -Force *.o"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-then-star"
+os = "windows"
+shell = "pwsh"
+command = "cd build; Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-push-existing-try-finally"
+os = "windows"
+shell = "pwsh"
+command = "Push-Location build; try { Remove-Item -Recurse -Force * } finally { Pop-Location }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-cd-existing-and-star"
+os = "windows"
+shell = "pwsh"
+command = "cd build && Remove-Item -Recurse -Force *"
+level = "ok"
+rules = []
+
+# Ruling 127 (oracle F:\Temp\shellwise-t34\W2\fix\oracle\glob-git.out): a PowerShell wildcard
+# takes the hidden `.git` only with -Force; without it the repo root's contents are danger.
+[[row]]
+id = "ps-ri-repo-contents-without-force"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse *"
+level = "danger"
+rules = ["delete-repo-contents"]
+
+[[row]]
+id = "ps-ri-repo-contents-force-alias"
+os = "windows"
+shell = "pwsh"
+command = "rm -r -fo *"
+level = "critical"
+rules = ["delete-critical"]
+
+# ---------------------------------------------------------------- Task 34 C4, C8, slice E: MSYS system folders
+[[row]]
+id = "gb-cd-usr-and-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr && rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+fix = "ask the user"
+
+[[row]]
+id = "gb-cd-etc-and-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /etc && rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-cd-usr-local-and-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr/local && rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-cd-usr-then-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr; rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-cd-usr-and-sub-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr && rm -rf local/*'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-cd-usr-then-surely-into-the-repo"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr; cd FX_REPO/build; rm -rf *'
+level = "ok"
+rules = []
+
+# When the `&&` chain breaks, the shell may still be in `/usr`.
+[[row]]
+id = "gb-cd-usr-and-into-the-repo-then-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr && cd FX_REPO/build && true; rm -rf *'
+level = "critical"
+rules = ["delete-critical"]
+
+# An absolute glob is no MSYS folder's contents (the location stays one the guard cannot follow).
+[[row]]
+id = "gb-cd-usr-and-an-absolute-glob"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr && rm -rf FX_REPO/build/*'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "gb-cd-usr-then-into-the-repo"
+os = "windows"
+shell = "gitbash"
+command = 'cd /usr && cd FX_REPO/build && rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-bash-c-drive-root"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf /c/'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-c-msys-system-folder"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf /usr'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Only `/<letter>` or `/<letter>/…` names a drive: `/cWindows` is no `C:\Windows`.
+[[row]]
+id = "gb-bash-c-no-drive-letter-path"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf /cWindows'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-c-msys-temp"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf /tmp/x'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-empty-var-then-msys-system-folder"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf $D/usr'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-empty-var-then-quoted-msys-etc"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf "$D/etc/"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-empty-var-then-msys-temp"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf $D/tmp'
+level = "warn"
+rules = ["dynamic-target"]
+
+# ---------------------------------------------------------------- Task 34 C6: Fix texts
+[[row]]
+id = "gb-bash-c-home-fix-says-it-once"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+fix = "of its own, or, if this is intended, run the same"
+
+# Below a system folder every path is critical again: no path to suggest.
+[[row]]
+id = "ps-ri-below-a-system-folder"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force C:\\Windows\\Temp"
+level = "critical"
+rules = ["delete-critical"]
+fix = "ask the user"
+
+[[row]]
+id = "gb-rm-rf-msys-system-folder-fix"
+os = "windows"
+shell = "gitbash"
+command = 'rm -rf /usr'
+level = "critical"
+rules = ["delete-critical"]
+fix = "ask the user"
+
+# ---------------------------------------------------------------- Task 34 C9: a reassignment after a dynamic one
+# A top-level unconditional assignment replaces whatever the name held; an earlier assignment
+# that may run later (a function body) still makes the name dynamic.
+[[row]]
+id = "gb-literal-after-a-substitution"
+os = "windows"
+shell = "gitbash"
+command = 'X=$(pwd); X=/; rm -rf "$X"'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-literal-build-after-a-substitution"
+os = "windows"
+shell = "gitbash"
+command = 'X=$(pwd); X=build; rm -rf "$X"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-literal-after-a-function-assignment"
+os = "windows"
+shell = "gitbash"
+command = 'f() { X=/; }; X=build; f; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+# An absolute value needs no location: only the function body's assignment keeps it dynamic.
+[[row]]
+id = "gb-absolute-literal-after-a-function-assignment"
+os = "windows"
+shell = "gitbash"
+command = 'f() { X=/; }; X=FX_REPO/build; f; rm -rf "$X"; X=b'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-conditional-literal-after-a-substitution"
+os = "windows"
+shell = "gitbash"
+command = 'X=$(pwd) && X=/; rm -rf "$X"'
+level = "warn"
+rules = ["dynamic-target"]
+
+# `${Y:=/}` assigns Y: the statement it stands in stays marked when X is replaced.
+[[row]]
+id = "gb-literal-after-an-assigning-expansion"
+os = "windows"
+shell = "gitbash"
+command = 'Y=build; X=${Y:=/}; X=b; rm -rf "$Y"/'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+# A PowerShell expression value may assign other names in place: the statement stays marked.
+[[row]]
+id = "ps-literal-after-an-expression"
+os = "windows"
+shell = "pwsh"
+command = "$x = (Get-Location).Path; $x = 'C:\\'; Remove-Item -Recurse -Force $x"
+level = "warn"
+rules = ["dynamic-target"]
+
+# ---------------------------------------------------------------- Task 34 rows Tasks 36-38 keep green
+[[row]]
+id = "gb-bash-c-builtin-rm-home"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'builtin rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-ri-unknown-drive-folder"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force Z:\\work\\build"
+level = "warn"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-ri-unknown-drive-root"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force Z:\\"
+level = "critical"
+rules = ["delete-critical"]
+
+# C7 hardening (Ruling 91a: an unknown tool is never a reason to deny by itself): these runners
+# and wrappers are not in the table, so their delete reads ok today. 0 corpus rows.
+[[row]]
+id = "gb-npx-rimraf-home"
+os = "windows"
+shell = "gitbash"
+command = 'npx rimraf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-pnpm-dlx-rimraf-home"
+os = "windows"
+shell = "gitbash"
+command = 'pnpm dlx rimraf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-bunx-rimraf-home"
+os = "windows"
+shell = "gitbash"
+command = 'bunx rimraf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-npm-exec-rimraf-home"
+os = "windows"
+shell = "gitbash"
+command = 'npm exec rimraf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-yarn-dlx-rimraf-home"
+os = "windows"
+shell = "gitbash"
+command = 'yarn dlx rimraf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-busybox-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'busybox rm -rf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-stdbuf-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'stdbuf -o0 rm -rf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-ionice-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'ionice -c3 rm -rf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-watch-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'watch rm -rf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-uv-run-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'uv run rm -rf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-poetry-run-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'poetry run rm -rf ~'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-doas-rm-root"
+os = "windows"
+shell = "gitbash"
+command = 'doas rm -rf /'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-winpty-rm-home"
+os = "windows"
+shell = "gitbash"
+command = 'winpty rm -rf ~'
+level = "ok"
+rules = []

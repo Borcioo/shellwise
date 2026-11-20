@@ -24,7 +24,14 @@ impl Fixture {
         let root =
             std::env::temp_dir().join(format!("shellwise-delete-deadline-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        for dir in ["repo/.git", "repo/build", "repo/keep", "vault", "home"] {
+        for dir in [
+            "repo/.git",
+            "repo/build",
+            "repo/keep",
+            "repo/src",
+            "vault",
+            "home",
+        ] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         for file in ["repo/a.txt", "repo/build/x.o", "home/f.txt"] {
@@ -134,6 +141,8 @@ fn a_repo_lookup_that_times_out_never_lowers_a_delete_to_warn() {
     const DISCARD: &[&str] = &["git-discard"];
     const CRITICAL: &[&str] = &["delete-critical"];
     const TIMEOUT: &[&str] = &["walk-timeout"];
+    const OPAQUE: &[&str] = &["opaque-destructive"];
+    const REPO_CONTENTS: &[&str] = &["delete-repo-contents"];
 
     // Without the hook: the lookup finishes. A protected path inside the repo makes the root an
     // ancestor of one, and deleting inside the root stays exempt.
@@ -152,6 +161,9 @@ fn a_repo_lookup_that_times_out_never_lowers_a_delete_to_warn() {
             &[],
         ),
         row(bash, "git clean -fd", "repo", inside, "danger", DISCARD),
+        // Ruling 127: a folder on disk takes the `cd`; a cwd that is gone reads nothing.
+        row(bash, "cd build; rm -rf *", "repo", out, "ok", &[]),
+        row(bash, "cd build; rm -rf *", "gone", out, "ok", &[]),
     ];
     let mut wrong = mismatches(&fx, &control);
 
@@ -185,6 +197,9 @@ fn a_repo_lookup_that_times_out_never_lowers_a_delete_to_warn() {
         row(bash, "rm -rf .", "repo", out, "danger", TIMEOUT),
         row(bash, "rm -rf build", "repo", out, "danger", TIMEOUT),
         row(bash, "rm -rf *", "repo", out, "danger", TIMEOUT),
+        // C3: a glob over a folder whose repo lookup timed out.
+        row(bash, "rm -rf ./*", "repo", out, "danger", TIMEOUT),
+        row(bash, "rm -rf ../*", "repo/src", out, "danger", TIMEOUT),
         row(bash, "rm -rf ..", "repo/build", out, "danger", TIMEOUT),
         row(bash, "rm -rf ../.git", "repo/build", out, "danger", TIMEOUT),
         row(
@@ -201,10 +216,34 @@ fn a_repo_lookup_that_times_out_never_lowers_a_delete_to_warn() {
         row(bash, &absolute, "repo", out, "danger", TIMEOUT),
         // Neither recursive nor forced: warn.
         row(bash, "rm a.txt", "repo", out, "warn", TIMEOUT),
+        // C8: unread code that spells `.git` while the lookup that would place it timed out.
+        row(bash, "bash -c 'rm -rf .git'", "repo", out, "danger", OPAQUE),
+        row(bash, "bash -c 'rm -rf build'", "repo", out, "warn", OPAQUE),
     ];
     wrong.extend(mismatches(&fx, &rows));
+    // Ruling 127: the read of the `cd` target times out: the old folder stays a candidate.
+    unsafe { std::env::set_var("SHELLWISE_TESTHOOK", "dir-lookup-timeout") };
+    let dir_rows = [
+        row(
+            bash,
+            "cd build; rm -rf *",
+            "repo",
+            out,
+            "danger",
+            REPO_CONTENTS,
+        ),
+        row(
+            pwsh,
+            "cd build; Remove-Item -Recurse -Force *",
+            "repo",
+            out,
+            "critical",
+            CRITICAL,
+        ),
+    ];
+    wrong.extend(mismatches(&fx, &dir_rows));
     unsafe { std::env::remove_var("SHELLWISE_TESTHOOK") };
-    let total = control.len() + rows.len();
+    let total = control.len() + rows.len() + dir_rows.len();
     assert!(
         wrong.is_empty(),
         "{} of {total} rows:\n{}",

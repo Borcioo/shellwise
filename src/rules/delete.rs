@@ -131,6 +131,9 @@ pub const OPAQUE_DESTRUCTIVE: &str = "opaque-destructive";
 pub const DELETE_EMPTY_EXPANSION: &str = "delete-empty-expansion";
 pub const DELETE_REPO_CONTENTS: &str = "delete-repo-contents";
 
+/// The reason a system folder is critical (`resolve::critical_reason` says the same).
+const SYSTEM_FOLDER: &str = "system folder";
+
 /// The Fix line of every danger the marker may confirm.
 pub(crate) const CONFIRM_FIX: &str =
     "if this is intended, run the same command again with ` # shellwise: allow` at its end";
@@ -648,6 +651,8 @@ impl<'a> Scene<'a> {
         let input = self.ctx.input;
         let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
         loc.read_script(self.ctx.script);
+        loc.read_text(input.command);
+        loc.use_disk(self.ctx.fs, self.ctx.deadline);
         loc
     }
 
@@ -918,6 +923,8 @@ impl<'a> Scene<'a> {
                 WordPart::Literal(s) | WordPart::Glob(s) => text.push_str(s),
                 WordPart::Var(name) => match self.env.get(name) {
                     Some(v) => text.push_str(v),
+                    // `${X:?}` stops the command when X is empty or unset: it never reads empty.
+                    None if empty && stops_when_empty(name) => return None,
                     None if empty => {}
                     None => return None,
                 },
@@ -936,13 +943,14 @@ impl<'a> Scene<'a> {
     /// Ruling 125: a glob over the literal contents of a protected folder (`rm -rf ~/*`, `cd / &&
     /// rm -rf *`) is critical like the folder; over the repo root's it is danger
     /// (`delete-repo-contents`), unless the glob takes `.git` too (a Bash step starting with
-    /// `.`, any PowerShell wildcard). `None` when the word is no such glob or its folder is none
-    /// of them: it is judged path by path.
+    /// `.`, a PowerShell wildcard with `-Force`). `None` when the word is no such glob or its
+    /// folder is none of them: it is judged path by path.
     fn glob_contents(
         &mut self,
         word: &Word,
         loc: &Location,
         by: DeleteBy,
+        how: How,
         span: Span,
     ) -> Option<Finding> {
         let shell = self.ctx.input.shell;
@@ -959,7 +967,17 @@ impl<'a> Scene<'a> {
             return None;
         }
         if self.msys_system(&folder) {
-            return Some(critical_contents(Path::new(&folder), "system folder", span));
+            return Some(critical_contents(Path::new(&folder), SYSTEM_FOLDER, span));
+        }
+        // A relative glob after a Git Bash `cd` to an MSYS system folder (`cd /usr && rm -rf *`).
+        if let Some(dir) = loc
+            .msys_folder()
+            .filter(|_| !(Path::new(&folder).is_absolute() || folder.starts_with(['/', '\\'])))
+        {
+            let inside = format!("{}/{}", dir.trim_end_matches('/'), folder);
+            if self.msys_system(&inside) {
+                return Some(critical_contents(Path::new(&inside), SYSTEM_FOLDER, span));
+            }
         }
         let as_word = Word {
             parts: vec![WordPart::Literal(folder)],
@@ -979,13 +997,16 @@ impl<'a> Scene<'a> {
             {
                 return Some(critical_contents(&p, reason, span));
             }
-            // A lookup that times out, or a folder above the repo root (`../*` from it), is
-            // judged path by path, as the delete of each match.
-            let Ok(Some(root)) = self.repo() else {
-                continue;
+            // A folder above the repo root (`../*` from it) is judged path by path, as the
+            // delete of each match; a lookup that times out may have been the root.
+            let root = match self.repo() {
+                Ok(Some(root)) => root,
+                Ok(None) => continue,
+                Err(TimedOut) => return Some(self.lookup_timeout(how, span, &text)),
             };
             if self.key(&root) == self.key(&p) {
-                let takes_git = is_pwsh(shell) || step.starts_with('.');
+                // A PowerShell wildcard leaves the hidden `.git` without -Force (Ruling 127).
+                let takes_git = (is_pwsh(shell) && how.forced) || step.starts_with('.');
                 if !takes_git {
                     return Some(repo_contents(&p, span));
                 }
@@ -1004,6 +1025,27 @@ impl<'a> Scene<'a> {
         self.ctx.input.shell == Shell::Bash(crate::BashProfile::GitBash)
             && self.os() == Os::Windows
             && resolve::is_msys_system_path(text)
+    }
+
+    /// In Git Bash, `/c` or `/c/rest`: the Windows path `C:\rest` it names.
+    fn msys_drive_path(&self, text: &str) -> Option<PathBuf> {
+        if self.ctx.input.shell != Shell::Bash(crate::BashProfile::GitBash)
+            || self.os() != Os::Windows
+        {
+            return None;
+        }
+        let rest = text.strip_prefix('/')?;
+        let mut chars = rest.chars();
+        let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+        let after = chars.as_str();
+        if !(after.is_empty() || after.starts_with('/')) {
+            return None;
+        }
+        Some(PathBuf::from(format!(
+            "{}:\\{}",
+            letter.to_ascii_uppercase(),
+            after.trim_start_matches('/').replace('/', "\\")
+        )))
     }
 
     /// Danger (a) of Ruling 122: a recursive or forced delete of `word` that, with every
@@ -1038,7 +1080,9 @@ impl<'a> Scene<'a> {
             let p = PathBuf::from(&folder);
             let home = self.home.clone();
             let protected = &self.ctx.cfg.protected;
-            let reason = match resolve::critical_reason(&p, None, home.as_deref(), protected) {
+            let lexical = resolve::critical_reason(&p, None, home.as_deref(), protected)
+                .or_else(|| self.msys_system(&folder).then_some(SYSTEM_FOLDER));
+            let reason = match lexical {
                 Some(r) => Some(r),
                 None => match self.repo() {
                     Ok(repo) => {
@@ -1115,9 +1159,7 @@ impl<'a> Scene<'a> {
                 format!(
                     "the guard cannot read what `{shown}` runs; its text names a command that deletes or discards data, and `{p}`, the {reason}"
                 ),
-                format!(
-                    "run the delete as a plain command of its own, or, if this is intended, {CONFIRM_FIX}"
-                ),
+                format!("run the delete as a plain command of its own, or, {CONFIRM_FIX}"),
                 c.span,
             ),
             None => warn(
@@ -1145,14 +1187,25 @@ impl<'a> Scene<'a> {
         if home_spelling {
             return self.home.clone().map(|_| (w.to_string(), "home folder"));
         }
-        let path = if lower == ".git" || lower == "./.git" || lower == ".\\.git" {
+        let git_spelling = lower == ".git" || lower == "./.git" || lower == ".\\.git";
+        if self.msys_system(w) {
+            return Some((w.to_string(), SYSTEM_FOLDER));
+        }
+        let path = if git_spelling {
             self.ctx.input.cwd.as_ref()?.join(".git")
+        } else if let Some(drive) = self.msys_drive_path(w) {
+            drive
         } else if Path::new(w).is_absolute() || w.starts_with(['/', '\\']) {
             PathBuf::from(w)
         } else {
             return None;
         };
-        let repo = self.repo().ok().flatten();
+        let repo = match self.repo() {
+            Ok(repo) => repo,
+            // The lookup that would place `.git` ran out of time: it may be the repo's.
+            Err(TimedOut) if git_spelling => return Some((w.to_string(), "repo's .git")),
+            Err(TimedOut) => None,
+        };
         let reason = resolve::critical_reason(
             &path,
             repo.as_deref(),
@@ -1230,12 +1283,12 @@ impl<'a> Scene<'a> {
         // A literal root or system path is critical wherever the shell stands.
         if let Some(text) = literal(word) {
             let reason = resolve::critical_reason(Path::new(&text), None, None, &[])
-                .or_else(|| self.msys_system(&text).then_some("system folder"));
+                .or_else(|| self.msys_system(&text).then_some(SYSTEM_FOLDER));
             if let Some(reason) = reason {
                 return Some(critical(Path::new(&text), reason, span));
             }
         }
-        if let Some(found) = self.glob_contents(word, loc, by, span) {
+        if let Some(found) = self.glob_contents(word, loc, by, how, span) {
             return Some(found);
         }
         let target = resolve::target_how(
@@ -1413,6 +1466,13 @@ fn with_value(w: &Word, name: &str, value: &str, fold: bool) -> Word {
     }
 }
 
+/// A Bash expansion `${NAME:?…}` as the IR keeps it (`NAME:?…`): the operator right after the
+/// name, so a default that holds `:?` (`${X:-a:?b}`) is none.
+fn stops_when_empty(var: &str) -> bool {
+    var.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        .starts_with(":?")
+}
+
 /// A path step made only of glob stars and dots (`*`, `.*`, `*.*`).
 fn is_all_glob(step: &str) -> bool {
     step.contains('*') && step.chars().all(|c| c == '*' || c == '.')
@@ -1426,11 +1486,20 @@ pub(crate) fn critical(p: &Path, reason: &str, span: Span) -> Finding {
             "deleting `{}` is blocked: it is the {reason}, and the allow marker cannot confirm it",
             p.display()
         ),
-        format!(
-            "delete only the folders inside it you mean, each by its full path, for example `{}`",
-            p.join("<name>").display()
-        ),
+        critical_fix(p, reason),
         span,
+    )
+}
+
+/// The Fix of a critical delete: the folders inside `p`, unless every path below it is critical
+/// too (a system folder), where only the user can run it.
+fn critical_fix(p: &Path, reason: &str) -> String {
+    if reason == SYSTEM_FOLDER {
+        return "do not delete in a system folder; if it must go, ask the user to run the command themselves".to_string();
+    }
+    format!(
+        "delete only the folders inside it you mean, each by its full path, for example `{}`",
+        p.join("<name>").display()
     )
 }
 
@@ -1443,10 +1512,7 @@ fn critical_contents(p: &Path, reason: &str, span: Span) -> Finding {
             "deleting everything inside `{}` is blocked: it is the {reason}, and the allow marker cannot confirm it",
             p.display()
         ),
-        format!(
-            "delete only the folders inside it you mean, each by its full path, for example `{}`",
-            p.join("<name>").display()
-        ),
+        critical_fix(p, reason),
         span,
     )
 }

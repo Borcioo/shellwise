@@ -732,7 +732,51 @@ pub struct Location {
     defined: Vec<String>,
     /// The aliases the whole command defines (`script_aliases`).
     aliases: Vec<Alias>,
+    /// Where a `cd` target is read on disk (Ruling 127): a literal folder that exists takes the
+    /// `cd`. `None` (no `use_disk`): nothing is read.
+    disk: Option<Disk>,
+    /// An earlier statement may have changed the disk: what a read shows now proves nothing.
+    disk_stale: bool,
+    /// PowerShell: `$ErrorActionPreference = 'Stop'` holds here, so a failing location change
+    /// ends the command.
+    stop_on_error: bool,
+    /// The command text may hold a `trap`, which resumes after a terminating error: a Stop form
+    /// proves nothing. True until `read_text` reads none.
+    may_trap: bool,
+    /// Set by `after_in` while it reads a statement whose `||` leads to a lone `exit`.
+    exit_follows: bool,
+    /// Set by `apply`: the location command it read ends the command when it fails.
+    halts: bool,
+    /// Set by `apply`: the literal MSYS system folder a Git Bash `cd` goes to.
+    msys_target: Option<String>,
+    /// Git Bash: the MSYS system folder (`/usr`) a literal `cd` may have moved to, until a later
+    /// move is sure to have left it.
+    msys: Option<String>,
+    /// The MSYS folder the shell is back in when the current `&&` chain breaks.
+    msys_fallback: Option<String>,
 }
+
+/// The file system and deadline a `Location` reads a `cd` target with.
+#[derive(Clone)]
+struct Disk {
+    fs: SharedFs,
+    deadline: Deadline,
+}
+
+impl std::fmt::Debug for Disk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Disk")
+    }
+}
+
+/// Two locations reading the same file system are alike, whatever their deadlines.
+impl PartialEq for Disk {
+    fn eq(&self, other: &Disk) -> bool {
+        Arc::ptr_eq(&self.fs, &other.fs)
+    }
+}
+
+impl Eq for Disk {}
 
 /// The path a link-creating command makes: `mklink`, `New-Item -ItemType Junction|SymbolicLink|
 /// HardLink`, `ln -s`, one entry per link. `None`: a link at a place the hook cannot tell.
@@ -1063,11 +1107,41 @@ impl Location {
             commands_read: false,
             defined: Vec::new(),
             aliases: Vec::new(),
+            disk: None,
+            disk_stale: false,
+            stop_on_error: false,
+            may_trap: true,
+            exit_follows: false,
+            halts: false,
+            msys_target: None,
+            msys: None,
+            msys_fallback: None,
         }
     }
 
     pub fn shell(&self) -> Shell {
         self.shell
+    }
+
+    /// Read a literal `cd` target on `fs` within `deadline` (Ruling 127): a folder that exists
+    /// takes the `cd`, with no fallback to the old folder. A read that times out, fails or names
+    /// a network or device path changes nothing.
+    pub fn use_disk(&mut self, fs: &SharedFs, deadline: &Deadline) {
+        self.disk = Some(Disk {
+            fs: Arc::clone(fs),
+            deadline: *deadline,
+        });
+    }
+
+    /// Read the command's text: a PowerShell Stop form proves a location change only when no
+    /// `trap` may resume after its error.
+    pub fn read_text(&mut self, command: &str) {
+        self.may_trap = contains_word(&command.to_ascii_lowercase(), "trap");
+    }
+
+    /// Git Bash: the MSYS system folder a literal `cd` may have moved the shell to.
+    pub fn msys_folder(&self) -> Option<&str> {
+        self.msys.as_deref()
     }
 
     /// Read the whole command once, before the first target: a path on a built-in drive that is
@@ -1131,7 +1205,25 @@ impl Location {
         if let Some(op) = script.join(i) {
             self.prev = Some(op);
         }
+        self.exit_follows = script.join(i + 1) == Some(ChainOp::Or)
+            && script.stmts.get(i + 1).is_some_and(|s| self.lone_exit(s));
         self.after(&script.stmts[i], env);
+        self.exit_follows = false;
+    }
+
+    /// `st` is a lone Bash `exit` (`exit`, `exit 1`) in its own pipeline, in the foreground: it
+    /// ends this shell (Ruling 127's oracle; in a pipeline it would end only a subshell). A
+    /// function the command names `exit` makes its call a location change `apply` cannot follow.
+    fn lone_exit(&self, st: &Stmt) -> bool {
+        let Stmt::Pipeline(p) = st else { return false };
+        let [Elem::Cmd(c)] = p.elems.as_slice() else {
+            return false;
+        };
+        // `exit a b` fails ("too many arguments") and the shell goes on.
+        !is_pwsh(self.shell)
+            && p.chain != Some(ChainOp::Background)
+            && literal(&c.name).as_deref() == Some("exit")
+            && c.args.len() <= 1
     }
 
     /// Advance past `stmt`.
@@ -1165,6 +1257,8 @@ impl Location {
             self.new_link_unknown |= d.unknown.is_some();
             self.new_links.extend(d.known);
         }
+        // A compound statement may change the disk, now or when its body runs later.
+        self.disk_stale |= !matches!(stmt, Stmt::Pipeline(_));
         match stmt {
             Stmt::Pipeline(p) => self.after_pipeline(p, env),
             Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
@@ -1190,6 +1284,9 @@ impl Location {
         if op != Some(ChainOp::And) {
             let fb = std::mem::take(&mut self.fallback);
             self.dirs.union(&fb);
+            if let Some(m) = self.msys_fallback.take() {
+                self.msys.get_or_insert(m);
+            }
         }
         self.prev = op;
     }
@@ -1198,6 +1295,14 @@ impl Location {
         let before = self.dirs.clone();
         let single = p.elems.len() == 1;
         let certain = single && p.chain == Some(ChainOp::And) && self.prev != Some(ChainOp::Or);
+        // It runs whenever the statements before it ran, in this shell.
+        let runs = single
+            && !matches!(self.prev, Some(ChainOp::And | ChainOp::Or))
+            && p.chain != Some(ChainOp::Background);
+        let exits = self.exit_follows;
+        self.halts = false;
+        self.msys_target = None;
+        let pushes = self.stack.len();
         let mut changed: Option<Dirs> = None;
         for e in &p.elems {
             if let Elem::Cmd(c) = e
@@ -1213,15 +1318,132 @@ impl Location {
             changed = Some(Dirs::unknown(UnknownKind::MayBeCritical));
         }
         if let Some(new) = changed {
-            if certain {
+            // Ruling 127: a move the shell cannot go on without leaves no old folder.
+            let sure = runs && (self.halts || exits || self.on_disk(&new));
+            if sure {
+                if self.stack.len() > pushes
+                    && let Some(top) = self.stack.last_mut()
+                {
+                    top.certain = true;
+                }
+                self.dirs = new;
+            } else if certain {
                 self.fallback.union(&before);
                 self.dirs = new;
             } else {
                 self.dirs = new;
                 self.dirs.union(&before);
             }
+            match self.msys_target.take() {
+                Some(t) => self.msys = Some(t),
+                None if sure => self.msys = None,
+                // Back in it when the `&&` chain breaks, as `fallback`.
+                None if certain => {
+                    self.msys_fallback = self.msys.take().or(self.msys_fallback.take())
+                }
+                None => {}
+            }
         }
+        if is_pwsh(self.shell) {
+            self.read_error_preference(p, runs);
+        }
+        self.disk_stale |= !self.leaves_disk(p);
         self.end_chain(p.chain);
+    }
+
+    /// `$ErrorActionPreference = 'Stop'` alone in a statement that runs: Stop holds from here;
+    /// any other assignment, or a command naming the variable, ends it.
+    fn read_error_preference(&mut self, p: &Pipeline, runs: bool) {
+        let named = |t: &str| {
+            t.trim_start_matches('$')
+                .to_ascii_lowercase()
+                .ends_with("erroractionpreference")
+        };
+        for e in &p.elems {
+            let Elem::Cmd(c) = e else { continue };
+            for (name, value) in &c.assigns {
+                if named(name) {
+                    self.stop_on_error = runs
+                        && name
+                            .trim_start_matches('$')
+                            .eq_ignore_ascii_case("erroractionpreference")
+                        && literal(value).is_some_and(|v| v.eq_ignore_ascii_case("stop"));
+                }
+            }
+            if c.args.iter().any(|w| {
+                w.parts
+                    .iter()
+                    .any(|part| matches!(part, WordPart::Literal(s) if named(s)))
+            }) {
+                self.stop_on_error = false;
+            }
+        }
+    }
+
+    /// Every command of `p` is an assignment alone or a location move (`LOCATION_MOVES`) named
+    /// plainly (no folder, no `.exe`), with no redirect and no substitution or block in its
+    /// words: it changes no file, so a `cd` target read on disk still holds after it. (An opaque
+    /// command, or a call of a name the command defines, already leaves the location unknown in
+    /// `apply`.)
+    fn leaves_disk(&self, p: &Pipeline) -> bool {
+        p.elems.iter().all(|e| {
+            let Elem::Cmd(c) = e else { return false };
+            let plain_words = cmd_words(c).iter().all(|w| {
+                !w.parts
+                    .iter()
+                    .any(|part| matches!(part, WordPart::Subst(_) | WordPart::Block(_)))
+            });
+            if !c.redirects.is_empty() || !plain_words {
+                return false;
+            }
+            match unwrap(c) {
+                Run::Cmd { name, raw, .. } => {
+                    (name.is_empty() && c.args.is_empty())
+                        || (raw == name && LOCATION_MOVES.contains(&name.as_str()))
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// Every folder of `new` exists on disk now, read within the deadline, and nothing before
+    /// may have changed that. A link, a share or device path, a read error or a timeout: no.
+    fn on_disk(&self, new: &Dirs) -> bool {
+        let Some(disk) = &self.disk else {
+            return false;
+        };
+        if self.disk_stale || self.os != Os::host() || new.unknown.is_some() || new.known.is_empty()
+        {
+            return false;
+        }
+        let paths: Vec<PathBuf> = new.known.iter().map(PathBuf::from).collect();
+        if paths.iter().any(|p| is_network_or_device(p, self.os)) {
+            return false;
+        }
+        let fs = Arc::clone(&disk.fs);
+        let d = disk.deadline;
+        // Test-only: the read runs out of time.
+        #[cfg(feature = "testhooks")]
+        let d = if crate::rules::testhooks::active("dir-lookup-timeout") {
+            Deadline::new(std::time::Instant::now(), 0)
+        } else {
+            d
+        };
+        let read = bounded(&d, move || {
+            paths
+                .iter()
+                .all(|p| !d.expired() && fs.lstat(p).is_ok_and(|m| m.is_dir))
+        });
+        read == Ok(true)
+    }
+
+    /// PowerShell: the location command `cmdlet` given `args` ends the command when it fails:
+    /// `-ErrorAction Stop`, or a Stop preference; never when a `trap` may resume after it. Any
+    /// other `-ErrorAction` (or a splat, or Bash's extra words) leaves the target unreadable
+    /// (`pwsh_location_arg`, `bash_location_arg`), and a target read from an unknown folder is an
+    /// unknown location whether the old folder stays a candidate or not.
+    fn stops_on_failure(&self, cmdlet: &str, args: &[Word]) -> bool {
+        !self.may_trap && (self.stop_on_error || error_action_stop(cmdlet, args))
     }
 
     /// The location a nested body starts at: unknown for a function (it runs later) and for
@@ -1382,9 +1604,11 @@ impl Location {
         };
         match name.as_str() {
             "cd" | "chdir" | "sl" | "set-location" => {
+                self.note_move(&name, args, false);
                 Some(self.set_location(&name, args, env, false))
             }
             "pushd" | "push-location" => {
+                self.note_move(&name, args, true);
                 let to = self.set_location(&name, args, env, true);
                 self.stack.push(Pushed {
                     dirs: self.dirs.clone(),
@@ -1478,6 +1702,25 @@ impl Location {
                 None => Dirs::unknown(UnknownKind::Dynamic),
             },
             LocArg::Unknown => Dirs::unknown(UnknownKind::MayBeCritical),
+        }
+    }
+
+    /// What `after_pipeline` needs of a location change it reads: whether it ends the command
+    /// when it fails, and the MSYS system folder it goes to.
+    fn note_move(&mut self, name: &str, args: &[Word], push: bool) {
+        self.halts = self.stops_on_failure(name, args);
+        self.msys_target = self.msys_target_of(args, push);
+    }
+
+    /// Git Bash on Windows: the literal target of a `cd`/`pushd` when it is an MSYS system
+    /// folder (`/usr`, `/etc/x`), which the guard cannot place on a drive.
+    fn msys_target_of(&self, args: &[Word], push: bool) -> Option<String> {
+        if self.shell != Shell::Bash(crate::BashProfile::GitBash) || self.os != Os::Windows {
+            return None;
+        }
+        match bash_location_arg(args, push) {
+            LocArg::Word(w) => literal(w).filter(|t| is_msys_system_path(t)),
+            _ => None,
         }
     }
 
@@ -1581,6 +1824,12 @@ fn pwsh_location_arg<'a>(cmdlet: &str, args: &'a [Word]) -> LocArg<'a> {
                 i = next;
                 match (name, value) {
                     ("PassThru" | "StackName", _) => continue,
+                    // Ruling 127: `-ErrorAction Stop` moves or ends the command.
+                    ("ErrorAction", Some(v))
+                        if pwsh_value_text(&v).is_some_and(|t| t.eq_ignore_ascii_case("stop")) =>
+                    {
+                        continue;
+                    }
                     ("Path", Some(PwshValue::Inline(t))) => LocArg::Text(t),
                     ("LiteralPath", Some(PwshValue::Inline(t))) => LocArg::LiteralText(t),
                     ("Path" | "LiteralPath", Some(PwshValue::Word(w))) => LocArg::Word(w),
@@ -1606,6 +1855,25 @@ fn pwsh_location_arg<'a>(cmdlet: &str, args: &'a [Word]) -> LocArg<'a> {
         }
     }
     found.unwrap_or(LocArg::Unknown)
+}
+
+/// The literal text of a bound parameter value.
+fn pwsh_value_text(v: &PwshValue) -> Option<String> {
+    match v {
+        PwshValue::Word(w) => literal(w),
+        PwshValue::Inline(t) => Some(t.clone()),
+    }
+}
+
+/// `cmdlet` is given `-ErrorAction Stop` in `args`, bound as PowerShell binds it.
+fn error_action_stop(cmdlet: &str, args: &[Word]) -> bool {
+    (0..args.len()).any(|i| {
+        matches!(
+            pwsh_arg(cmdlet, args, i),
+            PwshArg::Param { name: "ErrorAction", value: Some(v), .. }
+                if pwsh_value_text(&v).is_some_and(|t| t.eq_ignore_ascii_case("stop"))
+        )
+    })
 }
 
 /// The command name as the dialect resolves it, lowercased, without its folder and without
@@ -1820,6 +2088,10 @@ const LOCATION_COMMANDS: [&str; 13] = [
     "invoke-expression",
     "iex",
 ];
+
+/// The commands of `LOCATION_COMMANDS` that only move the shell (listed first there); the rest
+/// run code.
+const LOCATION_MOVES: &[&str] = LOCATION_COMMANDS.split_at(8).0;
 
 /// How a pwsh command outside `LOCATION_COMMANDS` moves the shell.
 enum PwshMove {
