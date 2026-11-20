@@ -392,8 +392,8 @@ id = "pwsh-claude-print-is-not-checked"
 os = "any"
 shell = "pwsh"
 command = 'claude -p "summarise the diff"'
-level = "ok"
-rules = []
+level = "warn"
+rules = ["claude-cmd-live-config"]
 
 # --- a PowerShell 7 function named like a built-in alias ---
 
