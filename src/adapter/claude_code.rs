@@ -5,8 +5,11 @@
 //! `additionalContext` with no decision, and every deny-level verdict is `deny`, or `ask` when
 //! every deny-level finding is a `danger` the config lists in `ask_instead_of_deny`.
 
+use std::cell::RefCell;
+use std::fmt;
 use std::path::PathBuf;
 
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,6 +30,7 @@ const LINE_LIMIT: usize = 600;
 const EVENT_NAME: &str = "PreToolUse";
 const DENY: &str = "deny";
 const ASK: &str = "ask";
+const TOOL_NAME: &str = "tool_name";
 
 /// What the event on stdin asks the adapter to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +70,7 @@ pub fn parse_event(bytes: &[u8], os: Os) -> Event {
     let Ok(event) = serde_json::from_slice::<Value>(bytes) else {
         return Event::Malformed("the hook event is not valid JSON");
     };
-    let Some(tool) = event.get("tool_name").and_then(Value::as_str) else {
+    let Some(tool) = event.get(TOOL_NAME).and_then(Value::as_str) else {
         return Event::Malformed("the hook event names no tool");
     };
     let Some(shell) = shell_for(tool, os) else {
@@ -87,6 +91,43 @@ pub fn parse_event(bytes: &[u8], os: Os) -> Event {
         shell,
         command,
         cwd,
+    }
+}
+
+/// True when the start of an event that was not read whole names a tool that is not a shell, so
+/// the unread input is none of ours (Ruling 91a). Only the keys before the tool name are read
+/// (the host sends it before `tool_input`); bytes that show no tool name give `false`.
+pub fn names_another_tool(prefix: &[u8], os: Os) -> bool {
+    let found = RefCell::new(None);
+    let mut de = serde_json::Deserializer::from_slice(prefix);
+    // The rest of the prefix is cut short, so the parse ends in an error after the name is seen.
+    let _ = serde::Deserializer::deserialize_map(&mut de, ToolNameSeeker(&found));
+    found
+        .into_inner()
+        .is_some_and(|tool: String| shell_for(&tool, os).is_none())
+}
+
+/// Reads an event's keys up to the tool name and stores the name when it is a string.
+struct ToolNameSeeker<'a>(&'a RefCell<Option<String>>);
+
+impl<'de> Visitor<'de> for ToolNameSeeker<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a hook event object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while let Some(key) = map.next_key::<String>()? {
+            if key == TOOL_NAME {
+                if let Ok(name) = map.next_value::<String>() {
+                    *self.0.borrow_mut() = Some(name);
+                }
+                return Ok(());
+            }
+            map.next_value::<IgnoredAny>()?;
+        }
+        Ok(())
     }
 }
 
@@ -371,6 +412,36 @@ mod tests {
         for (bytes, want) in rows {
             assert_eq!(
                 parse_event(bytes, Os::Windows),
+                want,
+                "{}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn a_cut_prefix_names_another_tool_only_when_it_shows_one() {
+        let rows: [(&[u8], bool); 9] = [
+            (
+                br#"{"cwd":"c","tool_name":"Write","tool_input":{"content":"aaa"#,
+                true,
+            ),
+            (br#"{"tool_name":"Read""#, true),
+            (
+                br#"{"tool_name":"Bash","tool_input":{"command":"aaa"#,
+                false,
+            ),
+            (br#"{"tool_name":"PowerShell","tool_input":{"#, false),
+            // The name is not shown yet, or not as a string, or not at the top level.
+            (br#"{"cwd":"c","tool_input":{"content":"aaa"#, false),
+            (br#"{"tool_name":"Wri"#, false),
+            (br#"{"tool_name":7,"x":"#, false),
+            (br#"{"tool_input":{"tool_name":"Write"},"x":"#, false),
+            (b"\xff\xfe garbage", false),
+        ];
+        for (bytes, want) in rows {
+            assert_eq!(
+                names_another_tool(bytes, Os::Windows),
                 want,
                 "{}",
                 String::from_utf8_lossy(bytes)

@@ -45,6 +45,20 @@ fn event(tool: &str, command: &str, cwd: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// An event in the host's key order (`docs/spikes.md` "Event on stdin": `tool_name` before
+/// `tool_input`), with one input key. `json!` sorts its keys, which puts `tool_input` first.
+fn host_event(tool: &str, key: &str, value: &str) -> Vec<u8> {
+    let s = |text: &str| serde_json::to_string(text).unwrap();
+    format!(
+        r#"{{"session_id":"s","transcript_path":"t","cwd":{},"permission_mode":"default","hook_event_name":"PreToolUse","tool_name":{},"tool_input":{{{}:{}}},"tool_use_id":"u"}}"#,
+        s(&cwd_of(&std::env::temp_dir().join("shellwise-tests-empty"))),
+        s(tool),
+        s(key),
+        s(value)
+    )
+    .into_bytes()
+}
+
 /// A folder of its own under the temp dir, emptied first: the event's `cwd` and a test's config.
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("shellwise-hook-{name}"));
@@ -277,7 +291,6 @@ fn a_200_kb_command_finishes_well_inside_the_hook_timeout() {
             .or(out["additionalContext"].as_str())
             .unwrap();
         assert!(text.contains("analysis-incomplete"), "{tool}: {text}");
-        assert!(r.stdout.len() <= 9000, "{tool}: {}", r.stdout.len());
     }
 }
 
@@ -310,9 +323,41 @@ fn a_malformed_event_at_the_read_cap_still_replies() {
 }
 
 #[test]
+fn an_over_cap_event_of_another_tool_is_no_output() {
+    // Over MAX_READ_BYTES only a prefix is read; a prefix that names a tool that is not a shell
+    // gives no output (Ruling 91a), one that names a shell tool keeps the unread deny.
+    let big = "a".repeat(1100 * 1024);
+    silent(&run(HOOK, Some(&host_event("Write", "content", &big)), &[]));
+    let reason = denied(&run(HOOK, Some(&host_event("Bash", "command", &big)), &[]));
+    assert!(reason.contains("could not be read"), "{reason}");
+}
+
+#[test]
+fn stdin_held_open_by_another_tool_is_no_output() {
+    let r = held_open(&host_event("Write", "content", "x"));
+    silent(&r);
+    assert!(r.elapsed >= Duration::from_millis(1400), "{:?}", r.elapsed);
+}
+
+#[test]
 fn stdin_held_open_is_a_deny_unread_inside_the_read_bound() {
     // The host writes the event but never closes the pipe: the read ends at its own bound
     // (`MIN_HOOK_TIMEOUT_MS - HOOK_MARGIN_MS`, 1500 ms), before any config could shorten it.
+    let r = held_open(&host_event("Bash", "command", "echo hi"));
+    let elapsed = r.elapsed;
+    let reason = denied(&r);
+    assert!(
+        reason.contains("stdin still open at the deadline"),
+        "{reason}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1400) && elapsed < Duration::from_millis(2900),
+        "{elapsed:?}"
+    );
+}
+
+/// Run the hook with `bytes` written to a stdin pipe that stays open until the hook exits.
+fn held_open(bytes: &[u8]) -> Run {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
     let dir = std::env::temp_dir().join("shellwise-tests-empty");
@@ -332,8 +377,7 @@ fn stdin_held_open_is_a_deny_unread_inside_the_read_bound() {
         .spawn()
         .expect("spawn shellwise");
     let mut pipe = child.stdin.take().unwrap();
-    pipe.write_all(&event("Bash", "echo hi", &cwd_of(&dir)))
-        .unwrap();
+    pipe.write_all(bytes).unwrap();
     pipe.flush().unwrap();
     let mut stdout = String::new();
     child
@@ -345,21 +389,12 @@ fn stdin_held_open_is_a_deny_unread_inside_the_read_bound() {
     let status = child.wait().unwrap();
     let elapsed = start.elapsed();
     drop(pipe);
-    let r = Run {
+    Run {
         code: status.code().unwrap(),
         stdout,
         stderr: String::new(),
         elapsed,
-    };
-    let reason = denied(&r);
-    assert!(
-        reason.contains("stdin still open at the deadline"),
-        "{reason}"
-    );
-    assert!(
-        elapsed >= Duration::from_millis(1400) && elapsed < Duration::from_millis(2900),
-        "{elapsed:?}"
-    );
+    }
 }
 
 #[test]

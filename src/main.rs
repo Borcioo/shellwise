@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::panic;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
@@ -127,26 +127,18 @@ fn run(start: Instant) -> i32 {
 /// `hook claude-code`: read the event, ignore a tool that is not a shell, load the config from
 /// the event's `cwd`, analyse, print the reply. Every path exits 0; an unread input denies.
 fn run_hook(start: Instant, args: HookArgs) -> i32 {
+    let os = Os::host();
     let bytes = match read_stdin(Deadline::new(start, HOOK_READ_MS)) {
         Input::Bytes(bytes) if bytes.len() > MAX_READ_BYTES => {
-            return emit(claude_code::reply(
-                &unread("input over the hard size cap"),
-                &Config::default(),
-            ));
+            return unread_reply("input over the hard size cap", &bytes, os);
         }
         Input::Bytes(bytes) => bytes,
-        Input::Unread(reason) => {
-            return emit(claude_code::reply(&unread(reason), &Config::default()));
-        }
-        Input::Error(e) => {
+        Input::Unread(reason, partial) => return unread_reply(reason, &partial, os),
+        Input::Error(e, partial) => {
             eprintln!("shellwise: cannot read stdin: {e}");
-            return emit(claude_code::reply(
-                &unread("stdin could not be read"),
-                &Config::default(),
-            ));
+            return unread_reply("stdin could not be read", &partial, os);
         }
     };
-    let os = Os::host();
     let (shell, command, cwd) = match claude_code::parse_event(&bytes, os) {
         Event::Ignored => return 0,
         Event::Malformed(reason) => return emit(claude_code::malformed(&bytes, reason)),
@@ -178,6 +170,15 @@ fn run_hook(start: Instant, args: HookArgs) -> i32 {
     emit(claude_code::reply(&Verdict::new(findings), &cfg))
 }
 
+/// The hook's reply to an event not read whole: no output when the bytes read name a tool that
+/// is not a shell, otherwise the unread deny.
+fn unread_reply(reason: &'static str, partial: &[u8], os: Os) -> i32 {
+    if claude_code::names_another_tool(partial, os) {
+        return 0;
+    }
+    emit(claude_code::reply(&unread(reason), &Config::default()))
+}
+
 /// Print the hook's reply, if any, as one LF-terminated line; exit 0.
 fn emit(reply: Option<String>) -> i32 {
     if let Some(mut text) = reply {
@@ -202,8 +203,8 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
     let bytes = if args.command.is_empty() {
         match read_stdin(deadline) {
             Input::Bytes(bytes) => bytes,
-            Input::Unread(reason) => return finish(unread(reason), cfg_findings, &args),
-            Input::Error(e) => {
+            Input::Unread(reason, _) => return finish(unread(reason), cfg_findings, &args),
+            Input::Error(e, _) => {
                 eprintln!("shellwise: cannot read stdin: {e}");
                 return EXIT_IO;
             }
@@ -269,30 +270,49 @@ fn load_config(
 
 enum Input {
     Bytes(Vec<u8>),
-    /// Too big or still open at the deadline: danger without scanning.
-    Unread(&'static str),
-    Error(io::Error),
+    /// Still open at the deadline, or no reader: danger without scanning. Holds the bytes read
+    /// so far.
+    Unread(&'static str, Vec<u8>),
+    /// A read error, with the bytes read before it.
+    Error(io::Error, Vec<u8>),
 }
 
 /// Read stdin on a thread, at most `MAX_READ_BYTES + 1` bytes, waiting only until the deadline.
+/// Each chunk is shared as it arrives, so a read that does not finish still shows its start.
 fn read_stdin(deadline: Deadline) -> Input {
     let (tx, rx) = mpsc::channel();
+    let shared = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&shared);
     let reader = thread::Builder::new().name("stdin".into()).spawn(move || {
-        let mut buf = Vec::new();
-        let r = io::stdin()
-            .lock()
-            .take(MAX_READ_BYTES as u64 + 1)
-            .read_to_end(&mut buf);
-        let _ = tx.send(r.map(|_| buf));
+        let mut input = io::stdin().lock().take(MAX_READ_BYTES as u64 + 1);
+        let mut chunk = vec![0u8; 64 * 1024];
+        let result = loop {
+            match input.read(&mut chunk) {
+                Ok(0) => break Ok(()),
+                Ok(n) => match sink.lock() {
+                    Ok(mut buf) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break Err(io::Error::other("the stdin buffer is poisoned")),
+                },
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => break Err(e),
+            }
+        };
+        let _ = tx.send(result);
     });
+    let read_so_far = || {
+        shared
+            .lock()
+            .map(|mut b| std::mem::take(&mut *b))
+            .unwrap_or_default()
+    };
     if reader.is_err() {
-        return Input::Unread("the stdin reader did not start");
+        return Input::Unread("the stdin reader did not start", Vec::new());
     }
     match rx.recv_timeout(deadline.remaining()) {
         // More than MAX_READ_BYTES is refused by the caller.
-        Ok(Ok(buf)) => Input::Bytes(buf),
-        Ok(Err(e)) => Input::Error(e),
-        Err(_) => Input::Unread("stdin still open at the deadline"),
+        Ok(Ok(())) => Input::Bytes(read_so_far()),
+        Ok(Err(e)) => Input::Error(e, read_so_far()),
+        Err(_) => Input::Unread("stdin still open at the deadline", read_so_far()),
     }
 }
 
