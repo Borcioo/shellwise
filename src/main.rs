@@ -35,6 +35,8 @@ const CONFIG_LOAD_MS: u64 = 1000;
 /// The hook reads its event before the config (the config needs the event's `cwd`), under a
 /// bound no config can undercut.
 const HOOK_READ_MS: u64 = MIN_HOOK_TIMEOUT_MS - HOOK_MARGIN_MS;
+/// The raw scan of a malformed event runs this long after the event read ends.
+const MALFORMED_SCAN_MS: u64 = 1000;
 
 #[derive(Parser)]
 #[command(
@@ -247,7 +249,7 @@ fn run_hook(start: Instant, args: HookArgs) -> i32 {
     let (shell, command, cwd) = match claude_code::parse_event(&bytes, os) {
         Event::Ignored => return 0,
         Event::Malformed(reason) => {
-            let deadline = Deadline::new(start, HOOK_READ_MS);
+            let deadline = hook_scan_deadline(start, Instant::now());
             return emit(claude_code::malformed(&bytes, reason, &deadline));
         }
         Event::Command {
@@ -345,6 +347,20 @@ fn run_check(start: Instant, args: CheckArgs) -> i32 {
 fn hook_config_budget(start: Instant, read_done: Instant) -> Deadline {
     let end = (read_done + Duration::from_millis(CONFIG_LOAD_MS))
         .min(start + Duration::from_millis(HOOK_READ_MS));
+    let ms = end.saturating_duration_since(start).as_millis();
+    Deadline::new(start, u64::try_from(ms).unwrap_or(HOOK_READ_MS))
+}
+
+/// The raw scan's deadline for a malformed event: `MALFORMED_SCAN_MS` from the end of the event
+/// read (`read_done`), so a large event that took most of the read bound still gets a whole scan,
+/// but never before `HOOK_READ_MS` or past `HOOK_READ_MS + MALFORMED_SCAN_MS` from the process
+/// start (2500 ms), which leaves 500 ms of the shortest host timeout (`MIN_HOOK_TIMEOUT_MS`) for
+/// the reply.
+fn hook_scan_deadline(start: Instant, read_done: Instant) -> Deadline {
+    let end = (read_done + Duration::from_millis(MALFORMED_SCAN_MS)).clamp(
+        start + Duration::from_millis(HOOK_READ_MS),
+        start + Duration::from_millis(HOOK_READ_MS + MALFORMED_SCAN_MS),
+    );
     let ms = end.saturating_duration_since(start).as_millis();
     Deadline::new(start, u64::try_from(ms).unwrap_or(HOOK_READ_MS))
 }
@@ -502,6 +518,29 @@ mod tests {
         ] {
             let budget = hook_config_budget(start, start + Duration::from_millis(read_ms));
             let left = budget.remaining().as_millis() as i64;
+            let want_left = want as i64 - start.elapsed().as_millis() as i64;
+            assert!(
+                (left - want_left).abs() <= 20,
+                "read {read_ms}: {left} ms left, want about {want_left}"
+            );
+        }
+    }
+
+    /// R1-3: a malformed event's raw scan gets its time from the end of the read, between the
+    /// read bound and 2500 ms from the process start.
+    #[test]
+    fn the_malformed_scan_starts_at_the_read_and_ends_by_2500_ms() {
+        let start = Instant::now();
+        // (event read after ms, scan deadline from the process start)
+        for (read_ms, want) in [
+            (0, 1500),
+            (300, 1500),
+            (1200, 2200),
+            (1500, 2500),
+            (2000, 2500),
+        ] {
+            let d = hook_scan_deadline(start, start + Duration::from_millis(read_ms));
+            let left = d.remaining().as_millis() as i64;
             let want_left = want as i64 - start.elapsed().as_millis() as i64;
             assert!(
                 (left - want_left).abs() <= 20,

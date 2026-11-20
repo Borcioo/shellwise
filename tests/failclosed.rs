@@ -155,6 +155,11 @@ mod hooks {
     /// A read-only command the removed harmless grammar used to clear.
     const READ_ONLY: &str = "git status";
 
+    /// The installed hook entry's `timeout: 5`. The process start of a freshly built binary can
+    /// take over a second on Windows, so a reply time measured from the spawn is held to this, not
+    /// to `MIN_HOOK_TIMEOUT_MS`; the bounds themselves are unit tests in `src/main.rs`.
+    const INSTALLED_HOST_MS: u64 = 5000;
+
     fn hook(mode: &str, command: &str) -> common::Run {
         let mut args = CHECK.to_vec();
         args.extend(["--", command]);
@@ -195,6 +200,34 @@ mod hooks {
         }
     }
 
+    /// R1-3: a malformed hook event shows no command, so a raw scan that gives no answer is a
+    /// deny at danger, destructive raw text or not, before the installed host timeout. The command
+    /// path keeps warn (`scan_that_misses_the_deadline_is_warn`).
+    #[test]
+    fn a_malformed_event_whose_scan_does_not_finish_is_a_deny() {
+        for command in [DESTRUCTIVE, PLAIN] {
+            let event =
+                format!("{{\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"{command}\"");
+            let r = run(
+                &["hook", "claude-code"],
+                Some(event.as_bytes()),
+                &[("SHELLWISE_TESTHOOK", "panic-scan-sleep")],
+            );
+            assert_eq!(r.code, 0, "{}", r.stderr);
+            let out: serde_json::Value = serde_json::from_str(r.stdout.trim()).expect(&r.stdout);
+            let hso = &out["hookSpecificOutput"];
+            assert_eq!(hso["permissionDecision"], "deny", "{command}: {}", r.stdout);
+            let reason = hso["permissionDecisionReason"].as_str().unwrap();
+            assert!(
+                reason.starts_with("shellwise: danger analysis-incomplete: ")
+                    && reason.contains("the raw scan did not finish"),
+                "{command}: {reason}"
+            );
+            let host = Duration::from_millis(INSTALLED_HOST_MS);
+            assert!(r.elapsed < host, "{command}: {:?}", r.elapsed);
+        }
+    }
+
     #[test]
     fn an_analysis_that_finishes_runs_no_raw_scan() {
         // `scan-abort` ends the process with exit code 99 as soon as the raw scan starts.
@@ -227,6 +260,46 @@ mod hooks {
     fn allow_marker_has_no_effect_on_a_failed_analysis() {
         let cmd = "Get-Date; rm -rf x # shellwise: allow";
         assert_failclosed_danger(&hook("panic", cmd), cmd, "rm -rf x");
+    }
+
+    /// R1-3: the raw scan of a malformed event gets its bound from the end of the read, so an
+    /// event whose last byte arrives at 1000 ms is scanned until about 2000 ms, where a bound from
+    /// the process start would have stopped at about 1500 ms (the read bound, or the late scan's
+    /// 500 ms floor after the read); and it still replies before the installed host timeout.
+    #[test]
+    fn a_late_malformed_event_is_scanned_from_the_end_of_its_read() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_shellwise"))
+            .args(["hook", "claude-code"])
+            .env("SHELLWISE_TESTHOOK", "panic-scan-sleep")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(b"{\"tool_name\":\"Bash\",\"tool_input\":")
+            .unwrap();
+        stdin.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        stdin.write_all(b"{\"command\":\"Get-Date\"").unwrap();
+        drop(stdin);
+        while child.try_wait().unwrap().is_none() && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let elapsed = start.elapsed();
+        let _ = child.kill();
+        let out = child.wait_with_output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("\"deny\""), "{text}");
+        assert!(text.contains("the raw scan did not finish"), "{text}");
+        assert!(elapsed >= Duration::from_millis(1800), "{elapsed:?}");
+        let host = Duration::from_millis(INSTALLED_HOST_MS);
+        assert!(elapsed < host, "{elapsed:?}");
     }
 
     #[test]

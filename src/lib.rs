@@ -248,6 +248,7 @@ fn checked(
         bounded_scan(Arc::clone(&command), deadline),
         &command,
         reason,
+        Level::Warn,
     );
     levels(verdict.findings, cfg)
 }
@@ -256,7 +257,14 @@ fn checked(
 /// not answer in time is `warn`, as one that does not finish.
 pub fn incomplete_within(command: &str, reason: &str, deadline: &Deadline) -> Verdict {
     let hit = bounded_scan(Arc::new(command.to_string()), deadline);
-    incomplete_from(hit, command, reason)
+    incomplete_from(hit, command, reason, Level::Warn)
+}
+
+/// `incomplete_within` for a hook event that could not be read: nothing shows what it would run,
+/// so a raw scan that gives no answer (a timeout, a panic, a worker that did not start) is `danger`.
+pub fn malformed_within(text: &str, reason: &str, deadline: &Deadline) -> Verdict {
+    let hit = bounded_scan(Arc::new(text.to_string()), deadline);
+    incomplete_from(hit, text, reason, Level::Danger)
 }
 
 /// How long the raw scan may run past the deadline. The deadline ends 1500 ms before the hook
@@ -549,12 +557,17 @@ fn incomplete_with(
     scan: impl FnOnce(&str) -> Option<Span> + std::panic::UnwindSafe,
 ) -> Verdict {
     let hit = panic::catch_unwind(|| scan(command)).ok();
-    incomplete_from(hit, command, reason)
+    incomplete_from(hit, command, reason, Level::Warn)
 }
 
-/// `incomplete` from a scan result (`None` when the scan did not finish). A scan hit sets the
-/// span and names the command; otherwise the span is the whole text.
-fn incomplete_from(hit: Option<Option<Span>>, command: &str, reason: &str) -> Verdict {
+/// `incomplete` from a scan result (`None` when the scan did not finish, then at `unfinished`). A
+/// scan hit sets the span and names the command; otherwise the span is the whole text.
+fn incomplete_from(
+    hit: Option<Option<Span>>,
+    command: &str,
+    reason: &str,
+    unfinished: Level,
+) -> Verdict {
     let whole = Span {
         start: 0,
         end: command.len(),
@@ -584,7 +597,7 @@ fn incomplete_from(hit: Option<Option<Span>>, command: &str, reason: &str) -> Ve
             ),
         },
         None => (
-            Level::Warn,
+            unfinished,
             whole,
             format!("the command could not be analysed ({reason}) and the raw scan did not finish"),
         ),
