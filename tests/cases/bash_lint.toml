@@ -328,6 +328,37 @@ level = "warn"
 rules = ["bash-backslash-collapse"]
 
 [[row]]
+id = "collapse-expanding-heredoc-before-a-dollar"
+os = "any"
+shell = "gitbash"
+command = '''
+cat <<EOF > notes.txt
+price a\\$HOME
+EOF'''
+level = "break"
+rules = ["bash-backslash-collapse"]
+fix = "write the text with the Write tool"
+
+[[row]]
+id = "collapse-expanding-heredoc-four-backslashes"
+os = "any"
+shell = "gitbash"
+command = '''
+cat <<EOF > notes.txt
+share \\\\host\x
+EOF'''
+level = "break"
+rules = ["bash-backslash-collapse"]
+
+[[row]]
+id = "collapse-sed-single-backslash-class-is-ok"
+os = "any"
+shell = "gitbash"
+command = "sed -E 's/\\d/x/' notes.txt"
+level = "ok"
+rules = []
+
+[[row]]
 id = "collapse-printf-behind-a-wrapper"
 os = "any"
 shell = "gitbash"

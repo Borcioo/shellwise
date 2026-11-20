@@ -55,7 +55,13 @@ fn program(ctx: &Ctx, c: &SimpleCommand) -> Option<&'static Program> {
     programs::lookup(&value(&c.name)?, ctx.input.shell, ctx.input.os)
 }
 
-fn finding(rule: &'static str, level: Level, message: String, fix: Option<String>, span: Span) -> Finding {
+fn finding(
+    rule: &'static str,
+    level: Level,
+    message: String,
+    fix: Option<String>,
+    span: Span,
+) -> Finding {
     Finding {
         rule,
         level,
@@ -72,20 +78,18 @@ fn finding(rule: &'static str, level: Level, message: String, fix: Option<String
 pub enum Shape {
     /// `\\` in an argument of a program that reads escapes itself (`printf`, `echo -e`).
     Escapes,
-    /// `\\` in the body of a heredoc with a quoted delimiter.
+    /// `\\` in a heredoc body where the collapse changes the bytes written: any pair under a
+    /// quoted delimiter, and under an expanding one a pair before `$`, `` ` ``, `\` or a newline.
     HeredocBody,
-    /// `\\d` or `\\w` in a regex program's arguments (`sed`).
-    RegexClass,
 }
 
-/// The shapes spike S4 proved collapse in the real Bash tool (Ruling 99 Q2, Ruling 100(b)): `\\`
-/// there is `break`, in every other shape `warn`. S4 probed printf, `echo -e` and a `<<'EOF'`
-/// body; its sed `\d` probe showed a missing regex class in GNU sed, not a collapse, so
-/// `RegexClass` stays out.
+/// The shapes the real Bash tool was shown to corrupt (spike S4, Ruling 110): `\\` there is
+/// `break`, in every other shape `warn`.
 pub const PROVEN: &[Shape] = &[Shape::Escapes, Shape::HeredocBody];
 
-/// The regex classes that lose their meaning when their backslash pair collapses.
-const REGEX_CLASSES: [char; 2] = ['d', 'w'];
+/// The characters an expanding heredoc body gives a backslash meaning before: `\\` there reads as
+/// `\` either way, except in front of one of these.
+const HEREDOC_SPECIAL: [char; 4] = ['$', '`', '\\', '\n'];
 
 const COLLAPSE_FIX: &str = "write the text with the Write tool to <file> and run bash <file>";
 
@@ -117,7 +121,6 @@ impl Rule for BackslashCollapse {
                 match shape {
                     Shape::Escapes => "the program then reads one backslash as an escape",
                     Shape::HeredocBody => "the heredoc body is written with one backslash",
-                    Shape::RegexClass => "the regex loses its class",
                 },
             ),
             None => (
@@ -147,12 +150,14 @@ fn shapes(ctx: &Ctx) -> Vec<(Shape, usize)> {
     let command = ctx.input.command;
     let mut hits = Vec::new();
     for c in programs::commands(ctx.script) {
-        // Only a quoted delimiter (`<<'EOF'`) keeps `\\` as written; in an expanding body bash
-        // itself reads `\\` as one backslash, so the collapse there is not the proven shape.
+        // A quoted delimiter (`<<'EOF'`) keeps every `\\` as written. In an expanding body bash
+        // itself reads `\\` as one backslash, so only a pair before a character that gives the
+        // backslash a meaning there (`\\$x`, `\\\\`) changes the bytes.
         for r in &c.redirects {
             if let Redirect::Heredoc { body, expands, .. } = r
-                && !expands
-                && let Some(p) = raw(command, body.span).find(PAIR)
+                && let Some(p) = first_pair(raw(command, body.span), |next| {
+                    !expands || next.is_some_and(|n| HEREDOC_SPECIAL.contains(&n))
+                })
             {
                 hits.push((Shape::HeredocBody, body.span.start + p));
             }
@@ -161,30 +166,30 @@ fn shapes(ctx: &Ctx) -> Vec<(Shape, usize)> {
         let Some(p) = program(ctx, &c) else {
             continue;
         };
-        let shape = match p.escapes {
-            Some(Escapes::Always) => pair_in(command, &c.args, |_| true).map(|at| (Shape::Escapes, at)),
-            Some(Escapes::Option) if escapes_on(p, &c.args) => {
-                pair_in(command, &c.args, |_| true).map(|at| (Shape::Escapes, at))
-            }
-            Some(Escapes::Regex) => {
-                pair_in(command, &c.args, |next| next.is_some_and(|n| REGEX_CLASSES.contains(&n)))
-                    .map(|at| (Shape::RegexClass, at))
-            }
-            _ => None,
+        let escapes = match p.escapes {
+            Some(Escapes::Always) => true,
+            Some(Escapes::Option) => escapes_on(p, &c.args),
+            None => false,
         };
-        hits.extend(shape);
+        if escapes {
+            hits.extend(
+                c.args
+                    .iter()
+                    .find_map(|w| {
+                        first_pair(raw(command, w.span), |_| true).map(|i| w.span.start + i)
+                    })
+                    .map(|at| (Shape::Escapes, at)),
+            );
+        }
     }
     hits
 }
 
-/// The offset of the first `\\` in `args` whose next character passes `next`.
-fn pair_in(command: &str, args: &[Word], next: impl Fn(Option<char>) -> bool) -> Option<usize> {
-    args.iter().find_map(|w| {
-        let text = raw(command, w.span);
-        text.match_indices(PAIR)
-            .find(|(i, _)| next(text[i + PAIR.len()..].chars().next()))
-            .map(|(i, _)| w.span.start + i)
-    })
+/// The offset in `text` of the first `\\` whose next character passes `next`.
+fn first_pair(text: &str, next: impl Fn(Option<char>) -> bool) -> Option<usize> {
+    text.match_indices(PAIR)
+        .find(|(i, _)| next(text[i + PAIR.len()..].chars().next()))
+        .map(|(i, _)| i)
 }
 
 /// Whether the leading options of `args` turn escapes on (`echo -e`, `echo -n -e`, `echo -ne`).
@@ -196,7 +201,10 @@ fn escapes_on(p: &Program, args: &[Word]) -> bool {
         if v.len() < 2 || !v.starts_with('-') {
             return false;
         }
-        if p.escape_options.iter().any(|o| Program::option_matches(&v, o)) {
+        if p.escape_options
+            .iter()
+            .any(|o| Program::option_matches(&v, o))
+        {
             return true;
         }
     }
@@ -212,7 +220,10 @@ fn collapsed_line(command: &str, at: usize) -> (usize, String) {
     let column = command[start..at].replace(PAIR, "\\").chars().count();
     let text: Vec<char> = command[start..end].replace(PAIR, "\\").chars().collect();
     let from = column.saturating_sub(30).min(text.len().saturating_sub(60));
-    (line, text[from..(from + 60).min(text.len())].iter().collect())
+    (
+        line,
+        text[from..(from + 60).min(text.len())].iter().collect(),
+    )
 }
 
 // --- bash-msys-path-mangle -----------------------------------------------------------------
@@ -348,15 +359,18 @@ impl Rule for VersionedPhp {
                 continue;
             };
             // The path comes only from the config, never from a guess.
-            let fix = p.fix.as_ref().map(|f| match ctx.cfg.tool_paths.get(&p.name) {
-                Some(path) => format!("{f}: \"{}\"", path.display()),
-                None => f.clone(),
-            });
+            let fix = p
+                .fix
+                .as_ref()
+                .map(|f| match ctx.cfg.tool_paths.get(&p.name) {
+                    Some(path) => format!("{f}: \"{}\"", path.display()),
+                    None => f.clone(),
+                });
             out.push(finding(
                 VERSIONED_PHP,
                 VERSIONED_PHP_LEVEL,
                 format!(
-                    "`{}` is a Windows launcher script, which Git Bash does not run by that name",
+                    "`{}` is a Windows launcher script (.bat), which Git Bash runs by that name only when a shell profile defines it",
                     c.typed
                 ),
                 fix,

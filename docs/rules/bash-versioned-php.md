@@ -1,8 +1,9 @@
 # bash-versioned-php
 
 Herd's versioned PHP names (`php74`, `php80` … `php85`) are Windows `.bat` launchers. Git Bash does
-not run a `.bat` file by its bare name, so `php83 -l a.php` fails there while it works in
-PowerShell. The names are the `launcher` rows of `data/programs.toml`.
+not run a `.bat` file by its bare name, so `php83 -l a.php` fails there unless a shell profile
+defines a `php83` function that calls the `.bat` (some machines do, which is why the rule warns).
+The names are the `launcher` rows of `data/programs.toml`.
 
 | Case | Level |
 |---|---|

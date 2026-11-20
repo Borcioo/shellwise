@@ -49,8 +49,6 @@ pub enum Escapes {
     Always,
     /// Only with one of `escape_options` (`echo -e`).
     Option,
-    /// Its script is a regular expression (`sed`).
-    Regex,
 }
 
 /// Further names of a program, per shell.
@@ -195,7 +193,9 @@ pub fn load(text: &str) -> Result<Table, String> {
         }
         let wrapper_facts = p.operands > 0 || p.assignments || !p.no_run_options.is_empty();
         if wrapper_facts && !p.is(Kind::Wrapper) {
-            return Err(format!("{row}: wrapper facts on a row that is not a wrapper"));
+            return Err(format!(
+                "{row}: wrapper facts on a row that is not a wrapper"
+            ));
         }
         if p.escapes == Some(Escapes::Option) && p.escape_options.is_empty() {
             return Err(format!("{row}: escapes = \"option\" needs escape_options"));
@@ -205,10 +205,7 @@ pub fn load(text: &str) -> Result<Table, String> {
         }
     }
     // A name may name one row per shell.
-    for shell in [
-        Shell::Bash(BashProfile::GitBash),
-        Shell::Pwsh,
-    ] {
+    for shell in [Shell::Bash(BashProfile::GitBash), Shell::Pwsh] {
         for os in [Os::Windows, Os::Posix] {
             let mut seen: Vec<String> = Vec::new();
             for p in raw.program.iter().filter(|p| p.applies(shell)) {
@@ -222,7 +219,12 @@ pub fn load(text: &str) -> Result<Table, String> {
             }
         }
     }
-    if raw.msys.roots.iter().any(|r| r.is_empty() || r.contains('/')) {
+    if raw
+        .msys
+        .roots
+        .iter()
+        .any(|r| r.is_empty() || r.contains('/'))
+    {
         return Err("msys.roots: a root is empty or holds a /".to_string());
     }
     Ok(Table {
@@ -258,6 +260,12 @@ fn windows_names(shell: Shell, os: Os) -> bool {
     os == Os::Windows || shell == Shell::Bash(BashProfile::GitBash)
 }
 
+/// Whether names compare ignoring case: Windows file names, and PowerShell command names on
+/// every OS (`Remove-Item` is `remove-item` on Linux too).
+fn folds_case(shell: Shell, os: Os) -> bool {
+    windows_names(shell, os) || matches!(shell, Shell::Pwsh | Shell::Powershell5)
+}
+
 /// `typed` without its folder and, for Windows names, without `.exe` and lowercased.
 fn base_name(typed: &str, shell: Shell, os: Os) -> String {
     let windows = windows_names(shell, os);
@@ -275,13 +283,14 @@ fn base_name(typed: &str, shell: Shell, os: Os) -> String {
 }
 
 /// The row `typed` (a command name as written, or its static value) runs in `shell` on `os`:
-/// one strip of the folder and of `.exe`; case is ignored for Windows names.
+/// one strip of the folder and of `.exe` for Windows names; case is ignored for Windows names
+/// and for PowerShell.
 pub fn lookup(typed: &str, shell: Shell, os: Os) -> Option<&'static Program> {
     let base = base_name(typed, shell, os);
     if base.is_empty() {
         return None;
     }
-    let fold = windows_names(shell, os);
+    let fold = folds_case(shell, os);
     table().iter().find(|p| {
         p.applies(shell)
             && p.names(shell, os).any(|n| {
@@ -359,12 +368,12 @@ fn unwrap_once(
             // The parser may already hold an argument that looks like an assignment as one.
             if !assigns.iter().any(|(n, _)| n == name) {
                 assigns.push((
-                name.to_string(),
-                Word {
-                    parts: vec![WordPart::Literal(value.to_string())],
-                    span: w.span,
-                    quote: w.quote,
-                },
+                    name.to_string(),
+                    Word {
+                        parts: vec![WordPart::Literal(value.to_string())],
+                        span: w.span,
+                        quote: w.quote,
+                    },
                 ));
             }
             i += 1;
@@ -536,14 +545,22 @@ mod tests {
 
     #[test]
     fn lookup_strips_one_folder_and_exe_and_folds_case_for_windows_names() {
-        for typed in ["timeout", "/usr/bin/timeout", "TIMEOUT.EXE", "C:\\x\\timeout.exe"] {
+        for typed in [
+            "timeout",
+            "/usr/bin/timeout",
+            "TIMEOUT.EXE",
+            "C:\\x\\timeout.exe",
+        ] {
             assert_eq!(
                 lookup(typed, GIT_BASH, Os::Windows).map(|p| p.name.as_str()),
                 Some("timeout"),
                 "{typed}"
             );
         }
-        assert_eq!(lookup("/usr/bin/timeout", POSIX, Os::Posix).map(|p| p.name.as_str()), Some("timeout"));
+        assert_eq!(
+            lookup("/usr/bin/timeout", POSIX, Os::Posix).map(|p| p.name.as_str()),
+            Some("timeout")
+        );
         assert!(lookup("TIMEOUT", POSIX, Os::Posix).is_none());
         assert!(lookup("timeout.exe", POSIX, Os::Posix).is_none());
         // A bash-only row is not a pwsh program: there `timeout` is timeout.exe.
@@ -560,6 +577,9 @@ mod tests {
             ("timeout \"$T\" rm -rf x", "rm", &["-rf", "x"]),
             ("timeout ${T:-60} rm x", "rm", &["x"]),
             ("timeout --signal=KILL 5 rm x", "rm", &["x"]),
+            // Ruling 111: an unknown wrapper option does not hide the command.
+            ("timeout --weird 60 rm -rf x", "rm", &["-rf", "x"]),
+            ("sudo -E rm x", "rm", &["x"]),
             ("nice -n 5 rm x", "rm", &["x"]),
             ("sudo -u root nice rm x", "rm", &["x"]),
             ("nohup rm x", "rm", &["x"]),
@@ -589,7 +609,13 @@ mod tests {
 
     #[test]
     fn strip_wrappers_keeps_a_command_that_runs_nothing_or_is_no_wrapper() {
-        for src in ["command -v rm", "nohup", "timeout 5", "printf x", "rm -rf x"] {
+        for src in [
+            "command -v rm",
+            "nohup",
+            "timeout 5",
+            "printf x",
+            "rm -rf x",
+        ] {
             let script = parse(src);
             let c = strip_wrappers(first(&script), GIT_BASH, Os::Windows);
             assert!(matches!(c, Cow::Borrowed(_)), "{src}");
@@ -617,6 +643,47 @@ mod tests {
         let script = parse("echo $(rm x) | cat; for f in a; do sed s/a/b/ f; done; g() { ls; }");
         let names: Vec<&str> = commands(&script).iter().map(|c| c.typed.as_str()).collect();
         assert_eq!(names, ["echo", "rm", "cat", "sed", "ls"]);
+    }
+
+    /// One command nested at each place the walker reads: the name, an argument, an assignment,
+    /// a redirect target, an expanding heredoc body, a condition, a block, and in PowerShell a
+    /// method argument and an expression.
+    #[test]
+    fn commands_reads_every_nesting_point() {
+        let bash: &[(&str, &[&str])] = &[
+            ("$(echo n) a", &["$(echo n)", "echo"]),
+            ("ls $(echo a)", &["ls", "echo"]),
+            ("A=$(echo a) ls", &["ls", "echo"]),
+            ("ls > $(echo f)", &["ls", "echo"]),
+            ("cat <<EOF\n$(echo a)\nEOF", &["cat", "echo"]),
+            ("if true; then echo a; fi", &["true", "echo"]),
+            ("{ echo a; }", &["echo"]),
+            ("(echo a)", &["echo"]),
+        ];
+        for (src, want) in bash {
+            let script = parse(src);
+            let names: Vec<&str> = commands(&script).iter().map(|c| c.typed.as_str()).collect();
+            assert_eq!(names, *want, "{src:?}");
+        }
+        let pwsh: &[(&str, &[&str])] = &[
+            ("[IO.File]::Delete((Get-Item x))", &["Get-Item"]),
+            ("\"x$(Get-Item a)\" | Out-Null", &["Get-Item", "Out-Null"]),
+        ];
+        for (src, want) in pwsh {
+            let script = crate::parse::pwsh::parse(src, Shell::Pwsh, Os::Windows).unwrap();
+            let names: Vec<&str> = commands(&script).iter().map(|c| c.typed.as_str()).collect();
+            assert_eq!(names, *want, "{src:?}");
+        }
+    }
+
+    #[test]
+    fn lookup_folds_case_for_powershell_on_every_os() {
+        let t = load("[[program]]\nname = \"remove-item\"\nshells = [\"pwsh\"]\n").unwrap();
+        assert_eq!(t.programs.len(), 1);
+        for os in [Os::Windows, Os::Posix] {
+            assert!(folds_case(Shell::Pwsh, os), "{os:?}");
+        }
+        assert!(!folds_case(POSIX, Os::Posix));
     }
 
     #[test]

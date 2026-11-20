@@ -22,9 +22,8 @@
 # no_run_options = ["-v"]             with one of these the wrapper runs nothing (`command -v x`)
 #
 # Rule facts:
-# escapes        = "always"           the program turns `\\` into `\` itself: "always" (printf),
-#                                     "option" (only with one of `escape_options`, echo -e) or
-#                                     "regex" (its script is a regex, sed)
+# escapes        = "always"           the program turns `\\` into `\` itself: "always" (printf) or
+#                                     "option" (only with one of `escape_options`, echo -e)
 # escape_options = ["-e"]             for escapes = "option"; a short cluster holding the letter
 #                                     counts (`-ne`)
 # cmd_options    = ["/d"]             cmd.exe spellings that break in this shell (`cd /d`)
@@ -85,12 +84,6 @@ shells = ["bash"]
 escapes = "option"
 escape_options = ["-e"]
 
-[[program]]
-name = "sed"
-shells = ["bash"]
-escapes = "regex"
-value_options = ["-e", "--expression", "-f", "--file", "-l", "--line-length"]
-
 # --- Native Windows programs that take Linux paths, which Git Bash rewrites (bash-msys-path-mangle) ---
 
 [[program]]
@@ -123,7 +116,7 @@ shells = ["bash"]
 kind = ["native-msys"]
 fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
 
-# --- Herd's versioned PHP launchers: .bat files, not on the Git Bash PATH by that name (bash-versioned-php) ---
+# --- Herd's versioned PHP launchers: .bat files Git Bash runs by that name only through a profile function (bash-versioned-php) ---
 
 [[program]]
 name = "php74"

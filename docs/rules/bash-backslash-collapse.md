@@ -8,12 +8,15 @@ The rule checks Git Bash command lines only: a script file run by path keeps its
 |---|---|---|
 | `\\` in an argument of `printf`, or of `echo` with `-e` | `break` | the program then reads the single backslash as an escape: `printf 'a\\b'` writes `a` and a backspace |
 | `\\` in the body of a heredoc with a quoted delimiter (`<<'EOF'`) | `break` | the file or program gets one backslash where the text has two |
-| `\\d` or `\\w` in a `sed` script | `warn` | S4 showed no collapse effect here: GNU sed has no `\d` either way, and `\w` works |
-| `\\` anywhere else, an expanding heredoc (`<<EOF`) included | `warn` | the text changes, but whether that breaks the command depends on how it is read |
+| `\\` before `$`, `` ` ``, `\` or a line end in an expanding heredoc (`<<EOF`) | `break` | `a\\$X` is written as `a$X` instead of `a\` and the value |
+| any other `\\` in an expanding heredoc | `warn` | bash reads `\\` there as `\` anyway, so `a\\b` is written as `a\b` either way |
+| `\\` anywhere else, a `sed` script included | `warn` | the text changes, but whether that breaks the command depends on how it is read |
 
-A shape is `break` only when spike S4 shows it collapsing in the real Bash tool (`docs/spikes.md`
-"Hook tool runtime"); `PROVEN` in `src/rules/bash_lint.rs` lists those shapes, and every shape left
-out is `warn`. The message quotes the line as bash receives it.
+A shape is `break` only when the real Bash tool was shown to write other bytes than the same text
+run from a file (spike S4, and the `<<EOF` probe of Task 29); `PROVEN` in `src/rules/bash_lint.rs`
+lists those shapes, and every shape left out is `warn`. A single-backslash class such as
+`sed -E 's/\d/x/'` holds no `\\` and gets no finding here: GNU sed lacking `\d` is another defect.
+The message quotes the line as bash receives it.
 
 ## Deny
 
