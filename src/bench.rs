@@ -1,7 +1,9 @@
 //! `shellwise bench`: replay the corpus in process through `analyse` and report the meters.
 //!
 //! Every corpus row runs as a command line with the default config, the row's cwd and the live
-//! `RealFs`. The report keeps four lines apart (Global Constraints, F8): meter 1, rows the real
+//! `RealFs`, on the OS its cwd shape names (`CwdShape`) and with a fixed synthetic environment
+//! of that OS (`WINDOWS_ENV`, `POSIX_ENV`), never the machine's own, so the result does not
+//! depend on who runs it. The report keeps four lines apart (Global Constraints, F8): meter 1, rows the real
 //! shell's parser also refuses, parity denials baseline-guard already makes, and the own line of the
 //! owner-requested length rule; then meter 2, `parse_kind_false_deny`, per rule × label counts,
 //! parity per installed baseline-guard rule and the in-process latency.
@@ -23,11 +25,13 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use shellwise::adapter::claude_code::shell_for;
 use shellwise::config::Config;
+use shellwise::fs::resolve::env_view;
 use shellwise::ir::EnvView;
 use shellwise::level::{Level, Verdict};
 use shellwise::rules::parse_error::PARSE_ERROR;
-use shellwise::{AnalyseInput, BashProfile, Deadline, Origin, Os, Shell, analyse, rules, scan};
+use shellwise::{AnalyseInput, Deadline, Origin, Os, Shell, analyse, rules, scan};
 
 /// The rule map every run uses unless `--rule-map` names another.
 const RULE_MAP: &str = include_str!("../tools/corpus/rule_map.toml");
@@ -43,6 +47,113 @@ const METER_2_PER_DAY: f64 = 2.0;
 const DUMP_HEADER: &str = "id\tlevel\trules\traw_hit";
 /// The stack of the replay thread, as large as the worker `analyse` runs the parse on.
 const REPLAY_STACK: usize = 64 * 1024 * 1024;
+/// What the hook reads of its environment on Windows (`env_view`): `~` and `$HOME` from
+/// `USERPROFILE`, Git Bash's `/tmp` from `TEMP`. Synthetic: no real user name.
+const WINDOWS_ENV: [(&str, &str); 3] = [
+    ("USERPROFILE", r"C:\Profiles\bench"),
+    ("TEMP", r"C:\Profiles\bench\AppData\Local\Temp"),
+    ("TMP", r"C:\Profiles\bench\AppData\Local\Temp"),
+];
+/// What the hook reads of its environment on Linux: `HOME`; `/tmp` is itself.
+const POSIX_ENV: [(&str, &str); 1] = [("HOME", "/h/bench")];
+
+/// The shape of a row's recorded cwd, which names the OS the row ran on (the corpus records no
+/// platform). Claude Code records the cwd in its own OS's form.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum CwdShape {
+    /// `C:\…` or `C:/…`: Windows.
+    Drive,
+    /// `\\host\share\…` or `//host/share/…`: Windows (a Windows process on a share, the WSL one
+    /// included).
+    Unc,
+    /// `/mnt/<letter>` or below: Linux, a WSL session in a mounted Windows drive.
+    WslMnt,
+    /// Any other `/…`: Linux.
+    Posix,
+    /// No cwd: Windows, as before (a relative path then has no location on either OS).
+    Missing,
+    /// Anything else (a relative cwd): Windows, as before; the location stays unknown.
+    Other,
+}
+
+impl CwdShape {
+    const ALL: [CwdShape; 6] = [
+        CwdShape::Drive,
+        CwdShape::Unc,
+        CwdShape::WslMnt,
+        CwdShape::Posix,
+        CwdShape::Missing,
+        CwdShape::Other,
+    ];
+
+    fn of(cwd: Option<&str>) -> CwdShape {
+        let Some(c) = cwd.filter(|c| !c.is_empty()) else {
+            return CwdShape::Missing;
+        };
+        let b = c.as_bytes();
+        if b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && matches!(b[2], b'\\' | b'/')
+        {
+            CwdShape::Drive
+        } else if c.starts_with(r"\\") || c.starts_with("//") {
+            CwdShape::Unc
+        } else if let Some(rest) = c.strip_prefix("/mnt/")
+            && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && matches!(rest.as_bytes().get(1), None | Some(b'/'))
+        {
+            CwdShape::WslMnt
+        } else if c.starts_with('/') {
+            CwdShape::Posix
+        } else {
+            CwdShape::Other
+        }
+    }
+
+    fn os(self) -> Os {
+        match self {
+            CwdShape::WslMnt | CwdShape::Posix => Os::Posix,
+            CwdShape::Drive | CwdShape::Unc | CwdShape::Missing | CwdShape::Other => Os::Windows,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            CwdShape::Drive => "drive",
+            CwdShape::Unc => "unc",
+            CwdShape::WslMnt => "wsl-mnt",
+            CwdShape::Posix => "posix",
+            CwdShape::Missing => "missing",
+            CwdShape::Other => "other",
+        }
+    }
+}
+
+/// The name a report gives an OS.
+fn os_name(os: Os) -> &'static str {
+    match os {
+        Os::Windows => "Windows",
+        Os::Posix => "Linux",
+    }
+}
+
+/// What the hook would see for this row: the shell its tool runs on the row's OS, the OS, the
+/// cwd and the synthetic environment of that OS.
+fn replay_input(row: &CorpusRow, tool: Tool) -> (Shell, Os, Option<PathBuf>, EnvView) {
+    let os = CwdShape::of(row.cwd.as_deref()).os();
+    let shell = tool.shell(os);
+    let vars: &[(&str, &str)] = match os {
+        Os::Windows => &WINDOWS_ENV,
+        Os::Posix => &POSIX_ENV,
+    };
+    let env = env_view(
+        shell,
+        os,
+        vars.iter().map(|(k, v)| (k.to_string(), v.to_string())),
+    );
+    (shell, os, row.cwd.as_ref().map(PathBuf::from), env)
+}
 
 #[derive(clap::Args)]
 pub struct BenchArgs {
@@ -139,13 +250,9 @@ impl Tool {
         }
     }
 
-    /// The corpus comes from Claude Code on Windows: its Bash tool is Git Bash, its PowerShell
-    /// tool starts `pwsh.exe`.
-    fn shell(self) -> Shell {
-        match self {
-            Tool::Bash => Shell::Bash(BashProfile::GitBash),
-            Tool::Pwsh => Shell::Pwsh,
-        }
+    /// The shell the hook picks for this tool on `os` (Git Bash on Windows, POSIX bash on Linux).
+    fn shell(self, os: Os) -> Shell {
+        shell_for(self.name(), os).expect("Bash and PowerShell are shell tools")
     }
 }
 
@@ -352,6 +459,10 @@ fn bench(args: &BenchArgs) -> Result<Vec<String>, String> {
             "moves: up {}, down {}, changed {}, unchanged {}, control {}",
             m["up"], m["down"], m["changed"], m["unchanged"], m["control_moves"]
         );
+        println!(
+            "moves by OS: Windows {}, Linux {}",
+            m["moved_by_os"]["Windows"], m["moved_by_os"]["Linux"]
+        );
     }
     Ok(fails)
 }
@@ -463,12 +574,13 @@ fn replay_rows(rows: &[(&CorpusRow, Tool)], pass: u8) -> Vec<Replayed> {
     rows.iter()
         .enumerate()
         .map(|(i, (row, tool))| {
+            let (shell, os, cwd, env) = replay_input(row, *tool);
             let input = AnalyseInput {
                 bytes: row.command.as_bytes(),
-                shell: tool.shell(),
-                os: Os::Windows,
-                cwd: row.cwd.as_ref().map(PathBuf::from),
-                env: EnvView::new(),
+                shell,
+                os,
+                cwd,
+                env,
                 origin: Origin::CommandLine,
                 problem: None,
             };
@@ -583,6 +695,8 @@ fn diff(
     }
     let (mut up, mut down, mut changed, mut unchanged, mut missing_in_old) = (0, 0, 0, 0, 0);
     let mut moved = Vec::new();
+    let mut moved_by_os: BTreeMap<&str, u64> =
+        [Os::Windows, Os::Posix].map(|os| (os_name(os), 0)).into();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for ((row, _), r) in rows.iter().zip(head) {
         seen.insert(row.id.as_str());
@@ -611,8 +725,11 @@ fn diff(
             old_level.as_str(),
             r.level.as_str()
         );
+        let os = os_name(CwdShape::of(row.cwd.as_deref()).os());
+        *moved_by_os.entry(os).or_default() += 1;
         moved.push(json!({
             "id": row.id,
+            "os": os,
             "way": way,
             "old_level": old_level.as_str(),
             "old_rules": old_rules,
@@ -632,6 +749,7 @@ fn diff(
         "missing_in_old": missing_in_old,
         "missing_in_new": missing_in_new,
         "control_moves": control_moves,
+        "moved_by_os": moved_by_os,
         "moved": moved,
     }))
 }
@@ -705,6 +823,9 @@ struct ParityRule {
 
 struct Report {
     rows: PerTool,
+    /// Rows replayed per OS (both keys always present, so 0 Linux rows shows).
+    rows_per_os: BTreeMap<&'static str, PerTool>,
+    cwd_shapes: BTreeMap<CwdShape, u64>,
     days: u64,
     ok: PerTool,
     ok_non_destructive: PerTool,
@@ -737,6 +858,10 @@ impl Report {
         let own: BTreeSet<&str> = map.own_line_rules.iter().map(String::as_str).collect();
         let mut r = Report {
             rows: PerTool::default(),
+            rows_per_os: [Os::Windows, Os::Posix]
+                .map(|os| (os_name(os), PerTool::default()))
+                .into(),
+            cwd_shapes: CwdShape::ALL.map(|s| (s, 0)).into(),
             days: 0,
             ok: PerTool::default(),
             ok_non_destructive: PerTool::default(),
@@ -758,6 +883,12 @@ impl Report {
         for ((row, tool), v) in rows.iter().zip(head) {
             let tool = *tool;
             r.rows.add(tool);
+            let shape = CwdShape::of(row.cwd.as_deref());
+            *r.cwd_shapes.entry(shape).or_default() += 1;
+            r.rows_per_os
+                .entry(os_name(shape.os()))
+                .or_default()
+                .add(tool);
             days.insert(row.ts.get(..10).unwrap_or(&row.ts));
             micros.entry(tool).or_default().push(v.micros);
             for (rule, level) in &v.rules {
@@ -877,8 +1008,20 @@ impl Report {
             .iter()
             .map(|(t, (p50, p99))| (t.name(), json!({ "p50": p50, "p99": p99 })))
             .collect();
+        let rows_per_os: BTreeMap<&str, Value> = self
+            .rows_per_os
+            .iter()
+            .map(|(os, c)| (*os, c.json()))
+            .collect();
+        let cwd_shapes: BTreeMap<&str, u64> = self
+            .cwd_shapes
+            .iter()
+            .map(|(s, n)| (s.name(), *n))
+            .collect();
         json!({
             "rows": self.rows.json(),
+            "rows_per_os": rows_per_os,
+            "cwd_shapes": cwd_shapes,
             "rows_of_other_tools": other_tool,
             "baseline_missing": baseline_missing,
             "days": self.days,
@@ -933,6 +1076,21 @@ impl Report {
             );
         };
         line("rows", self.rows);
+        for os in [Os::Windows, Os::Posix] {
+            let name = os_name(os);
+            line(
+                &format!("replayed on {name}"),
+                self.rows_per_os.get(name).copied().unwrap_or_default(),
+            );
+        }
+        println!(
+            "cwd shapes: {}",
+            self.cwd_shapes
+                .iter()
+                .map(|(s, n)| format!("{} {n}", s.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         println!("days: {}", self.days);
         println!(
             "meter 1: {} of {} non-destructive ok rows (budget {:.1}){}",
@@ -1090,4 +1248,105 @@ fn check_known(
         ));
     }
     out
+}
+
+/// Known answers for what `replay_input` hands the analysis: a row's delete target resolved by
+/// the real parser and resolver with the shell, OS, cwd and env the bench replays it with. No
+/// rule on this base resolves a delete target, so the verdict alone cannot show these.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shellwise::fs::resolve::{Location, Target, delete_by, target};
+    use shellwise::fs::{Fs, Meta, RealFs, SharedFs};
+    use shellwise::ir::{Elem, Stmt};
+    use shellwise::parse;
+    use std::io;
+    use std::sync::Arc;
+
+    /// `RealFs` with only drive C: present, so a row reads the same on any machine.
+    struct DriveC;
+
+    impl Fs for DriveC {
+        fn lstat(&self, p: &Path) -> io::Result<Meta> {
+            RealFs.lstat(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<PathBuf>> {
+            RealFs.read_dir(p)
+        }
+        fn link_target(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+            RealFs.link_target(p)
+        }
+        fn drive_exists(&self, letter: char) -> io::Result<bool> {
+            Ok(letter.eq_ignore_ascii_case(&'c'))
+        }
+    }
+
+    /// The last word of the row's first command, resolved as a delete target.
+    fn resolved(tool: Tool, cwd: &str, command: &str) -> Target {
+        let row = CorpusRow {
+            id: "f000000000c1".to_string(),
+            ts: "2026-11-01T10:00:00.000Z".to_string(),
+            tool: tool.name().to_string(),
+            command: command.to_string(),
+            cwd: Some(cwd.to_string()),
+            label: "ok".to_string(),
+            destructive: true,
+        };
+        let (shell, os, cwd, env) = replay_input(&row, tool);
+        let script = match shell {
+            Shell::Bash(profile) => parse::bash::parse(command, profile),
+            _ => parse::pwsh::parse(command, shell, os),
+        }
+        .expect("the command parses");
+        let Some(Stmt::Pipeline(p)) = script.stmts.first() else {
+            panic!("no pipeline in {command:?}");
+        };
+        let Some(Elem::Cmd(c)) = p.elems.first() else {
+            panic!("no command in {command:?}");
+        };
+        let mut loc = Location::new(shell, os, cwd.as_deref());
+        loc.read_script(&script);
+        let fs: SharedFs = Arc::new(DriveC);
+        let word = c.args.last().expect("a target");
+        target(
+            word,
+            &loc,
+            &env,
+            delete_by(c, shell, os),
+            &fs,
+            &Deadline::new(Instant::now(), 60_000),
+        )
+    }
+
+    fn paths(v: &[&str]) -> Target {
+        Target::Paths(v.iter().map(PathBuf::from).collect())
+    }
+
+    #[test]
+    fn a_linux_row_resolves_a_relative_delete_inside_its_project() {
+        assert_eq!(
+            resolved(Tool::Bash, "/fixture/proj", "rm -rf build"),
+            paths(&["/fixture/proj/build"])
+        );
+    }
+
+    #[test]
+    fn a_windows_row_resolves_as_before() {
+        assert_eq!(
+            resolved(Tool::Bash, r"C:\fixture\proj", "rm -rf build"),
+            paths(&[r"C:\fixture\proj\build"])
+        );
+        assert_eq!(
+            resolved(Tool::Pwsh, r"C:\fixture\proj", "Remove-Item -Recurse build"),
+            paths(&[r"C:\fixture\proj\build"])
+        );
+    }
+
+    #[test]
+    fn git_bash_tmp_maps_into_the_synthetic_temp() {
+        assert_eq!(
+            resolved(Tool::Bash, r"C:\fixture\proj", "rm -rf /tmp/fixture"),
+            paths(&[r"C:\Profiles\bench\AppData\Local\Temp\fixture"])
+        );
+    }
 }

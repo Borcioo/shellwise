@@ -107,6 +107,14 @@ shellwise bench --corpus "$SHELLWISE_CORPUS/corpus.jsonl" --baseline "$SHELLWISE
     [--dump <dump.tsv>] [--diff <old dump>]
 ```
 
+Each row replays as the hook would have seen it. The corpus records no platform, so the cwd shape
+names the OS: a drive-letter cwd, a UNC cwd (`\\host\share`, `//host/share`), no cwd or any other
+non-`/` cwd is Windows (Git Bash for `Bash`); `/mnt/<letter>` (WSL) and any other `/…` cwd is Linux
+(POSIX bash). The environment is a fixed synthetic one per OS (`WINDOWS_ENV`, `POSIX_ENV` in
+`src/bench.rs`: home, `TEMP`/`TMP`, so Git Bash's `/tmp` maps into that temp), never the machine's
+own. The report prints the rows replayed per OS and per cwd shape (`rows_per_os`, `cwd_shapes`), and
+`--diff` the moved rows per OS (`moved_by_os`).
+
 Build it with `--release`: the latency lines are meaningless in a debug build. The order: a first run
 with `--dump`, `real_parse.ps1 -Ids` on that dump, then the run with `--real-parse`. Without
 `--real-parse` the refused-by-the-real-parser line reads "not measured" and meter 1 is an upper bound.

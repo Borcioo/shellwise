@@ -28,6 +28,21 @@ Real answers (checked with `tools/corpus/real_parse.ps1`) except row 5: Git Bash
 and the file says `no` so that meter 1 and `parse_kind_false_deny` each get one row. Row 4 has no
 answer on purpose (`real_parse_missing`, `parse_kind_unmeasured`).
 
+## corpus_os.jsonl, baseline_os.jsonl
+
+The OS each row replays on, from its cwd shape (`each_row_replays_on_the_os_its_cwd_names`), with
+row 4 of `corpus.jsonl` (no cwd) so `known.jsonl` checks a row:
+
+| Row | Tool | cwd shape | Command shape | Verdict |
+|---|---|---|---|---|
+| …b1 | Bash | drive (Windows) | `docker` with a `/usr:` volume | warn `bash-msys-path-mangle` (Git Bash) |
+| …b2 | Bash | posix (Linux) | the same | ok (POSIX bash rewrites nothing) |
+| …b5 | PowerShell | UNC (Windows) | plain `Get-Date` | ok |
+| …b6 | Bash | `/mnt/c` (Linux) | plain echo | ok |
+
+Per OS: Windows 3 (Bash 2, PowerShell 1), Linux 2 (Bash 2). `old_dump_os.tsv` holds the old
+replay's verdicts (every row as Windows): with `--diff` only …b2 moves (down, Linux).
+
 ## Other files
 
 | File | Known answer |
