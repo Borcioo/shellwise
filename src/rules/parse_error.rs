@@ -15,19 +15,14 @@ pub const PARSE_ERROR_DESTRUCTIVE: &str = "parse-error-destructive";
 /// A backslash before a double quote, from code points.
 const BACKSLASH_QUOTE: &str = "\x5c\x22";
 
-/// Whether the shell is proven to refuse every text with this kind of error. An unclosed quote
-/// is, except in a PowerShell text holding a here-string opener (`@'`, `@"`), which the parser
-/// reads as an unclosed quote where PowerShell accepts some passed as arguments, or a backslash
-/// before a double quote, which the PowerShell host ran in texts ParseInput refuses.
-pub fn is_deny_kind(kind: &ParseKind, command: &str, shell: Shell) -> bool {
+/// Whether the shell is proven to refuse every text with this kind of error: an unclosed quote in
+/// either shell; in PowerShell also an empty pipe element and a parameter glued to a comma, which
+/// the PowerShell parser identifies only in the shapes pwsh refuses.
+pub fn is_deny_kind(kind: &ParseKind, _command: &str, shell: Shell) -> bool {
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
     match kind {
-        ParseKind::UnclosedQuote(_) => {
-            !(pwsh
-                && (command.contains("@'")
-                    || command.contains("@\"")
-                    || command.contains(BACKSLASH_QUOTE)))
-        }
+        ParseKind::UnclosedQuote(_) => true,
+        ParseKind::EmptyPipeElement | ParseKind::MissingArgument => pwsh,
         _ => false,
     }
 }
@@ -56,40 +51,103 @@ impl Rule for ParseErrorRule {
         };
         let command = ctx.input.command;
         let at = position(command, e.span.start);
-        match e.kind {
-            ParseKind::UnclosedQuote(q) if is_deny_kind(&e.kind, command, ctx.input.shell) => {
-                let quote = match q {
-                    QuoteKind::Single => '\'',
-                    QuoteKind::Double => '"',
-                    QuoteKind::Backtick => '`',
-                };
-                out.push(finding(
-                    PARSE_ERROR,
-                    Level::Break,
-                    e,
-                    command,
+        if is_deny_kind(&e.kind, command, ctx.input.shell) {
+            let (message, fix) = deny_text(e, command, ctx.input.shell, &at);
+            out.push(finding(PARSE_ERROR, Level::Break, e, command, message, fix));
+        } else if let Some((e, false)) = other_kind(ctx) {
+            out.push(finding(
+                PARSE_ERROR,
+                Level::Warn,
+                e,
+                command,
+                format!("{} at {at}", e.message),
+                syntax_fix(e, &at),
+            ));
+        }
+    }
+}
+
+/// The message and Fix line of a deny kind, the Fix chosen by the shape of the text.
+fn deny_text(e: &ParseError, command: &str, shell: Shell, at: &str) -> (String, String) {
+    const REFUSED: &str = "so the shell refuses the whole command and runs none of it";
+    let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
+    match e.kind {
+        ParseKind::UnclosedQuote(q) => {
+            let quote = match q {
+                QuoteKind::Single => '\'',
+                QuoteKind::Double => '"',
+                QuoteKind::Backtick => '`',
+            };
+            let here = pwsh && command[e.span.start..].starts_with('@');
+            let message = if here {
+                format!(
+                    "{}: the here-string opened at {at} never ends, {REFUSED}",
+                    e.message
+                )
+            } else {
+                format!(
+                    "{}: the {quote} opened at {at} is never closed, {REFUSED}",
+                    e.message
+                )
+            };
+            let typographic = command
+                .char_indices()
+                .find(|&(_, c)| ('\u{2018}'..='\u{201e}').contains(&c));
+            let fix = if here {
+                format!("end the here-string opened at {at} with a line that starts with {quote}@")
+            } else if let (true, Some((t, _))) = (pwsh, typographic) {
+                format!(
+                    "replace the typographic quote at {} with ' or \"",
+                    position(command, t)
+                )
+            } else if pwsh && q == QuoteKind::Double && command.contains(BACKSLASH_QUOTE) {
+                "in PowerShell write a quote inside \"…\" as \"\" or use '…'".to_string()
+            } else {
+                format!(
+                    "close the {quote} opened at {at}, or write the text to a file and pass the file"
+                )
+            };
+            (message, fix)
+        }
+        ParseKind::EmptyPipeElement => {
+            let pipe = e.span.end.saturating_sub(1);
+            let pipe_at = position(command, pipe);
+            let keyword = command
+                .get(e.span.start..pipe)
+                .filter(|_| pipe > e.span.start)
+                .and_then(|t| t.split(|c: char| !c.is_alphanumeric()).next())
+                .filter(|k| !k.is_empty());
+            match keyword {
+                Some(kw) => (
                     format!(
-                        "{}: the {quote} opened at {at} is never closed, so the shell refuses the whole command and runs none of it",
-                        e.message
+                        "PowerShell cannot pipe a {kw} statement: the | at {pipe_at} starts an empty pipe element, {REFUSED}"
                     ),
+                    format!("write $( before the {kw} at {at} and ) before the | at {pipe_at}"),
+                ),
+                None => (
+                    format!("the | at {pipe_at} has no command after it, {REFUSED}"),
                     format!(
-                        "close the {quote} opened at {at}, or write the text to a file and pass the file"
+                        "remove the empty | at {pipe_at}, or put the command after it on the same line"
                     ),
-                ));
-            }
-            _ => {
-                if let Some((e, false)) = other_kind(ctx) {
-                    out.push(finding(
-                        PARSE_ERROR,
-                        Level::Warn,
-                        e,
-                        command,
-                        format!("{} at {at}", e.message),
-                        syntax_fix(e, &at),
-                    ));
-                }
+                ),
             }
         }
+        ParseKind::MissingArgument => {
+            let word = command.get(e.span.start..e.span.end).unwrap_or("");
+            let message = format!(
+                "PowerShell reads {word} as a parameter and then finds no argument before the comma, {REFUSED}"
+            );
+            // Quoting is the fix only for a word of plain text.
+            let plain = !word.is_empty()
+                && !word.contains(['\'', '"', '`', '$', '@', '(', ')', '{', '}', '#']);
+            let fix = if plain {
+                format!("quote the argument: '{word}'")
+            } else {
+                syntax_fix(e, at)
+            };
+            (message, fix)
+        }
+        _ => (format!("{} at {at}", e.message), syntax_fix(e, at)),
     }
 }
 

@@ -122,13 +122,16 @@ level = "ok"
 rules = []
 oracle = "accepts"
 
+# A here-string opener inside a string is text; outside one it opens a here-string, which ends only
+# at a line starting with its closer.
 [[row]]
-id = "pwsh-here-string-opener-keeps-an-unclosed-quote-warn"
+id = "pwsh-a-here-string-opener-inside-a-string-is-text"
 os = "any"
 shell = "pwsh"
 command = "Write-Output \"abc @'\nx"
-level = "warn"
+level = "break"
 rules = ["parse-error"]
+fix = 'close the " opened at column 14'
 oracle = "refuses"
 
 [[row]]
@@ -142,10 +145,90 @@ fix = 'close the " opened at column 14'
 oracle = "refuses"
 
 [[row]]
-id = "pwsh-double-quote-opener-keeps-an-unclosed-quote-warn"
+id = "pwsh-a-double-here-string-opener-inside-a-string-is-text"
 os = "any"
 shell = "pwsh"
 command = "Write-Output 'abc @\"\nx"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 14"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-an-unclosed-here-string"
+os = "any"
+shell = "pwsh"
+command = "$t = @'\nabc"
+level = "break"
+rules = ["parse-error"]
+fix = "end the here-string opened at column 6 with a line that starts with '@"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-an-unclosed-double-here-string"
+os = "any"
+shell = "pwsh"
+command = "$t = @\"\n$(Get-Date)\nabc"
+level = "break"
+rules = ["parse-error"]
+fix = "end the here-string opened at column 6 with a line that starts with \"@"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-quote-inside-a-here-string-is-text"
+os = "any"
+shell = "pwsh"
+command = "$t = @'\nit's\n'@; Write-Output \"x"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at line 3, column 18'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-closer-not-at-the-line-start-is-text"
+os = "any"
+shell = "pwsh"
+command = "$t = @'\nx '@\n'@; Write-Output 'y"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at line 3, column 18"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-quote-after-a-double-here-string-is-break"
+os = "any"
+shell = "pwsh"
+command = "$t = @\"\nit\"s $(Get-Date)\n\"@ ; 'q"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at line 3, column 6"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-here-string-glued-to-a-word-is-a-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output a@'b"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at column 16"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-here-string-holding-quotes-is-clean"
+os = "any"
+shell = "pwsh"
+command = "$t = @'\nit's \"x\n'@"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# Text after a here-string header is an error of its own kind, not a proven unclosed quote.
+[[row]]
+id = "pwsh-text-after-a-here-string-header-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$t = @'x\nabc\n'@"
 level = "warn"
 rules = ["parse-error"]
 oracle = "refuses"
@@ -189,16 +272,353 @@ level = "ok"
 rules = []
 oracle = "accepts"
 
-# The PowerShell host ran corpus rows that ParseInput refuses as an unclosed quote, each holding a
-# backslash before a double quote: such a text is no proven refusal.
+# A backslash does not escape a double quote in PowerShell: an unclosed quote holding one is break,
+# with the hint to double the quote. The shapes of corpus rows the host refused (the first three
+# were labelled ok, their result being the host's parse error).
 [[row]]
-id = "pwsh-unclosed-quote-with-a-backslash-quote-is-warn"
+id = "pwsh-unclosed-quote-with-a-backslash-quote-is-break"
 os = "any"
 shell = "pwsh"
 command = 'rg -n "\"x" notes.txt'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-backslash-quote-a-json-key-pattern"
+os = "any"
+shell = "pwsh"
+command = 'rg -n "\"e2e[^\"]*\":" package.json'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-backslash-quote-at-the-end-of-a-pattern"
+os = "any"
+shell = "pwsh"
+command = 'rg -n "status|Badge|id: \"" src/routes.tsx src/list.tsx'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-backslash-quote-in-a-git-grep-alternation"
+os = "any"
+shell = "pwsh"
+command = 'git grep -n "const A\|\"users\"$\|role_check\", \"c\"" -- tests/schema.rs'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-backslash-quote-an-attribute-pattern"
+os = "any"
+shell = "pwsh"
+command = 'rg -n "<form|action=|name=\"" includes/page.php'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-backslash-quote-two-json-keys"
+os = "any"
+shell = "pwsh"
+command = 'rg -n "\"test|ts-node|\"mobx\"" package.json'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-backslash-quote-then-a-pipe"
+os = "any"
+shell = "pwsh"
+command = 'rg -n "markdown\"|\"source\"" tests/public | Select-Object -First 4'
+level = "break"
+rules = ["parse-error"]
+fix = """in PowerShell write a quote inside "…" as "" or use '…'"""
+oracle = "refuses"
+
+# --- A comment inside `$(` in a string: PowerShell finds the string's end without reading the
+# comment, so the comment ends at the subexpression's `)` for that purpose (quotes in it are text).
+
+[[row]]
+id = "pwsh-a-comment-in-a-subexpression-then-a-newline-is-no-unclosed-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date # c)\"\n"
+level = "warn"
+rules = ["parse-error"]
+fix = "correct the syntax at"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-comment-in-a-subexpression-then-an-open-string-is-break"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date # c)\" \"open"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 32'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-an-apostrophe-in-a-comment-in-a-subexpression-is-text"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date # it's)\""
 level = "warn"
 rules = ["parse-error"]
 oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-quote-after-the-comment-line-in-a-subexpression-is-break"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date # c\n'x)\""
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at line 2, column 1"
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-comment-in-a-subexpression-left-open-is-break"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date # c"
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 14'
+oracle = "refuses"
+
+# --- `#` glued to a bare word is word text, not a comment ---
+
+[[row]]
+id = "pwsh-a-hash-inside-a-word-is-no-comment"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output a#b "x'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 18'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-hash-after-a-dash-word-is-no-comment"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output ab-c#d "x'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 21'
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-hash-after-a-closing-quote-is-a-comment"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'a'#x \"y"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-hash-after-a-number-in-an-expression-is-a-comment"
+os = "any"
+shell = "pwsh"
+command = '$x = 1#c "y'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-hash-after-a-variable-in-an-expression-is-a-comment"
+os = "any"
+shell = "pwsh"
+command = '$x = $a#b "y'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-hash-after-a-hashtable-key-value-is-a-comment"
+os = "any"
+shell = "pwsh"
+command = "$h = @{a=1#c \"y\n}"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# The same with a later syntax error, so the reading runs: the `#` still starts a comment.
+[[row]]
+id = "pwsh-a-hash-after-a-closing-quote-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'a'#x \"y\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-hash-after-a-number-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$x = 1#c \"y\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-hash-after-a-variable-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$x = $a#b \"y\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+[[row]]
+id = "pwsh-a-hash-after-a-hashtable-key-value-then-an-error-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$h = @{a=1#c \"y\n}; Get-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# A here-string header with text after it opens no here-string for this reading.
+[[row]]
+id = "pwsh-text-after-a-here-string-header-then-a-quote-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$t = @'x\n'@ \"q"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+
+# `--%` passes the rest of its line as text, quotes included: no unclosed quote is claimed.
+[[row]]
+id = "pwsh-a-quote-after-a-stop-parsing-token-is-warn"
+os = "any"
+shell = "pwsh"
+command = "x --% \"a\nGet-Date ("
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+[[row]]
+id = "pwsh-a-double-closer-not-at-the-line-start-is-text"
+os = "any"
+shell = "pwsh"
+command = "$t = @\"\nx \"@\n\"@; Write-Output 'y"
+level = "break"
+rules = ["parse-error"]
+fix = "close the ' opened at line 3, column 18"
+oracle = "refuses"
+
+# Outside a string `ps-var-colon` does not read the text: `$a?:` stays a misread name (warn).
+[[row]]
+id = "pwsh-a-question-mark-name-and-a-colon-outside-a-string-is-warn"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output $a?: x'
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+[[row]]
+id = "pwsh-a-question-mark-name-and-a-colon-in-a-here-string-is-warn"
+os = "any"
+shell = "pwsh"
+command = "$t = @\"\n$a?: x\n\"@"
+level = "warn"
+rules = ["parse-error"]
+oracle = "refuses"
+# `$a?:b` names a variable on the drive `a?`: the tree splits the name, which is not modelled.
+[[row]]
+id = "pwsh-a-question-mark-name-then-a-drive-name-is-warn"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$a?:b"'
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+# --- Empty or whitespace-only text: PowerShell runs nothing and reports nothing ---
+
+[[row]]
+id = "pwsh-empty-text"
+os = "any"
+shell = "pwsh"
+command = ""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-spaces-only"
+os = "any"
+shell = "pwsh"
+command = "   "
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-newline-only"
+os = "any"
+shell = "pwsh"
+command = "\n"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-vertical-tab-only"
+os = "any"
+shell = "pwsh"
+command = "\u000b"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-form-feed-only"
+os = "any"
+shell = "pwsh"
+command = "\u000c"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-no-break-space-only"
+os = "any"
+shell = "pwsh"
+command = "\u00a0"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "pwsh-a-byte-order-mark-only"
+os = "any"
+shell = "pwsh"
+command = "\ufeff"
+level = "ok"
+rules = []
+oracle = "accepts"
+[[row]]
+id = "pwsh-mixed-whitespace"
+os = "any"
+shell = "pwsh"
+command = " \t\r\n "
+level = "ok"
+rules = []
+oracle = "accepts"
 
 [[row]]
 id = "pwsh-other-kind-with-an-encoded-body-is-warn"
@@ -233,6 +653,16 @@ rules = ["parse-error"]
 fix = 'close the " opened at column 8'
 oracle = "refuses"
 
+# A backslash escapes a double quote in Bash: no PowerShell hint.
+[[row]]
+id = "bash-unclosed-double-with-a-backslash-quote-gets-the-plain-fix"
+os = "any"
+shell = "bash"
+command = 'echo "a\"b'
+level = "break"
+rules = ["parse-error"]
+fix = 'close the " opened at column 6'
+oracle = "refuses"
 [[row]]
 id = "bash-unclosed-backtick"
 os = "any"

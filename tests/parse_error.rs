@@ -1,11 +1,19 @@
-//! The `parse-error` rule through `analyse`: `tests/cases/parse_error.toml`, and with the
+//! The `parse-error` rule through `analyse`: `tests/cases/parse_error.toml` and
+//! `tests/cases/pwsh_gaps_verdict.toml`, and with the
 //! `oracle` feature the real shells' parsers on every row that says what they do.
 
 mod case_loader;
 
+/// The rows of `parse_error.toml` and `pwsh_gaps_verdict.toml`; each must exist and run rows.
+fn all_rows() -> Vec<case_loader::Row> {
+    let mut rows = case_loader::rows("parse_error.toml");
+    rows.extend(case_loader::rows("pwsh_gaps_verdict.toml"));
+    rows
+}
+
 #[test]
 fn parse_error_rows() {
-    let rows = case_loader::rows("parse_error.toml");
+    let rows = all_rows();
     let wrong: Vec<String> = rows.iter().filter_map(case_loader::mismatch).collect();
     assert!(
         wrong.is_empty(),
@@ -14,12 +22,15 @@ fn parse_error_rows() {
         rows.len(),
         wrong.join("\n")
     );
-    eprintln!("parse_error.toml: {} rows ran", rows.len());
+    eprintln!(
+        "parse_error.toml and pwsh_gaps_verdict.toml: {} rows ran",
+        rows.len()
+    );
 }
 
 #[test]
 fn every_break_row_says_the_real_parser_refuses_it() {
-    let rows = case_loader::rows("parse_error.toml");
+    let rows = all_rows();
     let unproven: Vec<&str> = rows
         .iter()
         .filter(|r| r.level == "break" && r.oracle.as_deref() != Some("refuses"))
@@ -33,7 +44,7 @@ fn every_break_row_says_the_real_parser_refuses_it() {
 
 #[cfg(feature = "oracle")]
 mod oracle {
-    use super::case_loader::{self, Row};
+    use super::case_loader::Row;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -51,7 +62,7 @@ mod oracle {
     }
 
     fn with_oracle(bash: bool) -> Vec<Row> {
-        let rows: Vec<Row> = case_loader::rows("parse_error.toml")
+        let rows: Vec<Row> = super::all_rows()
             .into_iter()
             .filter(|r| r.oracle.is_some() && r.is_bash() == bash)
             .collect();

@@ -176,6 +176,58 @@ rules = ["ps-var-colon"]
 fix = 'write "${n}:" instead of "$n:"'
 oracle = "refuses"
 
+# A string that is an operand of `+` at statement level.
+[[row]]
+id = "the-left-operand-of-a-plus"
+os = "any"
+shell = "pwsh"
+command = '"$n: " + $c'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "the-right-operand-of-a-plus"
+os = "any"
+shell = "pwsh"
+command = '"a" + "$n: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "an-operand-of-a-plus-in-a-loop-body"
+os = "any"
+shell = "pwsh"
+command = 'foreach ($n in 1,2) { "$n: " + $c[$n-1] }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "an-operand-of-a-plus-in-an-assignment"
+os = "any"
+shell = "pwsh"
+command = '$x = "a" + "$n: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# `?` is a name character: `$a?:` is a variable `a?` on a drive.
+[[row]]
+id = "a-name-ending-in-a-question-mark"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$a?: x"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${a?}:" instead of "$a?:"'
+oracle = "refuses"
+
 # --- Allow twins ---
 
 # Inside $(...) and ${...} the outer string's rules do not apply: a single-quoted string there is
@@ -251,6 +303,24 @@ id = "escaped-dollar"
 os = "any"
 shell = "pwsh"
 command = "Write-Output \"\u0060$n: x\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "operands-of-a-plus-braced"
+os = "any"
+shell = "pwsh"
+command = '"a" + "${n}: x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "a-name-ending-in-a-question-mark-braced"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "${a?}: x"'
 level = "ok"
 rules = []
 oracle = "accepts"
