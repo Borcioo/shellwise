@@ -377,6 +377,15 @@ def check_installed(tool, cmd, cwd=None):
 FAKE_FIRST = FAKE_GUARD.replace('if cmd.startswith("deny-"):', 'if cmd.startswith(("deny-", "old-deny")):')
 
 
+def load_baseline():
+    """baseline.py as a module, no bytecode written next to it."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("corpus_baseline", BASELINE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def corpus_row(i, tool, command, label="ok", denied_by=None, destructive=False, excerpt=""):
     return {"id": "r%03d" % i, "session": "s", "ts": iso(1), "tool": tool, "command": command, "cwd": None,
             "cli_version": "2.1.300", "label": label, "denied_by": denied_by, "destructive": destructive,
@@ -480,6 +489,51 @@ class BaselineTests(unittest.TestCase):
         self.assertNotIn("r021", ok_ids)  # destructive
         deny_ids = {"r%03d" % k for k in range(11)} | {"a%02d" % k for k in range(5)}
         self.assertTrue(all(r["id"] in deny_ids for r in denies), denies)
+
+    def test_row_os_reads_the_cwd_as_the_bench_does(self):
+        mod = load_baseline()
+        path = os.path.join(HERE, "..", "..", "tests", "bench_fixture", "cwd_shapes.tsv")
+        with open(path, encoding="utf-8") as f:
+            cases = [line.rstrip("\n").split("\t") for line in f.readlines()[1:] if line.strip()]
+        self.assertEqual(len(cases), 12)
+        for cwd, _shape, want in cases:
+            self.assertEqual(mod.row_os(None if cwd == "-" else cwd), want, cwd)
+
+    def test_known_slice_expects_only_rules_that_fire_on_the_rows_os_and_tool(self):
+        mod = load_baseline()
+        linux, win, rows, base = "/w/proj", "C:" + chr(92) + "w", [], []
+
+        def add(i, tool, cwd, full):
+            rows.append(dict(corpus_row(0, tool, "x"), id=i, cwd=cwd))
+            base.append({"id": i, "full": full, "installed": full})
+        add("a00", "PowerShell", win, ["bash-msys-path-mangle"])    # a Bash rule on a pwsh row
+        add("a01", "Bash", linux, ["bash-msys-path-mangle"])        # a Git Bash rule on Linux
+        add("a02", "Bash", win, ["bash-msys-path-mangle"])
+        add("a03", "Bash", linux, ["git-restore-discards"])
+        add("a04", "Bash", "/mnt/c/w", ["git-restore-discards"])
+        add("a05", "Bash", linux, ["deny-r0"])                      # not in RUNS_ON: Windows only
+        for k in range(10):
+            add("w%02d" % k, "Bash", win, ["deny-r%d" % k])
+        for k in range(6):
+            add("o%02d" % k, "Bash", win, [])
+            add("p%02d" % k, "PowerShell", win, [])
+        for k in range(3):
+            add("z%02d" % k, "Bash", linux, [])
+        known = mod.known_slice(rows, base)
+        by_id = {k["id"]: k for k in known}
+        denies = [k for k in known if k["expected_rules"]]
+        oks = [k for k in known if not k["expected_rules"]]
+        self.assertNotIn("a00", by_id)
+        self.assertNotIn("a01", by_id)
+        self.assertNotIn("a05", by_id)
+        self.assertEqual(by_id["a02"], {"id": "a02", "os": "Windows", "expected_rules": ["bash-msys-path-mangle"]})
+        self.assertEqual([by_id.get(i, {}).get("os") for i in ("a03", "a04")], ["Linux", "Linux"], by_id)
+        self.assertEqual(len(denies), 12)
+        self.assertGreaterEqual(sum(k["os"] == "Linux" for k in oks), 2)
+        self.assertGreaterEqual(len(oks) - sum(k["os"] == "Linux" for k in oks), 8)
+        for k in known:
+            row = next(r for r in rows if r["id"] == k["id"])
+            self.assertEqual(k["os"], mod.row_os(row["cwd"]), k)
 
     def test_fails_on_zero_rows_for_a_shell(self):
         rows = [r for r in self.good_rows() if r["tool"] == "Bash"]

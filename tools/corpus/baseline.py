@@ -10,7 +10,9 @@ Loads baseline_guard.py by path (no copy, no bytecode written next to it) with B
 its check() and check_installed() on each row's command and cwd. Commands are never run. Each output row:
   {"id", "full": [rule, ...], "installed": [rule, ...]}  (rules of the deny findings only)
 --report writes counts only (no command text, ids or paths). --known writes a known-answer slice:
-10 rows baseline-guard denies (different rules) and 10 ok, non-destructive rows, {"id", "expected_rules"}.
+10 rows baseline-guard denies (different rules) and 10 ok, non-destructive rows, plus Linux rows up to 2 deny and
+2 ok, {"id", "os", "expected_rules"}: `os` comes from the cwd as `shellwise bench` reads it (`row_os`), and a
+deny row expects only rules that can fire on its tool and OS (`RUNS_ON`).
 Exits 1 when a check fails: 0 rows for a shell, 0 destructive rows, 0 baseline denies, or more than 5 % of
 the baseline-guard hook denies that do not replay having no computed cause (target gone, rule narrowed).
 --first-guard-date is that first commit's date (`git log --format=%cI`): only rows dated before it can be
@@ -34,6 +36,36 @@ CAUSE_TARGET, CAUSE_NARROWED, CAUSE_UNEXPLAINED = "target gone", "rule narrowed"
 EXCERPT = 300            # extract.py's error_excerpt cap
 DRIVE_PATH = re.compile(r"(?<![\w])[A-Za-z]:\\[^\s`'\",;|<>()]*")
 KNOWN_EACH = 10
+KNOWN_LINUX = 2          # Linux deny rows and Linux ok rows the slice holds at least, when the corpus has them
+WINDOWS, LINUX = "Windows", "Linux"
+DRIVE_CWD = re.compile(r"^[A-Za-z]:[\\/]")
+# Where the shellwise rule a baseline-guard id maps to (rule_map.toml) can fire: (tools, OSes), read from that
+# rule's gate. A slice row expects only rules that can fire on its tool and OS. An id not listed here is taken
+# as Windows-only (baseline-guard is a Windows hook), for both tools.
+BOTH = (WINDOWS, LINUX)
+RUNS_ON = {
+    "bash-backslash-collapse": (("Bash",), (WINDOWS,)),    # git_bash(ctx), src/rules/bash_lint.rs
+    "bash-msys-path-mangle": (("Bash",), (WINDOWS,)),      # git_bash(ctx), bash_lint.rs
+    "bash-powershell-syntax": (("Bash",), (WINDOWS,)),     # bash-ps-cmdlet: git_bash(ctx), bash_lint.rs
+    "bash-versioned-php": (("Bash",), (WINDOWS,)),         # git_bash(ctx), bash_lint.rs
+    "bash-vendor-bin-shebang": (("Bash",), (WINDOWS,)),    # git_bash(ctx), bash_lint.rs
+    "bash-too-long": (("Bash",), (WINDOWS,)),              # too-long: Git Bash only, src/rules/length.rs
+    "bash-unterminated-quote": (("Bash",), BOTH),          # parse-error: every shell and OS
+    "bat-metachar": (("PowerShell",), (WINDOWS,)),         # is_pwsh and os == Windows, pwsh_lint/bat.rs
+    "ps-bare-bash": (("PowerShell",), (WINDOWS,)),         # is_pwsh and os == Windows, pwsh_lint/ports.rs
+    "cli-inline-prose": (("PowerShell",), BOTH),           # is_pwsh, ports.rs
+    "gate-truncated-pipeline": (("PowerShell",), BOTH),    # is_pwsh, ports.rs (baseline-guard also flags Bash)
+    "ps-git-commit-stdin": (("PowerShell",), BOTH),        # is_pwsh, ports.rs
+    "ps-bad-parameter": (("PowerShell",), BOTH),           # Facts::for_shell (pwsh), ports.rs
+    "ps-native-nonewline": (("PowerShell",), BOTH),        # Facts::for_shell (pwsh), ports.rs
+    "ps-dotnet-relative-path": (("PowerShell",), BOTH),    # Facts::for_shell (pwsh), ports.rs
+    "stale-write-var": (("PowerShell",), BOTH),            # Facts::for_shell (pwsh), ports.rs
+    "ps-unix-command": (("PowerShell",), BOTH),            # is_pwsh, pwsh_lint/catalogue.rs
+    "git-no-verify": (TOOLS, BOTH),                        # git itself: the same on every OS (Task 32)
+    "git-restore-discards": (TOOLS, BOTH),                 # git itself (Task 32)
+    "git-unreadable": (TOOLS, BOTH),                       # git itself (Task 32)
+    "git-worktree-junction": (TOOLS, (WINDOWS,)),          # NTFS junctions exist only on Windows (Task 32)
+}
 # Draft: a target word the shell resolves at run time (variable, substitution, glob, %VAR%, ~).
 DYNAMIC = re.compile(r"[$`*?]|%[^%\s]+%|^~")
 
@@ -149,20 +181,62 @@ def dynamic_target(table, extract, row):
     return False
 
 
+def row_os(cwd):
+    """The OS a row ran on, from its cwd shape: a copy of `CwdShape` in src/bench.rs (the corpus records no
+    platform). Drive and UNC cwds, no cwd and a relative cwd are Windows; any other `/...` cwd, `/mnt/<letter>`
+    (WSL) included, is Linux. tests/bench_fixture/cwd_shapes.tsv holds the cases both are tested on."""
+    if not isinstance(cwd, str) or not cwd:
+        return WINDOWS
+    if DRIVE_CWD.match(cwd) or cwd.startswith(("\\\\", "//")):
+        return WINDOWS
+    return LINUX if cwd.startswith("/") else WINDOWS
+
+
+def can_fire(rule, tool, os_name):
+    tools, oses = RUNS_ON.get(rule, (TOOLS, (WINDOWS,)))
+    return tool in tools and os_name in oses
+
+
+def spread(ids, n):
+    """n of ids, spread evenly over them."""
+    n = min(n, len(ids))
+    return [ids[k * len(ids) // n] for k in range(n)]
+
+
 def known_slice(rows, base):
+    """KNOWN_EACH deny rows over different rules and KNOWN_EACH ok rows, plus Linux rows up to KNOWN_LINUX of each.
+    A deny row is a candidate only when every rule it expects can fire on its tool and OS."""
     by_id = {r["id"]: r for r in rows}
+    os_of = {r["id"]: row_os(r.get("cwd")) for r in rows}
+    ordered = sorted(base, key=lambda b: b["id"])
+
+    def fits(b):
+        r = by_id[b["id"]]
+        return all(can_fire(rule, r["tool"], os_of[b["id"]]) for rule in b["full"])
+
     by_rule = collections.defaultdict(list)
-    for b in sorted(base, key=lambda b: b["id"]):
-        if b["full"]:
+    for b in ordered:
+        if b["full"] and fits(b):
             by_rule[b["full"][0]].append(b)
     picked, depth = [], 0
     while len(picked) < KNOWN_EACH and any(len(v) > depth for v in by_rule.values()):
         for rule in sorted(by_rule):
             if len(picked) < KNOWN_EACH and len(by_rule[rule]) > depth:
-                picked.append({"id": by_rule[rule][depth]["id"], "expected_rules": by_rule[rule][depth]["full"]})
+                picked.append(by_rule[rule][depth])
+        depth += 1
+    # Linux rows, spread over rules, when the round above picked too few.
+    taken = {b["id"] for b in picked}
+    linux = collections.defaultdict(list)
+    for rule in sorted(by_rule):
+        linux[rule] = [b for b in by_rule[rule] if os_of[b["id"]] == LINUX and b["id"] not in taken]
+    depth = 0
+    while sum(os_of[b["id"]] == LINUX for b in picked) < KNOWN_LINUX and any(len(v) > depth for v in linux.values()):
+        for rule in sorted(linux):
+            if sum(os_of[b["id"]] == LINUX for b in picked) < KNOWN_LINUX and len(linux[rule]) > depth:
+                picked.append(linux[rule][depth])
         depth += 1
     oks = {t: [] for t in TOOLS}
-    for b in sorted(base, key=lambda b: b["id"]):
+    for b in ordered:
         r = by_id[b["id"]]
         if r["label"] == "ok" and not r["destructive"] and not b["full"] and not b["installed"] and r["tool"] in oks:
             oks[r["tool"]].append(b["id"])
@@ -170,8 +244,13 @@ def known_slice(rows, base):
     want = {t: min(len(oks[t]), KNOWN_EACH // len(TOOLS)) for t in TOOLS}
     for t in TOOLS:
         want[t] = min(len(oks[t]), KNOWN_EACH - sum(want[o] for o in TOOLS if o != t))
-    ok_ids = [oks[t][k * len(oks[t]) // want[t]] for t in TOOLS for k in range(want[t])]
-    return picked + [{"id": i, "expected_rules": []} for i in ok_ids]
+    ok_ids = [i for t in TOOLS for i in spread(oks[t], want[t])]
+    linux_oks = [i for t in TOOLS for i in oks[t] if os_of[i] == LINUX and i not in ok_ids]
+    short = KNOWN_LINUX - sum(os_of[i] == LINUX for i in ok_ids)
+    if short > 0:
+        ok_ids += spread(linux_oks, short)
+    return ([{"id": b["id"], "os": os_of[b["id"]], "expected_rules": b["full"]} for b in picked]
+            + [{"id": i, "os": os_of[i], "expected_rules": []} for i in ok_ids])
 
 
 def table_lines(header, rows):
