@@ -54,6 +54,9 @@ write("known_not_landed.jsonl", jl([
 ]))
 write("known_unmapped.jsonl", jl([{"id": "f00000000001", "expected_rules": ["fixture-unknown-id"]}]))
 write("known_absent.jsonl", jl([{"id": "f000000000ff", "expected_rules": ["bash-unterminated-quote"]}]))
+# Row 4 has no cwd, so it replays on Windows: a slice that says Linux is wrong.
+write("known_os_mismatch.jsonl", jl([{"id": "f00000000004", "os": "Linux",
+                                       "expected_rules": ["bash-unterminated-quote"]}]))
 write("known_default_map.jsonl", jl([{"id": "f00000000004", "expected_rules": ["bash-unterminated-quote"]}]))
 # Row 5 says "no" although bash refuses its text: the one fabricated answer, so meter 1 and
 # parse_kind_false_deny each have a row. Row 4 has no answer on purpose.

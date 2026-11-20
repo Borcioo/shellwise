@@ -61,9 +61,13 @@ command and cwd. It never runs a command; some git rules run read-only `git rev-
 disk under the row's cwd. Each row of `baseline.jsonl` is `{"id", "full": [rule…], "installed": [rule…]}`
 (deny findings only).
 
-`--report` writes counts only. `--known` writes a known-answer slice of 20 rows,
-`{"id", "expected_rules"}`: 10 that baseline-guard denies, spread over different rules, and 10 `ok`,
-non-destructive rows with no finding.
+`--report` writes counts only. `--known` writes a known-answer slice, `{"id", "os", "expected_rules"}`:
+10 rows that baseline-guard denies, spread over different rules, and 10 `ok`, non-destructive rows with no
+finding, plus Linux rows up to 2 of each kind when the corpus has them. `os` is read from the cwd the
+way `shellwise bench` reads it (`row_os`, a copy of the bench's rule; `tests/bench_fixture/cwd_shapes.tsv`
+tests both), and the bench fails on a row it replays on another OS. A deny row expects only rules that
+can fire on its tool and OS (`RUNS_ON` in `baseline.py`, one line of evidence per rule; an id not listed
+counts as Windows-only).
 
 Replaying the `denied-hook` rows with `denied_by = baseline-guard` is a positive control that replay
 works, not a coverage target. Each such row that does not replay to a deny today gets a computed cause:

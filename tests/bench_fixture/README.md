@@ -54,6 +54,8 @@ replay's verdicts (every row as Windows): with `--diff` only …b2 moves (down, 
 | `known_not_landed.jsonl` | 0 checked: exit 1 |
 | `known_unmapped.jsonl`, `baseline_unmapped.jsonl` | an id the map lacks: exit 1 |
 | `known_absent.jsonl` | a checked row missing from the corpus: exit 1 |
+| `known_os_mismatch.jsonl` | row 4 (no cwd, so Windows) marked `"os": "Linux"`: exit 1 |
+| `cwd_shapes.tsv` | cwd → shape → OS cases, read by `bench::tests` and by `tools/corpus/test_extract.py` (`row_os`) |
 | `known_default_map.jsonl` | row 4 under the compiled-in map: checked, passes |
 | `corpus_empty.jsonl`, `corpus_bash_only.jsonl` | 0 rows, 0 PowerShell rows: exit 1 |
 | `baseline_unjoined.jsonl` | 0 rows joined: exit 1 |

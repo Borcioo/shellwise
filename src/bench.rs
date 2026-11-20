@@ -203,6 +203,9 @@ struct BaselineRow {
 #[derive(Deserialize)]
 struct KnownRow {
     id: String,
+    /// The OS `baseline.py` read from the row's cwd; must be the one the bench replays it on.
+    #[serde(default)]
+    os: Option<String>,
     expected_rules: Vec<String>,
 }
 
@@ -1205,8 +1208,23 @@ fn check_known(
         none_denied: 0,
         fails: Vec::new(),
     };
+    let os_of: HashMap<&str, &'static str> = rows
+        .iter()
+        .map(|(row, _)| {
+            let os = os_name(CwdShape::of(row.cwd.as_deref()).os());
+            (row.id.as_str(), os)
+        })
+        .collect();
     for k in known {
         let found = by_id.get(k.id.as_str()).copied();
+        if let (Some(want), Some(got)) = (k.os.as_deref(), os_of.get(k.id.as_str()))
+            && want != *got
+        {
+            out.fails.push(format!(
+                "known row {} is {want} in the slice but replays on {got}",
+                k.id
+            ));
+        }
         if k.expected_rules.is_empty() {
             out.none_rows += 1;
             if found.is_some_and(Replayed::denied) {
@@ -1316,6 +1334,22 @@ mod tests {
             &fs,
             &Deadline::new(Instant::now(), 60_000),
         )
+    }
+
+    /// The cases `tools/corpus/baseline.py` (`row_os`, a copy of this rule) is tested on too.
+    #[test]
+    fn each_cwd_shape_names_its_os() {
+        let table = include_str!("../tests/bench_fixture/cwd_shapes.tsv");
+        let mut n = 0;
+        for line in table.lines().skip(1).filter(|l| !l.is_empty()) {
+            let cols: Vec<&str> = line.split('\t').collect();
+            let cwd = (cols[0] != "-").then_some(cols[0]);
+            let shape = CwdShape::of(cwd);
+            assert_eq!(shape.name(), cols[1], "{line}");
+            assert_eq!(os_name(shape.os()), cols[2], "{line}");
+            n += 1;
+        }
+        assert_eq!(n, 12, "rows read from cwd_shapes.tsv");
     }
 
     fn paths(v: &[&str]) -> Target {

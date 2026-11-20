@@ -299,6 +299,16 @@ fn a_known_row_absent_from_the_corpus_fails() {
 }
 
 #[test]
+fn a_known_row_whose_os_is_not_the_replayed_one_fails() {
+    let inputs = Inputs {
+        known: "known_os_mismatch.jsonl",
+        ..FULL
+    };
+    bench("known-os", &inputs, &[], &[])
+        .assert_fail("known row f00000000004 is Linux in the slice but replays on Windows");
+}
+
+#[test]
 fn a_missing_known_file_fails() {
     let inputs = Inputs {
         known: "no-such-known.jsonl",
