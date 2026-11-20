@@ -101,7 +101,15 @@ fn no_file_system_call_on_a_share_or_device_spelling() {
 
     let share_cwd = Path::new(r"\\192.0.2.1\share\repo");
     // (shell, command, cwd, level, the local folder the spelling names)
-    let rows: [(Shell, String, &Path, Level, &str); 9] = [
+    let rows: [(Shell, String, &Path, Level, &str); 10] = [
+        // Ruling 127: a `cd` target on a share is not read to prove the `cd`.
+        (
+            bash,
+            "cd build; rm -rf *".into(),
+            share_cwd,
+            Level::Warn,
+            r"\\192.0.2.1\share\repo",
+        ),
         // A cwd on a share: no repo lookup and no walk there.
         (
             bash,
