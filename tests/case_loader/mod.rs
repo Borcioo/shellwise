@@ -62,6 +62,16 @@ impl Row {
     }
 }
 
+/// Every row of `tests/cases/<name>`, for whatever OS: for checks of what the table declares,
+/// never for verdicts. Panics on an empty file.
+pub fn all_rows(name: &str) -> Vec<Row> {
+    let path = format!("{}/tests/cases/{name}", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let file: File = toml::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert!(!file.row.is_empty(), "{name}: no rows");
+    file.row
+}
+
 /// The rows of `tests/cases/<name>` that run on this OS. Prints how many were skipped and why;
 /// panics when none is left.
 pub fn rows(name: &str) -> Vec<Row> {
