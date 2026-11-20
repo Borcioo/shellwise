@@ -195,12 +195,17 @@ pub fn critical_reason(
         }
     };
     let key = key_of(&text);
+    // Matched by text too, so a device spelling (`\\?\C:\…\.git`) needs no file-system call.
     let git_dir = cwd_repo.map(repo_git);
     let named: Vec<(&Path, &'static str, &'static str)> = home
         .map(|h| (h, "home folder", "ancestor of the home folder"))
         .into_iter()
         .chain(cwd_repo.map(|r| (r, "repo root", "ancestor of the repo root")))
-        .chain(git_dir.as_deref().map(|g| (g, REPO_GIT, "ancestor of the repo root")))
+        .chain(
+            git_dir
+                .as_deref()
+                .map(|g| (g, REPO_GIT, "ancestor of the repo root")),
+        )
         .chain(protected.iter().map(|p| {
             (
                 p.as_path(),
@@ -236,9 +241,8 @@ fn system_path(c: &Canon) -> Option<&'static str> {
                         || first == "programdata")
             }
             Os::Posix => {
-                c.prefix == "/"
-                    && (matches!(first.as_str(), "usr" | "etc" | "bin" | "sbin" | "System")
-                        || first.starts_with("lib"))
+                matches!(first.as_str(), "usr" | "etc" | "bin" | "sbin" | "System")
+                    || first.starts_with("lib")
             }
         };
     hit.then_some("system folder")
@@ -308,7 +312,10 @@ pub fn critical_by_identity(
 /// the guard makes no file-system call on one (a call may hang on the network or send the
 /// user's credentials to the server, Ruling 114(f)). A verbatim drive path (`\\?\C:\x`) is none.
 pub fn is_network_or_device(p: &Path, os: Os) -> bool {
-    os == Os::Windows && Canon::parse(&p.to_string_lossy(), os).prefix.starts_with("\\\\")
+    // Only a Windows reading gives such a prefix.
+    Canon::parse(&p.to_string_lossy(), os)
+        .prefix
+        .starts_with("\\\\")
 }
 
 const REPO_GIT: &str = "repo's .git, which holds every commit";

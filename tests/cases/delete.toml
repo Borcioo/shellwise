@@ -14,7 +14,8 @@
 #
 # The runner replaces each FX_ name with its path (forward slashes for bash rows). A row whose
 # id starts with `nocwd-` runs with no cwd, `norepo-` with the cwd FX_NOREPO, `unccwd-` with a
-# cwd on a share no host answers, and `scratch-` with `scratch_dir` set to FX_OUTSIDE. Every path the fixture uses has no space.
+# cwd on a share no host answers (the twin `unccwd-git-clean` stays an unknown location),
+# `admincwd-` with the cwd `\\localhost\C$`, and `scratch-` with `scratch_dir` set to FX_OUTSIDE. Every path the fixture uses has no space.
 # The rows are synthetic and ranked by the corpus counts of their shapes (2026-11-19, 50,862
 # rows): `git worktree remove` 320, `[IO.Directory]::Delete` 260, `Remove-Item` with
 # `-ErrorAction` 215, `Remove-Item -Recurse` 199, `rm -rf` 152, `rm <file>` 141,
@@ -1119,6 +1120,15 @@ command = "rm -rf .git # shellwise: allow"
 level = "critical"
 rules = ["delete-critical"]
 
+# Another spelling of the same folder, through a link to the repo: matched by file identity.
+[[row]]
+id = "ps-ri-dot-git-through-a-link-to-the-repo"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force FX_ROOT\\repolink\\.git"
+level = "critical"
+rules = ["delete-critical"]
+
 # Inside `.git` is the project: a stale lock is a common, safe delete.
 [[row]]
 id = "gb-rm-git-index-lock"
@@ -1290,6 +1300,76 @@ command = 'Remove-Item -Recurse -Force \\192.0.2.1\share'
 level = "critical"
 rules = ["delete-critical"]
 
+# ---------------------------------------------------------------- device spellings of protected folders
+# The critical match is lexical and runs before the network-or-device rule; only the file-system
+# part is skipped (`tests/delete_fs.rs` proves no call is made on these spellings).
+
+[[row]]
+id = "ps-ri-long-path-drive-root"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\?\C:\'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-long-path-system-folder"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\?\C:\Windows\Temp\sometool'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-long-path-home"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force \\\\?\\FX_HOME"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-long-path-repo-git"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force \\\\?\\FX_REPO\\.git"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-admin-share-of-a-drive-root"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\localhost\C$'
+level = "critical"
+rules = ["delete-critical"]
+
+# `git clean` from a cwd that is a drive's admin share: the folder git cleans is the drive root.
+[[row]]
+id = "admincwd-git-clean"
+os = "windows"
+shell = "gitbash"
+command = "git clean -fdx"
+level = "critical"
+rules = ["delete-critical"]
+
+# Twins: a share path that names nothing protected stays an unknown location, unread.
+[[row]]
+id = "ps-ri-admin-share-subfolder"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\localhost\C$\sometool-build'
+level = "danger"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-ri-unc-windows-folder"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\192.0.2.1\share\Windows\x'
+level = "danger"
+rules = ["delete-unknown-location"]
+
 # ---------------------------------------------------------------- writer arguments that resolve
 
 [[row]]
@@ -1299,6 +1379,33 @@ shell = "pwsh"
 command = "Remove-Item -Recurse -Force $env:NOT_IN_THE_HOOK_ENV\\tmp1"
 level = "danger"
 rules = ["dynamic-target"]
+
+# A writer word that does not resolve may name any drive path: every variable is then unread.
+[[row]]
+id = "ps-set-item-dynamic-then-temp-delete"
+os = "windows"
+shell = "pwsh"
+command = "Set-Item $name x; Remove-Item -Recurse -Force $env:TEMP\\tmp1"
+level = "danger"
+rules = ["dynamic-target"]
+
+# A drive-relative path is relative to that drive's current folder, which the guard cannot see.
+[[row]]
+id = "ps-ri-drive-relative-windows"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force C:Windows"
+level = "danger"
+rules = ["delete-unknown-location"]
+
+# List merging: the higher level wins whatever the order.
+[[row]]
+id = "ps-ri-list-danger-then-critical"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force ..\\outside\\data,C:\\"
+level = "critical"
+rules = ["delete-critical"]
 
 [[row]]
 id = "gb-rm-tilde-file"

@@ -10,8 +10,8 @@ use std::sync::{Arc, OnceLock};
 use serde::Deserialize;
 
 use super::delete::{
-    self, CONFIRM_FIX, Call, How, Node, Read, Scene, facts_of, finding, is_pwsh, literal,
-    literals, max_finding, read_call, row_holds, walk_script,
+    self, CONFIRM_FIX, Call, How, Node, Read, Scene, facts_of, finding, is_pwsh, literal, literals,
+    max_finding, read_call, row_holds, walk_script,
 };
 use super::{Ctx, Rule};
 use crate::fs::bounded;
@@ -233,7 +233,14 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
             if !scene.ctx.cfg.policies.git_no_verify {
                 return None;
             }
-            hooks(facts, sub, &args[..sub_at], &lits[..sub_at], rest_lits, call.span())
+            hooks(
+                facts,
+                sub,
+                &args[..sub_at],
+                &lits[..sub_at],
+                rest_lits,
+                call.span(),
+            )
         }
         GitAction::WorktreeRemove => worktree_remove(scene, rest, rest_lits, &git_loc, call),
         GitAction::CheckoutPaths | GitAction::RestorePaths => {
@@ -311,7 +318,9 @@ fn hooks(
             if redirects {
                 return Some(no_verify(
                     &sub.words,
-                    &global_lits[k + 1].clone().unwrap_or_else(|| lead.to_string()),
+                    &global_lits[k + 1]
+                        .clone()
+                        .unwrap_or_else(|| lead.to_string()),
                     span,
                 ));
             }
@@ -379,7 +388,9 @@ fn no_verify(sub: &str, flag: &str, span: Span) -> Finding {
 fn is_dir(scene: &Scene, p: &Path) -> Option<bool> {
     let fs = Arc::clone(scene.ctx.fs);
     let p = p.to_path_buf();
-    bounded(scene.ctx.deadline, move || fs.lstat(&p).map(|m| m.is_dir)).ok().map(|r| r.unwrap_or(false))
+    bounded(scene.ctx.deadline, move || fs.lstat(&p).map(|m| m.is_dir))
+        .ok()
+        .map(|r| r.unwrap_or(false))
 }
 
 /// Whether `p` exists now (`None` when the deadline passed).
@@ -441,9 +452,8 @@ fn worktree_remove(
         Target::Timeout => return Some(scene.timeout(call.span(), &text)),
     };
     let literal_text = rest_lits[j].as_deref();
-    let absolute = literal_text.is_some_and(|t| {
-        Path::new(t).is_absolute() || t.starts_with('/') || t.starts_with('\\')
-    });
+    let absolute = literal_text
+        .is_some_and(|t| Path::new(t).is_absolute() || t.starts_with('/') || t.starts_with('\\'));
     let shell = scene.ctx.input.shell;
     let mut worst = None;
     for p in paths {
@@ -514,7 +524,10 @@ fn restore(
     span: Span,
 ) -> Option<Finding> {
     let end = rest_lits.iter().position(|a| a.as_deref() == Some("--"));
-    let is_dot = |a: &Option<String>| a.as_deref().is_some_and(|t| t.len() == 1 && t.starts_with('.'));
+    let is_dot = |a: &Option<String>| {
+        a.as_deref()
+            .is_some_and(|t| t.len() == 1 && t.starts_with('.'))
+    };
     let mut paths: Vec<&Word> = Vec::new();
     let mut unknown = false;
     if sub.action == GitAction::CheckoutPaths {
@@ -522,11 +535,12 @@ fn restore(
             paths.extend(&rest[e + 1..]);
         } else if let Some(k) = rest_lits.iter().position(is_dot) {
             paths.push(&rest[k]);
-        } else if rest_lits
-            .iter()
-            .flatten()
-            .any(|a| facts.branch_options.iter().any(|b| scan::flag_matches(b, a)))
-        {
+        } else if rest_lits.iter().flatten().any(|a| {
+            facts
+                .branch_options
+                .iter()
+                .any(|b| scan::flag_matches(b, a))
+        }) {
             // A branch operation: git takes no path here.
             return None;
         } else {
@@ -535,7 +549,14 @@ fn restore(
                 if t.as_deref().is_some_and(|t| t.starts_with('-')) {
                     continue;
                 }
-                match resolve::target(w, git_loc, &scene.env, DeleteBy::Native, scene.ctx.fs, scene.ctx.deadline) {
+                match resolve::target(
+                    w,
+                    git_loc,
+                    &scene.env,
+                    DeleteBy::Native,
+                    scene.ctx.fs,
+                    scene.ctx.deadline,
+                ) {
                     Target::Paths(ps) => {
                         if ps.iter().any(|p| exists(scene, p) != Some(false)) {
                             paths.push(w);
@@ -599,7 +620,13 @@ fn restore(
     } else {
         format!("look at `git diff --stat -- {list}` first; {CONFIRM_FIX}")
     };
-    Some(finding(GIT_RESTORE_DISCARDS, Level::Danger, message, fix, span))
+    Some(finding(
+        GIT_RESTORE_DISCARDS,
+        Level::Danger,
+        message,
+        fix,
+        span,
+    ))
 }
 
 /// `git clean -f` deletes untracked files inside the folder git runs in, or inside the

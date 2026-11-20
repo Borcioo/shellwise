@@ -126,7 +126,8 @@ fn unlock(p: &Path) {
     }
 }
 
-const LINKS: [(&str, &str); 4] = [
+const LINKS: [(&str, &str); 5] = [
+    ("repolink", "repo"),
     ("repo/linked/out", "outside/target"),
     ("repo/jn", "outside/target"),
     ("repo/wt/node_modules", "outside/target"),
@@ -182,7 +183,11 @@ fn fixture() -> &'static Fixture {
         }
         touch(&fx.at(&format!("{LOCKED}/f.txt")));
         lock(&fx.at(LOCKED));
-        if let Some(repo) = fx.at("norepo").ancestors().find(|d| d.join(".git").exists()) {
+        if let Some(repo) = fx
+            .at("norepo")
+            .ancestors()
+            .find(|d| d.join(".git").exists())
+        {
             panic!("the non-repo fixture lies inside the repo {repo:?}");
         }
         fx
@@ -208,6 +213,8 @@ fn config(row: &Row) -> Config {
 }
 
 const UNC_CWD: &str = r"\\192.0.2.1\share\repo";
+/// The admin share of drive C on this machine: a drive root under a share spelling.
+const ADMIN_SHARE_CWD: &str = r"\\localhost\C$";
 
 fn cwd(row: &Row) -> Option<PathBuf> {
     let fx = fixture();
@@ -215,6 +222,8 @@ fn cwd(row: &Row) -> Option<PathBuf> {
         None
     } else if row.id.starts_with("norepo-") {
         Some(fx.at("norepo"))
+    } else if row.id.starts_with("admincwd-") {
+        Some(PathBuf::from(ADMIN_SHARE_CWD))
     } else if row.id.starts_with("unccwd-") {
         // A documentation address no host answers: a file-system call there runs out of time.
         Some(PathBuf::from(UNC_CWD))
@@ -314,7 +323,13 @@ fn ported_rows_keep_their_count() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| r["id"].as_str().unwrap().trim_start_matches("nocwd-").to_string())
+        .map(|r| {
+            r["id"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("nocwd-")
+                .to_string()
+        })
         .collect();
     assert!(!ids.is_empty(), "git.toml: no rows");
     for (prefix, want) in PORTED {
@@ -371,9 +386,9 @@ fn every_finding_id_has_a_deny_row_a_row_without_it_and_a_doc() {
         if NO_ROW.contains(&id) {
             continue;
         }
-        let deny = rows
-            .iter()
-            .any(|r| fires(r, id) && ["danger", "critical"].contains(&r["level"].as_str().unwrap()));
+        let deny = rows.iter().any(|r| {
+            fires(r, id) && ["danger", "critical"].contains(&r["level"].as_str().unwrap())
+        });
         if !deny || rows.iter().all(|r| fires(r, id)) {
             wrong.push(format!("{id}: no deny row, or no row without it"));
         }
@@ -411,7 +426,12 @@ fn the_marker_confirms_only_break_and_danger_of_other_rules() {
         ("analysis-incomplete", Level::Danger, Level::Danger),
     ];
     for (rule, before, after) in table {
-        let v = marker::apply(&script, text, false, Verdict::new(vec![found(rule, before)]));
+        let v = marker::apply(
+            &script,
+            text,
+            false,
+            Verdict::new(vec![found(rule, before)]),
+        );
         assert_eq!(v.findings[0].level, after, "{rule} at {before:?}");
         assert_eq!(v.level, after, "{rule} at {before:?}");
     }
@@ -455,9 +475,37 @@ fn the_marker_does_not_confirm_too_long() {
         origin: Origin::CommandLine,
         problem: None,
     };
-    let v = analyse(&input, &Config::default(), &Deadline::new(Instant::now(), 8000));
+    let v = analyse(
+        &input,
+        &Config::default(),
+        &Deadline::new(Instant::now(), 8000),
+    );
     assert_eq!(v.level, Level::Break, "{v:?}");
     assert!(v.findings.iter().any(|f| f.rule == "too-long"), "{v:?}");
+}
+
+#[test]
+fn allowed_roots_come_from_the_user_file_and_never_from_the_repo_file() {
+    let dir = fixture().at("cfg");
+    mkdir(&dir);
+    let user = dir.join("config.toml");
+    let repo = dir.join(shellwise::config::REPO_FILE);
+    std::fs::write(&user, "allowed_roots = ['scratch']\n").unwrap();
+    std::fs::write(&repo, "allowed_roots = ['wide']\n").unwrap();
+    assert_eq!(
+        Config::default().allowed_roots,
+        vec![std::env::temp_dir()],
+        "the default is the temp folder"
+    );
+    let (cfg, out) = Config::load(None, Some(&user), None);
+    assert_eq!(cfg.allowed_roots, vec![dir.join("scratch")], "{out:?}");
+    let (cfg, out) = Config::load(None, None, Some(&repo));
+    assert_eq!(cfg.allowed_roots, vec![std::env::temp_dir()]);
+    assert!(
+        out.iter()
+            .any(|f| f.rule == shellwise::config::CONFIG_REPO_IGNORED),
+        "{out:?}"
+    );
 }
 
 // ---------------------------------------------------------------- the spawned callers
@@ -523,9 +571,16 @@ fn the_hook_judges_a_delete_from_the_event_cwd() {
 fn the_hook_resolves_the_home_folder_from_its_own_environment() {
     let fx = fixture();
     let env = home_env();
-    let r = common::run(&HOOK, Some(&bash_event("rm -rf ~", &fx.at("repo"))), &env_refs(&env));
+    let r = common::run(
+        &HOOK,
+        Some(&bash_event("rm -rf ~", &fx.at("repo"))),
+        &env_refs(&env),
+    );
     let why = reason(&r);
-    assert!(why.starts_with("shellwise: critical delete-critical"), "{why}");
+    assert!(
+        why.starts_with("shellwise: critical delete-critical"),
+        "{why}"
+    );
 }
 
 #[test]
@@ -533,10 +588,17 @@ fn check_resolves_the_home_folder_from_its_own_environment() {
     let fx = fixture();
     let env = home_env();
     let repo = fx.at("repo").to_string_lossy().into_owned();
-    let args = ["check", "--shell", "bash", "--json", "--cwd", &repo, "--", "rm -rf ~"];
+    let args = [
+        "check", "--shell", "bash", "--json", "--cwd", &repo, "--", "rm -rf ~",
+    ];
     let r = common::run(&args, None, &env_refs(&env));
     assert_eq!(r.code, 3, "{} {}", r.stdout, r.stderr);
-    assert_eq!(r.json()["findings"][0]["rule"], "delete-critical", "{}", r.stdout);
+    assert_eq!(
+        r.json()["findings"][0]["rule"],
+        "delete-critical",
+        "{}",
+        r.stdout
+    );
 }
 
 #[test]

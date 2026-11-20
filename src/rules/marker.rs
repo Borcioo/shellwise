@@ -46,8 +46,7 @@ pub fn apply(script: &Script, command: &str, parse_failed: bool, verdict: Verdic
         .findings
         .into_iter()
         .map(|mut f| {
-            if matches!(f.level, Level::Break | Level::Danger)
-                && !NOT_CONFIRMABLE.contains(&f.rule)
+            if matches!(f.level, Level::Break | Level::Danger) && !NOT_CONFIRMABLE.contains(&f.rule)
             {
                 f.level = Level::Ok;
                 f.message = format!("{} (confirmed by the trailing allow marker)", f.message);

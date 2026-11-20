@@ -94,7 +94,9 @@ pub(crate) fn facts_of<T: DeserializeOwned + Send + Sync + 'static>(
             })
             .collect()
     });
-    let i = programs::table().iter().position(|p| std::ptr::eq(p, prog))?;
+    let i = programs::table()
+        .iter()
+        .position(|p| std::ptr::eq(p, prog))?;
     all.get(i)?.as_ref()
 }
 
@@ -187,7 +189,7 @@ impl Call<'_> {
 }
 
 pub(crate) enum Read<'a> {
-    Call(Call<'a>, &'static Program),
+    Call(Box<Call<'a>>, &'static Program),
     /// A program the table does not know: never a reason to deny by itself (Ruling 91a).
     Plain,
     /// Code the guard does not read: an opaque name, an unread wrapper, a shell or eval body.
@@ -250,13 +252,13 @@ pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) ->
         return Read::Unread;
     }
     Read::Call(
-        Call {
+        Box::new(Call {
             name,
             cmdlet,
             run,
             piped,
             original: c,
-        },
+        }),
         prog,
     )
 }
@@ -358,7 +360,11 @@ fn runner_runs_delete(args: &[Word], runner: &Program, shell: Shell, os: Os) -> 
             return false;
         };
         if t.starts_with('-') && t.len() > 1 {
-            i += if runner.value_options.contains(&t) { 2 } else { 1 };
+            i += if runner.value_options.contains(&t) {
+                2
+            } else {
+                1
+            };
             continue;
         }
         return programs::lookup(&base_name(&t), shell, os).is_some_and(deletes);
@@ -481,8 +487,8 @@ fn native_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
                 ended = true;
                 continue;
             }
-            let option = t.len() > 1
-                && (t.starts_with('-') || (facts.slash_options && t.starts_with('/')));
+            let option =
+                t.len() > 1 && (t.starts_with('-') || (facts.slash_options && t.starts_with('/')));
             if option {
                 seen_option = true;
                 p.recursive |= facts.recursive.iter().any(|e| scan::flag_matches(e, t));
@@ -608,17 +614,24 @@ impl<'a> Scene<'a> {
     /// Why deleting `p` is critical. Deleting inside the repo root (`contents`, as in
     /// `find . -name '*.o' -delete` from the root) is not; inside a drive root, `/`, a system
     /// path, the home folder, a protected path or an ancestor of one still is.
+    /// On a network or device path only the lexical match runs: no file-system call there
+    /// (Ruling 114(f)).
     pub fn critical(&mut self, p: &Path, contents: bool) -> Result<Option<&'static str>, TimedOut> {
         let repo = self.repo()?;
         let cfg = self.ctx.cfg;
-        let reason = resolve::critical_by_identity(
-            p,
-            repo.as_deref(),
-            self.home.as_deref(),
-            &cfg.protected,
-            self.ctx.fs,
-            self.ctx.deadline,
-        )?;
+        let (home, protected) = (self.home.as_deref(), &cfg.protected);
+        let reason = if resolve::is_network_or_device(p, self.os()) {
+            resolve::critical_reason(p, repo.as_deref(), home, protected)
+        } else {
+            resolve::critical_by_identity(
+                p,
+                repo.as_deref(),
+                home,
+                protected,
+                self.ctx.fs,
+                self.ctx.deadline,
+            )?
+        };
         if contents
             && reason.is_some()
             && repo.as_deref().is_some_and(|r| self.key(r) == self.key(p))
@@ -630,17 +643,19 @@ impl<'a> Scene<'a> {
 
     /// The finding for one resolved path, or `None` when deleting it is ok.
     pub fn judge_path(&mut self, p: &Path, how: How, span: Span, shown: &str) -> Option<Finding> {
+        // The critical match first: a share or device spelling of a protected folder stays
+        // critical. Past it, such a path is not read at all.
+        match self.critical(p, how.contents) {
+            Err(TimedOut) => return Some(self.timeout(span, shown)),
+            Ok(Some(reason)) => return Some(critical(p, reason, span)),
+            Ok(None) => {}
+        }
         if resolve::is_network_or_device(p, self.os()) {
             return Some(self.unknown_location(
                 span,
                 shown,
                 "it is a network or device path, which the guard does not read",
             ));
-        }
-        match self.critical(p, how.contents) {
-            Err(TimedOut) => return Some(self.timeout(span, shown)),
-            Ok(Some(reason)) => return Some(critical(p, reason, span)),
-            Ok(None) => {}
         }
         let os = self.os();
         let key = self.key(p);
@@ -673,7 +688,8 @@ impl<'a> Scene<'a> {
                 Err(TimedOut) => return Some(self.timeout(span, shown)),
                 Ok(Some(project)) => {
                     let pk = self.key(&project);
-                    let inside = (key != pk && is_within(&key, &pk, os)) || (how.contents && key == pk);
+                    let inside =
+                        (key != pk && is_within(&key, &pk, os)) || (how.contents && key == pk);
                     if !inside {
                         return Some(outside(p, key == pk, span));
                     }
@@ -842,7 +858,11 @@ impl<'a> Scene<'a> {
             .to_string();
         let facts = delete_facts(prog)?;
         if facts.runner {
-            return Some(self.dynamic(span, &shown, "it deletes the names it reads from its input"));
+            return Some(self.dynamic(
+                span,
+                &shown,
+                "it deletes the names it reads from its input",
+            ));
         }
         let picked = if call.cmdlet {
             cmdlet_targets(call.args(), facts, prog)
@@ -935,7 +955,13 @@ fn outside(p: &Path, is_cwd: bool, span: Span) -> Finding {
             p.display()
         )
     };
-    finding(DELETE_OUTSIDE_PROJECT, Level::Danger, message, CONFIRM_FIX.to_string(), span)
+    finding(
+        DELETE_OUTSIDE_PROJECT,
+        Level::Danger,
+        message,
+        CONFIRM_FIX.to_string(),
+        span,
+    )
 }
 
 fn through_link(p: &Path, link: &Path, shell: Shell, span: Span) -> Finding {
@@ -953,7 +979,9 @@ fn through_link(p: &Path, link: &Path, shell: Shell, span: Span) -> Finding {
             p.display(),
             link.display()
         ),
-        format!("remove the link itself first with `{unlink}` in a command of its own, then run the delete again"),
+        format!(
+            "remove the link itself first with `{unlink}` in a command of its own, then run the delete again"
+        ),
         span,
     )
 }
@@ -986,8 +1014,10 @@ fn any_in_stmt(st: &Stmt, pred: &mut dyn FnMut(Node<'_>) -> bool) -> bool {
     match st {
         Stmt::Pipeline(p) => p.elems.iter().enumerate().any(|(k, e)| match e {
             Elem::Cmd(c) => {
-                pred(Node::Cmd { cmd: c, piped: k > 0 })
-                    || cmd_words(c).any(|w| any_in_word(w, pred))
+                pred(Node::Cmd {
+                    cmd: c,
+                    piped: k > 0,
+                }) || cmd_words(c).any(|w| any_in_word(w, pred))
             }
             Elem::Method(m) => pred(Node::Method(m)) || m.args.iter().any(|w| any_in_word(w, pred)),
             Elem::Expr(w) => any_in_word(w, pred),
@@ -1027,7 +1057,13 @@ fn walk_stmt(st: &Stmt, loc: &Location, env: &EnvView, f: &mut dyn FnMut(Node<'_
             for (k, e) in p.elems.iter().enumerate() {
                 match e {
                     Elem::Cmd(c) => {
-                        f(Node::Cmd { cmd: c, piped: k > 0 }, loc);
+                        f(
+                            Node::Cmd {
+                                cmd: c,
+                                piped: k > 0,
+                            },
+                            loc,
+                        );
                         for w in cmd_words(c) {
                             walk_word(w, p, loc, env, f);
                         }

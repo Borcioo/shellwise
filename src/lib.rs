@@ -336,7 +336,7 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
             _ => (Script::default(), Some(e)),
         },
     };
-    let fs: fs::SharedFs = Arc::new(fs::RealFs);
+    let fs = rule_fs();
     let ctx = rules::Ctx {
         input,
         script: &script,
@@ -370,6 +370,84 @@ fn check(input: &CheckInput, cfg: &Config, deadline: &Deadline) -> Result<Verdic
 #[cfg(feature = "testhooks")]
 fn testhook_is(mode: &str) -> bool {
     rules::testhooks::active(mode)
+}
+
+/// The file system the rules read: the real one, or with `SHELLWISE_TESTHOOK=fs-record` the
+/// real one recording every path it is asked about (`testhooks::FS_CALLS`).
+#[cfg(feature = "testhooks")]
+fn rule_fs() -> fs::SharedFs {
+    if testhook_is("fs-record") {
+        Arc::new(testhooks::RecordingFs)
+    } else {
+        Arc::new(fs::RealFs)
+    }
+}
+
+#[cfg(not(feature = "testhooks"))]
+fn rule_fs() -> fs::SharedFs {
+    Arc::new(fs::RealFs)
+}
+
+/// Test-only: a file system that records the paths of every call. Compiled only with the
+/// `testhooks` feature.
+#[cfg(feature = "testhooks")]
+pub mod testhooks {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use crate::fs::{FileId, Fs, LinkKind, Meta, RealFs};
+
+    /// Every path `RecordingFs` was asked about, in order (`mount_points` records `<mounts>`).
+    pub static FS_CALLS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    fn record(p: &Path) {
+        FS_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(p.to_path_buf());
+    }
+
+    pub struct RecordingFs;
+
+    impl Fs for RecordingFs {
+        fn lstat(&self, p: &Path) -> io::Result<Meta> {
+            record(p);
+            RealFs.lstat(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<PathBuf>> {
+            record(p);
+            RealFs.read_dir(p)
+        }
+        fn link_target(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+            record(p);
+            RealFs.link_target(p)
+        }
+        fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
+            record(p);
+            RealFs.long_path(p)
+        }
+        fn link_kind(&self, p: &Path) -> io::Result<LinkKind> {
+            record(p);
+            RealFs.link_kind(p)
+        }
+        fn file_id(&self, p: &Path) -> io::Result<Option<FileId>> {
+            record(p);
+            RealFs.file_id(p)
+        }
+        fn device(&self, p: &Path) -> io::Result<Option<u64>> {
+            record(p);
+            RealFs.device(p)
+        }
+        fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
+            record(Path::new("<mounts>"));
+            RealFs.mount_points()
+        }
+        fn drive_exists(&self, letter: char) -> io::Result<bool> {
+            record(Path::new(&format!("{}:\\", letter.to_ascii_uppercase())));
+            RealFs.drive_exists(letter)
+        }
+    }
 }
 
 #[cfg(not(feature = "testhooks"))]
