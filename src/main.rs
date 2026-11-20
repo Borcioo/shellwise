@@ -76,6 +76,17 @@ fn run_explain(id: &str) -> i32 {
             let _ = stdout.flush();
             0
         }
+        // Any other rule id is a ShellCheck code, which `lint` reports for a Bash file.
+        Err(_) if shellwise::is_rule_id(id) => {
+            let mut stdout = io::stdout().lock();
+            let _ = writeln!(
+                stdout,
+                "# {id}\n\nA ShellCheck check that `shellwise lint` runs on a Bash file (`warn`). \
+                 Its page: https://www.shellcheck.net/wiki/{id}"
+            );
+            let _ = stdout.flush();
+            0
+        }
         Err(_) => {
             eprintln!("shellwise: no rule {id:?}");
             EXIT_USAGE

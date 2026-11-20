@@ -39,6 +39,7 @@ const WARN_DEFAULT: &[&str] = &[
     "gate-truncated-pipeline",
     "ps-bare-bash",
     "ps-dotnet-relative-path",
+    "ps-alias-shadow",
 ];
 
 fn is_deny(level: &str) -> bool {

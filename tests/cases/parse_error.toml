@@ -1017,3 +1017,15 @@ command = "git reset --hard\ntool -a,b"
 level = "break"
 rules = ["parse-error"]
 oracle = "refuses"
+
+# q34 (slice A, outside its slice; row only, at its current level): a heredoc whose body holds
+# quote characters, inside a double-quoted `$( )`. `bash -n` accepts it; our parser reads it as
+# a parse error that is no deny kind, so it is warn. The fix belongs in src/parse/bash.rs.
+[[row]]
+id = "q34-heredoc-with-quotes-in-a-quoted-substitution-is-warn"
+os = "any"
+shell = "bash"
+command = "echo \"$(cat <<EOF\n'\"\nEOF\n)\""
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"

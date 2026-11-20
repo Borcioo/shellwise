@@ -1,6 +1,6 @@
 //! `will-hang`: a command that waits for something nobody can give it in the hook's tool (stdin
-//! is an open pipe that never ends, no terminal answers a prompt), and a PowerShell function
-//! whose name a built-in alias outranks.
+//! is an open pipe that never ends, no terminal answers a prompt). `ps-alias-shadow`: a
+//! PowerShell function whose name a built-in alias outranks.
 //!
 //! The commands are data. A `[[program]]` row whose `kind` holds `interactive` says which options
 //! start the wait (`hang_when`), which options end or bound it (`hang_unless`), whether feeding
@@ -20,6 +20,7 @@ use crate::parse::pwsh;
 use crate::programs::{self, Kind, Program};
 
 pub const WILL_HANG: &str = "will-hang";
+pub const PS_ALIAS_SHADOW: &str = "ps-alias-shadow";
 
 /// The fix line when a table row has no `fix`.
 const FALLBACK_FIX: &str = "run it with its input given up front, or bound its wait";
@@ -112,10 +113,7 @@ impl Walker<'_, '_> {
                         self.script(b, true);
                     }
                 }
-                Stmt::Func { name, body } => {
-                    self.alias_helper(name);
-                    self.script(body, true);
-                }
+                Stmt::Func { body, .. } => self.script(body, true),
                 Stmt::Block(b) => self.script(b, true),
             }
         }
@@ -213,34 +211,84 @@ impl Walker<'_, '_> {
             span: c.span,
         });
     }
+}
 
-    /// A PowerShell 7 function named like a built-in alias: the alias runs, not the function.
-    fn alias_helper(&mut self, name: &str) {
-        let ctx = self.ctx;
-        let (shell, os) = (ctx.input.shell, ctx.input.os);
-        if shell != Shell::Pwsh {
-            return;
-        }
-        // `global:md` and `script:md` name the same function.
-        let bare = name.rsplit_once(':').map_or(name, |(_, n)| n);
-        let Some(target) = pwsh::canonical(bare, shell, os) else {
-            return;
-        };
-        if target == bare.to_lowercase() {
-            return;
-        }
-        self.out.push(Finding {
-            rule: WILL_HANG,
-            level: Level::Warn,
-            message: format!(
-                "the function `{bare}` is never called by that name: the built-in alias `{bare}` for `{target}` outranks it, and the call runs `{target}` with the function's arguments"
-            ),
-            fix: Some(format!(
-                "rename the function {bare} to a Verb-Noun name and call it by that name"
-            )),
-            span: Span::default(),
-        });
+/// `ps-alias-shadow`: a PowerShell 7 function named like a built-in alias: the alias runs, not
+/// the function. On a command line and in a script file alike.
+pub struct AliasShadowRule;
+
+impl Rule for AliasShadowRule {
+    fn id(&self) -> &'static str {
+        PS_ALIAS_SHADOW
     }
+
+    fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
+        if ctx.input.shell == Shell::Pwsh {
+            functions(ctx, ctx.script, out);
+        }
+    }
+}
+
+/// Every function definition in `s`, nested ones included.
+fn functions(ctx: &Ctx, s: &Script, out: &mut Vec<Finding>) {
+    let words = |w: &Word, out: &mut Vec<Finding>| {
+        for part in &w.parts {
+            if let WordPart::Subst(s) | WordPart::Block(s) = part {
+                functions(ctx, s, out);
+            }
+        }
+    };
+    for st in &s.stmts {
+        match st {
+            Stmt::Pipeline(p) => {
+                for elem in &p.elems {
+                    match elem {
+                        Elem::Cmd(c) => {
+                            for w in std::iter::once(&c.name).chain(&c.args) {
+                                words(w, out);
+                            }
+                        }
+                        Elem::Method(m) => m.args.iter().for_each(|w| words(w, out)),
+                        Elem::Expr(w) => words(w, out),
+                    }
+                }
+            }
+            Stmt::Loop { body, .. } | Stmt::Block(body) => functions(ctx, body, out),
+            Stmt::Cond { branches, .. } => {
+                for b in branches {
+                    functions(ctx, b, out);
+                }
+            }
+            Stmt::Func { name, body } => {
+                shadowed(ctx, name, out);
+                functions(ctx, body, out);
+            }
+        }
+    }
+}
+
+/// The finding for a function `name` a built-in alias outranks.
+fn shadowed(ctx: &Ctx, name: &str, out: &mut Vec<Finding>) {
+    let (shell, os) = (ctx.input.shell, ctx.input.os);
+    // `global:md` and `script:md` name the same function.
+    let bare = name.rsplit_once(':').map_or(name, |(_, n)| n);
+    let Some(target) = pwsh::canonical(bare, shell, os) else {
+        return;
+    };
+    if target == bare.to_lowercase() {
+        return;
+    }
+    out.push(Finding {
+        rule: PS_ALIAS_SHADOW,
+        level: Level::Warn,
+        message: format!(
+            "the function `{bare}` is never called by that name: the built-in alias `{bare}` for `{target}` outranks it, and the call runs `{target}` with the function's arguments"
+        ),
+        fix: Some(format!(
+            "rename the function {bare} to a Verb-Noun name and call it by that name"
+        )),
+        span: Span::default(),
+    });
 }
 
 /// Whether `args` hold one of `options`, read as getopt reads them: a long option exactly; a

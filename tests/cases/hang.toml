@@ -1,5 +1,5 @@
 # The will-hang rule through analyse: commands that wait for input nobody can give in the hook's
-# tool, and a PowerShell function a built-in alias outranks. Every row goes through the real
+# tool, and (ps-alias-shadow) a PowerShell function a built-in alias outranks. Every row goes through the real
 # parsers; the program table (`data/programs.toml`) carries the facts.
 #
 # Spike S3 (Ruling 110): the Bash tool's stdin is an open pipe that never ends, so a Bash `read`
@@ -395,7 +395,7 @@ command = 'claude -p "summarise the diff"'
 level = "warn"
 rules = ["claude-cmd-live-config"]
 
-# --- a PowerShell 7 function named like a built-in alias ---
+# --- ps-alias-shadow: a PowerShell 7 function named like a built-in alias (also in `lint`) ---
 
 [[row]]
 id = "pwsh-function-named-md"
@@ -403,7 +403,7 @@ os = "any"
 shell = "pwsh"
 command = 'function md { New-Item -ItemType Directory -Path $args[0] }'
 level = "warn"
-rules = ["will-hang"]
+rules = ["ps-alias-shadow"]
 fix = 'rename the function md to a Verb-Noun name'
 
 [[row]]
@@ -412,7 +412,7 @@ os = "any"
 shell = "pwsh"
 command = "Write-Output start\nfunction rd { Write-Output $args[0] }"
 level = "warn"
-rules = ["will-hang"]
+rules = ["ps-alias-shadow"]
 fix = 'rename the function rd to a Verb-Noun name'
 
 [[row]]
@@ -421,7 +421,7 @@ os = "any"
 shell = "pwsh"
 command = 'function global:md { New-Item -ItemType Directory -Path $args[0] }'
 level = "warn"
-rules = ["will-hang"]
+rules = ["ps-alias-shadow"]
 fix = 'rename the function md to a Verb-Noun name'
 
 [[row]]
@@ -430,7 +430,7 @@ os = "windows"
 shell = "pwsh"
 command = 'function ls { Get-ChildItem -Force }'
 level = "warn"
-rules = ["will-hang"]
+rules = ["ps-alias-shadow"]
 fix = 'rename the function ls to a Verb-Noun name'
 
 [[row]]
@@ -470,5 +470,53 @@ id = "bash-function-named-md-is-ok"
 os = "any"
 shell = "bash"
 command = 'md() { mkdir "$1"; }'
+level = "ok"
+rules = []
+
+# --- D9: rows only, at their current level (low plausibility, left as they are) ---
+# Bash bounds a read under TMOUT (exit 142 after the timeout), `env read` fails at once (127: env
+# runs no builtin), and an earlier `exec < file` feeds the read (a documented limit): each reads
+# as `break` today, a false deny the rule keeps.
+
+[[row]]
+id = "d9-read-under-tmout-prefix"
+os = "any"
+shell = "bash"
+command = 'TMOUT=5 read x'
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "d9-read-after-export-tmout"
+os = "any"
+shell = "bash"
+command = 'export TMOUT=5; read x'
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "d9-env-read"
+os = "any"
+shell = "bash"
+command = 'env read x'
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "d9-read-after-exec-redirect"
+os = "any"
+shell = "bash"
+command = 'exec < input.txt; read x'
+level = "break"
+rules = ["will-hang"]
+
+# D09 (surviving mutant): a dynamic argument might hold the bound (Ruling 91a), so the read is
+# not judged. A bare `read` with a non-literal word is already opaque in the Bash lowering (a name
+# writer); behind a wrapper the lowering does not see the builtin, and this check is what holds.
+[[row]]
+id = "d09-wrapped-read-with-a-dynamic-option-is-not-judged"
+os = "any"
+shell = "bash"
+command = 'env read $opts x'
 level = "ok"
 rules = []

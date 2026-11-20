@@ -8,7 +8,7 @@
 //! decided it.
 
 use super::{Ctx, Rule, Scope};
-use crate::ir::{EnvView, Redirect, SimpleCommand, Word};
+use crate::ir::{Elem, EnvView, Redirect, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::level::{Finding, Level, Span};
 use crate::programs::{self, Escapes, Kind, Program};
 use crate::{BashProfile, Os, Shell};
@@ -228,7 +228,7 @@ fn collapsed_line(command: &str, at: usize) -> (usize, String) {
 
 // --- bash-msys-path-mangle -----------------------------------------------------------------
 
-/// Warn: 173 `ok` corpus rows match (Task 29 plan).
+/// Warn: 249 `ok` corpus rows match (the corpus replay at 667aa40).
 pub const MSYS_LEVEL: Level = Level::Warn;
 
 pub struct MsysPathMangle;
@@ -337,7 +337,7 @@ impl Rule for PsCmdlet {
 
 // --- bash-versioned-php --------------------------------------------------------------------
 
-/// Warn by the landing rule: a draft matcher counted 35 `ok` rows that ran a versioned name.
+/// Warn by the landing rule: the corpus replay at 667aa40 counts 33 `ok` rows that ran a versioned name.
 pub const VERSIONED_PHP_LEVEL: Level = Level::Warn;
 
 pub struct VersionedPhp;
@@ -381,7 +381,7 @@ impl Rule for VersionedPhp {
 
 // --- bash-vendor-bin-shebang ---------------------------------------------------------------
 
-/// Warn by the landing rule: a draft matcher counted 23 `ok` rows.
+/// Warn by the landing rule: the corpus replay at 667aa40 counts 31 `ok` rows.
 pub const VENDOR_BIN_LEVEL: Level = Level::Warn;
 
 /// The Composer bin folder, as a path prefix.
@@ -467,14 +467,11 @@ impl Rule for CdSlashD {
                 continue;
             };
             let path_text = raw(command, path.span);
-            if !one_word(path_text) {
+            if !exact_spans(&c) {
                 continue;
             }
-            let path = forward_slashes(unquote(path_text));
-            let fix = p
-                .fix
-                .as_ref()
-                .map(|f| f.replace("<path>", &format!("\"{path}\"")));
+            let path = bash_path(unquote(path_text));
+            let fix = p.fix.as_ref().map(|f| f.replace("<path>", &path));
             out.push(finding(
                 CD_SLASH_D,
                 CD_SLASH_D_LEVEL,
@@ -488,6 +485,13 @@ impl Rule for CdSlashD {
             return;
         }
     }
+}
+
+/// Whether the command's words carry their own spans: each argument starts after the name ends. A
+/// command nested in `$(…)` whose text the parser could not place gives every word the outer
+/// word's span (`echo "$(cd /d \<newline>D:/x)"`), which may still read as one quoted word.
+fn exact_spans(c: &SimpleCommand) -> bool {
+    c.args.iter().all(|a| a.span.start >= c.name.span.end)
 }
 
 /// Whether `text` is one shell word: no whitespace outside quotes. A word nested in `$(…)` may
@@ -520,8 +524,46 @@ fn unquote(text: &str) -> &str {
     text
 }
 
+/// The path with forward slashes and no trailing whitespace (a `C:\ ` escapes the space after it).
 fn forward_slashes(text: &str) -> String {
-    text.replace('\\', "/")
+    text.replace('\\', "/").trim_end().to_string()
+}
+
+/// A cmd.exe path as one bash word that names the same folder: forward slashes, `%NAME%` as
+/// `$NAME` (Git Bash has the Windows variables), double-quoted, with a leading `~` left outside
+/// the quotes so bash still expands it.
+fn bash_path(text: &str) -> String {
+    let path = cmd_variables(&forward_slashes(text));
+    match path.strip_prefix('~') {
+        Some("") => "~".to_string(),
+        Some(rest) if rest.starts_with('/') => format!("~/\"{}\"", &rest[1..]),
+        _ => format!("\"{path}\""),
+    }
+}
+
+/// `%NAME%` as `$NAME`, for a name of letters, digits and `_`; any other `%` stays.
+fn cmd_variables(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('%') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let name_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        let name = &after[..name_len];
+        let valid = !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit());
+        if valid && after[name_len..].starts_with('%') {
+            out.push('$');
+            out.push_str(name);
+            rest = &after[name_len + 1..];
+        } else {
+            out.push('%');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 // --- bash-unquoted-backslash-path ----------------------------------------------------------
@@ -541,28 +583,119 @@ impl Rule for UnquotedBackslashPath {
             return;
         }
         let command = ctx.input.command;
-        for c in programs::commands(ctx.script) {
-            for w in std::iter::once(&c.name).chain(&c.args) {
-                let text = raw(command, w.span);
-                if !one_word(text) || !unquoted_drive_backslash(text) {
-                    continue;
+        for span in path_spans(ctx.script, command) {
+            let text = raw(command, span);
+            if !one_word(text) || !unquoted_drive_backslash(text) {
+                continue;
+            }
+            out.push(finding(
+                UNQUOTED_BACKSLASH_PATH,
+                UNQUOTED_PATH_LEVEL,
+                format!(
+                    "bash drops the backslashes of the unquoted path `{text}`, so the command gets `{}`",
+                    text.replace('\\', "")
+                ),
+                Some(format!("write {} with forward slashes", forward_slashes(text))),
+                span,
+            ));
+            return;
+        }
+    }
+}
+
+/// The spans of the words bash reads as a path or a value: each command's name and arguments,
+/// its file redirect targets (`> C:\x`) and assigned values (`P=C:\x make`), then the words of
+/// every `for` header (`for f in C:\a`).
+fn path_spans(script: &Script, command: &str) -> Vec<Span> {
+    let mut out = Vec::new();
+    for c in programs::commands(script) {
+        out.push(c.name.span);
+        out.extend(c.args.iter().map(|w| w.span));
+        for r in &c.redirects {
+            if let Redirect::File { target, .. } = r {
+                out.push(target.span);
+            }
+        }
+        out.extend(c.assigns.iter().map(|(_, w)| w.span));
+    }
+    for_headers(script, command, &mut out);
+    out
+}
+
+/// The words after `in` of every `for` loop, read from the loop's source text: the parser gives
+/// those words the span of the whole loop.
+fn for_headers(script: &Script, command: &str, out: &mut Vec<Span>) {
+    for st in &script.stmts {
+        match st {
+            Stmt::Loop { body, span } => {
+                out.extend(for_list(command, *span));
+                for_headers(body, command, out);
+            }
+            Stmt::Func { body, .. } | Stmt::Block(body) => for_headers(body, command, out),
+            Stmt::Cond { branches, .. } => {
+                for b in branches {
+                    for_headers(b, command, out);
                 }
-                out.push(finding(
-                    UNQUOTED_BACKSLASH_PATH,
-                    UNQUOTED_PATH_LEVEL,
-                    format!(
-                        "bash drops the backslashes of the unquoted path `{text}`, so the command gets `{}`",
-                        text.replace('\\', "")
-                    ),
-                    Some(format!("write {} with forward slashes", forward_slashes(text))),
-                    w.span,
-                ));
-                return;
+            }
+            Stmt::Pipeline(p) => {
+                for e in &p.elems {
+                    let Elem::Cmd(c) = e else { continue };
+                    for w in std::iter::once(&c.name).chain(&c.args) {
+                        for part in &w.parts {
+                            if let WordPart::Subst(s) = part {
+                                for_headers(s, command, out);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+/// The spans of the words between `for NAME in` and the `;`, newline or `do` that ends the list,
+/// in a loop whose text starts with `for`; none for any other loop.
+fn for_list(command: &str, span: Span) -> Vec<Span> {
+    let text = raw(command, span);
+    let mut words = Vec::new();
+    let (mut start, mut quote, mut escaped) = (None::<usize>, None::<char>, false);
+    for (i, ch) in text.char_indices() {
+        let ends = quote.is_none() && !escaped && (ch.is_whitespace() || ch == ';');
+        if ends {
+            if let Some(s) = start.take() {
+                words.push(s..i);
+            }
+            if ch == ';' || ch == '\n' {
+                break;
+            }
+            continue;
+        }
+        start.get_or_insert(i);
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && (ch == '\'' || ch == '"') {
+            quote = Some(ch);
+        }
+    }
+    match words.as_slice() {
+        [first, _, keyword, list @ ..]
+            if &text[first.clone()] == "for" && &text[keyword.clone()] == "in" =>
+        {
+            list.iter()
+                .take_while(|w| &text[(*w).clone()] != "do")
+                .map(|w| Span {
+                    start: span.start + w.start,
+                    end: span.start + w.end,
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
 /// Whether `word` (its source text) holds a drive path whose backslash bash removes: `X:\` outside
 /// quotes, with no letter or digit before the drive letter and no second backslash after it
 /// (`X:\\` is the collapse rule's).

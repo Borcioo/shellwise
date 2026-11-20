@@ -21,6 +21,23 @@ fn explain_prints_the_embedded_doc_of_every_rule() {
     }
 }
 
+/// D5: a ShellCheck code `lint` reports gets an answer that names it and its page.
+#[test]
+fn explain_answers_a_shellcheck_code() {
+    let r = common::run(&["explain", "SC2086"], None, &[]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.starts_with("# SC2086\n"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("https://www.shellcheck.net/wiki/SC2086"),
+        "{}",
+        r.stdout
+    );
+    // Not a code in the spelling `lint` gives one.
+    for id in ["SC", "SC08", "SCx"] {
+        assert_eq!(common::run(&["explain", id], None, &[]).code, 64, "{id}");
+    }
+}
+
 #[test]
 fn explain_refuses_an_unknown_id() {
     let r = common::run(&["explain", "no-such-rule"], None, &[]);

@@ -24,6 +24,9 @@ use crate::{
     analyse,
 };
 
+/// The warn of a CRLF `.sh` linted in the Git Bash profile, which is then read as its LF twin.
+pub const BASH_CRLF: &str = "bash-crlf";
+
 /// Exit code when findings reach `break` or worse.
 pub const EXIT_FINDINGS: i32 = 1;
 /// Exit code for a file `lint` refuses to read (unknown name, too big, not UTF-8).
@@ -194,7 +197,12 @@ pub fn lint_with(
     external: &dyn Fn(&str, Shell) -> Vec<Finding>,
 ) -> Result<Report, Refusal> {
     let shell = dialect(path).ok_or(Refusal::Dialect)?;
-    let text = read_text(path)?;
+    let mut text = read_text(path)?;
+    // Git Bash reads a CRLF script as its LF twin; Linux bash does not.
+    let crlf = shell == Shell::Bash(BashProfile::GitBash) && text.contains("\r\n");
+    if crlf {
+        text = text.replace("\r\n", "\n");
+    }
     let input = AnalyseInput {
         bytes: text.as_bytes(),
         shell,
@@ -204,7 +212,18 @@ pub fn lint_with(
         origin: Origin::File,
         problem: None,
     };
-    let own = analyse(&input, cfg, deadline).findings;
+    let mut own = analyse(&input, cfg, deadline).findings;
+    if crlf {
+        let mut f = Finding {
+            rule: BASH_CRLF,
+            level: Level::Warn,
+            message: "the file has CRLF line ends: Git Bash runs it, Linux bash stops at each CR ($'\\r': command not found)".to_string(),
+            fix: Some("save the file with LF line ends".to_string()),
+            span: Span::default(),
+        };
+        f.level = cfg.level(f.rule, f.level);
+        own.insert(0, f);
+    }
     let mut located: Vec<Located> = own.into_iter().map(|f| locate(&text, f)).collect();
 
     let extra = match panic::catch_unwind(AssertUnwindSafe(|| external(&text, shell))) {

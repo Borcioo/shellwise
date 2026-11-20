@@ -8,7 +8,7 @@ A Composer script run by path (`vendor/bin/pint`, `./vendor/bin/phpunit`) starts
 | `vendor/bin/<tool>` or `./vendor/bin/<tool>` as the command, behind wrappers too | `warn` by default |
 | the `.bat` launcher (`vendor/bin/phpunit.bat`), or the script passed to `php` | no finding |
 
-The level follows the landing rule: a draft matcher counted 23 `ok` rows, so it starts as `warn`
+The level follows the landing rule: the corpus replay counts 31 `ok` rows, so it starts as `warn`
 (`VENDOR_BIN_LEVEL`). Git Bash only.
 
 ## Deny

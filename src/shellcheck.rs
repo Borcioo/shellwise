@@ -110,11 +110,12 @@ fn incomplete(reason: &str) -> Finding {
     }
 }
 
-/// An error is `break`; a warning, a note and a style hint are `warn`.
+/// Every ShellCheck finding is `warn`: an error carries no one-step Fix line, and a parse error is
+/// a deny only where the shellwise parser identifies it and the real shell confirms it (its own
+/// `parse-error`).
 fn level(severity: Severity) -> Level {
     match severity {
-        Severity::ErrorC => Level::Break,
-        Severity::WarningC | Severity::InfoC | Severity::StyleC => Level::Warn,
+        Severity::ErrorC | Severity::WarningC | Severity::InfoC | Severity::StyleC => Level::Warn,
     }
 }
 
@@ -216,10 +217,12 @@ mod tests {
         assert!(!codes(text).contains(&"SC2164"), "{:?}", codes(text));
     }
 
+    /// D5: an error (no Fix line) is `warn` like a note.
     #[test]
-    fn an_error_is_break_and_a_note_is_warn() {
+    fn an_error_and_a_note_are_warn() {
         let found = run("if true; then\n");
-        assert!(found.iter().any(|f| f.level == Level::Break), "{found:?}");
+        assert!(found.iter().any(|f| f.rule.starts_with("SC1")), "{found:?}");
+        assert!(found.iter().all(|f| f.level == Level::Warn), "{found:?}");
         let found = run("echo $1\n");
         assert!(found.iter().all(|f| f.level == Level::Warn), "{found:?}");
         assert!(!found.is_empty());
