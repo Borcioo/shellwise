@@ -29,7 +29,7 @@ fn main() {
     let table: toml::Table = text.parse().expect("data/programs.toml is TOML");
     for key in table.keys() {
         assert!(
-            key == "program" || key == "msys",
+            key == "program" || key == "msys" || key == "loops",
             "data/programs.toml: unknown top-level key {key:?}"
         );
     }
@@ -58,6 +58,47 @@ fn main() {
         "        msys: Msys {{ roots: {}, opt_out: {} }},",
         vec_of(&msys_list("roots")),
         vec_of(&msys_list("opt_out"))
+    )
+    .unwrap();
+    let loops = table
+        .get("loops")
+        .map(|m| m.as_table().expect("[loops] is a table"));
+    let loops_list = |key: &str| {
+        loops
+            .and_then(|m| m.get(key))
+            .map_or_else(Vec::new, strings)
+    };
+    if let Some(m) = loops {
+        for key in m.keys() {
+            assert!(
+                [
+                    "exits",
+                    "always",
+                    "clocks",
+                    "compares",
+                    "hint_bash",
+                    "hint_pwsh"
+                ]
+                .contains(&key.as_str()),
+                "[loops]: unknown key {key:?}"
+            );
+        }
+    }
+    let loops_text = |key: &str| {
+        loops
+            .and_then(|m| m.get(key))
+            .map_or("", |v| v.as_str().expect("a [loops] hint is a string"))
+            .to_string()
+    };
+    writeln!(
+        out,
+        "        loops: Loops {{ exits: {}, always: {}, clocks: {}, compares: {}, hint_bash: {}, hint_pwsh: {} }},",
+        vec_of(&loops_list("exits")),
+        vec_of(&loops_list("always")),
+        vec_of(&loops_list("clocks")),
+        vec_of(&loops_list("compares")),
+        string_expr(&loops_text("hint_bash")),
+        string_expr(&loops_text("hint_pwsh"))
     )
     .unwrap();
     out.push_str("    }\n}\n");

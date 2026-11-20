@@ -9,7 +9,10 @@ as git parses it: `-f` alone or in a cluster (`-ff`), a prefix of `--force` (`--
 after the path; an option word the guard cannot read (`$opt`) counts as forced. Level `warn` without `--force`, and for a worktree the guard cannot place (a variable, an
 unknown folder, or a bare name that is no folder here, which git may match to a registered
 worktree by its name). A worktree outside the project is no finding by itself: git removes only a
-registered worktree.
+registered worktree. A linked worktree (its `.git` is a file) is never `delete-critical` as the repo
+root of the cwd, the session's own worktree included: git removes the worktree and its entry and
+never the main repository's `.git` (Ruling 132). The main working tree, and a worktree that holds a
+protected path, stay `delete-critical`; `rm -rf` of a worktree root is judged by the delete rules.
 
 `Fix: remove each link inside it first with `[IO.Directory]::Delete('<link>')` (PowerShell) or
 `rm '<link>'` (Bash) in a command of its own, then remove the worktree` (or, when the guard

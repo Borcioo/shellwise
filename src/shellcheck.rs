@@ -66,9 +66,10 @@ pub fn findings(text: &str, shell: Shell, deadline: &Deadline) -> Option<Vec<Fin
                     .iter()
                     .map(|c| Finding {
                         rule: code_id(c.comment.code),
-                        level: level(c.comment.severity),
+                        level: level(c.comment.code, c.comment.severity),
                         message: c.comment.message.clone(),
-                        fix: None,
+                        fix: refused(c.comment.code, c.comment.severity)
+                            .then(|| c.comment.message.clone()),
                         span: Span {
                             start: byte_offset(&source, &c.start),
                             end: byte_offset(&source, &c.end),
@@ -110,13 +111,21 @@ fn incomplete(reason: &str) -> Finding {
     }
 }
 
-/// Every ShellCheck finding is `warn`: an error carries no one-step Fix line, and a parse error is
-/// a deny only where the shellwise parser identifies it and the real shell confirms it (its own
-/// `parse-error`).
-fn level(severity: Severity) -> Level {
-    match severity {
-        Severity::ErrorC | Severity::WarningC | Severity::InfoC | Severity::StyleC => Level::Warn,
+/// A ShellCheck parse error (an SC1xxx error) is `break` with its message as the Fix line: the
+/// caller keeps it at `break` only when the shellwise parser fails on the file too, so the shell
+/// refuses it (`lint_file::lint_with`). Every other finding is `warn`: it carries no one-step Fix
+/// line.
+fn level(code: i64, severity: Severity) -> Level {
+    if refused(code, severity) {
+        Level::Break
+    } else {
+        Level::Warn
     }
+}
+
+/// Whether a finding is one of ShellCheck's parse errors.
+fn refused(code: i64, severity: Severity) -> bool {
+    (1000..2000).contains(&code) && matches!(severity, Severity::ErrorC)
 }
 
 /// `SC<code>` as a rule id, made once per code in this process.
@@ -217,12 +226,25 @@ mod tests {
         assert!(!codes(text).contains(&"SC2164"), "{:?}", codes(text));
     }
 
-    /// D5: an error (no Fix line) is `warn` like a note.
+    /// D5, R1-1: a parse error is `break` with its message as the Fix line (the caller lowers it
+    /// when the shellwise parser reads the file); its info note and every other finding are `warn`.
     #[test]
-    fn an_error_and_a_note_are_warn() {
-        let found = run("if true; then\n");
-        assert!(found.iter().any(|f| f.rule.starts_with("SC1")), "{found:?}");
-        assert!(found.iter().all(|f| f.level == Level::Warn), "{found:?}");
+    fn a_parse_error_is_break_with_its_message_and_a_note_is_warn() {
+        let found = run("#!/bin/bash\nif true; then\n  echo hi\n");
+        let error = found.iter().find(|f| f.rule == "SC1046").expect("SC1046");
+        assert_eq!(error.level, Level::Break, "{found:?}");
+        assert_eq!(error.fix.as_deref(), Some(error.message.as_str()));
+        let note = run("if [[$1 == x]]; then echo y; fi\n");
+        let info = note.iter().find(|f| f.rule == "SC1009").expect("SC1009");
+        assert_eq!(info.level, Level::Warn, "{note:?}");
+        assert_eq!(info.fix, None);
+        // An error that is no parse error (SC2078, a constant test) stays warn.
+        let constant = run("[ abc ]\n");
+        let sc2078 = constant
+            .iter()
+            .find(|f| f.rule == "SC2078")
+            .expect("SC2078");
+        assert_eq!((sc2078.level, &sc2078.fix), (Level::Warn, &None));
         let found = run("echo $1\n");
         assert!(found.iter().all(|f| f.level == Level::Warn), "{found:?}");
         assert!(!found.is_empty());

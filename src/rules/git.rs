@@ -523,6 +523,19 @@ fn is_dir(scene: &Scene, p: &Path) -> Option<bool> {
         .map(|r| r.unwrap_or(false))
 }
 
+/// Whether `p` is a linked worktree's root: its `.git` is a file (`gitdir: …`), where the main
+/// working tree's is a folder. A read that fails or times out: no.
+fn is_linked_worktree(scene: &Scene, p: &Path) -> bool {
+    let fs = Arc::clone(scene.ctx.fs);
+    let git = p.join(".git");
+    matches!(
+        bounded(scene.ctx.deadline, move || fs
+            .lstat(&git)
+            .map(|m| m.is_file)),
+        Ok(Ok(true))
+    )
+}
+
 /// Whether `p` exists now (`None` when the deadline passed).
 fn exists(scene: &Scene, p: &Path) -> Option<bool> {
     let fs = Arc::clone(scene.ctx.fs);
@@ -606,6 +619,17 @@ fn worktree_remove(
     for p in paths {
         match scene.critical(&p, false) {
             Err(_) => return Some(scene.timeout(call.span(), &text)),
+            // A linked worktree that is the cwd's repo root (Ruling 132): git removes only the
+            // worktree and its entry, never the main repository's `.git`.
+            // Only that reason: when the worktree is also another critical location (the home
+            // folder, a protected path, by text or identity), that reason stands.
+            Ok(Some(reason)) if reason == resolve::REPO_ROOT && is_linked_worktree(scene, &p) => {
+                match scene.critical_but_the_repo(&p) {
+                    Err(_) => return Some(scene.timeout(call.span(), &text)),
+                    Ok(Some(other)) => return Some(delete::critical(&p, other, call.span())),
+                    Ok(None) => {}
+                }
+            }
             Ok(Some(reason)) => return Some(delete::critical(&p, reason, call.span())),
             Ok(None) => {}
         }
@@ -617,63 +641,78 @@ fn worktree_remove(
                 "no folder of that name is here, and git may match it to a registered worktree by its name",
             )),
             Some(false) => None,
-            Some(true) => match walk::outside_links(&p, scene.ctx.fs, scene.ctx.deadline) {
-                WalkResult::Clean => None,
-                WalkResult::Outside(links) => {
-                    let link = links.first().map(|l| l.path.clone()).unwrap_or_default();
-                    let unlink = if is_pwsh(shell) {
-                        format!("[IO.Directory]::Delete('{}')", link.display())
-                    } else {
-                        format!("rm '{}'", link.display().to_string().replace('\\', "/"))
-                    };
-                    let fix = format!(
-                        "remove each link inside it first with `{unlink}` in a command of its own, then remove the worktree"
-                    );
-                    Some(if forced {
-                        finding(
-                            GIT_WORKTREE_JUNCTION,
-                            Level::Danger,
-                            format!(
-                                "`git worktree remove --force` deletes through junctions: `{}` holds `{}`, so git would empty its target",
-                                p.display(),
-                                link.display()
-                            ),
-                            fix,
-                            call.span(),
-                        )
-                    } else {
-                        warn(
-                            GIT_WORKTREE_JUNCTION,
-                            format!(
-                                "`{}` holds the junction `{}`: git refuses to remove it without --force, and with --force it would empty the junction's target",
-                                p.display(),
-                                link.display()
-                            ),
-                            Some(fix),
-                            call.span(),
-                        )
-                    })
+            Some(true) => {
+                match walk::outside_links(&p, scene.ctx.fs, scene.ctx.deadline, scene.ctx.input.os)
+                {
+                    WalkResult::Clean if forced => Some(warn(
+                        GIT_DISCARD,
+                        format!(
+                            "`git worktree remove --force` removes `{}` with any uncommitted or untracked work in it, which is lost",
+                            p.display()
+                        ),
+                        Some(
+                            "commit or stash the work first, or drop --force so git refuses a worktree that holds changes"
+                                .to_string(),
+                        ),
+                        call.span(),
+                    )),
+                    WalkResult::Clean => None,
+                    WalkResult::Outside(links) => {
+                        let link = links.first().map(|l| l.path.clone()).unwrap_or_default();
+                        let unlink = if is_pwsh(shell) {
+                            format!("[IO.Directory]::Delete('{}')", link.display())
+                        } else {
+                            format!("rm '{}'", link.display().to_string().replace('\\', "/"))
+                        };
+                        let fix = format!(
+                            "remove each link inside it first with `{unlink}` in a command of its own, then remove the worktree"
+                        );
+                        Some(if forced {
+                            finding(
+                                GIT_WORKTREE_JUNCTION,
+                                Level::Danger,
+                                format!(
+                                    "`git worktree remove --force` deletes through junctions: `{}` holds `{}`, so git would empty its target",
+                                    p.display(),
+                                    link.display()
+                                ),
+                                fix,
+                                call.span(),
+                            )
+                        } else {
+                            warn(
+                                GIT_WORKTREE_JUNCTION,
+                                format!(
+                                    "`{}` holds the junction `{}`: git refuses to remove it without --force, and with --force it would empty the junction's target",
+                                    p.display(),
+                                    link.display()
+                                ),
+                                Some(fix),
+                                call.span(),
+                            )
+                        })
+                    }
+                    WalkResult::Unreadable(at) => {
+                        let message = format!(
+                            "this removes the worktree `{}`, and the guard cannot read `{}` inside it to tell whether a junction there leads outside it",
+                            p.display(),
+                            at.display()
+                        );
+                        Some(if forced {
+                            finding(
+                                delete::WALK_UNREADABLE,
+                                Level::Danger,
+                                message,
+                                CONFIRM_FIX.to_string(),
+                                call.span(),
+                            )
+                        } else {
+                            warn(delete::WALK_UNREADABLE, message, None, call.span())
+                        })
+                    }
+                    WalkResult::Timeout => Some(scene.timeout(call.span(), &text)),
                 }
-                WalkResult::Unreadable(at) => {
-                    let message = format!(
-                        "this removes the worktree `{}`, and the guard cannot read `{}` inside it to tell whether a junction there leads outside it",
-                        p.display(),
-                        at.display()
-                    );
-                    Some(if forced {
-                        finding(
-                            delete::WALK_UNREADABLE,
-                            Level::Danger,
-                            message,
-                            CONFIRM_FIX.to_string(),
-                            call.span(),
-                        )
-                    } else {
-                        warn(delete::WALK_UNREADABLE, message, None, call.span())
-                    })
-                }
-                WalkResult::Timeout => Some(scene.timeout(call.span(), &text)),
-            },
+            }
         };
         worst = max_finding(worst, found);
     }

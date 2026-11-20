@@ -55,6 +55,12 @@ pub trait Fs: Send + Sync {
     fn mount_points(&self) -> io::Result<Option<Vec<PathBuf>>> {
         Ok(None)
     }
+    /// Whether a PowerShell wildcard without -Force skips `p`: on Windows its Hidden attribute,
+    /// elsewhere a name that starts with a dot (the default, which the fakes keep).
+    fn is_hidden(&self, p: &Path) -> io::Result<bool> {
+        Ok(p.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.')))
+    }
     /// The Windows drive `letter` (`C`) exists now: its root can be read. A drive a command
     /// makes later does not.
     fn drive_exists(&self, letter: char) -> io::Result<bool> {
@@ -187,6 +193,14 @@ impl Fs for RealFs {
     #[cfg(windows)]
     fn long_path(&self, p: &Path) -> io::Result<PathBuf> {
         windows::long_path(p)
+    }
+
+    #[cfg(windows)]
+    fn is_hidden(&self, p: &Path) -> io::Result<bool> {
+        use std::os::windows::fs::MetadataExt;
+        /// `FILE_ATTRIBUTE_HIDDEN`.
+        const HIDDEN: u32 = 0x2;
+        Ok(std::fs::symlink_metadata(p)?.file_attributes() & HIDDEN != 0)
     }
 
     #[cfg(windows)]

@@ -162,17 +162,20 @@ pub fn path_key(p: &str, os: Os) -> String {
 
 // ------------------------------------------------------------------ critical folders
 
+/// The reason `critical_reason` gives for the cwd's repo root itself.
+pub const REPO_ROOT: &str = "repo root";
+
 /// Why deleting `p` (recursively) is critical, or `None`. `home` is the profile folder from
 /// the hook's environment, not `EnvView::home` (which a command can make dynamic);
-/// `cwd_repo` is the root of the repo holding the event's `cwd`. Compared on the host's
+/// `cwd_repo` is the root of the repo holding the event's `cwd`. Compared on `os`'s
 /// rules: ignoring case on Windows, after canonicalising separators and `\\?\`.
 pub fn critical_reason(
     p: &Path,
     cwd_repo: Option<&Path>,
     home: Option<&Path>,
     protected: &[PathBuf],
+    os: Os,
 ) -> Option<&'static str> {
-    let os = Os::host();
     let text = p.to_string_lossy();
     let canon = Canon::parse(&text, os);
     if canon.is_root() {
@@ -200,7 +203,7 @@ pub fn critical_reason(
     let named: Vec<(&Path, &'static str, &'static str)> = home
         .map(|h| (h, "home folder", "ancestor of the home folder"))
         .into_iter()
-        .chain(cwd_repo.map(|r| (r, "repo root", "ancestor of the repo root")))
+        .chain(cwd_repo.map(|r| (r, REPO_ROOT, "ancestor of the repo root")))
         .chain(
             git_dir
                 .as_deref()
@@ -267,8 +270,9 @@ pub fn critical_by_identity(
     protected: &[PathBuf],
     fs: &SharedFs,
     deadline: &Deadline,
+    os: Os,
 ) -> Result<Option<&'static str>, TimedOut> {
-    if let Some(r) = critical_reason(p, cwd_repo, home, protected) {
+    if let Some(r) = critical_reason(p, cwd_repo, home, protected, os) {
         return Ok(Some(r));
     }
     let p = p.to_path_buf();
@@ -281,7 +285,7 @@ pub fn critical_by_identity(
         ));
     }
     if let Some(r) = cwd_repo {
-        named.push((r.to_path_buf(), "repo root", "ancestor of the repo root"));
+        named.push((r.to_path_buf(), REPO_ROOT, "ancestor of the repo root"));
         named.push((repo_git(r), REPO_GIT, "ancestor of the repo root"));
     }
     for x in protected {
@@ -531,7 +535,8 @@ fn param_token(t: &str) -> Option<(&str, Option<&str>)> {
         return None;
     }
     Some(match rest.split_once(':') {
-        Some((n, v)) => (n, Some(v)),
+        // `-Path: C:\x` is one word; PowerShell binds the value without the blank.
+        Some((n, v)) => (n, Some(v.trim_start_matches([' ', '\t']))),
         None => (rest, None),
     })
 }
@@ -2113,6 +2118,10 @@ fn command_leaves_disk(c: &SimpleCommand) -> bool {
     if !c.assigns.is_empty() {
         return false;
     }
+    // A name typed with a folder (`./ls`) runs a file of that name, which no list knows (R1-2).
+    if c.typed.contains(['/', '\\']) {
+        return false;
+    }
     // A name that is no literal (`$X`) is listed nowhere. The first eight location commands are
     // the plain moves; `source`, `eval` and the rest run code.
     let raw = raw_name(c);
@@ -2788,7 +2797,7 @@ fn visit_stmt(st: &Stmt, aliases: &[Alias], f: &mut dyn FnMut(Node<'_>)) {
                 }
             }
         }
-        Stmt::Loop { body, span } => {
+        Stmt::Loop { body, span, .. } => {
             f(Node::Loop(*span));
             visit_script(body, aliases, f);
         }
@@ -4064,5 +4073,28 @@ impl Location {
             let parent = c.comps.pop().map(|_| path_key(&c.render(), self.os));
             is_within(&lk, &key, self.os) || parent.is_some_and(|pk| is_within(&key, &pk, self.os))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R1-9 (D-empty): a move that names no folder and no unknown one is never proved on disk,
+    /// although every folder of an empty set exists. Control: the cwd itself is.
+    #[test]
+    fn a_move_to_no_folder_is_never_on_disk() {
+        let cwd = std::env::temp_dir();
+        let mut loc = Location::new(
+            Shell::Bash(crate::BashProfile::Posix),
+            Os::host(),
+            Some(&cwd),
+        );
+        let fs: SharedFs = Arc::new(super::super::RealFs);
+        loc.use_disk(&fs, &Deadline::new(std::time::Instant::now(), 8000));
+        let here = loc.dirs.clone();
+        assert!(!here.known.is_empty() && here.unknown.is_none(), "{here:?}");
+        assert!(loc.on_disk(&here));
+        assert!(!loc.on_disk(&Dirs::default()));
     }
 }

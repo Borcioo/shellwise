@@ -8,6 +8,7 @@
 use super::{Ctx, Rule};
 use crate::ir::{ChainOp, Elem, Script, Stmt};
 use crate::level::{Finding, Level, Span};
+use crate::parse::pwsh::{Closers, quote_closers};
 use crate::parse::{self, ParseError, ParseKind, QuoteKind};
 use crate::scan;
 use crate::{BashProfile, Deadline, Shell};
@@ -96,18 +97,56 @@ fn deny_text(e: &ParseError, command: &str, shell: Shell, at: &str) -> (String, 
                     e.message
                 )
             };
-            let typographic = command
-                .char_indices()
-                .find(|&(_, c)| ('\u{2018}'..='\u{201e}').contains(&c));
+            // The quote that opened the unclosed string, or the last one that closed a string
+            // before it the way the author did not mean (`'it’s'`, `"\"x"`).
+            let open = e.span.start;
+            let closers = if pwsh {
+                quote_closers(command)
+            } else {
+                Closers::default()
+            };
+            let last_before = |v: &[usize]| v.iter().rev().copied().find(|&c| c < open);
+            let opens_typographic = command[open..]
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_ascii());
+            let typographic = if opens_typographic {
+                Some(open)
+            } else {
+                last_before(&closers.typographic)
+            };
+            // A `\"` that closed a string before the open one, else a `\""` inside the open one
+            // (PowerShell reads its `""` as a quote, so the string goes on).
+            let closed: Vec<usize> = closers
+                .backslash
+                .iter()
+                .filter(|b| b.1)
+                .map(|b| b.0)
+                .collect();
+            let backslash = last_before(&closed).map(|b| (b, true)).or_else(|| {
+                closers
+                    .backslash
+                    .iter()
+                    .copied()
+                    .find(|&(b, closes)| !closes && b > open)
+            });
             let fix = if here {
                 format!("end the here-string opened at {at} with a line that starts with {quote}@")
-            } else if let (true, Some((t, _))) = (pwsh, typographic) {
+            } else if let (true, Some(t)) = (pwsh, typographic) {
                 format!(
                     "replace the typographic quote at {} with ' or \"",
                     position(command, t)
                 )
-            } else if pwsh && q == QuoteKind::Double && command.contains(BACKSLASH_QUOTE) {
-                "in PowerShell write a quote inside \"…\" as \"\" or use '…'".to_string()
+            } else if let Some((b, closes)) = backslash {
+                let what = if closes {
+                    "closes the string"
+                } else {
+                    "and the quote after it write one quote and leave the string open"
+                };
+                format!(
+                    "the {BACKSLASH_QUOTE} at {} {what}: in PowerShell write a quote inside \"…\" as \"\" or use '…'",
+                    position(command, b)
+                )
             } else {
                 format!(
                     "close the {quote} opened at {at}, or write the text to a file and pass the file"

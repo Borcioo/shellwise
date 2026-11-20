@@ -41,8 +41,11 @@ after the first line).
 | Shape | Fix line |
 |---|---|
 | An unclosed quote | `Fix: close the " opened at column <n>, or write the text to a file and pass the file` |
-| An unclosed quote in PowerShell text holding `\"` | `Fix: in PowerShell write a quote inside "…" as "" or use '…'` |
-| An unclosed quote in PowerShell text holding a typographic quote (U+2018–U+201E) | `Fix: replace the typographic quote at column <n> with ' or "` |
+| An unclosed quote in PowerShell after a `\"` that closed a double-quoted string | `Fix: the \" at column <n> closes the string: in PowerShell write a quote inside "…" as "" or use '…'` |
+| An unclosed PowerShell string holding `\""` (read as one quote, so the string goes on) | `Fix: the \" at column <n> and the quote after it write one quote and leave the string open: …` |
+| An unclosed PowerShell string a typographic quote (U+2018–U+201E) opened, or one after a string a typographic quote closed where a plain quote opened it (or the other way round) | `Fix: replace the typographic quote at column <n> with ' or "` |
+
+A typographic pair (`‘a’`) and a `\"` inside single quotes give no hint: the Fix names the open quote.
 | A here-string that never ends | `Fix: end the here-string opened at column <n> with a line that starts with '@` |
 | An empty pipe element | `Fix: remove the empty \| at column <n>, or put the command after it on the same line` |
 | A piped statement | `Fix: write $( before the foreach at column <m> and ) before the \| at column <n>` |

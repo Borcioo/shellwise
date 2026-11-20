@@ -12,6 +12,9 @@ subcommand's options are listed in `data/programs.toml`). Level `warn` for the s
 the work or drop one entry: `git reset --keep` (git refuses when a file it would touch has
 edits) and `git stash drop` (one stash entry, still reachable by its hash for a while). `git clean -f`
 without `-d`, or with a pathspec of part of the tree, is no finding of this rule: the delete rules judge its paths.
+Level `warn` for `git worktree remove --force` on a worktree with no link inside it: any uncommitted
+or untracked work in it is lost (with a link it is `git-worktree-junction`; without `--force` git
+refuses a worktree that holds changes, so it is no finding).
 
 `Fix: if this is intended, run the same command again with ` # shellwise: allow` at its end`
 (for `git clean`: look at `git clean -nd` first)
@@ -28,6 +31,7 @@ git clean -fdx
 ```bash
 git reset --keep HEAD~1
 git stash drop
+git worktree remove --force .claude/worktrees/x
 ```
 
 ## Allow

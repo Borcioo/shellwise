@@ -35,10 +35,37 @@ pub struct Comment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Pipeline(Pipeline),
-    Loop { body: Script, span: Span },
-    Cond { branches: Vec<Script>, span: Span },
-    Func { name: String, body: Script },
+    Loop {
+        body: Script,
+        span: Span,
+        head: LoopHead,
+    },
+    Cond {
+        branches: Vec<Script>,
+        span: Span,
+    },
+    Func {
+        name: String,
+        body: Script,
+    },
     Block(Script),
+}
+
+/// What a loop's header says about when the loop ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopHead {
+    /// Once per item of a list, a range or its input (`for x in …`, `foreach`, `switch`).
+    Items,
+    /// `for ((init; cond; step))`, `for (init; cond; step)`: `open` when the condition is empty.
+    Counted { open: bool },
+    /// `while`, `until`, `do … while|until`: the first `cond` statements of the body (the last
+    /// ones when `at_end`, as in `do … while`) are the condition; `until` ends the loop when the
+    /// condition holds.
+    Test {
+        cond: usize,
+        at_end: bool,
+        until: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -37,7 +37,7 @@ shell = "bash"
 command = 'read -r name'
 level = "break"
 rules = ["will-hang"]
-fix = 'feed read its input on the same line: append <<< "<value>" to the read command'
+fix = 'feed read its input on the same line: read -r name <<< "<value>"'
 
 [[row]]
 id = "bash-read-prompt-value-looks-like-an-option"
@@ -530,3 +530,562 @@ shell = "bash"
 command = 'env read $opts x'
 level = "ok"
 rules = []
+# --- wait-loop-unbounded: a loop that waits and nothing bounds (owner decision, 2026-11-20) ---
+# A loop that polls (its body waits) or whose condition is always true, with no counter, deadline
+# or `timeout` that ends it, runs forever when what it waits for never comes. Shapes from
+# `F:\Temp\shellwise-t34\waitloop\probes.txt` (lines 1-5) and synthetic twins. Command lines and
+# script files alike.
+
+[[row]]
+id = "wl-bash-until-grep-log"
+os = "any"
+shell = "bash"
+command = "until grep -q '^done' /tmp/x/run.log 2>/dev/null; do sleep 15; done; cat /tmp/x/summary.txt"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 40); do grep -q '^done' /tmp/x/run.log 2>/dev/null && break; sleep 15; done; cat /tmp/x/summary.txt  # when you wait for a process, wait on the process (wait <pid>)"
+
+[[row]]
+id = "wl-bash-while-not-curl"
+os = "any"
+shell = "bash"
+command = "while ! curl -sf http://localhost:3000/health; do sleep 2; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 300); do curl -sf http://localhost:3000/health && break; sleep 2; done"
+
+[[row]]
+id = "wl-bash-while-true-sleep"
+os = "any"
+shell = "bash"
+command = "while true; do sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 120); do sleep 5; done"
+
+[[row]]
+id = "wl-bash-while-colon-sleep"
+os = "any"
+shell = "bash"
+command = "while :; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 600); do sleep 1; done"
+
+# `while C` ends when C fails: the Fix breaks on `C || break`.
+[[row]]
+id = "wl-bash-while-file-exists"
+os = "any"
+shell = "bash"
+command = "while [ -f build.lock ]; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 600); do [ -f build.lock ] || break; sleep 1; done"
+
+[[row]]
+id = "wl-bash-arith-for-open"
+os = "any"
+shell = "bash"
+command = "for (( ; ; )); do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Always true and no wait: a loop with no exit at all.
+[[row]]
+id = "wl-bash-while-true-no-wait"
+os = "any"
+shell = "bash"
+command = "while true; do echo tick; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# A child shell's script is read too: without `timeout` the same loop is a finding.
+[[row]]
+id = "wl-bash-child-shell-until"
+os = "any"
+shell = "bash"
+command = "bash -c 'until grep -q done run.log; do sleep 15; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-child-shell-cluster"
+os = "any"
+shell = "bash"
+command = "sh -lc 'while true; do sleep 5; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# The body has a wait and the condition reads input: the brief names the no-wait form as the one
+# that ends with its input, so this one is a finding (pinned for a ruling).
+[[row]]
+id = "wl-bash-while-read-with-sleep"
+os = "any"
+shell = "bash"
+command = "while read -r host; do sleep 1; done < hosts.txt"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Near misses: a clock or a counter that does not lead to the exit.
+[[row]]
+id = "wl-bash-clock-only-echoed"
+os = "any"
+shell = "bash"
+command = "while true; do echo $SECONDS; sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-counter-never-tested"
+os = "any"
+shell = "bash"
+command = "n=0; while true; do n=$((n+1)); sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-numeric-test-on-no-counter"
+os = "any"
+shell = "bash"
+command = "until [ \"$(grep -c exit run.log)\" -ge 3 ]; do sleep 10; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-guard-without-bound"
+os = "any"
+shell = "bash"
+command = "while true; do grep -q done run.log && break; sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# --- the bounds it reads ---
+
+[[row]]
+id = "wl-bash-for-seq-bounded"
+os = "any"
+shell = "bash"
+command = "for i in $(seq 1 60); do grep -q '^done' run.log && break; sleep 15; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-child-shell"
+os = "any"
+shell = "bash"
+command = "timeout 600 bash -c 'until grep -q done run.log; do sleep 15; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-guard"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done run.log; do sleep 5; n=$((n+1)); [ $n -ge 60 ] && break; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-in-condition"
+os = "any"
+shell = "bash"
+command = "until grep -q done run.log || (( n++ >= 60 )); do sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-while-counter-test"
+os = "any"
+shell = "bash"
+command = "i=0; while [ $i -lt 60 ]; do i=$((i+1)); sleep 1; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-seconds-deadline"
+os = "any"
+shell = "bash"
+command = "while (( SECONDS < 600 )); do grep -q done run.log && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-date-deadline-guard"
+os = "any"
+shell = "bash"
+command = "start=$(date +%s); while true; do sleep 30; if [ $(( $(date +%s) - start )) -gt 5400 ]; then exit 1; fi; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-arith-for-counted"
+os = "any"
+shell = "bash"
+command = "for ((i=0; i<60; i++)); do sleep 1; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-while-read-file"
+os = "any"
+shell = "bash"
+command = "while read -r line; do echo \"$line\"; done < list.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-pipeline-feeds-read"
+os = "any"
+shell = "bash"
+command = "cat list.txt | while IFS= read -r line; do echo \"$line\"; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-condition-without-wait"
+os = "any"
+shell = "bash"
+command = "while grep -q x f.txt; do sed -i 1d f.txt; done"
+level = "ok"
+rules = []
+
+# A dynamic command may end the loop: not judged.
+[[row]]
+id = "wl-bash-opaque-body-not-judged"
+os = "any"
+shell = "bash"
+command = "while true; do $step; sleep 1; done"
+level = "ok"
+rules = []
+
+# --- PowerShell ---
+
+[[row]]
+id = "wl-ps-while-not-test-path"
+os = "any"
+shell = "pwsh"
+command = "while (-not (Test-Path done.txt)) { Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { if ((Test-Path done.txt)) { break }; Start-Sleep 5 }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>)"
+
+[[row]]
+id = "wl-ps-while-true"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { Start-Sleep -Seconds 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { Start-Sleep -Seconds 5 }"
+
+[[row]]
+id = "wl-ps-do-until"
+os = "any"
+shell = "pwsh"
+command = "do { Start-Sleep 5 } until (Test-Path done.txt)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { Start-Sleep 5; if (Test-Path done.txt) { break } }"
+
+[[row]]
+id = "wl-ps-do-while"
+os = "any"
+shell = "pwsh"
+command = "do { Start-Sleep -Milliseconds 500 } while (-not (Test-Path done.txt))"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 1200; $i++) { Start-Sleep -Milliseconds 500; if ((Test-Path done.txt)) { break } }"
+
+[[row]]
+id = "wl-ps-for-open"
+os = "any"
+shell = "pwsh"
+command = "for (;;) { Start-Sleep 1 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-counter-never-tested"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while ($true) { $n++; Start-Sleep 1 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-guard-without-bound"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { if (Test-Path done.txt) { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-for-counted"
+os = "any"
+shell = "pwsh"
+command = "for ($i = 0; $i -lt 60; $i++) { if (Test-Path done.txt) { break }; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-range-foreach-object"
+os = "any"
+shell = "pwsh"
+command = "1..60 | ForEach-Object { Start-Sleep 1 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-foreach-range"
+os = "any"
+shell = "pwsh"
+command = "foreach ($k in 1..10) { Start-Sleep 1 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-switch-is-no-wait-loop"
+os = "any"
+shell = "pwsh"
+command = "switch ($x) { 'a' { Start-Sleep 5 } }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-in-condition"
+os = "any"
+shell = "pwsh"
+command = "$t = 0; while ($t -lt 580) { if (Test-Path done.txt) { break }; Start-Sleep 20; $t += 20 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-get-date-deadline"
+os = "any"
+shell = "pwsh"
+command = "$end = (Get-Date).AddMinutes(9); while ((Get-Date) -lt $end) { if (Test-Path done.txt) { break }; Start-Sleep 15 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-stopwatch"
+os = "any"
+shell = "pwsh"
+command = "$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path done.txt) -and $sw.Elapsed.TotalSeconds -lt 570) { Start-Sleep 10 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-do-while-counter"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.txt))"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-guard"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while ($true) { $n++; if ($n -ge 60) { break }; Start-Sleep 1 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-condition-without-wait"
+os = "any"
+shell = "pwsh"
+command = "while ($q.Count -gt 0) { $q.Dequeue() }"
+level = "ok"
+rules = []
+
+# `read` waits only with `-t`: without it the loop ends with its input.
+[[row]]
+id = "wl-bash-read-in-body-is-no-wait"
+os = "any"
+shell = "bash"
+command = 'while [ -n "$x" ]; do read -r x; done < list.txt'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-read-with-timeout-waits"
+os = "any"
+shell = "bash"
+command = 'while [ -z "$x" ]; do read -rt 1 x; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+# A counter in `(( ))` with no blanks, and a pre-increment.
+[[row]]
+id = "wl-bash-counter-arith-no-blanks"
+os = "any"
+shell = "bash"
+command = 'until grep -q done run.log || ((n++>=60)); do sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-pre-increment"
+os = "any"
+shell = "bash"
+command = 'until grep -q done run.log || (( ++n > 60 )); do sleep 5; done'
+level = "ok"
+rules = []
+# --- follow-unbounded (warn): a follow command nothing stops ---
+
+[[row]]
+id = "fu-bash-tail-f"
+os = "any"
+shell = "bash"
+command = "tail -f run.log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f run.log"
+
+[[row]]
+id = "fu-bash-tail-cluster-and-long"
+os = "any"
+shell = "bash"
+command = "tail -n 20 -F run.log; tail --follow=name app.log"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+
+[[row]]
+id = "fu-bash-watch"
+os = "any"
+shell = "bash"
+command = "watch -n 5 ls"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-kubectl-logs-f"
+os = "any"
+shell = "bash"
+command = "kubectl logs -f deploy/api"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-ps-get-content-wait"
+os = "any"
+shell = "pwsh"
+command = "Get-Content run.log -Wait -Tail 10"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Get-Content run.log -Wait -Tail 10 | Select-Object -First 20"
+
+[[row]]
+id = "fu-ps-gc-alias-wait"
+os = "windows"
+shell = "pwsh"
+command = "gc run.log -Wait"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-tail-f-into-grep-without-m"
+os = "any"
+shell = "bash"
+command = "tail -f run.log | grep ERROR"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-tail-f-timeout"
+os = "any"
+shell = "bash"
+command = "timeout 60 tail -f run.log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-tail-f-head"
+os = "any"
+shell = "bash"
+command = "tail -f run.log | head -n 5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-tail-f-grep-m1"
+os = "any"
+shell = "bash"
+command = "tail -f run.log | grep -m1 done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-tail-f-grep-q"
+os = "any"
+shell = "bash"
+command = "tail -f run.log | grep -q done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-tail-plain"
+os = "any"
+shell = "bash"
+command = "tail -n 20 run.log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-kubectl-logs-no-follow"
+os = "any"
+shell = "bash"
+command = "kubectl logs deploy/api --tail 50"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-kubectl-f-before-another-sub"
+os = "any"
+shell = "bash"
+command = "kubectl apply -f deploy.yaml"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-ps-get-content-wait-first"
+os = "any"
+shell = "pwsh"
+command = "Get-Content run.log -Wait | Select-Object -First 5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-ps-get-content-plain"
+os = "any"
+shell = "pwsh"
+command = "Get-Content run.log -Tail 10"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-child-tail"
+os = "any"
+shell = "bash"
+command = "timeout 30 bash -c 'tail -f run.log'"
+level = "ok"
+rules = []
+
+# A wrapper is read through: `nohup` does not bound it.
+[[row]]
+id = "fu-bash-nohup-tail-f"
+os = "any"
+shell = "bash"
+command = "nohup tail -f run.log"
+level = "warn"
+rules = ["follow-unbounded"]
+# The Fix carries the command's own text, a redirect included.
+[[row]]
+id = "bash-read-fix-keeps-a-redirect"
+os = "any"
+shell = "bash"
+command = 'read x 2>/dev/null'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input on the same line: read x 2>/dev/null <<< "<value>"'

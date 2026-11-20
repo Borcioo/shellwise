@@ -16,6 +16,7 @@ pub mod parse_error;
 pub mod ps_var_colon;
 
 pub mod hang;
+pub mod wait_loop;
 
 pub mod inline_length;
 
@@ -82,6 +83,8 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     rules.extend(pwsh_lint::rules());
     rules.push(Box::new(hang::HangRule));
     rules.push(Box::new(hang::AliasShadowRule));
+    rules.push(Box::new(wait_loop::WaitLoopRule));
+    rules.push(Box::new(wait_loop::FollowRule));
     #[cfg(feature = "testhooks")]
     rules.push(Box::new(testhooks::TestHook));
     rules

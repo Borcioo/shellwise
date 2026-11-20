@@ -1,0 +1,75 @@
+# wait-loop-unbounded
+
+A loop that waits for something outside it with nothing to bound the wait. If what it waits for
+never comes (a log line that is never written, a server that never answers), the loop runs forever.
+A worker's `until grep -q <line> <log>; do sleep 15; done` ran orphaned for nine hours. The rule
+checks command lines and script files (`shellwise lint`) alike.
+
+A loop is judged when its body waits (`sleep`, `Start-Sleep`, `Wait-Process`, `Wait-Job`,
+`Wait-Event`, `read -t`) or its condition is always true (`while true`, `while :`, `while ($true)`,
+`for (( ; ; ))`, `for (;;)`). It is a finding when nothing visible ends it:
+
+| Shape | Level | Why | Fix |
+|---|---|---|---|
+| Bash `while`/`until` and PowerShell `while`/`do … while`/`do … until`/`for (;;)` that waits or is always true, with no bound | `break` | Its end depends only on something outside the loop, which may never come. | `for i in $(seq 1 <N>); do <the stop test> && break; <the body>; done`, or in PowerShell `for ($i = 0; $i -lt <N>; $i++) { if (<the stop test>) { break }; <the body> }`. The rule fills in the loop's own condition and body, and an N that makes about ten minutes of the loop's own sleep. |
+| A `for` over a list or a range (`for i in $(seq 1 60)`, `foreach ($k in 1..10)`, `1..60 \| ForEach-Object`), a counted `for ((i=0; i<60; i++))` or `for ($i = 0; $i -lt 60; $i++)` | `ok` | It ends with its items or its counter. | |
+| The condition, or the test that guards a `break`, `exit`, `return` or `throw` in the body, reads a clock (`$SECONDS`, `date +%s`, `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`) or compares (`-lt`, `-le`, `-gt`, `-ge`, `<`, `>` in `(( ))`) a variable the loop changes (`n=$((n+1))`, `(( n++ < 60 ))`, `$t += 20`) | `ok` | A deadline or a counter ends it. | |
+| The loop runs under `timeout <n>`, also through `bash -c '…'` or `sh -lc '…'` in the same text | `ok` | `timeout` ends it. | |
+| No wait in the body and a condition that is not always true (`while read line; do …; done < file`, `cat f \| while IFS= read -r l; do …; done`) | `ok` | It ends with its input or its condition; it is no wait loop. | |
+| A body that runs a command the guard cannot read (`$step`, `eval`) | `ok` | That command may end the loop. | |
+
+The Fix line is the whole command with the loop rewritten (a command of one line; else the loop alone), and it ends with one sentence as a trailing comment, so it still runs as pasted: when what you wait for is a process, wait on the process
+(`wait <pid>`, `Wait-Process -Id <pid> -Timeout <seconds>`) rather than on a line in its log.
+
+## Deny
+
+```bash
+until grep -q '^done' /tmp/x/run.log 2>/dev/null; do sleep 15; done; cat /tmp/x/summary.txt
+```
+
+`break`: `Fix: for i in $(seq 1 40); do grep -q '^done' /tmp/x/run.log 2>/dev/null && break; sleep 15; done; cat /tmp/x/summary.txt  # when you wait for a process, wait on the process (wait <pid>) rather than on a line in its log`
+
+```bash
+while ! curl -sf http://localhost:3000/health; do sleep 2; done
+while true; do grep -q done run.log && break; sleep 5; done
+until [ "$(grep -c exit run.log)" -ge 3 ]; do sleep 10; done
+bash -c 'until grep -q done run.log; do sleep 15; done'
+```
+
+`break`: the second one breaks on the log line only, and the third one compares a count no line
+of the loop changes.
+
+```powershell
+while (-not (Test-Path done.txt)) { Start-Sleep 5 }
+```
+
+`break`: `Fix: for ($i = 0; $i -lt 120; $i++) { if ((Test-Path done.txt)) { break }; Start-Sleep 5 }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log`
+
+## Allow
+
+```bash
+for i in $(seq 1 60); do grep -q '^done' run.log && break; sleep 15; done
+timeout 600 bash -c 'until grep -q done run.log; do sleep 15; done'
+n=0; until grep -q done run.log; do sleep 5; n=$((n+1)); [ $n -ge 60 ] && break; done
+while (( SECONDS < 600 )); do grep -q done run.log && break; sleep 5; done
+while read -r line; do echo "$line"; done < list.txt
+```
+
+```powershell
+$end = (Get-Date).AddMinutes(9); while ((Get-Date) -lt $end) { if (Test-Path done.txt) { break }; Start-Sleep 15 }
+$n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.txt))
+```
+
+`ok`: each one has a bound the rule can see.
+
+## Limits
+
+- A bound is read from the loop's own text: a counter or deadline that a function or a sourced
+  script keeps is not seen, and the loop is a finding.
+- PowerShell keeps no `break` in the parsed form: a guard is an `if` whose text holds an exit word.
+  A `break` with no `if` around it is not seen.
+- A loop with a wait in its body whose condition reads input (`while read -r h; do sleep 1; done <
+  hosts.txt`) is a finding, though it ends with its input.
+- Bash `for ((;;))` written without blanks is a parse error for the Bash parser (warn
+  `parse-error`); `for (( ; ; ))` is read.
+- Only the outermost wrapper counts as a bound, as for `will-hang`.

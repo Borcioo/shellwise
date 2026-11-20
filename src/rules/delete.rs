@@ -494,7 +494,10 @@ fn cmdlet_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
             p.words.push(w.clone());
             continue;
         };
-        let inline = lead.split_once(':').map(|(_, v)| v.to_string());
+        // `-Path: C:\x` is one word; PowerShell binds the value without the blank.
+        let inline = lead
+            .split_once(':')
+            .map(|(_, v)| v.trim_start_matches([' ', '\t']).to_string());
         let whole = literal(w);
         if pwsh_matches(&facts.dry_run, lead) {
             p.dry_run = true;
@@ -708,7 +711,7 @@ impl<'a> Scene<'a> {
         // repo root stays exempt (a protected path inside it makes it an ancestor of one);
         // when the lookup that tells times out, the lexical reason stands.
         if let Some(reason) =
-            resolve::critical_reason(p, None, self.home.as_deref(), &cfg.protected)
+            resolve::critical_reason(p, None, self.home.as_deref(), &cfg.protected, self.os())
         {
             let inside_root =
                 contents && matches!(self.repo(), Ok(Some(r)) if self.key(&r) == self.key(p));
@@ -717,7 +720,7 @@ impl<'a> Scene<'a> {
         let repo = self.repo()?;
         let (home, protected) = (self.home.as_deref(), &cfg.protected);
         let reason = if resolve::is_network_or_device(p, self.os()) {
-            resolve::critical_reason(p, repo.as_deref(), home, protected)
+            resolve::critical_reason(p, repo.as_deref(), home, protected, self.os())
         } else {
             resolve::critical_by_identity(
                 p,
@@ -726,6 +729,7 @@ impl<'a> Scene<'a> {
                 protected,
                 self.ctx.fs,
                 self.ctx.deadline,
+                self.os(),
             )?
         };
         if contents
@@ -735,6 +739,30 @@ impl<'a> Scene<'a> {
             return Ok(None);
         }
         Ok(reason)
+    }
+
+    /// Why deleting `p` is critical with the cwd's repo root left out, by text and by identity:
+    /// whether any other reason holds for a linked worktree that is that root.
+    pub fn critical_but_the_repo(&self, p: &Path) -> Result<Option<&'static str>, TimedOut> {
+        let (home, protected) = (self.home.as_deref(), &self.ctx.cfg.protected);
+        if resolve::is_network_or_device(p, self.os()) {
+            return Ok(resolve::critical_reason(
+                p,
+                None,
+                home,
+                protected,
+                self.os(),
+            ));
+        }
+        resolve::critical_by_identity(
+            p,
+            None,
+            home,
+            protected,
+            self.ctx.fs,
+            self.ctx.deadline,
+            self.os(),
+        )
     }
 
     /// The finding for one resolved path, or `None` when deleting it is ok.
@@ -815,7 +843,7 @@ impl<'a> Scene<'a> {
     fn links(&mut self, p: &Path, how: How, span: Span, shown: &str) -> Option<Finding> {
         let shell = self.ctx.input.shell;
         if how.recursive && !how.contents {
-            return match walk::outside_links(p, self.ctx.fs, self.ctx.deadline) {
+            return match walk::outside_links(p, self.ctx.fs, self.ctx.deadline, self.os()) {
                 WalkResult::Clean => None,
                 WalkResult::Outside(links) => {
                     let first = links.first().map(|l| l.path.clone()).unwrap_or_default();
@@ -864,6 +892,32 @@ impl<'a> Scene<'a> {
             Ok(Ok(Some(link))) => Some(through_link(p, &link, shell, span)),
             _ => Some(self.timeout(span, shown)),
         }
+    }
+
+    /// Whether a PowerShell wildcard without -Force skips `p` (`Fs::is_hidden`), read once under
+    /// the deadline. A read that fails or times out counts as not hidden: the wildcard takes it.
+    fn hidden(&self, p: &Path) -> bool {
+        let fs = Arc::clone(self.ctx.fs);
+        let path = p.to_path_buf();
+        #[allow(unused_mut)]
+        let mut deadline = *self.ctx.deadline;
+        // Test-only: the read runs out of time.
+        #[cfg(feature = "testhooks")]
+        let slow = crate::rules::testhooks::active("hidden-lookup-timeout");
+        #[cfg(not(feature = "testhooks"))]
+        let slow = false;
+        if slow {
+            deadline = crate::Deadline::new(std::time::Instant::now(), 0);
+        }
+        matches!(
+            bounded(&deadline, move || {
+                if slow {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                fs.is_hidden(&path)
+            }),
+            Ok(Ok(true))
+        )
     }
 
     pub fn timeout(&self, span: Span, shown: &str) -> Finding {
@@ -993,7 +1047,7 @@ impl<'a> Scene<'a> {
         for p in paths {
             let home = self.home.clone();
             if let Some(reason) =
-                resolve::critical_reason(&p, None, home.as_deref(), &cfg.protected)
+                resolve::critical_reason(&p, None, home.as_deref(), &cfg.protected, self.os())
             {
                 return Some(critical_contents(&p, reason, span));
             }
@@ -1005,14 +1059,21 @@ impl<'a> Scene<'a> {
                 Err(TimedOut) => return Some(self.lookup_timeout(how, span, &text)),
             };
             if self.key(&root) == self.key(&p) {
-                // A PowerShell wildcard leaves the hidden `.git` without -Force (Ruling 127).
-                let takes_git = (is_pwsh(shell) && how.forced) || step.starts_with('.');
+                // A PowerShell wildcard leaves a hidden `.git` without -Force (Ruling 127); a
+                // `.git` without the Hidden attribute (WSL git, a copied repo) it takes (R1-6).
+                let git = p.join(".git");
+                let takes_git =
+                    step.starts_with('.') || (is_pwsh(shell) && (how.forced || !self.hidden(&git)));
                 if !takes_git {
                     return Some(repo_contents(&p, span));
                 }
-                let git = p.join(".git");
-                let reason =
-                    resolve::critical_reason(&git, Some(&root), home.as_deref(), &cfg.protected)?;
+                let reason = resolve::critical_reason(
+                    &git,
+                    Some(&root),
+                    home.as_deref(),
+                    &cfg.protected,
+                    self.os(),
+                )?;
                 return Some(critical(&git, reason, span));
             }
         }
@@ -1080,14 +1141,18 @@ impl<'a> Scene<'a> {
             let p = PathBuf::from(&folder);
             let home = self.home.clone();
             let protected = &self.ctx.cfg.protected;
-            let lexical = resolve::critical_reason(&p, None, home.as_deref(), protected)
+            let lexical = resolve::critical_reason(&p, None, home.as_deref(), protected, self.os())
                 .or_else(|| self.msys_system(&folder).then_some(SYSTEM_FOLDER));
             let reason = match lexical {
                 Some(r) => Some(r),
                 None => match self.repo() {
-                    Ok(repo) => {
-                        resolve::critical_reason(&p, repo.as_deref(), home.as_deref(), protected)
-                    }
+                    Ok(repo) => resolve::critical_reason(
+                        &p,
+                        repo.as_deref(),
+                        home.as_deref(),
+                        protected,
+                        self.os(),
+                    ),
                     Err(TimedOut) => return Some(self.lookup_timeout(how, span, shown)),
                 },
             };
@@ -1211,6 +1276,7 @@ impl<'a> Scene<'a> {
             repo.as_deref(),
             self.home.as_deref(),
             &self.ctx.cfg.protected,
+            self.os(),
         )?;
         Some((w.to_string(), reason))
     }
@@ -1282,7 +1348,7 @@ impl<'a> Scene<'a> {
             .unwrap_or_default();
         // A literal root or system path is critical wherever the shell stands.
         if let Some(text) = literal(word) {
-            let reason = resolve::critical_reason(Path::new(&text), None, None, &[])
+            let reason = resolve::critical_reason(Path::new(&text), None, None, &[], self.os())
                 .or_else(|| self.msys_system(&text).then_some(SYSTEM_FOLDER));
             if let Some(reason) = reason {
                 return Some(critical(Path::new(&text), reason, span));

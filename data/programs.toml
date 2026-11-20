@@ -13,7 +13,7 @@
 #                                     "interactive", "launcher"
 # value_options  = ["-s"]             options that take the next word as their value
 # fix            = "..."              the Fix line text a rule about this program prints; `<path>`
-#                                     and the like are filled in by the rule
+#                                     and the like are filled in by the rule (`<command>`: the command as typed)
 #
 # Wrapper facts (kind = "wrapper"; `programs::strip_wrappers` reads them):
 # operands       = 1                  words before the wrapped command that are not options
@@ -115,6 +115,8 @@ name = "docker"
 shells = ["bash"]
 kind = ["native-msys"]
 fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+follow_when = ["-f", "--follow"]
+follow_sub = "logs"
 
 [[program]]
 name = "docker-compose"
@@ -133,6 +135,8 @@ name = "kubectl"
 shells = ["bash"]
 kind = ["native-msys"]
 fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
+follow_when = ["-f", "--follow"]
+follow_sub = "logs"
 
 [[program]]
 name = "podman"
@@ -216,7 +220,9 @@ value_options = ["-a", "-d", "-i", "-n", "-N", "-p", "-t", "-u"]
 hang_unless = ["-t", "-u"]
 hang_stdin = true
 hang_level = "break"
-fix = 'feed read its input on the same line: append <<< "<value>" to the read command'
+fix = 'feed read its input on the same line: <command> <<< "<value>"'
+loop_role = ["wait"]
+loop_wait_when = ["-t"]
 
 [[program]]
 name = "claude"
@@ -226,6 +232,68 @@ hang_bash_only = true
 hang_level = "warn"
 fix = "timeout 120 claude -p <prompt>"
 lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = ["--version", "-v", "--help", "-h"] }
+
+# --- Wait loops (wait-loop-unbounded, read by src/rules/wait_loop.rs; the loop words are in [loops]) ---
+# loop_role       what the command is to a loop: "wait" (it pauses, so the loop polls)
+# loop_wait_when  for "wait": only with one of these options (`read -t`)
+# loop_wait_ms    for "wait": with one of these options its number is milliseconds
+# loop_body       on a shell row: the option whose next word is a script the rule reads too
+#                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
+
+[[program]]
+name = "sleep"
+shells = ["bash"]
+loop_role = ["wait"]
+
+[[program]]
+name = "start-sleep"
+shells = ["pwsh"]
+aliases = { pwsh_windows = ["sleep"], pwsh_posix = ["sleep"] }
+loop_role = ["wait"]
+loop_wait_ms = ["-Milliseconds", "-m"]
+
+[[program]]
+name = "wait-process"
+shells = ["pwsh"]
+loop_role = ["wait"]
+
+[[program]]
+name = "wait-job"
+shells = ["pwsh"]
+loop_role = ["wait"]
+
+[[program]]
+name = "wait-event"
+shells = ["pwsh"]
+loop_role = ["wait"]
+
+# --- Follow commands (follow-unbounded, read by src/rules/wait_loop.rs) ---
+# follow            true = the command always follows its input (`watch`)
+# follow_when       options that make it follow (`tail -f`)
+# follow_sub        the subcommand the options count after (`kubectl logs -f`)
+# ends_follow       true = as a later pipeline stage it ends the pipeline (`head`)
+# ends_follow_when  options with which it ends the pipeline (`grep -m1`, `Select-Object -First`)
+# The Get-Content and Select-Object rows (PowerShell) carry `follow_when` and `ends_follow_when`.
+
+[[program]]
+name = "tail"
+shells = ["bash"]
+follow_when = ["-f", "-F", "--follow"]
+
+[[program]]
+name = "watch"
+shells = ["bash"]
+follow = true
+
+[[program]]
+name = "head"
+shells = ["bash"]
+ends_follow = true
+
+[[program]]
+name = "grep"
+shells = ["bash"]
+ends_follow_when = ["-m", "--max-count", "-q", "--quiet"]
 
 # --- The delete family (Task 32: [program.delete], read by src/rules/delete.rs) ---
 
@@ -302,14 +370,17 @@ dry_run = ["/L"]
 name = "bash"
 shells = ["bash"]
 kind = ["shell"]
+loop_body = ["-c"]
 
 [[program]]
 name = "sh"
 kind = ["shell"]
+loop_body = ["-c"]
 
 [[program]]
 name = "zsh"
 kind = ["shell"]
+loop_body = ["-c"]
 
 [[program]]
 name = "pwsh"
@@ -451,6 +522,7 @@ long_options = ["--quiet", "--dry-run", "--force", "--interactive", "--exclude",
 name = "bash"
 shells = ["pwsh"]
 kind = ["shell"]
+loop_body = ["-c"]
 fix ="& \"$env:ProgramFiles\\Git\\bin\\bash.exe\""
 lint = { tags = ["wsl-bash"] }
 
@@ -491,11 +563,13 @@ lint = { variable_params = ["sessionvariable"] }
 name = "select-object"
 shells = ["pwsh"]
 lint = { tags = ["truncator"], truncate_params = ["first"], flag_hints = ["-n#=-First "] }
+ends_follow_when = ["-First", "-Index"]
 
 [[program]]
 name = "get-content"
 shells = ["pwsh"]
 lint = { flag_hints = ["-n#=-TotalCount "] }
+follow_when = ["-Wait"]
 
 [[program]]
 name = "set-content"
@@ -684,3 +758,20 @@ lint = { tags = ["unix-only"] }
 roots = ["var", "usr", "etc", "tmp", "home", "opt", "bin", "sbin", "app", "srv", "data", "root", "mnt", "run", "lib", "workspace", "code"]
 # Environment names that turn the conversion off; the rule stays quiet when the command sets one.
 opt_out = ["MSYS_NO_PATHCONV", "MSYS2_ARG_CONV_EXCL"]
+
+# --- The words a loop's end is read from (wait-loop-unbounded) ---
+
+[loops]
+# Words that leave the loop or the shell.
+exits = ["break", "exit", "return", "throw"]
+# A whole loop condition that is always true (Bash `true`, `:`; PowerShell `$true`, `1`).
+always = ["true", ":", "$true", "1"]
+# Words that read the time: a test holding one is a deadline (`$SECONDS`, `date +%s`,
+# `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`).
+clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopwatch", "Elapsed"]
+# Operators that compare numbers: a test with one on a variable the loop changes is a counter
+# (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
+compares = ["-lt", "-le", "-gt", "-ge", "<", "<=", ">", ">="]
+# The sentence after the Fix line.
+hint_bash = "when you wait for a process, wait on the process (wait <pid>) rather than on a line in its log"
+hint_pwsh = "when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"

@@ -310,11 +310,10 @@ fn an_event_over_the_read_cap_is_a_deny_unread() {
 #[test]
 fn a_malformed_event_at_the_read_cap_still_replies() {
     // The raw scan of a malformed event runs on the bounded worker (F-A4): just under the 1 MiB
-    // read cap, with nesting the scan has to walk, the hook still exits 0 before the shortest
-    // host timeout a config may state (`MIN_HOOK_TIMEOUT_MS`), with the deny when the scan
-    // finishes in time and no output when it does not (a reply after the host's timeout counts
-    // as none). Small malformed events get their deny in
-    // `a_malformed_event_denies_only_destructive_raw_text`.
+    // read cap, with nesting the scan has to walk, the hook still exits 0 with a deny before the
+    // shortest host timeout a config may state (`MIN_HOOK_TIMEOUT_MS`): the scan's flag when it
+    // finishes in time, "the raw scan did not finish" when it does not (R1-3). Small malformed
+    // events get their deny in `a_malformed_event_denies_only_destructive_raw_text`.
     let head = format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{DESTRUCTIVE}; "#);
     let unit = format!("${}", ch(0x28));
     let body = unit.repeat((1024 * 1024 - head.len()) / unit.len());
@@ -324,6 +323,11 @@ fn a_malformed_event_at_the_read_cap_still_replies() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     let host = Duration::from_millis(shellwise::config::MIN_HOOK_TIMEOUT_MS);
     assert!(r.elapsed < host, "{:?}", r.elapsed);
+    let reason = denied(&r);
+    assert!(
+        reason.starts_with("shellwise: danger analysis-incomplete: "),
+        "{reason}"
+    );
 }
 
 #[test]
@@ -578,14 +582,22 @@ mod hooks {
     }
 
     /// The deadline the config sets, not a test override: a stuck analysis replies before the
-    /// host's timeout, for the default config (`hook_timeout_ms` 10000) and for the installed
-    /// pair (hook entry `timeout: 5`, `hook_timeout_ms = 5000`, Ruling 129).
+    /// host's timeout, stated here as the host's own number, never read from the config. The
+    /// installed pair is the hook entry's `timeout: 5` with `hook_timeout_ms = 5000` (Ruling 129);
+    /// a config without the key must still fit a hook entry of `timeout: 10`.
     #[test]
     fn a_stuck_analysis_replies_before_the_host_timeout_with_the_default_deadline() {
-        let default_ms = shellwise::config::Config::default().hook_timeout_ms;
+        /// The installed hook entry's `timeout: 5`.
+        const INSTALLED_HOST_MS: u64 = 5000;
+        /// A hook entry of `timeout: 10`.
+        const TEN_SECOND_HOST_MS: u64 = 10_000;
         for (name, config, host_ms) in [
-            ("stuck-default", "", default_ms),
-            ("stuck-installed", "hook_timeout_ms = 5000\n", 5000),
+            (
+                "stuck-installed",
+                "hook_timeout_ms = 5000\n",
+                INSTALLED_HOST_MS,
+            ),
+            ("stuck-default", "", TEN_SECOND_HOST_MS),
         ] {
             let dir = folder(name);
             let file = dir.join("integration.toml");

@@ -627,7 +627,7 @@ fn path_spans(script: &Script, command: &str) -> Vec<Span> {
 fn for_headers(script: &Script, command: &str, out: &mut Vec<Span>) {
     for st in &script.stmts {
         match st {
-            Stmt::Loop { body, span } => {
+            Stmt::Loop { body, span, .. } => {
                 out.extend(for_list(command, *span));
                 for_headers(body, command, out);
             }

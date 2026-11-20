@@ -179,6 +179,41 @@ fn a_function_an_alias_outranks_is_a_warn_in_a_ps1_file() {
     assert_eq!(report.exit_code(), 0);
 }
 
+/// D2: `stale-write-var` reads command lines only. In a script the variable a `New-Variable` line
+/// binds is there for the next line: the binary passes the file.
+#[test]
+fn a_ps1_that_binds_a_variable_with_new_variable_then_writes_it_passes() {
+    let d = folder("new_variable");
+    let path = d.join("write.ps1");
+    std::fs::write(&path, "New-Variable v 1\nSet-Content a.txt $v\n").unwrap();
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    assert_eq!(r.stdout, format!("{}: ok\n", path.display()));
+}
+
+/// A wait loop with no bound hangs a script as it hangs a command line: break in `lint` too.
+#[test]
+fn an_unbounded_wait_loop_in_a_sh_file_is_a_break() {
+    let d = folder("wait_loop");
+    let path = d.join("wait.sh");
+    std::fs::write(
+        &path,
+        "#!/bin/bash\nuntil grep -q done run.log; do\n  sleep 15\ndone\n",
+    )
+    .unwrap();
+    let report = lint(&path).unwrap();
+    assert_eq!(ids(&report), ["wait-loop-unbounded"]);
+    assert_eq!(report.exit_code(), 1);
+    // The bounded twin is clean.
+    let ok = d.join("bounded.sh");
+    std::fs::write(
+        &ok,
+        "#!/bin/bash\nfor i in $(seq 1 40); do\n  grep -q done run.log && break\n  sleep 15\ndone\n",
+    )
+    .unwrap();
+    assert!(lint(&ok).unwrap().findings.is_empty());
+}
+
 /// D6: Git Bash drops the CR of a CRLF script and runs it (Linux bash reads `$'\r'`). In the Git
 /// Bash profile (a Windows host) a CRLF `.sh` gets one warn, and the shellwise rules and the
 /// external linter read its LF twin.
@@ -923,8 +958,8 @@ fn a_shellcheck_error_and_a_warning_are_warn_and_pass_the_file() {
         "{}",
         r.stdout
     );
-    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line. ShellCheck
-    // gives no one-step Fix line, so an error is warn (D5).
+    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line, as the
+    // shellwise parser does, so the error is warn (D5, R1-1; `bash -n` in the next test).
     let (path, r) = lint_cli(
         "sc_levels_error",
         "test.sh",
@@ -939,6 +974,51 @@ fn a_shellcheck_error_and_a_warning_are_warn_and_pass_the_file() {
         r.stdout
     );
     assert!(!r.stdout.contains("parse-error"), "{}", r.stdout);
+}
+
+/// R1-1: a file Bash refuses (an `if` with no `fi`) fails the lint: ShellCheck's parse error is
+/// break with its message as the Fix line, because the shellwise parser fails on the file too.
+/// Its twin that Bash parses (SC1035) passes.
+#[test]
+fn a_sh_file_bash_refuses_is_a_break_with_shellchecks_message() {
+    let open_if = "#!/bin/bash\nif true; then\n  echo hi\n";
+    let (path, r) = lint_cli("sc_refused", "openif.sh", open_if);
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    let head = format!("{}:2:1: break SC1046: ", path.display());
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&head))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    let message = &lines[at][head.len()..];
+    assert_eq!(lines[at + 1], format!("  Fix: {message}"), "{}", r.stdout);
+
+    let twin = "#!/bin/bash\nif [[$1 == x]]; then echo y; fi\n";
+    #[cfg_attr(not(feature = "oracle"), allow(unused_variables))]
+    let (twin_path, t) = lint_cli("sc_refused_twin", "sc1035.sh", twin);
+    assert_eq!(t.code, 0, "{} {}", t.stdout, t.stderr);
+    assert!(!t.stdout.contains(": break "), "{}", t.stdout);
+    assert!(!t.stdout.contains("  Fix: "), "{}", t.stdout);
+
+    // The oracle: `bash -n` refuses the first file and parses its twin.
+    #[cfg(feature = "oracle")]
+    {
+        #[cfg(windows)]
+        let bash = r"C:\Program Files\Git\bin\bash.exe";
+        #[cfg(not(windows))]
+        let bash = "/bin/bash";
+        let syntax = |p: &Path| {
+            std::process::Command::new(bash)
+                .arg("-n")
+                .arg(p)
+                .output()
+                .expect("bash runs")
+                .status
+                .code()
+        };
+        assert_eq!(syntax(&path), Some(2));
+        assert_eq!(syntax(&twin_path), Some(0));
+    }
 }
 
 /// SC2164 (`cd` without `|| exit`) is left out by default; real ShellCheck reports it on this text.

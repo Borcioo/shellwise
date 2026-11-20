@@ -14,8 +14,8 @@ use shellwise::fs::resolve::{
 use shellwise::fs::walk::{Link, LinkKind, WalkResult, outside_links};
 use shellwise::fs::{FileId, Fs, Meta, RealFs, SharedFs};
 use shellwise::ir::{
-    ChainOp, Elem, EnvView, MethodCall, Pipeline, Quote, Script, SimpleCommand, Stmt, Word,
-    WordPart,
+    ChainOp, Elem, EnvView, LoopHead, MethodCall, Pipeline, Quote, Script, SimpleCommand, Stmt,
+    Word, WordPart,
 };
 use shellwise::level::Span;
 use shellwise::{BashProfile, Deadline, Os, Shell};
@@ -487,7 +487,7 @@ fn walk_finds_a_folder_link_whose_target_is_outside_the_tree() {
     let root = root.parent().unwrap().to_path_buf();
     let link = t.dir_link("root/a/j", &outside);
     assert_eq!(
-        outside_links(&root, &real(), &far()),
+        outside_links(&root, &real(), &far(), Os::host()),
         WalkResult::Outside(vec![link])
     );
 }
@@ -500,7 +500,7 @@ fn walk_is_clean_when_every_link_points_inside_the_tree() {
     t.dir_link("root/j", &t.root.join("root/data"));
     t.dir_link("root/data/k", &inner);
     assert_eq!(
-        outside_links(&t.root.join("root"), &real(), &far()),
+        outside_links(&t.root.join("root"), &real(), &far(), Os::host()),
         WalkResult::Clean
     );
 }
@@ -512,7 +512,7 @@ fn walk_counts_a_link_into_a_sibling_with_a_longer_name_as_outside() {
     let data = t.mkdir("root2/data");
     let link = t.dir_link("root/j", &data);
     assert_eq!(
-        outside_links(&t.root.join("root"), &real(), &far()),
+        outside_links(&t.root.join("root"), &real(), &far(), Os::host()),
         WalkResult::Outside(vec![link])
     );
 }
@@ -524,7 +524,7 @@ fn walk_finds_a_symlink_whose_target_is_outside_the_tree() {
     t.mkdir("root");
     let link = t.sym_link("root/s", &outside);
     assert_eq!(
-        outside_links(&t.root.join("root"), &real(), &far()),
+        outside_links(&t.root.join("root"), &real(), &far(), Os::host()),
         WalkResult::Outside(vec![link])
     );
 }
@@ -544,7 +544,7 @@ fn walk_counts_a_volume_target_and_an_unreadable_target_as_outside() {
         .add(&at("root/b/broken"), Node::BrokenLink)
         .shared();
     assert_eq!(
-        outside_links(Path::new(&at("root")), &fs, &far()),
+        outside_links(Path::new(&at("root")), &fs, &far(), Os::host()),
         WalkResult::Outside(vec![
             lk(at("root/a/m"), LinkKind::MountPoint),
             lk(at("root/b/broken"), LinkKind::Unknown)
@@ -559,7 +559,7 @@ fn walk_reports_an_entry_it_cannot_stat() {
         .add(&at("root/a/x"), Node::Denied)
         .shared();
     assert_eq!(
-        outside_links(Path::new(&at("root")), &fs, &far()),
+        outside_links(Path::new(&at("root")), &fs, &far(), Os::host()),
         WalkResult::Unreadable(PathBuf::from(at("root/a/x")))
     );
 }
@@ -570,7 +570,7 @@ fn walk_reports_a_folder_it_cannot_list() {
     t.mkdir("root/ok");
     let denied = t.deny_list("root/ok/locked");
     assert_eq!(
-        outside_links(&t.root.join("root"), &real(), &far()),
+        outside_links(&t.root.join("root"), &real(), &far(), Os::host()),
         WalkResult::Unreadable(denied)
     );
 }
@@ -585,17 +585,17 @@ fn walk_checks_the_root_and_its_ancestors_for_a_link() {
     // An ancestor of the root is a link: the tree lives elsewhere.
     let deep = Path::new(&at("wt/j")).join("sub");
     assert_eq!(
-        outside_links(&deep, &fs, &far()),
+        outside_links(&deep, &fs, &far(), Os::host()),
         WalkResult::Outside(vec![lk(at("wt/j"), LinkKind::Junction)])
     );
     // The root itself is a link.
     assert_eq!(
-        outside_links(Path::new(&at("wt/k")), &fs, &far()),
+        outside_links(Path::new(&at("wt/k")), &fs, &far(), Os::host()),
         WalkResult::Outside(vec![lk(at("wt/k"), LinkKind::Junction)])
     );
     // A missing root has nothing to delete.
     assert_eq!(
-        outside_links(Path::new(&at("real/nope")), &fs, &far()),
+        outside_links(Path::new(&at("real/nope")), &fs, &far(), Os::host()),
         WalkResult::Clean
     );
 }
@@ -609,7 +609,7 @@ fn walk_breadth_first_reports_the_link_nearest_the_root_first() {
         .dir(&at("elsewhere"))
         .shared();
     assert_eq!(
-        outside_links(Path::new(&at("root")), &fs, &far()),
+        outside_links(Path::new(&at("root")), &fs, &far(), Os::host()),
         WalkResult::Outside(vec![
             lk(at("root/a/near"), LinkKind::Junction),
             lk(at("root/z/b/c/deep"), LinkKind::Junction)
@@ -623,7 +623,7 @@ fn walk_times_out_within_the_remaining_time_when_a_call_never_returns() {
         let fs: SharedFs = Arc::new(Hang(call));
         let start = Instant::now();
         let deadline = Deadline::new(start, 200);
-        let r = outside_links(Path::new(&at("root")), &fs, &deadline);
+        let r = outside_links(Path::new(&at("root")), &fs, &deadline, Os::host());
         let took = start.elapsed();
         assert_eq!(r, WalkResult::Timeout, "{call}");
         assert!(took < Duration::from_millis(250), "{call}: {took:?}");
@@ -644,7 +644,7 @@ fn walk_counts_a_folder_on_another_device_as_a_mount_point() {
     fake.devs.insert(PathBuf::from(at("data/unread")), None);
     let fs = fake.shared();
     assert_eq!(
-        outside_links(Path::new(&at("data")), &fs, &far()),
+        outside_links(Path::new(&at("data")), &fs, &far(), Os::host()),
         WalkResult::Outside(vec![
             lk(at("data/unread"), LinkKind::MountPoint),
             lk(at("data/vol"), LinkKind::MountPoint),
@@ -656,7 +656,7 @@ fn walk_counts_a_folder_on_another_device_as_a_mount_point() {
         .dir(&at("data/vol/x"))
         .shared();
     assert_eq!(
-        outside_links(Path::new(&at("data")), &one, &far()),
+        outside_links(Path::new(&at("data")), &one, &far(), Os::host()),
         WalkResult::Clean
     );
     // A device the walk cannot read, on the root or a folder in it.
@@ -672,7 +672,7 @@ fn walk_counts_a_folder_on_another_device_as_a_mount_point() {
             .insert(PathBuf::from(at(refused)), Some(DEVICE_ERROR));
         let fs = fake.shared();
         assert_eq!(
-            outside_links(Path::new(&at("data")), &fs, &far()),
+            outside_links(Path::new(&at("data")), &fs, &far(), Os::host()),
             want,
             "{refused}"
         );
@@ -698,13 +698,13 @@ fn walk_counts_a_listed_mount_point_inside_the_tree_on_the_same_device() {
     ]);
     let fs = fake.shared();
     assert_eq!(
-        outside_links(Path::new(&at("data")), &fs, &far()),
+        outside_links(Path::new(&at("data")), &fs, &far(), Os::host()),
         WalkResult::Outside(vec![lk(at("data/bind"), LinkKind::MountPoint)])
     );
     // A mount table that cannot be read leaves the device check.
     let unread = tree().shared();
     assert_eq!(
-        outside_links(Path::new(&at("data")), &unread, &far()),
+        outside_links(Path::new(&at("data")), &unread, &far(), Os::host()),
         WalkResult::Clean
     );
 }
@@ -745,7 +745,7 @@ fn real_fs_walk_reports_a_mount_inside_the_tree() {
         dev.is_some() && shm.is_some() && dev != shm,
         "{dev:?} {shm:?}"
     );
-    match outside_links(Path::new("/dev"), &fs, &far()) {
+    match outside_links(Path::new("/dev"), &fs, &far(), Os::host()) {
         WalkResult::Outside(links) => assert!(
             links.iter().any(|l| l.kind == LinkKind::MountPoint
                 && [Path::new("/dev/shm"), Path::new("/dev/pts")].contains(&l.path.as_path())),
@@ -760,7 +760,7 @@ fn walk_on_an_expired_deadline_is_a_timeout() {
     let fs = FakeFs::default().dir(&at("root")).shared();
     let deadline = Deadline::new(Instant::now() - Duration::from_millis(5), 1);
     assert_eq!(
-        outside_links(Path::new(&at("root")), &fs, &deadline),
+        outside_links(Path::new(&at("root")), &fs, &deadline, Os::host()),
         WalkResult::Timeout
     );
 }
@@ -2335,6 +2335,7 @@ fn an_unproven_drive_and_a_session_command_have_their_own_causes() {
             Stmt::Loop {
                 body: script(vec![git()]),
                 span: Span::default(),
+                head: LoopHead::Items,
             },
         ),
         (
@@ -3909,6 +3910,7 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
     unknown_after(vec![Stmt::Loop {
         body: script(vec![stmt(lits("cd", &["sub"]), None)]),
         span: Span::default(),
+        head: LoopHead::Items,
     }]);
     unknown_after(vec![Stmt::Block(script(vec![stmt(
         lits("cd", &["sub"]),
@@ -4189,6 +4191,7 @@ fn pwsh_location_functions_and_script_runs_move_the_shell() {
     let lp = Stmt::Loop {
         body: script(vec![one("cd..", seq), one("x", seq)]),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let got = resolve(
         &lit("."),
@@ -5114,6 +5117,7 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
     let lp = Stmt::Loop {
         body: script(vec![one("f", seq)]),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
     loc.read_script(&script(vec![func("f", vec![]), lp.clone()]));
@@ -5125,6 +5129,7 @@ fn a_command_the_script_defines_makes_the_location_unknown() {
     let lp = Stmt::Loop {
         body: script(vec![stmt(lits("sudo", &["x"]), seq)]),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let mut loc = Location::new(ps, Os::Windows, Some(Path::new(sub)));
     loc.read_script(&script(vec![func("sudo", vec![]), lp.clone()]));
@@ -5269,6 +5274,7 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
     let lp = Stmt::Loop {
         body,
         span: Span::default(),
+        head: LoopHead::Items,
     };
     expect(
         resolve(&repo, &base.inner(&lp), &env),
@@ -5633,6 +5639,7 @@ fn bodies_that_run_later_or_repeatedly_start_at_an_unknown_location() {
     let lp = |body: Script| Stmt::Loop {
         body,
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let func = Stmt::Func {
         name: "f".to_string(),
@@ -5684,6 +5691,7 @@ fn a_remap_anywhere_in_the_command_reaches_a_body_that_runs_later_or_again() {
     let lp = |body: Vec<Stmt>| Stmt::Loop {
         body: script(body),
         span: Span::default(),
+        head: LoopHead::Items,
     };
     let drive_new = || method("ExecutionContext.SessionState.Drive", "New", vec![lit("x")]);
     let rows: Vec<(&str, Vec<Stmt>, &str, bool, Target)> = vec![
@@ -6404,6 +6412,7 @@ fn a_loop_variable_named_in_the_loop_text_is_dynamic() {
     let s = script(vec![Stmt::Loop {
         body: script(vec![stmt(lits(":", &[]), None)]),
         span: Span { start: 0, end: 24 },
+        head: LoopHead::Items,
     }]);
     let (loc, mut env) = win(bash);
     mark_assigned(&mut env, &s, text);
@@ -6439,7 +6448,7 @@ fn critical_reason_names_each_protected_folder_on_windows() {
     let home = Path::new(r"C:\Profiles\u");
     let repo = Path::new(r"C:\w\repo");
     let protected = [PathBuf::from(r"D:\keep\data")];
-    let r = |p: &str| critical_reason(Path::new(p), Some(repo), Some(home), &protected);
+    let r = |p: &str| critical_reason(Path::new(p), Some(repo), Some(home), &protected, Os::host());
     let cases: &[(&str, Option<&str>)] = &[
         (r"C:\", Some("drive root")),
         ("d:/", Some("drive root")),
@@ -6471,7 +6480,10 @@ fn critical_reason_names_each_protected_folder_on_windows() {
     for (p, want) in cases {
         assert_eq!(r(p), *want, "{p}");
     }
-    assert_eq!(critical_reason(Path::new(r"C:\w"), None, None, &[]), None);
+    assert_eq!(
+        critical_reason(Path::new(r"C:\w"), None, None, &[], Os::host()),
+        None
+    );
 }
 
 #[cfg(not(windows))]
@@ -6480,7 +6492,7 @@ fn critical_reason_names_each_protected_folder_on_posix() {
     let home = Path::new("/hm/u");
     let repo = Path::new("/w/repo");
     let protected = [PathBuf::from("/keep/data")];
-    let r = |p: &str| critical_reason(Path::new(p), Some(repo), Some(home), &protected);
+    let r = |p: &str| critical_reason(Path::new(p), Some(repo), Some(home), &protected, Os::host());
     let cases: &[(&str, Option<&str>)] = &[
         ("/", Some("file-system root")),
         ("//", Some("file-system root")),
@@ -6510,8 +6522,11 @@ fn critical_match_by_identity_sees_through_junctions() {
     let repo = j.path.join("repo");
     let real_repo = t.root.join("real").join("repo");
     // The spelling pass alone misses both.
-    assert_eq!(critical_reason(&real_repo, Some(&repo), None, &[]), None);
-    let r = |p: &Path| critical_by_identity(p, Some(&repo), None, &[], &real(), &far());
+    assert_eq!(
+        critical_reason(&real_repo, Some(&repo), None, &[], Os::host()),
+        None
+    );
+    let r = |p: &Path| critical_by_identity(p, Some(&repo), None, &[], &real(), &far(), Os::host());
     assert_eq!(r(&real_repo), Ok(Some("repo root")));
     assert_eq!(
         r(&t.root.join("real")),
@@ -6548,6 +6563,7 @@ fn critical_match_by_identity_sees_through_drive_mappings_and_short_names() {
             &[],
             &fs,
             &far(),
+            Os::host(),
         )
     };
     assert_eq!(r("mapped/repo"), Ok(Some("repo root")));
@@ -6563,6 +6579,7 @@ fn critical_match_by_identity_sees_through_drive_mappings_and_short_names() {
         &[],
         &hang,
         &Deadline::new(start, 100),
+        Os::host(),
     );
     assert!(got.is_err());
     assert!(start.elapsed() < Duration::from_millis(150));
@@ -7137,6 +7154,7 @@ fn a_script_alias_is_read_as_the_command_it_names() {
                 Stmt::Loop {
                     body: script(vec![st(lits("mk", &["/c/w/repo/t/j"]))]),
                     span: Span::default(),
+                    head: LoopHead::Items,
                 },
             ],
             rmrf("/c/w/repo/t/j/x"),

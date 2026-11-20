@@ -98,6 +98,12 @@ write("old_dump_os.tsv", ["id\tlevel\trules\traw_hit",
                           "f000000000b2\twarn\tbash-msys-path-mangle\tno",
                           "f000000000b5\tok\t-\tno",
                           "f000000000b6\tok\t-\tno"])
+# E1: a Linux row's system folders are the Linux ones, on any host the bench runs on.
+# The bench needs a row of each tool.
+HOST_ROWS = [("f000000000c1", "Bash", "/fixture/proj", "rm -rf /usr fixture-dir"),
+             ("f000000000c2", "PowerShell", WIN_CWD, "Get-Date -Format fixture")]
+write("corpus_host_os.jsonl", jl([os_row(r) for r in HOST_ROWS] + [ROW4]))
+write("baseline_host_os.jsonl", jl({"id": r[0], "full": [], "installed": []} for r in HOST_ROWS))
 # Well-formed files that join to no corpus row: each must fail, not report a measured 0.
 write("real_parse_unjoined.tsv", ["id\trefused\terror_id", "f000000000ff\tyes\tfixture"])
 write("old_dump_unjoined.tsv", ["id\tlevel\trules\traw_hit", "f000000000ff\tok\t-\tno"])

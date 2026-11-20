@@ -25,6 +25,25 @@ pub const PS_ALIAS_SHADOW: &str = "ps-alias-shadow";
 /// The fix line when a table row has no `fix`.
 const FALLBACK_FIX: &str = "run it with its input given up front, or bound its wait";
 
+/// In a row's `fix`, the command's own text.
+const COMMAND: &str = "<command>";
+
+/// The text of `c` as written: from its name to its last word or redirect target (the Bash
+/// lowering gives a command with a redirect the span of its name alone).
+fn command_text(src: &str, c: &SimpleCommand) -> String {
+    let targets = c.redirects.iter().filter_map(|r| match r {
+        Redirect::File { target, .. } => Some(target.span),
+        Redirect::Heredoc { .. } => None,
+    });
+    let spans = std::iter::once(c.span)
+        .chain(std::iter::once(c.name.span))
+        .chain(c.args.iter().map(|w| w.span))
+        .chain(targets)
+        .filter(|s| s.end > s.start);
+    let (start, end) = spans.fold((usize::MAX, 0), |(a, b), s| (a.min(s.start), b.max(s.end)));
+    src.get(start..end).unwrap_or(&c.typed).trim().to_string()
+}
+
 /// The `extra` keys of a program row this rule reads.
 const WHEN: &str = "hang_when";
 const UNLESS: &str = "hang_unless";
@@ -207,7 +226,7 @@ impl Walker<'_, '_> {
                 "`{}` can wait without end here: the tool has no terminal and its stdin never ends, so a prompt or a read of stdin is never answered and nothing bounds the wait",
                 inner.typed
             ),
-            fix: Some(spec.fix.to_string()),
+            fix: Some(spec.fix.replace(COMMAND, &command_text(ctx.input.command, c))),
             span: c.span,
         });
     }

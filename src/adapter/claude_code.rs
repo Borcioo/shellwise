@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::fs::resolve::env_view;
 use crate::ir::EnvView;
 use crate::level::{Finding, Level, Verdict};
-use crate::{BashProfile, Deadline, Os, Shell, incomplete_within};
+use crate::{BashProfile, Deadline, Os, Shell, malformed_within};
 
 /// The host refuses or files away hook output past 10,000 characters (CR bytes included). The
 /// reply stays below this many bytes, which is never fewer than its characters.
@@ -138,12 +138,12 @@ struct ToolInput {
 }
 
 /// The reply to an event that could not be read: a deny when its raw text holds a destructive
-/// command (or the raw scan does not finish), otherwise no output, because nothing shows a
-/// command would run. The raw text is read through `scan_text` first, and scanned under
-/// `deadline` (`incomplete_within`).
+/// command or the raw scan gives no answer (a timeout, a panic, a worker that did not start), at
+/// `danger`; otherwise no output, because nothing shows a command would run. The raw text is read
+/// through `scan_text` first, and scanned under `deadline` (`malformed_within`).
 pub fn malformed(bytes: &[u8], reason: &str, deadline: &Deadline) -> Option<String> {
     let raw = scan_text(&String::from_utf8_lossy(bytes));
-    let verdict = incomplete_within(&raw, reason, deadline);
+    let verdict = malformed_within(&raw, reason, deadline);
     if verdict.level >= Level::Danger {
         Some(render(Some(DENY), &verdict))
     } else {
