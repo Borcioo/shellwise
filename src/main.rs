@@ -24,6 +24,7 @@ use shellwise::{
 };
 
 mod bench;
+mod shellcheck;
 
 /// Exit code for usage errors.
 const EXIT_USAGE: i32 = 64;
@@ -56,6 +57,17 @@ enum Cmd {
     Hook(HookCmd),
     /// Replay the corpus through the analysis and report the meters; exit 1 when it cannot measure.
     Bench(bench::BenchArgs),
+    /// Lint a .ps1, .sh or .bash file; exit 0 clean or warn, 1 break or worse, 64 refused, 74 unreadable.
+    Lint(LintArgs),
+}
+
+#[derive(clap::Args)]
+struct LintArgs {
+    /// The script file.
+    file: PathBuf,
+    /// An integration config file; the user file overrides it, the repo file only raises.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -126,6 +138,56 @@ fn run(start: Instant) -> i32 {
         Cmd::Check(args) => run_check(start, args),
         Cmd::Hook(HookCmd::ClaudeCode(args)) => run_hook(start, args),
         Cmd::Bench(args) => bench::run(args),
+        Cmd::Lint(args) => run_lint(start, args),
+    }
+}
+
+/// `lint <file>`: the shellwise rules for a file (`lint_file`), and ShellCheck's for a Bash one.
+/// The config loads from the current directory; one that does not load refuses the run.
+fn run_lint(start: Instant, args: LintArgs) -> i32 {
+    let cfg = match load_config(start, args.config, None) {
+        Ok((cfg, findings)) => {
+            for f in findings {
+                eprintln!(
+                    "shellwise: config: {} {}: {}",
+                    f.level.as_str(),
+                    f.rule,
+                    f.message
+                );
+            }
+            cfg
+        }
+        Err(reason) => {
+            eprintln!("shellwise: the config did not load ({reason}); nothing was linted");
+            return EXIT_IO;
+        }
+    };
+    let deadline = shellwise::lint_file::deadline(start, &cfg);
+    let file = &args.file;
+    let external = |text: &str, shell: Shell| match shellcheck::findings(text, shell, &deadline) {
+        Some(found) => found,
+        None => {
+            if matches!(shell, Shell::Bash(_)) {
+                eprintln!(
+                    "{}: ShellCheck skipped: the file is over {} bytes",
+                    file.display(),
+                    shellcheck::MAX_BYTES
+                );
+            }
+            Vec::new()
+        }
+    };
+    match shellwise::lint_file::lint_with(file, &cfg, &deadline, &external) {
+        Ok(report) => {
+            let mut stdout = io::stdout().lock();
+            let _ = stdout.write_all(report.render(file).as_bytes());
+            let _ = stdout.flush();
+            report.exit_code()
+        }
+        Err(refusal) => {
+            eprintln!("{}", refusal.render(file));
+            refusal.exit_code()
+        }
     }
 }
 

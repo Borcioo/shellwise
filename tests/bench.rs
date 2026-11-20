@@ -151,6 +151,7 @@ fn the_meter_lines_have_their_known_answers() {
         "refused by the real parser: 1 (Bash 0, PowerShell 1)",
         "parity: 1 (Bash 1, PowerShell 0)",
         "own line: 0 (Bash 0, PowerShell 0)",
+        "inline-script-too-long thresholds: PowerShell over 80 lines or 6000 characters, Bash over 100 lines or 8000 characters",
         "meter 2: 1 (Bash 1, PowerShell 0)",
         "parse_kind_false_deny: 1",
     ] {

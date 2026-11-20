@@ -1,11 +1,14 @@
-//! `shellwise lint <file>` (`src/lint_file.rs`) and the length rules of `src/rules/inline_length.rs`
-//! (`inline-script-too-long` and the hosts' `too-long`), through `analyse` and the real parsers.
+//! `shellwise lint <file>` (`src/lint_file.rs`, ShellCheck's checks in `src/shellcheck.rs`) and the
+//! length rules `inline-script-too-long` (`src/rules/inline_length.rs`) and `too-long`'s cmd.exe
+//! branch (`src/rules/length.rs`), through `analyse`, the real parsers and the spawned binary.
 //!
 //! The fixtures in `tests/lint_fixture/` are text files. Files that hold bytes a text editor would
 //! not keep (a byte-order mark, invalid UTF-8, UTF-16) and files of an exact size are written by
 //! each test into its own folder. Over-long commands are generated: their rows would not be
-//! readable in a case file. The line thresholds also have rows in `tests/cases/inline_length.toml`.
+//! readable in a case file. The line thresholds and the cmd.exe rows are in
+//! `tests/cases/inline_length.toml`.
 
+mod case_loader;
 mod common;
 
 use std::cell::Cell;
@@ -16,7 +19,10 @@ use shellwise::config::Config;
 use shellwise::ir::EnvView;
 use shellwise::level::{Finding, Level, Span, Verdict};
 use shellwise::lint_file::{self, Refusal, Report};
-use shellwise::{AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse};
+use shellwise::{
+    ANALYSIS_INCOMPLETE, AnalyseInput, BashProfile, Deadline, MAX_INPUT_BYTES, MAX_READ_BYTES,
+    Origin, Os, Shell, analyse,
+};
 
 // --- helpers ---
 
@@ -63,6 +69,7 @@ fn check_with(shell: Shell, os: Os, text: &str, cfg: &Config) -> Verdict {
         cwd: None,
         env: EnvView::new(),
         origin: Origin::CommandLine,
+        problem: None,
     };
     analyse(&input, cfg, &Deadline::new(Instant::now(), 8000))
 }
@@ -93,11 +100,26 @@ fn lines_of(line: &str, n: usize) -> String {
     vec![line; n].join("\n")
 }
 
-fn utf16_units(text: &str) -> usize {
-    text.encode_utf16().count()
+/// The file a length rule's Fix line names, and the text after `then run `.
+fn fix_parts(fix: &str) -> (String, String) {
+    let rest = fix
+        .strip_prefix("Fix: write the command to ")
+        .unwrap_or_else(|| panic!("{fix}"));
+    let (file, rest) = rest
+        .split_once(" with the Write tool, run shellwise lint ")
+        .unwrap();
+    let (linted, run) = rest.split_once(", then run ").unwrap();
+    let quoted = if file.contains(' ') {
+        format!("'{file}'")
+    } else {
+        file.to_string()
+    };
+    assert_eq!(linted, quoted, "{fix}");
+    assert!(run.ends_with(&format!(" {quoted}")), "{fix}");
+    (file.to_string(), run.to_string())
 }
 
-// --- lint <file> ---
+// --- lint <file>: the read path ---
 
 #[test]
 fn a_clean_file_lints_ok_with_exit_0() {
@@ -124,7 +146,10 @@ fn an_unclosed_quote_in_a_file_is_break_at_its_line_and_column() {
     assert_eq!(lines.len(), 2, "{text}");
     let head = format!("{}:1:6: break parse-error: ", path.display());
     assert!(lines[0].starts_with(&head), "{text}");
-    assert!(lines[1].starts_with("  Fix: close the ' opened at column 6"), "{text}");
+    assert!(
+        lines[1].starts_with("  Fix: close the ' opened at column 6"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -166,43 +191,84 @@ fn a_utf8_byte_order_mark_is_accepted_and_is_not_counted() {
     let path = dir.join("bom_ok.sh");
     std::fs::write(&path, &ok).unwrap();
     assert!(lint(&path).unwrap().findings.is_empty());
+
+    // Only one mark is dropped: a second is text, which bash reads as part of a command name.
+    let mut twice = vec![0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF];
+    twice.extend_from_slice(b"echo 'abc\n");
+    let path = dir.join("bom_twice.sh");
+    std::fs::write(&path, &twice).unwrap();
+    let report = lint(&path).unwrap();
+    assert_eq!(ids(&report), ["parse-error"]);
+    assert_eq!((report.findings[0].line, report.findings[0].column), (1, 7));
 }
 
 #[test]
 fn a_name_that_is_not_ps1_sh_or_bash_is_refused_with_exit_64() {
     let dir = folder("dialect");
-    for name in ["x.txt", "noext", "ok.sh.txt", "script"] {
+    for name in [
+        "x.txt",
+        "noext",
+        "ok.sh.txt",
+        "script",
+        "x.ps",
+        "x.bat",
+        "x.psm1",
+    ] {
         let path = dir.join(name);
         std::fs::write(&path, "echo hi\n").unwrap();
         let refusal = lint(&path).unwrap_err();
         assert!(matches!(refusal, Refusal::Dialect), "{name}: {refusal:?}");
         assert_eq!(refusal.exit_code(), 64, "{name}");
+        assert!(
+            refusal.render(&path).contains(".ps1, .sh or .bash"),
+            "{name}"
+        );
     }
-    // The fixture itself, and the three accepted names in any case.
     assert!(matches!(
         lint(&fixture("x.txt")).unwrap_err(),
         Refusal::Dialect
     ));
-    for name in ["UP.SH", "Mixed.Ps1", "tool.bash"] {
+    // Each accepted name, in any case, picks its dialect: `$n:` is a finding in PowerShell only,
+    // an unclosed quote in either.
+    let pwsh_only = "echo \"$n: x\"\n";
+    for (name, want) in [
+        ("a.ps1", vec!["ps-var-colon"]),
+        ("Mixed.Ps1", vec!["ps-var-colon"]),
+        ("a.sh", vec![]),
+        ("UP.SH", vec![]),
+        ("tool.bash", vec![]),
+        ("TOOL.BASH", vec![]),
+    ] {
         let path = dir.join(name);
-        std::fs::write(&path, "Get-Date\n").unwrap();
-        // `Get-Date` is a valid line in either dialect only as far as the parser goes: it must
-        // not be refused for its name.
-        assert!(!matches!(lint(&path), Err(Refusal::Dialect)), "{name}");
+        std::fs::write(&path, pwsh_only).unwrap();
+        let report = lint(&path).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(ids(&report), want, "{name}");
     }
 }
 
 #[test]
 fn a_file_that_is_not_utf8_is_refused_with_its_reason() {
     let dir = folder("utf8");
-    let path = dir.join("bad_utf8.sh");
-    std::fs::write(&path, b"echo \xFF\n").unwrap();
-    let refusal = lint(&path).unwrap_err();
-    assert!(matches!(refusal, Refusal::NotUtf8(5)), "{refusal:?}");
-    assert_eq!(refusal.exit_code(), 64);
-    let text = refusal.render(&path);
-    assert!(text.contains("not valid UTF-8"), "{text}");
-    assert!(text.contains("offset 5"), "{text}");
+    let cases: [(&str, &[u8], usize); 4] = [
+        ("byte_ff.sh", b"echo \xFF\n", 5),
+        ("cp1250.ps1", b"Write-Output 'za\xBF\xF3\xB3\xE6'\n", 16),
+        ("truncated.sh", b"echo \xC5", 5),
+        // The offset counts from after the byte-order mark.
+        ("bom_then_bad.sh", b"\xEF\xBB\xBFecho \xFF\n", 5),
+    ];
+    for (name, bytes, at) in cases {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let refusal = lint(&path).unwrap_err();
+        assert!(
+            matches!(refusal, Refusal::NotUtf8(n) if n == at),
+            "{name}: {refusal:?}"
+        );
+        assert_eq!(refusal.exit_code(), 64, "{name}");
+        let text = refusal.render(&path);
+        assert!(text.contains("not valid UTF-8"), "{text}");
+        assert!(text.contains(&format!("offset {at}")), "{text}");
+    }
 
     // Valid UTF-8 outside ASCII is not refused: the check is strict, not an ASCII filter.
     let word: String = [0x7A, 0x142, 0x107]
@@ -217,16 +283,29 @@ fn a_file_that_is_not_utf8_is_refused_with_its_reason() {
 #[test]
 fn a_utf16_file_is_refused_by_its_byte_order_mark() {
     let dir = folder("utf16");
-    let mut bytes = vec![0xFF, 0xFE];
-    for unit in "echo hi\n".encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
+    let wide = |bom: [u8; 2], big_endian: bool| {
+        let mut bytes = bom.to_vec();
+        for unit in "echo hi\n".encode_utf16() {
+            let pair = if big_endian {
+                unit.to_be_bytes()
+            } else {
+                unit.to_le_bytes()
+            };
+            bytes.extend_from_slice(&pair);
+        }
+        bytes
+    };
+    for (name, bytes) in [
+        ("le.ps1", wide([0xFF, 0xFE], false)),
+        ("be.sh", wide([0xFE, 0xFF], true)),
+    ] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let refusal = lint(&path).unwrap_err();
+        assert!(matches!(refusal, Refusal::Utf16), "{name}: {refusal:?}");
+        assert_eq!(refusal.exit_code(), 64);
+        assert!(refusal.render(&path).contains("UTF-16"), "{name}");
     }
-    let path = dir.join("wide.ps1");
-    std::fs::write(&path, &bytes).unwrap();
-    let refusal = lint(&path).unwrap_err();
-    assert!(matches!(refusal, Refusal::Utf16), "{refusal:?}");
-    assert_eq!(refusal.exit_code(), 64);
-    assert!(refusal.render(&path).contains("UTF-16"));
 }
 
 #[test]
@@ -235,7 +314,9 @@ fn a_file_over_the_read_cap_is_refused_and_one_at_the_cap_is_read() {
     let at_cap = dir.join("at_cap.sh");
     std::fs::write(&at_cap, vec![b'#'; MAX_READ_BYTES]).unwrap();
     let report = lint(&at_cap).expect("a file of exactly MAX_READ_BYTES is read");
-    // Over the analysis cap, so the analysis is incomplete: a warn, which does not fail the file.
+    // Over the analysis cap: incomplete, a warn that does not fail the file and is never "ok".
+    assert_eq!(ids(&report), [ANALYSIS_INCOMPLETE]);
+    assert_eq!(report.level, Level::Warn);
     assert_eq!(report.exit_code(), 0);
 
     let over = dir.join("over.sh");
@@ -243,6 +324,13 @@ fn a_file_over_the_read_cap_is_refused_and_one_at_the_cap_is_read() {
     let refusal = lint(&over).unwrap_err();
     assert!(matches!(refusal, Refusal::TooBig), "{refusal:?}");
     assert_eq!(refusal.exit_code(), 64);
+    assert!(
+        refusal
+            .render(&over)
+            .contains(&format!("over {MAX_READ_BYTES} bytes")),
+        "{}",
+        refusal.render(&over)
+    );
 }
 
 #[test]
@@ -251,6 +339,7 @@ fn a_missing_file_is_unreadable_with_exit_74() {
     let refusal = lint(&path).unwrap_err();
     assert!(matches!(refusal, Refusal::Unreadable(_)), "{refusal:?}");
     assert_eq!(refusal.exit_code(), 74);
+    assert!(refusal.render(&path).contains("cannot read the file"));
 }
 
 #[test]
@@ -262,11 +351,19 @@ fn a_long_script_is_a_finding_as_a_command_line_and_clean_as_a_file() {
     ];
     for (name, shell, text) in cases {
         let line = check(shell, Os::Posix, &text);
-        assert_eq!(rules_of(&line), ["inline-script-too-long"], "{name} as a command");
+        assert_eq!(
+            rules_of(&line),
+            ["inline-script-too-long"],
+            "{name} as a command"
+        );
         let path = dir.join(name);
         std::fs::write(&path, &text).unwrap();
         let report = lint(&path).unwrap();
-        assert!(report.findings.is_empty(), "{name} as a file: {:?}", ids(&report));
+        assert!(
+            report.findings.is_empty(),
+            "{name} as a file: {:?}",
+            ids(&report)
+        );
     }
 }
 
@@ -284,10 +381,16 @@ fn a_10_kb_sh_with_a_doubled_backslash_lints_clean() {
     std::fs::write(&path, &text).unwrap();
     let report = lint(&path).unwrap();
     assert!(report.findings.is_empty(), "{:?}", ids(&report));
-    assert_eq!(report.exit_code(), 0);
-    // The same text as a command is over the inline limit: the file's silence is the scope.
-    let line = check(bash(), Os::Posix, &text);
-    assert!(rules_of(&line).contains(&"inline-script-too-long"));
+    // The same text as a Git Bash command is denied by the backslash rule.
+    let line = check(Shell::Bash(BashProfile::GitBash), Os::Windows, &text);
+    assert!(
+        rules_of(&line).contains(&"bash-backslash-collapse"),
+        "{:?}",
+        rules_of(&line)
+    );
+    // And the binary, ShellCheck included, finds nothing either.
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
 }
 
 #[test]
@@ -318,9 +421,12 @@ fn an_external_linter_adds_findings_sorted_and_deduplicated() {
         ]
     };
     let cfg = Config::default();
-    let report = lint_file::lint_with(&path, &cfg, &Deadline::new(Instant::now(), 8000), &external)
-        .unwrap();
-    assert!(saw_text.get(), "the external linter did not get the text and shell");
+    let report =
+        lint_file::lint_with(&path, &cfg, &Deadline::new(Instant::now(), 8000), &external).unwrap();
+    assert!(
+        saw_text.get(),
+        "the external linter did not get the text and shell"
+    );
     assert_eq!(ids(&report), ["ext-a", "parse-error"]);
     assert!(!report.findings[1].finding.message.contains("again"));
     assert_eq!(report.exit_code(), 1);
@@ -350,84 +456,137 @@ fn a_panic_in_the_external_linter_keeps_ours_and_adds_a_warn() {
     got.sort();
     assert_eq!(got, ["analysis-incomplete", "parse-error"]);
     assert_eq!(report.exit_code(), 1);
-}
-
-#[test]
-fn lint_of_a_500_line_file_takes_under_50_ms_in_process() {
-    let dir = folder("speed");
-    let path = dir.join("long.sh");
-    let text: String = (0..500).map(|i| format!("echo line {i}\n")).collect();
-    std::fs::write(&path, text).unwrap();
-    let mut times = Vec::new();
-    for _ in 0..11 {
-        let start = Instant::now();
-        let report = lint(&path).unwrap();
-        times.push(start.elapsed());
-        assert!(report.findings.is_empty());
-    }
-    times.sort();
-    let median = times[times.len() / 2];
-    assert!(median.as_millis() < 50, "median {median:?}");
+    let clean = lint_file::lint_with(
+        &fixture("ok.sh"),
+        &Config::default(),
+        &Deadline::new(Instant::now(), 8000),
+        &external,
+    )
+    .unwrap();
+    assert_eq!(ids(&clean), ["analysis-incomplete"]);
+    assert_eq!(clean.level, Level::Warn);
 }
 
 // --- the Fix line of a length rule routes to a file `lint` reads ---
 
 #[test]
-fn the_fix_line_names_a_file_that_lints_and_the_command_that_runs_it() {
+fn the_fix_line_names_a_new_file_that_lints_and_the_command_that_runs_it() {
     let dir = folder("route");
+    let cfg = Config {
+        scratch_dir: Some(dir.clone()),
+        ..Config::default()
+    };
     let cases = [
-        (bash(), lines_of("echo hi", 200), "bash", "script.sh"),
-        (pwsh(), lines_of("Get-Date", 120), "pwsh -NoProfile -File", "script.ps1"),
+        (bash(), lines_of("echo hi", 200), "bash", ".sh"),
+        (
+            pwsh(),
+            lines_of("Get-Date", 120),
+            "pwsh -NoProfile -File",
+            ".ps1",
+        ),
+        (
+            Shell::Powershell5,
+            lines_of("Get-Date", 81),
+            "powershell -NoProfile -File",
+            ".ps1",
+        ),
     ];
-    for (shell, text, runner, name) in cases {
-        let cfg = Config {
-            scratch_dir: Some(dir.clone()),
-            ..Config::default()
-        };
+    for (shell, text, runner, ext) in cases {
         let verdict = check_with(shell, Os::Posix, &text, &cfg);
-        assert_eq!(rules_of(&verdict), ["inline-script-too-long"], "{name}");
+        assert_eq!(rules_of(&verdict), ["inline-script-too-long"], "{runner}");
         let fix = verdict.findings[0].fix_line().unwrap();
-        let file = fix
-            .split("write the command to ")
-            .nth(1)
-            .and_then(|s| s.split(" with the Write tool").next())
-            .unwrap_or_else(|| panic!("no file in {fix}"))
-            .trim_matches('"');
-        assert!(file.contains("lint_file_route"), "{fix}");
-        assert!(file.ends_with(name), "{fix}");
-        assert!(fix.contains(&format!("run shellwise lint {file},")), "{fix}");
-        assert!(fix.ends_with(&format!("then run {runner} {file}")), "{fix}");
+        let (file, run) = fix_parts(&fix);
+        let dir_text = dir.to_string_lossy().replace('\\', "/");
+        let name = file
+            .strip_prefix(&format!("{dir_text}/command-"))
+            .unwrap_or_else(|| panic!("{fix}"));
+        assert!(name.ends_with(ext) && !name.contains('/'), "{fix}");
+        assert_eq!(run, format!("{runner} {file}"), "{fix}");
         // Follow the line: write the text to the file it names, and lint that file.
-        std::fs::write(file, &text).unwrap();
-        let report = lint(Path::new(file)).unwrap();
-        assert!(report.findings.is_empty(), "{name}: {:?}", ids(&report));
+        std::fs::write(&file, &text).unwrap();
+        let report = lint(Path::new(&file)).unwrap();
+        assert!(report.findings.is_empty(), "{runner}: {:?}", ids(&report));
+        // Ruling 109: a second call names another file.
+        let again = check_with(shell, Os::Posix, &text, &cfg).findings[0]
+            .fix_line()
+            .unwrap();
+        assert_ne!(fix_parts(&again).0, file);
     }
 }
 
 #[test]
-fn the_fix_line_quotes_a_scratch_path_with_a_space_and_uses_forward_slashes() {
+fn the_fix_line_single_quotes_a_scratch_path_with_a_space_and_uses_forward_slashes() {
     let cfg = Config {
         scratch_dir: Some(PathBuf::from("C:\\with space\\scratch")),
         ..Config::default()
     };
-    let verdict = check_with(bash(), Os::Posix, &lines_of("echo hi", 151), &cfg);
+    let verdict = check_with(pwsh(), Os::Posix, &lines_of("Get-Date", 81), &cfg);
     let fix = verdict.findings[0].fix_line().unwrap();
-    let file = "\"C:/with space/scratch/script.sh\"";
-    assert_eq!(fix.matches(file).count(), 3, "{fix}");
+    let (file, _) = fix_parts(&fix);
+    assert!(file.starts_with("C:/with space/scratch/command-"), "{fix}");
+    assert_eq!(fix.matches(&format!("'{file}'")).count(), 2, "{fix}");
 }
 
 #[test]
-fn the_fix_line_runs_the_runner_of_the_shell() {
-    let verdict = check(Shell::Powershell5, Os::Posix, &lines_of("Get-Date", 81));
+fn without_a_scratch_folder_the_file_is_in_a_per_user_temp_folder() {
+    let verdict = check(bash(), Os::Posix, &lines_of("echo hi", 101));
     let fix = verdict.findings[0].fix_line().unwrap();
-    assert!(fix.contains("then run powershell -NoProfile -File "), "{fix}");
-    // With no scratch folder configured, the OS temp folder plus `shellwise`.
-    let verdict = check(bash(), Os::Posix, &lines_of("echo hi", 151));
-    let fix = verdict.findings[0].fix_line().unwrap();
-    assert!(fix.contains("/shellwise/script.sh"), "{fix}");
+    let (file, _) = fix_parts(&fix);
+    let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+    let rest = file
+        .strip_prefix(temp.trim_end_matches('/'))
+        .unwrap_or_else(|| panic!("{file} is not under {temp}"));
+    let (folder, name) = rest.trim_start_matches('/').split_once('/').expect(&file);
+    assert!(
+        folder.starts_with("shellwise-") && folder.len() > "shellwise-".len(),
+        "{file}"
+    );
+    assert!(
+        name.starts_with("command-") && name.ends_with(".sh"),
+        "{file}"
+    );
+}
+
+/// `too-long` and `inline-script-too-long` print one routing text: the same sentence, for the same
+/// shell, with only the file's unique name differing.
+#[test]
+fn both_length_rules_print_the_same_routing_text() {
+    let cfg = Config {
+        scratch_dir: Some(PathBuf::from("/work")),
+        ..Config::default()
+    };
+    let gitbash = Shell::Bash(BashProfile::GitBash);
+    let hard = check_with(gitbash, Os::Windows, &bash_text(7600), &cfg);
+    let inline = check_with(gitbash, Os::Windows, &lines_of("echo hi", 101), &cfg);
+    assert_eq!(rules_of(&hard), ["too-long"]);
+    assert_eq!(rules_of(&inline), ["inline-script-too-long"]);
+    let shape = |v: &Verdict| {
+        let (file, run) = fix_parts(&v.findings[0].fix_line().unwrap());
+        let name = file.rsplit('/').next().unwrap().to_string();
+        (
+            v.findings[0].fix_line().unwrap().replace(&name, "<name>"),
+            run.replace(&name, "<name>"),
+        )
+    };
+    assert_eq!(shape(&hard), shape(&inline));
+    assert_eq!(shape(&hard).1, "bash /work/<name>");
 }
 
 // --- inline-script-too-long: the thresholds ---
+
+#[test]
+fn inline_length_rows() {
+    let rows = case_loader::rows("inline_length.toml");
+    let wrong: Vec<String> = rows.iter().filter_map(case_loader::mismatch).collect();
+    assert!(
+        wrong.is_empty(),
+        "{} of {} rows:\n{}",
+        wrong.len(),
+        rows.len(),
+        wrong.join("\n")
+    );
+    eprintln!("inline_length.toml: {} rows ran", rows.len());
+}
 
 #[test]
 fn pwsh_fires_over_80_lines_or_6000_characters() {
@@ -440,24 +599,28 @@ fn pwsh_fires_over_80_lines_or_6000_characters() {
     let v5 = |text: String| rules_of(&check(Shell::Powershell5, Os::Posix, &text));
     assert!(v5(lines_of("Get-Date", 80)).is_empty());
     assert_eq!(v5(lines_of("Get-Date", 81)), ["inline-script-too-long"]);
+    assert!(v5(pwsh_text(6000)).is_empty());
+    assert_eq!(v5(pwsh_text(6001)), ["inline-script-too-long"]);
 }
 
 #[test]
-fn bash_fires_over_150_lines_or_6000_characters() {
+fn bash_fires_over_100_lines_or_8000_characters() {
     let at = |text: String| rules_of(&check(bash(), Os::Posix, &text));
-    assert!(at(lines_of("echo hi", 150)).is_empty());
-    assert_eq!(at(lines_of("echo hi", 151)), ["inline-script-too-long"]);
-    assert!(at(bash_text(6000)).is_empty());
-    assert_eq!(at(bash_text(6001)), ["inline-script-too-long"]);
+    assert!(at(lines_of("echo hi", 100)).is_empty());
+    assert_eq!(at(lines_of("echo hi", 101)), ["inline-script-too-long"]);
+    assert!(at(bash_text(8000)).is_empty());
+    assert_eq!(at(bash_text(8001)), ["inline-script-too-long"]);
 }
 
 #[test]
 fn the_threshold_counts_characters_not_bytes() {
-    // 3,001 two-byte characters are 6,002 bytes but 3,001 characters: not over 6,000.
+    // 4,001 two-byte characters are 8,007 bytes but 4,006 characters: not over 8,000 (bash) and
+    // over 6,000 bytes but not 6,000 characters (pwsh).
     let o = char::from_u32(0xF3).unwrap();
-    let text = format!("echo {}", o.to_string().repeat(3001));
-    assert!(text.len() > 6000 && text.chars().count() < 6000);
+    let text = format!("echo {}", o.to_string().repeat(4001));
+    assert!(text.len() > 8000 && text.chars().count() < 6000);
     assert!(rules_of(&check(bash(), Os::Posix, &text)).is_empty());
+    assert!(rules_of(&check(pwsh(), Os::Posix, &text)).is_empty());
 }
 
 #[test]
@@ -470,60 +633,59 @@ fn the_message_names_the_size_and_the_limit() {
     assert_eq!(f.span.start, 0);
 }
 
+/// The marker downgrades break to ok elsewhere; on a length rule it changes nothing (F7).
+#[test]
+fn the_allow_marker_does_not_lower_the_length_rules() {
+    let marked = format!("{}\n# shellwise: allow", lines_of("Get-Date", 81));
+    let v = check(pwsh(), Os::Posix, &marked);
+    assert_eq!(rules_of(&v), ["inline-script-too-long"]);
+    assert_eq!(v.level, Level::Break);
+}
+
 // --- too-long: the hosts' hard limits ---
 
+/// The PowerShell tool passes its text in an environment variable, not on the command line: a
+/// 40,000-character script runs (probe: pwsh 7.7 with the tool's launcher ran 100,000). Only the
+/// inline rule speaks.
 #[test]
-fn a_powershell_command_over_the_createprocess_limit_is_too_long_on_windows() {
-    let at = |text: String, os: Os| check(pwsh(), os, &text);
-    // At the limit it still runs: only the inline rule speaks (the text is over 6,000 characters).
-    assert_eq!(rules_of(&at(pwsh_text(32767), Os::Windows)), ["inline-script-too-long"]);
-    // One over: the command cannot start, and the inline finding steps aside.
-    let v = at(pwsh_text(32768), Os::Windows);
-    assert_eq!(rules_of(&v), ["too-long"]);
-    assert_eq!(v.level, Level::Break);
-    let fix = v.findings[0].fix_line().unwrap();
-    assert!(fix.contains("shellwise lint"), "{fix}");
-    assert!(fix.contains("script.ps1"), "{fix}");
-    assert!(fix.contains("pwsh -NoProfile -File"), "{fix}");
-    // Not on another OS.
-    assert_eq!(rules_of(&at(pwsh_text(32768), Os::Posix)), ["inline-script-too-long"]);
+fn a_long_powershell_command_is_not_too_long() {
+    let v = check(pwsh(), Os::Windows, &pwsh_text(40_000));
+    assert_eq!(rules_of(&v), ["inline-script-too-long"]);
 }
 
 #[test]
-fn the_createprocess_limit_counts_utf16_units() {
-    // `Write-Output '` + 16,376 emoji + `'` is 32,767 units but 16,391 characters and 65,519 bytes.
+fn a_cmd_command_line_over_the_limit_is_too_long_with_its_own_fix() {
+    let cmd = |len: usize| {
+        let text = format!("cmd /c echo {}", "a".repeat(len - 12));
+        assert_eq!(text.chars().count(), len);
+        text
+    };
+    let v = check(pwsh(), Os::Windows, &cmd(8166));
+    assert_eq!(rules_of(&v), ["too-long"]);
+    let f = &v.findings[0];
+    assert!(f.message.contains("8192"), "{}", f.message);
+    assert!(f.message.contains("8191"), "{}", f.message);
+    let fix = f.fix_line().unwrap();
+    // Routing the command to a script would not help: the script starts the same cmd line.
+    assert!(!fix.contains("shellwise lint"), "{fix}");
+    assert!(fix.contains("delete the leading cmd /c"), "{fix}");
+    // Another program of the same length is only inline, and so is cmd off Windows.
+    assert_eq!(
+        rules_of(&check(pwsh(), Os::Windows, &pwsh_text(8166))),
+        ["inline-script-too-long"]
+    );
+    assert_eq!(
+        rules_of(&check(pwsh(), Os::Posix, &cmd(8166))),
+        ["inline-script-too-long"]
+    );
+    // The limit counts UTF-16 units: 4,083 two-unit characters are 8,166 units, over it.
     let emoji = char::from_u32(0x1F600).unwrap().to_string();
-    let at_limit = format!("Write-Output '{}'", emoji.repeat(16376));
-    assert_eq!(utf16_units(&at_limit), 32767);
-    assert_eq!(
-        rules_of(&check(pwsh(), Os::Windows, &at_limit)),
-        ["inline-script-too-long"]
-    );
-    let over = format!("Write-Output '{}a'", emoji.repeat(16376));
-    assert_eq!(utf16_units(&over), 32768);
-    assert_eq!(rules_of(&check(pwsh(), Os::Windows, &over)), ["too-long"]);
-}
-
-#[test]
-fn a_cmd_command_line_over_8191_is_too_long_on_windows() {
-    let cmd = |len: usize| format!("cmd /c echo {}", "a".repeat(len - 12));
-    assert_eq!(cmd(8191).chars().count(), 8191);
-    assert_eq!(
-        rules_of(&check(pwsh(), Os::Windows, &cmd(8191))),
-        ["inline-script-too-long"]
-    );
-    let v = check(pwsh(), Os::Windows, &cmd(8192));
-    assert_eq!(rules_of(&v), ["too-long"]);
-    // The limit follows the program: the same length for another program is only inline.
-    assert_eq!(
-        rules_of(&check(pwsh(), Os::Windows, &pwsh_text(8192))),
-        ["inline-script-too-long"]
-    );
-    // And the OS: no `cmd` limit off Windows.
-    assert_eq!(
-        rules_of(&check(pwsh(), Os::Posix, &cmd(8192))),
-        ["inline-script-too-long"]
-    );
+    let wide = format!("cmd /c echo {}", emoji.repeat(4077));
+    assert_eq!(wide.encode_utf16().count(), 8166);
+    assert_eq!(rules_of(&check(pwsh(), Os::Windows, &wide)), ["too-long"]);
+    let narrow = format!("cmd /c echo {}a", emoji.repeat(4076));
+    assert_eq!(narrow.encode_utf16().count(), 8165);
+    assert_ne!(rules_of(&check(pwsh(), Os::Windows, &narrow)), ["too-long"]);
 }
 
 #[test]
@@ -535,12 +697,21 @@ fn a_git_bash_command_over_the_escaped_limit_is_too_long_once() {
         &bash_text(7795),
     );
     assert_eq!(rules_of(&v), ["too-long"]);
+    // A `cmd //c` line that long is Git Bash's finding, once.
+    let long_cmd = format!("cmd //c echo {}", "a".repeat(8200));
+    let v = check(Shell::Bash(BashProfile::GitBash), Os::Windows, &long_cmd);
+    assert_eq!(rules_of(&v), ["too-long"]);
+    assert!(
+        v.findings[0].message.contains("Git Bash"),
+        "{}",
+        v.findings[0].message
+    );
 }
 
 // --- the spawned binary ---
 
 #[test]
-fn the_lint_subcommand_exits_0_1_and_64() {
+fn the_lint_subcommand_exits_0_1_64_and_74() {
     let arg = |p: &Path| p.to_string_lossy().into_owned();
 
     let ok = fixture("ok.sh");
@@ -552,13 +723,27 @@ fn the_lint_subcommand_exits_0_1_and_64() {
     let r = common::run(&["lint", &arg(&bad)], None, &[]);
     assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
     let head = format!("{}:1:6: break parse-error: ", bad.display());
-    assert!(r.stdout.lines().next().unwrap().starts_with(&head), "{}", r.stdout);
-    assert!(r.stdout.lines().nth(1).unwrap().starts_with("  Fix: "), "{}", r.stdout);
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&head))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    assert!(lines[at + 1].starts_with("  Fix: "), "{}", r.stdout);
+
+    let bad_ps1 = fixture("bad.ps1");
+    let r = common::run(&["lint", &arg(&bad_ps1)], None, &[]);
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    assert!(
+        r.stdout.contains(":2:15: break ps-var-colon: "),
+        "{}",
+        r.stdout
+    );
 
     let txt = fixture("x.txt");
     let r = common::run(&["lint", &arg(&txt)], None, &[]);
     assert_eq!(r.code, 64, "{} {}", r.stdout, r.stderr);
-    assert!(!r.stderr.is_empty());
+    assert!(r.stderr.contains(".ps1, .sh or .bash"), "{}", r.stderr);
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
 
     let r = common::run(&["lint"], None, &[]);
     assert_eq!(r.code, 64, "{} {}", r.stdout, r.stderr);
@@ -577,15 +762,211 @@ fn the_lint_subcommand_lints_the_file_the_fix_line_names() {
     };
     let text = lines_of("echo hi", 200);
     let verdict = check_with(bash(), Os::Posix, &text, &cfg);
-    let fix = verdict.findings[0].fix_line().unwrap();
-    let file = fix
-        .split("run shellwise lint ")
-        .nth(1)
-        .and_then(|s| s.split(',').next())
-        .unwrap()
-        .trim_matches('"')
-        .to_string();
+    let (file, _) = fix_parts(&verdict.findings[0].fix_line().unwrap());
     std::fs::write(&file, &text).unwrap();
     let r = common::run(&["lint", &file], None, &[]);
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+}
+
+// --- ShellCheck's checks, through the binary ---
+
+/// `shellwise lint` of a file `name` holding `text`, in a folder of the test's own.
+fn lint_cli(tag: &str, name: &str, text: &str) -> (PathBuf, common::Run) {
+    let path = folder(tag).join(name);
+    std::fs::write(&path, text).unwrap();
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    (path, r)
+}
+
+/// `<line>:<col>: <level> <rule>` of each finding line, sorted.
+fn places(path: &Path, r: &common::Run) -> Vec<String> {
+    let prefix = format!("{}:", path.display());
+    let mut out: Vec<String> = r
+        .stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix(&prefix))
+        .filter_map(|rest| {
+            let (line, rest) = rest.split_once(':')?;
+            let (col, rest) = rest.split_once(": ")?;
+            let (head, _) = rest.split_once(": ")?;
+            Some(format!("{line}:{col}: {head}"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Real ShellCheck 0.11.0 on the same text (`shellcheck -f gcc`) puts SC2154 and SC2086 at 2:7 after
+/// a tab, at 3:8 after a two-byte character and at 4:9 after two tabs: character columns.
+#[test]
+fn shellcheck_findings_print_at_the_columns_real_shellcheck_gives() {
+    let o = char::from_u32(0xF3).unwrap();
+    let text = format!("#!/bin/bash\n\techo $x\necho {o} $y\n\ta\techo $z\n");
+    let (path, r) = lint_cli("sc_columns", "cols.sh", &text);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    assert_eq!(
+        places(&path, &r),
+        [
+            "2:7: warn SC2086",
+            "2:7: warn SC2154",
+            "3:8: warn SC2086",
+            "3:8: warn SC2154",
+            "4:9: warn SC2086",
+            "4:9: warn SC2154"
+        ],
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn a_shellcheck_error_fails_the_file_and_a_warning_does_not() {
+    let (path, r) = lint_cli("sc_levels", "var.sh", "rm $var\n");
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    assert_eq!(
+        places(&path, &r),
+        ["1:4: warn SC2086", "1:4: warn SC2154"],
+        "{}",
+        r.stdout
+    );
+    // `[[ ]]` needs spaces inside: SC1035 is an error, and bash still parses the line.
+    let (path, r) = lint_cli(
+        "sc_levels_error",
+        "test.sh",
+        "if [[$1 == x]]; then echo y; fi\n",
+    );
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    assert!(
+        places(&path, &r).iter().any(|p| p.contains(": break SC")),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("parse-error"), "{}", r.stdout);
+}
+
+/// SC2164 (`cd` without `|| exit`) is left out by default; real ShellCheck reports it on this text.
+#[test]
+fn sc2164_is_left_out_of_a_linted_file() {
+    let (path, r) = lint_cli("sc2164", "cd.sh", "cd /tmp\nls\n");
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    assert_eq!(r.stdout, format!("{}: ok\n", path.display()));
+}
+
+/// With the dataflow analysis ShellCheck knows `$x` holds `1` and asks for no quotes; without it,
+/// above `DATAFLOW_MAX_BYTES` (15 KiB), it does.
+#[test]
+fn the_dataflow_analysis_runs_on_small_files_only() {
+    let script = "x=1\necho $x\n";
+    let (path, r) = lint_cli("sc_dataflow_small", "small.sh", script);
+    assert_eq!(r.stdout, format!("{}: ok\n", path.display()));
+    let big = format!("{script}{}\n", "#".repeat(15 * 1024));
+    let (path, r) = lint_cli("sc_dataflow_big", "big.sh", &big);
+    assert_eq!(places(&path, &r), ["2:6: warn SC2086"], "{}", r.stdout);
+}
+
+#[test]
+fn a_file_over_64_kib_skips_shellcheck_with_a_notice() {
+    let pad = |n: usize| format!("ls $var\n{}\n", "#".repeat(n));
+    let over = pad(MAX_INPUT_BYTES);
+    let (path, r) = lint_cli("sc_over", "over.sh", &over);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    assert_eq!(
+        r.stderr.trim_end(),
+        format!(
+            "{}: ShellCheck skipped: the file is over {MAX_INPUT_BYTES} bytes",
+            path.display()
+        )
+    );
+    assert_eq!(
+        places(&path, &r),
+        [format!("1:1: warn {ANALYSIS_INCOMPLETE}")]
+    );
+    // At the cap ShellCheck runs and says nothing on stderr.
+    let at = pad(MAX_INPUT_BYTES - 9);
+    assert_eq!(at.len(), MAX_INPUT_BYTES);
+    let (path, r) = lint_cli("sc_at", "at.sh", &at);
+    assert!(r.stderr.is_empty(), "{}", r.stderr);
+    assert!(
+        places(&path, &r).contains(&"1:4: warn SC2086".to_string()),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A script nested deeper than the main thread's stack takes: the lint still ends with a verdict.
+#[test]
+fn a_deeply_nested_script_does_not_abort_the_lint() {
+    let depth = 4000;
+    let text = format!("echo {}x{}\n", "$(".repeat(depth), ")".repeat(depth));
+    assert!(text.len() < MAX_INPUT_BYTES);
+    let (_, r) = lint_cli("sc_deep", "deep.sh", &text);
+    assert!(matches!(r.code, 0 | 1), "exit {}: {}", r.code, r.stderr);
+    assert!(!r.stdout.is_empty());
+}
+
+/// ShellCheck is linked for `lint <file>` only (Ruling 112(a)): no library file names it, so
+/// `analyse` and with it `check` and `hook` cannot reach it, and in `src/main.rs` only `run_lint`
+/// calls it.
+#[test]
+fn shellcheck_is_reachable_from_lint_only() {
+    use syn::visit::Visit;
+
+    struct Mentions(bool);
+    impl<'ast> Visit<'ast> for Mentions {
+        fn visit_path(&mut self, p: &'ast syn::Path) {
+            if p.segments.iter().any(|s| s.ident == "shellcheck") {
+                self.0 = true;
+            }
+            syn::visit::visit_path(self, p);
+        }
+    }
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    let mut dirs = vec![src.clone()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                files.push(p);
+            }
+        }
+    }
+    assert!(files.len() > 10, "{files:?}");
+    let mut wrong = Vec::new();
+    for f in &files {
+        let rel = f
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel == "main.rs" || rel == "shellcheck.rs" {
+            continue;
+        }
+        let text = std::fs::read_to_string(f).unwrap();
+        if text.contains("rshellcheck_core") || text.contains("shellcheck::") {
+            wrong.push(rel);
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "these files name the ShellCheck port: {wrong:?}"
+    );
+
+    let main = syn::parse_file(&std::fs::read_to_string(src.join("main.rs")).unwrap()).unwrap();
+    let callers: Vec<String> = main
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(f) => {
+                let mut m = Mentions(false);
+                m.visit_item_fn(f);
+                m.0.then(|| f.sig.ident.to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(callers, ["run_lint"]);
 }

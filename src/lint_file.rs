@@ -202,6 +202,7 @@ pub fn lint_with(
         cwd: std::env::current_dir().ok(),
         env: EnvView::new(),
         origin: Origin::File,
+        problem: None,
     };
     let own = analyse(&input, cfg, deadline).findings;
     let mut located: Vec<Located> = own.into_iter().map(|f| locate(&text, f)).collect();

@@ -46,3 +46,23 @@ echo hi
 ```
 
 `ok`. The same text at 7499 escaped characters is `ok` too; the line is exact.
+
+## cmd.exe from PowerShell
+
+On Windows, a PowerShell command that starts `cmd` (`cmd /c …`, `cmd.exe /c …`, `& cmd /c …`) is
+`too-long` when the line cmd gets is over 8,191 characters, the limit `line_limit` of the `cmd`
+row in `data/programs.toml`. pwsh starts cmd by its full path, `"C:\WINDOWS\system32\cmd.exe"`
+(29 characters, the row's `launch_path_units`), in place of everything up to the end of the typed
+word, so the rule counts the rest of the text in UTF-16 units plus 29. cmd then prints "The command
+line is too long." and runs nothing, and the PowerShell tool still exits 0. Measured with pwsh 7.7:
+a typed `cmd /c echo a…` runs at 8,165 characters and is refused at 8,166.
+
+A script file does not help here, because the script starts the same cmd line, so this finding has
+its own Fix line:
+
+`Fix: delete the leading cmd /c and run the program directly from PowerShell, which starts command lines up to 32766 characters`
+
+The PowerShell tool's own text has no limit: the tool passes it to pwsh in an environment variable,
+not on the command line, and a script of 100,000 characters runs. A long PowerShell command is
+`inline-script-too-long`, not `too-long`. A Git Bash `cmd //c …` command reaches the Git Bash limit
+first.
