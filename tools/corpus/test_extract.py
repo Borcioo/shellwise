@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -498,6 +499,14 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(len(cases), 12)
         for cwd, _shape, want in cases:
             self.assertEqual(mod.row_os(None if cwd == "-" else cwd), want, cwd)
+
+    def test_runs_on_is_the_rule_maps_table(self):
+        mod = load_baseline()
+        with open(os.path.join(HERE, "rule_map.toml"), "rb") as f:
+            table = tomllib.load(f)
+        self.assertEqual(sorted(mod.RUNS_ON), sorted(table["map"]))
+        self.assertEqual(mod.RUNS_ON["bash-backslash-collapse"], (("Bash",), ("Windows",)))
+        self.assertEqual(mod.RUNS_ON["git-no-verify"], (("Bash", "PowerShell"), ("Windows", "Linux")))
 
     def test_known_slice_expects_only_rules_that_fire_on_the_rows_os_and_tool(self):
         mod = load_baseline()

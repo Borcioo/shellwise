@@ -1,5 +1,5 @@
-# The fixture rule map with parse-error on the own line: the ids its baseline and known rows name, one id that never lands, and
-# one parity exception.
+# The fixture rule map with parse-error on the own line: the ids its baseline and known rows name, one id that never lands and
+# where each can fire.
 
 own_line_rules = ["parse-error"]
 
@@ -9,8 +9,9 @@ bash-too-long = "too-long"
 bash-backslash-collapse = "bash-backslash-collapse"
 fixture-unlanded = "fixture-no-such-rule"
 
-[[parity_exception]]
-baseline_guard = "bash-backslash-collapse"
-shape = "fixture-shape"
-expected = 1
-why = "the fixture's known answer for a named shape class"
+# Where each mapped rule can fire (the bench fails on a key without an entry).
+[runs_on]
+bash-unterminated-quote = { tools = ["Bash"], os = ["Windows", "Linux"], why = "parse-error: every shell and OS" }
+bash-too-long = { tools = ["Bash"], os = ["Windows"], why = "too-long: Git Bash only" }
+bash-backslash-collapse = { tools = ["Bash"], os = ["Windows"], why = "git_bash(ctx)" }
+fixture-unlanded = { tools = ["Bash", "PowerShell"], os = ["Windows"], why = "fixture: a rule that never lands" }
