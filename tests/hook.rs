@@ -182,6 +182,7 @@ fn ok_is_no_output() {
         ("PowerShell", "timeout 60 newtool -x"),
         ("Bash", "echo hi"),
         ("Bash", ""),
+        ("PowerShell", ""),
     ] {
         silent(&hook(tool, command));
     }
