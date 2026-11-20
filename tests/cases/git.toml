@@ -777,3 +777,20 @@ shell = "pwsh"
 command = "git checkout $b"
 level = "warn"
 rules = ["git-restore-discards"]
+fix = "git switch <branch>"
+
+[[row]]
+id = "worktree-remove-force-a-tree-the-walk-cannot-read"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force locked"
+level = "danger"
+rules = ["walk-unreadable"]
+
+[[row]]
+id = "worktree-remove-a-tree-the-walk-cannot-read-unforced"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove locked"
+level = "warn"
+rules = ["walk-unreadable"]

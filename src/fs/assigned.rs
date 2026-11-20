@@ -201,7 +201,7 @@ pub fn resolve_assigned(
         Some(a)
     });
     // The final marks, with the literals in sight; then every candidate name that is not valid
-    // at every use is dynamic.
+    // at every use is dynamic (a held name is a candidate too, so it stays dynamic in `env`).
     for c in &naive {
         env.set(&c.name, &c.values[0]);
     }
@@ -210,9 +210,6 @@ pub fn resolve_assigned(
         if !everywhere.contains(&key(&c.name)) {
             env.mark_dynamic(&c.name);
         }
-    }
-    for a in &held {
-        env.mark_dynamic(&a.name);
     }
     held
 }

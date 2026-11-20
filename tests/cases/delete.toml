@@ -2245,6 +2245,40 @@ command = 'a=build; b=$a/x; a=$(pwd); rm -rf "$b"'
 level = "warn"
 rules = ["dynamic-target"]
 
+# A name another command assigns (`read`), a pwsh `+=`, and a pwsh loop over a command hold no
+# literal.
+[[row]]
+id = "gb-literal-then-read-into-the-name"
+os = "windows"
+shell = "gitbash"
+command = 'd=build; read -r d < name.txt; rm -rf "$d/"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "gb-value-built-from-a-name-read-into"
+os = "windows"
+shell = "gitbash"
+command = 'd=build; read -r d < name.txt; b=$d; rm -rf "$b/"'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "ps-append-assignment-is-no-literal"
+os = "windows"
+shell = "pwsh"
+command = "$d += 'build'; Remove-Item -Recurse -Force \"$d\\\""
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "ps-loop-over-a-command-is-no-literal-list"
+os = "windows"
+shell = "pwsh"
+command = "foreach ($d in gci) { Remove-Item -Recurse -Force \"$d\\\" }"
+level = "danger"
+rules = ["delete-empty-expansion"]
+
 [[row]]
 id = "ps-literal-then-a-dynamic-value-before-the-delete"
 os = "windows"

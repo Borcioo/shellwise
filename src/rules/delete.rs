@@ -501,11 +501,9 @@ fn native_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
                     // GNU reads a long option by any unique prefix (`--recur`, `--forc`); one
                     // the table does not list may force or recurse, for the danger gate.
                     let name = t.split('=').next().unwrap_or(t);
-                    let prefix_of = |list: &[String]| list.iter().any(|e| e.starts_with(name));
-                    let rec = prefix_of(&facts.recursive);
+                    let rec = facts.recursive.iter().any(|e| e.starts_with(name));
                     p.recursive |= rec;
-                    p.forced |=
-                        !rec && !prefix_of(&facts.dry_run) && !prefix_of(&prog.value_options);
+                    p.forced |= !rec;
                 }
                 p.dry_run |= facts.dry_run.iter().any(|e| scan::flag_matches(e, t));
                 if facts.exec_options.iter().any(|e| e == t) {
