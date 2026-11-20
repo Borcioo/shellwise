@@ -51,4 +51,4 @@ appear in the repo, one regex per line, `#` comments).
 
 ## Licence
 
-MIT OR Apache-2.0, at your option.
+GPL-3.0-or-later. The full text is in `LICENSE`.

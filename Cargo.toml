@@ -3,7 +3,7 @@ name = "shellwise"
 version = "0.1.0"
 edition = "2024"
 description = "Command guard and lint for shell commands written by AI coding agents"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 readme = "README.md"
 publish = false
 
