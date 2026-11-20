@@ -23,6 +23,8 @@ use shellwise::{
     AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse, unread,
 };
 
+mod bench;
+
 /// Exit code for usage errors.
 const EXIT_USAGE: i32 = 64;
 /// Exit code when the input cannot be read.
@@ -52,6 +54,8 @@ enum Cmd {
     /// Run as an agent host's hook; always exits 0.
     #[command(subcommand)]
     Hook(HookCmd),
+    /// Replay the corpus through the analysis and report the meters; exit 1 when it cannot measure.
+    Bench(bench::BenchArgs),
 }
 
 #[derive(Subcommand)]
@@ -121,6 +125,7 @@ fn run(start: Instant) -> i32 {
     match cli.cmd {
         Cmd::Check(args) => run_check(start, args),
         Cmd::Hook(HookCmd::ClaudeCode(args)) => run_hook(start, args),
+        Cmd::Bench(args) => bench::run(args),
     }
 }
 
