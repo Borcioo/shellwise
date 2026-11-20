@@ -309,18 +309,21 @@ fn an_event_over_the_read_cap_is_a_deny_unread() {
 
 #[test]
 fn a_malformed_event_at_the_read_cap_still_replies() {
-    // The raw scan of a malformed event runs without the analysis worker: just under the 1 MiB
-    // read cap, with nesting the scan has to walk, the hook still exits 0 with its deny.
+    // The raw scan of a malformed event runs on the bounded worker (F-A4): just under the 1 MiB
+    // read cap, with nesting the scan has to walk, the hook still exits 0 before the shortest
+    // host timeout a config may state (`MIN_HOOK_TIMEOUT_MS`), with the deny when the scan
+    // finishes in time and no output when it does not (a reply after the host's timeout counts
+    // as none). Small malformed events get their deny in
+    // `a_malformed_event_denies_only_destructive_raw_text`.
     let head = format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{DESTRUCTIVE}; "#);
     let unit = format!("${}", ch(0x28));
     let body = unit.repeat((1024 * 1024 - head.len()) / unit.len());
     let event = format!("{head}{body}");
     assert!(event.len() <= 1024 * 1024, "{}", event.len());
-    let reason = denied(&run(HOOK, Some(event.as_bytes()), &[]));
-    assert!(
-        reason.starts_with("shellwise: danger analysis-incomplete: "),
-        "{reason}"
-    );
+    let r = run(HOOK, Some(event.as_bytes()), &[]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let host = Duration::from_millis(shellwise::config::MIN_HOOK_TIMEOUT_MS);
+    assert!(r.elapsed < host, "{:?}", r.elapsed);
 }
 
 #[test]
@@ -355,6 +358,62 @@ fn stdin_held_open_is_a_deny_unread_inside_the_read_bound() {
         elapsed >= Duration::from_millis(1400) && elapsed < Duration::from_millis(2900),
         "{elapsed:?}"
     );
+}
+
+/// F-A3: the config budget starts when the event is read, so an event that arrives late but
+/// inside the read bound (1500 ms) still loads the config and gets its own verdict.
+#[test]
+fn an_event_read_late_still_loads_the_config() {
+    let r = late(&event("Bash", "echo hi", &cwd_of(&folder("late"))), 1200);
+    assert!(r.elapsed >= Duration::from_millis(1200), "{:?}", r.elapsed);
+    silent(&r);
+}
+
+/// Run the hook with `bytes` written to its stdin `delay_ms` after it starts, then closed.
+fn late(bytes: &[u8], delay_ms: u64) -> Run {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    let dir = std::env::temp_dir().join("shellwise-tests-empty");
+    std::fs::create_dir_all(&dir).unwrap();
+    let start = std::time::Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_shellwise"))
+        .args(HOOK)
+        .current_dir(&dir)
+        .env("APPDATA", &dir)
+        .env("XDG_CONFIG_HOME", &dir)
+        .env("HOME", &dir)
+        .env_remove("SHELLWISE_TESTHOOK")
+        .env_remove("SHELLWISE_TESTHOOK_DEADLINE_MS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shellwise");
+    let mut pipe = child.stdin.take().unwrap();
+    std::thread::sleep(Duration::from_millis(delay_ms));
+    pipe.write_all(bytes).unwrap();
+    drop(pipe);
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+    Run {
+        code: status.code().unwrap(),
+        stdout,
+        stderr,
+        elapsed: start.elapsed(),
+    }
 }
 
 /// Run the hook with `bytes` written to a stdin pipe that stays open until the hook exits.
@@ -516,5 +575,35 @@ mod hooks {
         let r = with_hook("stuck", "sleep", "Bash", DESTRUCTIVE);
         assert!(r.elapsed < Duration::from_secs(5), "{:?}", r.elapsed);
         denied(&r);
+    }
+
+    /// The deadline the config sets, not a test override: a stuck analysis replies before the
+    /// host's timeout, for the default config (`hook_timeout_ms` 10000) and for the installed
+    /// pair (hook entry `timeout: 5`, `hook_timeout_ms = 5000`, Ruling 129).
+    #[test]
+    fn a_stuck_analysis_replies_before_the_host_timeout_with_the_default_deadline() {
+        let default_ms = shellwise::config::Config::default().hook_timeout_ms;
+        for (name, config, host_ms) in [
+            ("stuck-default", "", default_ms),
+            ("stuck-installed", "hook_timeout_ms = 5000\n", 5000),
+        ] {
+            let dir = folder(name);
+            let file = dir.join("integration.toml");
+            std::fs::write(&file, config).unwrap();
+            let file = file.to_str().unwrap().to_string();
+            let args = ["hook", "claude-code", "--config", file.as_str()];
+            let r = run(
+                &args,
+                Some(&event("Bash", DESTRUCTIVE, &cwd_of(&dir))),
+                &[("SHELLWISE_TESTHOOK", "sleep")],
+            );
+            assert!(
+                r.elapsed < Duration::from_millis(host_ms),
+                "{name}: {:?} against the host's {host_ms} ms",
+                r.elapsed
+            );
+            let reason = denied(&r);
+            assert!(reason.contains("deadline"), "{name}: {reason}");
+        }
     }
 }

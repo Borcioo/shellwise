@@ -105,6 +105,37 @@ fn every_rule_has_a_deny_row_an_allow_row_and_a_doc() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// A10: an id stays in `WARN_DEFAULT` only while its default level is warn. Every finding of such
+/// a rule, in every case row run with the default config, is warn; a rule whose default became a
+/// deny level fails here and must leave the list (and get a deny row).
+#[test]
+fn every_warn_default_rule_reports_at_warn() {
+    let mut checked = 0;
+    let mut wrong = Vec::new();
+    for (file, rows) in case_files() {
+        for row in rows.iter().filter(|r| r.config.is_none()) {
+            for f in case_loader::verdict(row).findings {
+                if WARN_DEFAULT.contains(&f.rule) {
+                    checked += 1;
+                    if f.level.as_str() != "warn" {
+                        wrong.push(format!(
+                            "{file} {}: {} at {}",
+                            row.id,
+                            f.rule,
+                            f.level.as_str()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "no finding of a WARN_DEFAULT rule in the case files"
+    );
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn every_deny_carries_a_fix_line() {
     let files = case_files();

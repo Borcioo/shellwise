@@ -22,6 +22,9 @@ const NOT_CONFIRMABLE: [&str; 5] = [
     crate::ANALYSIS_INCOMPLETE,
 ];
 
+/// The clause a critical delete's message ends with (`delete.rs`).
+const CANNOT_CONFIRM: &str = ", and the allow marker cannot confirm it";
+
 fn is_marker(c: &Comment, command: &str) -> bool {
     let text = c.text.strip_prefix('#').unwrap_or("").trim();
     c.trailing
@@ -49,7 +52,9 @@ pub fn apply(script: &Script, command: &str, parse_failed: bool, verdict: Verdic
             if matches!(f.level, Level::Break | Level::Danger) && !NOT_CONFIRMABLE.contains(&f.rule)
             {
                 f.level = Level::Ok;
-                f.message = format!("{} (confirmed by the trailing allow marker)", f.message);
+                // A critical finding a config lowered to danger says the marker cannot confirm it.
+                let message = f.message.replace(CANNOT_CONFIRM, "");
+                f.message = format!("{message} (confirmed by the trailing allow marker)");
             }
             f
         })

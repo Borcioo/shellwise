@@ -204,6 +204,25 @@ mod hooks {
         assert_eq!(r.code, 99, "{}", r.stdout);
     }
 
+    /// F-A4: the raw scan of a length rule that panicked and of a malformed hook event runs on
+    /// the bounded worker (`scan-abort` ends the process as soon as that worker starts).
+    #[test]
+    fn every_raw_scan_runs_on_the_bounded_worker() {
+        let r = hook("length-panic,scan-abort", PLAIN);
+        assert_eq!(r.code, 99, "length stage: {} {}", r.stdout, r.stderr);
+        let malformed = b"{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf x\"";
+        let r = run(
+            &["hook", "claude-code"],
+            Some(malformed),
+            &[("SHELLWISE_TESTHOOK", "scan-abort")],
+        );
+        assert_eq!(r.code, 99, "malformed event: {} {}", r.stdout, r.stderr);
+        // Control: without the hook the malformed event is a deny, so the scan reached it.
+        let r = run(&["hook", "claude-code"], Some(malformed), &[]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert!(r.stdout.contains("\"deny\""), "{}", r.stdout);
+    }
+
     #[test]
     fn allow_marker_has_no_effect_on_a_failed_analysis() {
         let cmd = "Get-Date; rm -rf x # shellwise: allow";

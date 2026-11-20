@@ -30,6 +30,19 @@ pub const MAX_READ_BYTES: usize = 1024 * 1024;
 /// The rule id of every analysis that did not finish for a reason other than a parse error.
 pub const ANALYSIS_INCOMPLETE: &str = "analysis-incomplete";
 
+include!(concat!(env!("OUT_DIR"), "/rule_docs.rs"));
+
+/// Whether a finding can carry `id`: a rule documented in `docs/rules/` (every rule is, a test
+/// checks it), or a ShellCheck code `SC<n>`.
+pub fn is_rule_id(id: &str) -> bool {
+    // The spelling `shellcheck.rs` gives a code.
+    let shellcheck = id
+        .get(2..)
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|n| format!("SC{n}") == id);
+    shellcheck || RULE_DOCS.binary_search_by(|(k, _)| (*k).cmp(id)).is_ok()
+}
+
 /// `SHELLWISE=off` turns the whole check off; any other value leaves it on.
 const OFF_VAR: &str = "SHELLWISE";
 const OFF_VALUE: &str = "off";
@@ -157,7 +170,7 @@ pub fn analyse(input: &AnalyseInput, cfg: &Config, deadline: &Deadline) -> Verdi
     };
     let mut findings = match length_stage(&check, cfg, deadline) {
         Ok(found) => levels(found, cfg).findings,
-        Err(reason) => return levels(incomplete(&command, reason).findings, cfg),
+        Err(reason) => return levels(incomplete_within(&command, reason, deadline).findings, cfg),
     };
     let problem = if let Some(reason) = input.problem {
         Some(reason)
@@ -237,6 +250,13 @@ fn checked(
         reason,
     );
     levels(verdict.findings, cfg)
+}
+
+/// `incomplete` with the raw scan on a worker under `deadline` (`bounded_scan`): a scan that does
+/// not answer in time is `warn`, as one that does not finish.
+pub fn incomplete_within(command: &str, reason: &str, deadline: &Deadline) -> Verdict {
+    let hit = bounded_scan(Arc::new(command.to_string()), deadline);
+    incomplete_from(hit, command, reason)
 }
 
 /// How long the raw scan may run past the deadline. The deadline ends 1500 ms before the hook

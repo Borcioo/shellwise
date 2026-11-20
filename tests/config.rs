@@ -73,14 +73,14 @@ fn user_layer_overrides_the_integration_layer() {
         &d,
         "integ.toml",
         "gate_commands = ['a']\ndynamic_target = 'critical'\nask_instead_of_deny = ['x']\n\
-         [levels]\nr1 = 'danger'\nr2 = 'break'\n[policies]\ngit_no_verify = true\n\
+         [levels]\ngit-discard = 'danger'\nwill-hang = 'break'\n[policies]\ngit_no_verify = true\n\
          [tool_paths]\nmy-tool = 'x/my-tool.ps1'\n",
     );
     let user = write(
         &d,
         "user.toml",
         "gate_commands = ['b']\ndynamic_target = 'break'\nask_instead_of_deny = []\n\
-         [levels]\nr1 = 'warn'\n[policies]\ngit_no_verify = false\n\
+         [levels]\ngit-discard = 'warn'\n[policies]\ngit_no_verify = false\n\
          [tool_paths]\nmy-tool = 'y/my-tool.ps1'\n",
     );
     let (cfg, findings) = Config::load(Some(&integ), Some(&user), None);
@@ -90,38 +90,44 @@ fn user_layer_overrides_the_integration_layer() {
     assert!(cfg.ask_instead_of_deny.is_empty());
     assert!(!cfg.policies.git_no_verify);
     assert_eq!(cfg.tool_paths["my-tool"], d.join("y/my-tool.ps1"));
-    // The user lowers r1 (allowed) and leaves the integration's r2 in place.
-    assert_eq!(cfg.level("r1", Level::Danger), Level::Warn);
-    assert_eq!(cfg.level("r2", Level::Warn), Level::Break);
+    // The user lowers git-discard (allowed) and leaves the integration's will-hang in place.
+    assert_eq!(cfg.level("git-discard", Level::Danger), Level::Warn);
+    assert_eq!(cfg.level("will-hang", Level::Warn), Level::Break);
 }
 
 #[test]
 fn repo_layer_raises_levels() {
     let d = scratch("repo_raises");
-    let user = write(&d, "user.toml", "[levels]\nset = 'warn'\n");
+    let user = write(&d, "user.toml", "[levels]\ngit-discard = 'warn'\n");
     let repo = write(
         &d,
         REPO_FILE,
-        "[levels]\nset = 'danger'\nunset = 'critical'\n",
+        "[levels]\ngit-discard = 'danger'\nwill-hang = 'critical'\n",
     );
     let (cfg, findings) = Config::load(None, Some(&user), Some(&repo));
     assert!(findings.is_empty(), "{findings:?}");
     // Over a user setting, and over a rule default no other layer set.
-    assert_eq!(cfg.level("set", Level::Break), Level::Danger);
-    assert_eq!(cfg.level("unset", Level::Break), Level::Critical);
+    assert_eq!(cfg.level("git-discard", Level::Break), Level::Danger);
+    assert_eq!(cfg.level("will-hang", Level::Break), Level::Critical);
 }
 
 #[test]
 fn repo_layer_cannot_lower_levels() {
     let d = scratch("repo_lowers");
-    let user = write(&d, "user.toml", "[levels]\nr = 'danger'\n");
+    let user = write(&d, "user.toml", "[levels]\ngit-discard = 'danger'\n");
     let rows = [
-        ("r = 'warn'", "levels.r", "r", Level::Danger, Level::Danger),
+        (
+            "git-discard = 'warn'",
+            "levels.git-discard",
+            "git-discard",
+            Level::Danger,
+            Level::Danger,
+        ),
         // `ok` only switches a rule off, whatever its default.
         (
-            "fresh = 'ok'",
-            "levels.fresh",
-            "fresh",
+            "will-hang = 'ok'",
+            "levels.will-hang",
+            "will-hang",
             Level::Break,
             Level::Break,
         ),
@@ -143,9 +149,9 @@ fn repo_layer_cannot_lower_levels() {
         assert_eq!(cfg.level(rule, default), want, "{line}");
     }
     // No other layer sets the rule: the repo value is a floor and cannot go under the default.
-    let repo = write(&d, REPO_FILE, "[levels]\nunset = 'warn'\n");
+    let repo = write(&d, REPO_FILE, "[levels]\nwill-hang = 'warn'\n");
     let (cfg, _) = Config::load(None, Some(&user), Some(&repo));
-    assert_eq!(cfg.level("unset", Level::Danger), Level::Danger);
+    assert_eq!(cfg.level("will-hang", Level::Danger), Level::Danger);
 }
 
 #[test]
@@ -203,7 +209,7 @@ fn malformed_toml_ignores_only_that_layer() {
     let bad = "gate_commands = ['unterminated\n";
     let integ_ok = "[policies]\ngit_no_verify = true\n";
     let user_ok = "gate_commands = ['g']\n";
-    let repo_ok = "[levels]\nr = 'critical'\n";
+    let repo_ok = "[levels]\ngit-discard = 'critical'\n";
     // (broken layer, integration, user, repo)
     let rows = [
         ("integration", bad, user_ok, repo_ok),
@@ -235,15 +241,23 @@ fn malformed_toml_ignores_only_that_layer() {
         } else {
             Level::Critical
         };
-        assert_eq!(cfg.level("r", Level::Warn), want, "{broken}");
+        assert_eq!(cfg.level("git-discard", Level::Warn), want, "{broken}");
     }
 }
 
 #[test]
 fn repo_file_must_be_a_regular_file() {
+    /// Removes the folder, and the link in it, when the test ends, also when it fails.
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
     let d = scratch("repo_not_regular");
+    let _removed = Removed(d.clone());
     let user = write(&d, "user.toml", "gate_commands = ['g']\n");
-    let target = write(&d, "target.toml", "[levels]\nr = 'critical'\n");
+    let target = write(&d, "target.toml", "[levels]\ngit-discard = 'critical'\n");
     let folder = d.join("folder").join(REPO_FILE);
     fs::create_dir_all(&folder).unwrap();
     let link = d.join("link").join(REPO_FILE);
@@ -267,7 +281,7 @@ fn repo_file_must_be_a_regular_file() {
             ["g"],
             "{kind}: the user layer still applies"
         );
-        assert_eq!(cfg.level("r", Level::Warn), Level::Warn, "{kind}");
+        assert_eq!(cfg.level("git-discard", Level::Warn), Level::Warn, "{kind}");
     }
 }
 
@@ -312,6 +326,48 @@ fn an_oversized_file_ignores_that_layer() {
     let (cfg, findings) = Config::load(None, Some(&p), None);
     assert!(findings.is_empty(), "{findings:?}");
     assert_eq!(cfg.gate_commands, ["ok"]);
+}
+
+/// F-A5: a `[levels]` key that names no rule (a typo) is `config-invalid` in every layer that
+/// takes levels, and sets nothing; a documented rule id and a ShellCheck code load clean.
+#[test]
+fn an_unknown_rule_id_under_levels_is_config_invalid() {
+    let d = scratch("unknown_rule_id");
+    for name in ["integ.toml", "user.toml", REPO_FILE] {
+        for (key, known) in [
+            ("parse_error", false),
+            ("no-such-rule", false),
+            ("SC", false),
+            ("SC08", false),
+            ("parse-error", true),
+            ("walk-timeout", true),
+            ("SC2086", true),
+        ] {
+            let file = write(&d, name, &format!("[levels]\n{key} = 'critical'\n"));
+            let (cfg, findings) = match name {
+                "integ.toml" => Config::load(Some(&file), None, None),
+                "user.toml" => Config::load(None, Some(&file), None),
+                _ => Config::load(None, None, Some(&file)),
+            };
+            if known {
+                assert!(findings.is_empty(), "{name} {key}: {findings:?}");
+                assert_eq!(cfg.level(key, Level::Warn), Level::Critical, "{name} {key}");
+            } else {
+                assert_eq!(
+                    rules(&findings),
+                    [CONFIG_INVALID],
+                    "{name} {key}: {findings:?}"
+                );
+                assert_eq!(findings[0].level, Level::Warn, "{name} {key}");
+                assert!(
+                    findings[0].message.contains(&format!("`levels.{key}`")),
+                    "{name} {key}: {}",
+                    findings[0].message
+                );
+                assert_eq!(cfg.level(key, Level::Warn), Level::Warn, "{name} {key}");
+            }
+        }
+    }
 }
 
 #[test]
