@@ -735,14 +735,16 @@ pub struct Location {
     /// Where a `cd` target is read on disk (Ruling 127): a literal folder that exists takes the
     /// `cd`. `None` (no `use_disk`): nothing is read.
     disk: Option<Disk>,
-    /// An earlier statement may have changed the disk: what a read shows now proves nothing.
-    disk_stale: bool,
+
     /// PowerShell: `$ErrorActionPreference = 'Stop'` holds here, so a failing location change
     /// ends the command.
     stop_on_error: bool,
     /// The command text may hold a `trap`, which resumes after a terminating error: a Stop form
     /// proves nothing. True until `read_text` reads none.
     may_trap: bool,
+    /// The command text may negate a pipeline (`! cd x || exit`): a failing `cd` then skips the
+    /// `exit`. True until `read_text` reads no `!`.
+    may_negate: bool,
     /// Set by `after_in` while it reads a statement whose `||` leads to a lone `exit`.
     exit_follows: bool,
     /// Set by `apply`: the location command it read ends the command when it fails.
@@ -761,6 +763,9 @@ pub struct Location {
 struct Disk {
     fs: SharedFs,
     deadline: Deadline,
+    /// The offset of the first command that may delete or discard: a `cd` at or after it may
+    /// find its folder gone.
+    first_change: Option<usize>,
 }
 
 impl std::fmt::Debug for Disk {
@@ -1108,9 +1113,10 @@ impl Location {
             defined: Vec::new(),
             aliases: Vec::new(),
             disk: None,
-            disk_stale: false,
+
             stop_on_error: false,
             may_trap: true,
+            may_negate: true,
             exit_follows: false,
             halts: false,
             msys_target: None,
@@ -1125,18 +1131,21 @@ impl Location {
 
     /// Read a literal `cd` target on `fs` within `deadline` (Ruling 127): a folder that exists
     /// takes the `cd`, with no fallback to the old folder. A read that times out, fails or names
-    /// a network or device path changes nothing.
-    pub fn use_disk(&mut self, fs: &SharedFs, deadline: &Deadline) {
+    /// a network or device path changes nothing, and so does a `cd` at or after `first_change`,
+    /// the offset of the first command that may delete or discard (the folder may be gone then).
+    pub fn use_disk(&mut self, fs: &SharedFs, deadline: &Deadline, first_change: Option<usize>) {
         self.disk = Some(Disk {
             fs: Arc::clone(fs),
             deadline: *deadline,
+            first_change,
         });
     }
 
     /// Read the command's text: a PowerShell Stop form proves a location change only when no
-    /// `trap` may resume after its error.
+    /// `trap` may resume after its error, and `cd x || exit` only when no `!` may negate it.
     pub fn read_text(&mut self, command: &str) {
         self.may_trap = contains_word(&command.to_ascii_lowercase(), "trap");
+        self.may_negate = command.contains('!');
     }
 
     /// Git Bash: the MSYS system folder a literal `cd` may have moved the shell to.
@@ -1257,8 +1266,7 @@ impl Location {
             self.new_link_unknown |= d.unknown.is_some();
             self.new_links.extend(d.known);
         }
-        // A compound statement may change the disk, now or when its body runs later.
-        self.disk_stale |= !matches!(stmt, Stmt::Pipeline(_));
+
         match stmt {
             Stmt::Pipeline(p) => self.after_pipeline(p, env),
             Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => {
@@ -1299,7 +1307,12 @@ impl Location {
         let runs = single
             && !matches!(self.prev, Some(ChainOp::And | ChainOp::Or))
             && p.chain != Some(ChainOp::Background);
-        let exits = self.exit_follows;
+        let exits = self.exit_follows && !self.may_negate;
+        let at = p.elems.first().map(|e| match e {
+            Elem::Cmd(c) => c.span.start,
+            Elem::Method(m) => m.span.start,
+            Elem::Expr(w) => w.span.start,
+        });
         self.halts = false;
         self.msys_target = None;
         let pushes = self.stack.len();
@@ -1319,7 +1332,7 @@ impl Location {
         }
         if let Some(new) = changed {
             // Ruling 127: a move the shell cannot go on without leaves no old folder.
-            let sure = runs && (self.halts || exits || self.on_disk(&new));
+            let sure = runs && (self.halts || exits || self.on_disk(&new, at));
             if sure {
                 if self.stack.len() > pushes
                     && let Some(top) = self.stack.last_mut()
@@ -1345,15 +1358,16 @@ impl Location {
             }
         }
         if is_pwsh(self.shell) {
-            self.read_error_preference(p, runs);
+            self.read_error_preference(p);
         }
-        self.disk_stale |= !self.leaves_disk(p);
+
         self.end_chain(p.chain);
     }
 
-    /// `$ErrorActionPreference = 'Stop'` alone in a statement that runs: Stop holds from here;
-    /// any other assignment, or a command naming the variable, ends it.
-    fn read_error_preference(&mut self, p: &Pipeline, runs: bool) {
+    /// `$ErrorActionPreference = 'Stop'`: Stop holds from here; any other assignment, or a
+    /// command naming the variable, ends it. (A PowerShell assignment is a statement of its own:
+    /// no pipeline, `&&` or `||` holds one.)
+    fn read_error_preference(&mut self, p: &Pipeline) {
         let named = |t: &str| {
             t.trim_start_matches('$')
                 .to_ascii_lowercase()
@@ -1363,10 +1377,9 @@ impl Location {
             let Elem::Cmd(c) = e else { continue };
             for (name, value) in &c.assigns {
                 if named(name) {
-                    self.stop_on_error = runs
-                        && name
-                            .trim_start_matches('$')
-                            .eq_ignore_ascii_case("erroractionpreference")
+                    self.stop_on_error = name
+                        .trim_start_matches('$')
+                        .eq_ignore_ascii_case("erroractionpreference")
                         && literal(value).is_some_and(|v| v.eq_ignore_ascii_case("stop"));
                 }
             }
@@ -1380,39 +1393,19 @@ impl Location {
         }
     }
 
-    /// Every command of `p` is an assignment alone or a location move (`LOCATION_MOVES`) named
-    /// plainly (no folder, no `.exe`), with no redirect and no substitution or block in its
-    /// words: it changes no file, so a `cd` target read on disk still holds after it. (An opaque
-    /// command, or a call of a name the command defines, already leaves the location unknown in
-    /// `apply`.)
-    fn leaves_disk(&self, p: &Pipeline) -> bool {
-        p.elems.iter().all(|e| {
-            let Elem::Cmd(c) = e else { return false };
-            let plain_words = cmd_words(c).iter().all(|w| {
-                !w.parts
-                    .iter()
-                    .any(|part| matches!(part, WordPart::Subst(_) | WordPart::Block(_)))
-            });
-            if !c.redirects.is_empty() || !plain_words {
-                return false;
-            }
-            match unwrap(c) {
-                Run::Cmd { name, raw, .. } => {
-                    (name.is_empty() && c.args.is_empty())
-                        || (raw == name && LOCATION_MOVES.contains(&name.as_str()))
-                }
-                _ => false,
-            }
-        })
-    }
-
-    /// Every folder of `new` exists on disk now, read within the deadline, and nothing before
-    /// may have changed that. A link, a share or device path, a read error or a timeout: no.
-    fn on_disk(&self, new: &Dirs) -> bool {
+    /// Every folder of `new` exists on disk now, read within the deadline, and the move at `at`
+    /// comes before any command that may delete or discard. A link, a share or device path, a
+    /// read error or a timeout: no.
+    fn on_disk(&self, new: &Dirs, at: Option<usize>) -> bool {
         let Some(disk) = &self.disk else {
             return false;
         };
-        if self.disk_stale || self.os != Os::host() || new.unknown.is_some() || new.known.is_empty()
+        let before_change = match (at, disk.first_change) {
+            (Some(a), Some(f)) => a < f,
+            (_, None) => true,
+            (None, Some(_)) => false,
+        };
+        if !before_change || self.os != Os::host() || new.unknown.is_some() || new.known.is_empty()
         {
             return false;
         }
@@ -2088,10 +2081,6 @@ const LOCATION_COMMANDS: [&str; 13] = [
     "invoke-expression",
     "iex",
 ];
-
-/// The commands of `LOCATION_COMMANDS` that only move the shell (listed first there); the rest
-/// run code.
-const LOCATION_MOVES: &[&str] = LOCATION_COMMANDS.split_at(8).0;
 
 /// How a pwsh command outside `LOCATION_COMMANDS` moves the shell.
 enum PwshMove {

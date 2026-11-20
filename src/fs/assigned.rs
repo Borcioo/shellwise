@@ -8,8 +8,9 @@
 //!   function, loop body, subshell, substitution, pipeline element or background `&`), written
 //!   `X=` or `$x =` (no `+=`, no index), with a value of literals and of names valid at every
 //!   use (a value built from a name that is reassigned anywhere is no literal);
-//! - no assignment of the name stands before it, and nothing else in the command marks it
-//!   (`export`, `read`, a `source` or `eval` that may assign anything);
+//! - an assignment of the name before it is another top-level one (which this one replaces when
+//!   no `&&` or `||` stands in front), and nothing else in the command marks it (`export`,
+//!   `read`, a `source` or `eval` that may assign anything);
 //! - it holds from the end of its statement up to the next assignment of the name (any kind,
 //!   anywhere), never inside a loop that assigns the name again; a loop variable holds inside
 //!   its loop only;
@@ -168,11 +169,12 @@ pub fn resolve_assigned(
         let Some((c, name, value)) = plain_assignment(p, command, pwsh, &declares) else {
             continue;
         };
-        let only_itself = value.parts.iter().all(|part| match part {
-            WordPart::Var(n) => !n.contains('='),
-            WordPart::Subst(_) => !pwsh,
-            _ => true,
-        });
+        // (`${Y:=v}` makes the bash parser mark its command a runtime target, which keeps every
+        // name it may assign dynamic.)
+        let only_itself = !value
+            .parts
+            .iter()
+            .any(|part| pwsh && matches!(part, WordPart::Subst(_)));
         if only_itself {
             top_plain.push((key(&name), c.span.start, c.span));
         }

@@ -652,8 +652,33 @@ impl<'a> Scene<'a> {
         let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
         loc.read_script(self.ctx.script);
         loc.read_text(input.command);
-        loc.use_disk(self.ctx.fs, self.ctx.deadline);
+        loc.use_disk(self.ctx.fs, self.ctx.deadline, self.first_change());
         loc
+    }
+
+    /// The offset of the first command that may delete or discard data: a delete the guard
+    /// reads, a .NET delete, or any command whose text the raw scan matches as destructive.
+    fn first_change(&self) -> Option<usize> {
+        let input = self.ctx.input;
+        let (shell, os, command) = (input.shell, input.os, input.command);
+        let mut first: Option<usize> = None;
+        any_node(self.ctx.script, &mut |n| {
+            let at = match n {
+                Node::Cmd { cmd, .. } => {
+                    let family = matches!(
+                        read_call(cmd, false, shell, os),
+                        Read::Call(call, prog) if in_family(&call, prog, shell, os)
+                    );
+                    (family || unread_hits(cmd, command)).then_some(cmd.span.start)
+                }
+                Node::Method(m) => method_row(m).map(|_| m.span.start),
+            };
+            if let Some(a) = at {
+                first = Some(first.map_or(a, |f| f.min(a)));
+            }
+            false
+        });
+        first
     }
 
     fn os(&self) -> Os {

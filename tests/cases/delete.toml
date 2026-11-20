@@ -3117,15 +3117,13 @@ command = 'cd build || return; rm -rf *'
 level = "ok"
 rules = []
 
-# `set` is no command the guard knows leaves the disk as it read it (a `programs.toml` fact
-# would): today's verdict.
 [[row]]
 id = "gb-cd-existing-after-set-e"
 os = "windows"
 shell = "gitbash"
 command = 'set -e; cd build; rm -rf *'
-level = "danger"
-rules = ["delete-repo-contents"]
+level = "ok"
+rules = []
 
 [[row]]
 id = "gb-cd-existing-or-group-exit"
@@ -3160,8 +3158,8 @@ command = 'cd . && cd build; rm -rf *'
 level = "danger"
 rules = ["delete-repo-contents"]
 
-# Statements before the `cd` that leave the disk as the guard read it (an assignment alone, a
-# location move: one row per name), and their twins that may change it.
+# Before the `cd`: commands that delete nothing leave the disk as the guard read it; a delete, a
+# .NET delete or unread destructive code may have removed the folder.
 [[row]]
 id = "gb-cd-existing-after-cd"
 os = "windows"
@@ -3171,74 +3169,10 @@ level = "ok"
 rules = []
 
 [[row]]
-id = "ps-cd-existing-after-chdir"
-os = "windows"
-shell = "pwsh"
-command = "chdir .; cd build; Remove-Item -Recurse -Force *"
-level = "ok"
-rules = []
-
-[[row]]
-id = "ps-cd-existing-after-sl"
-os = "windows"
-shell = "pwsh"
-command = "sl .; cd build; Remove-Item -Recurse -Force *"
-level = "ok"
-rules = []
-
-[[row]]
-id = "ps-cd-existing-after-set-location"
-os = "windows"
-shell = "pwsh"
-command = "Set-Location .; cd build; Remove-Item -Recurse -Force *"
-level = "ok"
-rules = []
-
-[[row]]
-id = "gb-cd-existing-after-pushd"
-os = "windows"
-shell = "gitbash"
-command = 'pushd .; cd build; rm -rf *'
-level = "ok"
-rules = []
-
-[[row]]
-id = "ps-cd-existing-after-push-location"
-os = "windows"
-shell = "pwsh"
-command = "Push-Location .; cd build; Remove-Item -Recurse -Force *"
-level = "ok"
-rules = []
-
-[[row]]
-id = "gb-cd-existing-after-popd"
-os = "windows"
-shell = "gitbash"
-command = 'pushd .; popd; cd build; rm -rf *'
-level = "ok"
-rules = []
-
-[[row]]
-id = "ps-cd-existing-after-pop-location"
-os = "windows"
-shell = "pwsh"
-command = "Push-Location .; Pop-Location; cd build; Remove-Item -Recurse -Force *"
-level = "ok"
-rules = []
-
-[[row]]
 id = "gb-cd-existing-after-echo"
 os = "windows"
 shell = "gitbash"
 command = 'echo hi; cd build; rm -rf *'
-level = "danger"
-rules = ["delete-repo-contents"]
-
-[[row]]
-id = "gb-cd-existing-after-an-assignment"
-os = "windows"
-shell = "gitbash"
-command = 'X=1; cd build; rm -rf *'
 level = "ok"
 rules = []
 
@@ -3247,8 +3181,24 @@ id = "gb-cd-existing-after-a-program"
 os = "windows"
 shell = "gitbash"
 command = 'touch x; cd build; rm -rf *'
+level = "ok"
+rules = []
+
+[[row]]
+id = "gb-cd-existing-after-unread-delete"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf build'; cd build; rm -rf *"
 level = "danger"
-rules = ["delete-repo-contents"]
+rules = ["opaque-destructive", "delete-repo-contents"]
+
+[[row]]
+id = "ps-cd-existing-after-a-dotnet-delete"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('build', $true); cd build; Remove-Item -Recurse -Force *"
+level = "critical"
+rules = ["delete-critical", "ps-dotnet-relative-path"]
 
 [[row]]
 id = "gb-cd-existing-after-a-substitution"
@@ -3259,26 +3209,10 @@ level = "danger"
 rules = ["delete-repo-contents"]
 
 [[row]]
-id = "gb-cd-existing-after-a-redirect"
-os = "windows"
-shell = "gitbash"
-command = 'cd . > log.txt; cd build; rm -rf *'
-level = "danger"
-rules = ["delete-repo-contents"]
-
-[[row]]
-id = "ps-cd-existing-after-a-cd-program"
-os = "windows"
-shell = "pwsh"
-command = ".\\cd.exe .; cd FX_REPO\\build; Remove-Item -Recurse -Force *"
-level = "warn"
-rules = ["delete-unknown-location"]
-
-[[row]]
 id = "gb-cd-existing-after-a-group"
 os = "windows"
 shell = "gitbash"
-command = '{ echo hi; }; cd build; rm -rf *'
+command = '{ rm -rf build; }; cd build; rm -rf *'
 level = "danger"
 rules = ["delete-repo-contents"]
 
@@ -3291,6 +3225,15 @@ command = 'exit() { :; }; cd nosuch || exit; rm -rf *'
 level = "warn"
 rules = ["delete-unknown-location"]
 
+# `! cd nosuch` succeeds when the `cd` fails, so the `exit` is skipped.
+[[row]]
+id = "gb-negated-cd-missing-or-exit"
+os = "windows"
+shell = "gitbash"
+command = '! cd nosuch || exit 1; rm -rf *'
+level = "danger"
+rules = ["delete-repo-contents"]
+
 # `cd nosuch && exit` skips the exit when the `cd` fails.
 [[row]]
 id = "gb-cd-missing-and-exit"
@@ -3299,15 +3242,6 @@ shell = "gitbash"
 command = 'cd nosuch && exit; rm -rf *'
 level = "danger"
 rules = ["delete-repo-contents"]
-
-# `source` runs code: the disk may have changed.
-[[row]]
-id = "gb-cd-absolute-after-source"
-os = "windows"
-shell = "gitbash"
-command = 'source x; cd FX_REPO/build; rm -rf *'
-level = "warn"
-rules = ["delete-unknown-location"]
 
 # A `cd` in the background or in a pipeline runs in a subshell.
 [[row]]

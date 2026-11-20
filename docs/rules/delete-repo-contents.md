@@ -7,10 +7,11 @@ PowerShell wildcard without `-Force` (`.git` is hidden). A glob that takes `.git
 PowerShell wildcard with `-Force`) is `delete-critical`, and so is the repo root itself.
 
 After a `cd`, the glob is read in the folder the shell is surely in (Ruling 127): a literal folder
-that exists on disk when nothing earlier in the command may change the disk, a Bash `cd X || exit`,
-and in PowerShell `$ErrorActionPreference = 'Stop'` or `-ErrorAction Stop` on the location
-command (no `trap` in the command). After any other form (`cd X; …`, `set -e`, `cd X || return`)
-a `cd` that fails leaves the shell in the old folder, so a glob there may still be the repo root's.
+that exists on disk, read before any command in the text that may delete or discard; a Bash
+`cd X || exit` (no `!` in the command); in PowerShell `$ErrorActionPreference = 'Stop'` or
+`-ErrorAction Stop` on the location command (no `trap` in the command). After any other form
+(`cd X; …` to a missing folder, `set -e`, `cd X || return`) a `cd` that fails leaves the shell in
+the old folder, so a glob there may still be the repo root's.
 
 Level `danger`: the trailing allow marker confirms it.
 
