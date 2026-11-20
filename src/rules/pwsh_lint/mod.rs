@@ -10,9 +10,25 @@
 //!
 //! Every program, cmdlet and option name comes from data: `data/programs.toml` (each row's `lint`
 //! table: `tags` and the option lists the rules read) and the command table. Parameter names
-//! compared in code are the table's canonical names, after binding. The table's shape follows
-//! Specter's command database (https://github.com/rjmholt/Specter, MIT, Copyright (c) Specter
-//! Contributors); `ps-auto-variable` and `cli-inline-prose` follow a Specter rule each.
+//! compared in code are the table's canonical names, after binding.
+//!
+//! Derived in part from Specter (https://github.com/rjmholt/Specter), a reimplementation of
+//! PSScriptAnalyzer: the table's shape follows its command database, and `ps-bad-parameter`,
+//! `ps-auto-variable` and `cli-inline-prose` follow a Specter rule each (named on the rule's
+//! doc). Specter's licence notice:
+//!
+//! > MIT License. Copyright (c) Specter Contributors. Permission is hereby granted, free of
+//! > charge, to any person obtaining a copy of this software and associated documentation files
+//! > (the "Software"), to deal in the Software without restriction, including without limitation
+//! > the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+//! > of the Software, and to permit persons to whom the Software is furnished to do so, subject
+//! > to the following conditions: The above copyright notice and this permission notice shall be
+//! > included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED
+//! > "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+//! > WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+//! > EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+//! > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+//! > CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 use super::{Ctx, Rule};
 use crate::ir::{Elem, MethodCall, Pipeline, Script, SimpleCommand, Stmt, Word, WordPart};
@@ -276,7 +292,9 @@ fn finding(rule: &'static str, level: Level, span: Span, message: String, fix: S
 
 /// The pipeline element before `site`, if any.
 fn upstream<'a>(site: &Site<'a>) -> Option<&'a Elem> {
-    site.index.checked_sub(1).and_then(|i| site.pipe.elems.get(i))
+    site.index
+        .checked_sub(1)
+        .and_then(|i| site.pipe.elems.get(i))
 }
 
 fn elem_span(e: &Elem) -> Span {

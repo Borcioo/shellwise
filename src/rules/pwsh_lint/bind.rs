@@ -27,8 +27,10 @@ pub fn bind(c: &Cmdlet, typed: &str) -> Bound {
 
 fn bind_among(c: &Cmdlet, typed: &str, dynamic: bool) -> Bound {
     let n = typed.to_lowercase();
-    let pool: Vec<(&'static Param, bool)> =
-        c.all_params().filter(|(p, _)| p.dynamic == dynamic).collect();
+    let pool: Vec<(&'static Param, bool)> = c
+        .all_params()
+        .filter(|(p, _)| p.dynamic == dynamic)
+        .collect();
     if let Some((p, _)) = pool.iter().find(|(p, _)| p.name == n) {
         return Bound::Param(p);
     }
@@ -43,8 +45,11 @@ fn bind_among(c: &Cmdlet, typed: &str, dynamic: bool) -> Bound {
         [] => Bound::Missing,
         [(one, _)] => Bound::Param(one),
         _ => {
-            let own: Vec<&'static Param> =
-                hits.iter().filter(|(_, common)| !common).map(|(p, _)| *p).collect();
+            let own: Vec<&'static Param> = hits
+                .iter()
+                .filter(|(_, common)| !common)
+                .map(|(p, _)| *p)
+                .collect();
             match own.as_slice() {
                 [one] => Bound::Param(one),
                 _ => Bound::Ambiguous(hits.iter().map(|(p, _)| p.name).collect()),
@@ -204,8 +209,7 @@ pub fn switch_on(src: &str, args: &[Arg], param: &str) -> bool {
         Some(Arg::Named {
             attached, value, ..
         }) => {
-            !attached.as_deref().is_some_and(off)
-                && !value.is_some_and(|v| off(text(src, v.span)))
+            !attached.as_deref().is_some_and(off) && !value.is_some_and(|v| off(text(src, v.span)))
         }
         _ => false,
     }

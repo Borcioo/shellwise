@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use super::bind::stops_parsing;
 use super::{Ctx, Rule, finding, has_folder, is_pwsh, literal, text};
+use crate::Os;
 use crate::fs;
 use crate::ir::SimpleCommand;
 use crate::level::{Finding, Level, Span};
 use crate::parse::cmd::reparse_bat_arg;
-use crate::Os;
 
 pub const BAT_METACHAR: &str = "bat-metachar";
 
@@ -234,7 +234,12 @@ fn local_drive_path(p: &Path) -> bool {
 fn reaches_cmd(ctx: &Ctx, name: &str) -> bool {
     let pathext = env_value(ctx, "PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
     let mut exts: Vec<String> = vec![".ps1".to_string()];
-    exts.extend(pathext.split(';').filter(|e| !e.is_empty()).map(str::to_string));
+    exts.extend(
+        pathext
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(str::to_string),
+    );
     exts.push(String::new());
     let (folders, base): (Vec<PathBuf>, String) = if has_folder(name) {
         let p = Path::new(name);
@@ -253,7 +258,10 @@ fn reaches_cmd(ctx: &Ctx, name: &str) -> bool {
             .file_name()
             .map(|b| b.to_string_lossy().into_owned())
             .unwrap_or_default();
-        (full.parent().map(Path::to_path_buf).into_iter().collect(), base)
+        (
+            full.parent().map(Path::to_path_buf).into_iter().collect(),
+            base,
+        )
     } else {
         let path = env_value(ctx, "PATH").unwrap_or_default();
         (
@@ -348,7 +356,7 @@ fn bat_fix(ctx: &Ctx, c: &SimpleCommand, bad: usize, percent: bool) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::fs::{Meta, Fs, SharedFs};
+    use crate::fs::{Fs, Meta, SharedFs};
     use crate::ir::EnvView;
     use crate::{CheckInput, Deadline, Origin, Shell};
     use std::io;
@@ -390,14 +398,29 @@ mod tests {
 
     /// The rule's findings on `command`, parsed by the real pwsh parser, with PATH and PATHEXT
     /// pinned, and every `lstat` it made.
-    fn run(command: &str, path: &str, cwd: Option<&str>, files: &[&str]) -> (Vec<Finding>, Vec<PathBuf>) {
-        let script = crate::parse::pwsh::parse(command, Shell::Pwsh, Os::Windows).unwrap();
+    fn run(
+        command: &str,
+        path: &str,
+        cwd: Option<&str>,
+        files: &[&str],
+    ) -> (Vec<Finding>, Vec<PathBuf>) {
+        run_on(Os::Windows, command, path, cwd, files)
+    }
+
+    fn run_on(
+        os: Os,
+        command: &str,
+        path: &str,
+        cwd: Option<&str>,
+        files: &[&str],
+    ) -> (Vec<Finding>, Vec<PathBuf>) {
+        let script = crate::parse::pwsh::parse(command, Shell::Pwsh, os).unwrap();
         let mut env = EnvView::case_insensitive();
         env.set("PATH", path);
         env.set("PATHEXT", ".COM;.EXE;.BAT;.CMD");
         let input = CheckInput {
             shell: Shell::Pwsh,
-            os: Os::Windows,
+            os,
             command,
             cwd: cwd.map(PathBuf::from),
             env,
@@ -437,14 +460,37 @@ mod tests {
         ] {
             let (found, calls) = run(&format!("{name}{ARG}"), r"C:\bin", None, &[]);
             assert!(calls.is_empty(), "{name}: {calls:?}");
-            assert_eq!(found.len(), 1, "{name}: an unresolved launcher with a folder counts");
+            assert_eq!(
+                found.len(),
+                1,
+                "{name}: an unresolved launcher with a folder counts"
+            );
         }
     }
 
     #[test]
+    fn pwsh_off_windows_runs_no_bat_file() {
+        // Control: the same explicit `.bat` call is a finding on Windows.
+        let cmd = format!(r".\tools\php.bat{ARG}");
+        assert_eq!(run(&cmd, r"C:\bin", None, &[]).0.len(), 1);
+        let (found, calls) = run_on(Os::Posix, &cmd, "/usr/bin", None, &[]);
+        assert!(found.is_empty() && calls.is_empty(), "{found:?} {calls:?}");
+    }
+
+    #[test]
     fn a_unc_cwd_or_path_folder_is_never_looked_up() {
-        let (_, calls) = run(&format!(r"tools\php{ARG}"), r"C:\bin", Some(r"\\srv\share\repo"), &[]);
+        let (found, calls) = run(
+            &format!(r"tools\php{ARG}"),
+            r"C:\bin",
+            Some(r"\\srv\share\repo"),
+            &[],
+        );
         assert!(calls.is_empty(), "{calls:?}");
+        assert_eq!(
+            found.len(),
+            1,
+            "unresolved, a name with a folder counts as a launcher"
+        );
         let (found, calls) = run(&format!("php{ARG}"), r"\\srv\share\bin;//srv/b", None, &[]);
         assert!(calls.is_empty(), "{calls:?}");
         assert!(found.is_empty(), "a bare name found nowhere is no program");
@@ -459,20 +505,42 @@ mod tests {
         assert_eq!(calls.get(1), Some(&PathBuf::from(r"C:\a\php.COM")));
         assert_eq!(calls.last(), Some(&PathBuf::from(r"C:\b\php.BAT")));
         // An .exe before the .bat in the same folder, or in an earlier folder, wins.
-        for files in [&[r"C:\a\php.exe", r"C:\a\php.bat"][..], &[r"C:\a\php.exe", r"C:\b\php.bat"]] {
+        for files in [
+            &[r"C:\a\php.exe", r"C:\a\php.bat"][..],
+            &[r"C:\a\php.exe", r"C:\b\php.bat"],
+        ] {
             let (found, _) = run(&format!("php{ARG}"), r"C:\a;C:\b", None, files);
             assert!(found.is_empty(), "{files:?}");
         }
         // A .bat in an earlier folder wins over an .exe in a later one.
-        let (found, _) = run(&format!("php{ARG}"), r"C:\a;C:\b", None, &[r"C:\a\php.bat", r"C:\b\php.exe"]);
+        let (found, _) = run(
+            &format!("php{ARG}"),
+            r"C:\a;C:\b",
+            None,
+            &[r"C:\a\php.bat", r"C:\b\php.exe"],
+        );
         assert_eq!(found.len(), 1);
         // A script wins over the .bat in its folder.
-        let (found, _) = run(&format!("php{ARG}"), r"C:\a", None, &[r"C:\a\php.ps1", r"C:\a\php.bat"]);
+        let (found, _) = run(
+            &format!("php{ARG}"),
+            r"C:\a",
+            None,
+            &[r"C:\a\php.ps1", r"C:\a\php.bat"],
+        );
         assert!(found.is_empty());
         // A relative name is looked up under a local cwd.
-        let (found, calls) = run(&format!(r"tools\php{ARG}"), r"C:\x", Some(r"C:\repo"), &[r"C:\repo\tools\php.exe"]);
+        let (found, calls) = run(
+            &format!(r"tools\php{ARG}"),
+            r"C:\x",
+            Some(r"C:\repo"),
+            &[r"C:\repo\tools\php.exe"],
+        );
         assert!(found.is_empty());
-        assert_eq!(calls.last(), Some(&PathBuf::from(r"C:\repo\tools\php.EXE")), "{calls:?}");
+        assert_eq!(
+            calls.last(),
+            Some(&PathBuf::from(r"C:\repo\tools\php.EXE")),
+            "{calls:?}"
+        );
     }
 
     #[test]

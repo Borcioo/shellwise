@@ -19,7 +19,9 @@ pub fn generate(out_dir: &std::path::Path) {
         .collect();
     assert!(!docs.is_empty(), "docs/rules holds no .md file");
     docs.sort();
-    let mut out = String::from("/// Every rule's doc, sorted by id.\npub static RULE_DOCS: &[(&str, &str)] = &[\n");
+    let mut out = String::from(
+        "/// Every rule's doc, sorted by id.\npub static RULE_DOCS: &[(&str, &str)] = &[\n",
+    );
     for (id, path) in &docs {
         writeln!(out, "    ({id:?}, include_str!({path:?})),").unwrap();
     }

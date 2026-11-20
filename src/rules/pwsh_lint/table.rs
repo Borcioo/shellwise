@@ -191,7 +191,10 @@ mod tests {
     fn load(text: &str) -> Loaded {
         let mut t = Loaded::default();
         let mut params: Vec<(String, String)> = Vec::new();
-        for line in text.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        for line in text
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
             let f: Vec<&str> = line.split('\t').collect();
             match f[0] {
                 "platform" => t.platform = f[1..].join(" "),
@@ -272,7 +275,10 @@ mod tests {
                     format!("{} {group}", param_text(&c.param))
                 })
                 .collect(),
-            aliases: ALIASES.iter().map(|(a, c)| ((*a).into(), (*c).into())).collect(),
+            aliases: ALIASES
+                .iter()
+                .map(|(a, c)| ((*a).into(), (*c).into()))
+                .collect(),
             variables: VARIABLES
                 .iter()
                 .map(|(v, k)| ((*v).into(), kind(*k).into()))
@@ -288,7 +294,11 @@ mod tests {
     #[test]
     fn the_generated_table_equals_the_tsv() {
         let want = load(include_str!("../../../data/pwsh_commands.tsv"));
-        assert!(want.cmdlets.len() > 300 && want.aliases.len() > 100, "{}", want.cmdlets.len());
+        assert!(
+            want.cmdlets.len() > 300 && want.aliases.len() > 100,
+            "{}",
+            want.cmdlets.len()
+        );
         assert_eq!(generated(), want);
     }
 
@@ -299,14 +309,20 @@ mod tests {
         assert!(Facts::for_shell(Shell::Bash(crate::BashProfile::GitBash)).is_none());
         let gci = t.cmdlet("Get-ChildItem").expect("pwsh has Get-ChildItem");
         assert!(gci.params.iter().any(|p| p.name == "recurse"));
-        assert!(gci.all_params().any(|(p, common)| common && p.name == "erroraction"));
+        assert!(
+            gci.all_params()
+                .any(|(p, common)| common && p.name == "erroraction")
+        );
         assert!(t.cmdlet("get-wmiobject").is_none(), "a 5.1-only cmdlet");
         assert_eq!(t.alias_target("LS"), Some("get-childitem"));
         assert_eq!(t.variable_kind("HOME"), Some(VarKind::Readonly));
         assert_eq!(t.variable_kind("args"), Some(VarKind::Automatic));
         assert!(t.is_approved_verb("Get"));
         assert!(!t.is_approved_verb("Frob"));
-        assert_eq!(t.dotnet_path_args("System.IO.Directory", "Move"), Some(&[0, 1][..]));
+        assert_eq!(
+            t.dotnet_path_args("System.IO.Directory", "Move"),
+            Some(&[0, 1][..])
+        );
         assert_eq!(t.dotnet_path_args("IO.File", "ReadAllText"), Some(&[0][..]));
         assert_eq!(t.dotnet_path_args("IO.File", "Exists"), None);
     }

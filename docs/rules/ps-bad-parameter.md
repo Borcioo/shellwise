@@ -1,6 +1,6 @@
 # ps-bad-parameter
 
-A cmdlet call that PowerShell refuses at binding time: a parameter name it cannot find, a prefix that matches several parameters, a parameter left without its value, or one positional argument too many. Parameters are bound as PowerShell binds them, from the generated table `data/pwsh_commands.tsv`: exact name, exact alias, then a unique prefix of a name or alias; a provider's dynamic parameters only when no other parameter matches. The table holds pwsh 7 and Windows PowerShell 5.1 separately, so a 7-only parameter is reported in 5.1. Known bash habits (`ls -la`, `Select-String -A 1`, `cd /d`) get the PowerShell spelling from the cmdlet's row in `data/programs.toml` (`lint.flag_hints`).
+A cmdlet call that PowerShell refuses at binding time: a parameter name it cannot find, a prefix that matches several parameters, a parameter left without its value, or one positional argument too many. Parameters are bound as PowerShell binds them, from the generated table `data/pwsh_commands.tsv`: exact name, exact alias, then a unique prefix of a name or alias; a provider's dynamic parameters only when no other parameter matches. A parameter that takes a value takes the next word, even one starting with a dash, unless that word names a static parameter (`-l -File` lists a path named `-File`). The table holds pwsh 7 facts only, so Windows PowerShell 5.1 is not judged; a simple function (no CmdletBinding) and a path on another provider's drive (`Cert:`, `HKLM:`) get no unknown-parameter finding. Known bash habits (`ls -la`, `Select-String -A 1`, `cd /d`) get the PowerShell spelling from the cmdlet's row in `data/programs.toml` (`lint.flag_hints`).
 
 | Case | Level | Why |
 |---|---|---|
@@ -10,7 +10,7 @@ A cmdlet call that PowerShell refuses at binding time: a parameter name it canno
 | PositionalParameterNotFound: more positional arguments than the cmdlet takes | `break` | The call fails. |
 | Words after `--`, after `--%`, or a command the table does not hold | `ok` | Not bound here. |
 
-Derived from Specter's `UseCmdletCorrectly` and `UseCompatibleCommands` (https://github.com/rjmholt/Specter, MIT License, Copyright (c) Specter Contributors; the full notice is in the header of `src/rules/pwsh_lint.rs`).
+Derived from Specter's `UseCmdletCorrectly` and `UseCompatibleCommands` (https://github.com/rjmholt/Specter, MIT License, Copyright (c) Specter Contributors; the full notice is in the header of `src/rules/pwsh_lint/mod.rs`).
 
 ## Deny
 

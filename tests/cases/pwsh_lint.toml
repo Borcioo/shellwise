@@ -386,6 +386,65 @@ rules = ["ps-bad-parameter"]
 fix = "use -Context 0,1: Select-String b -Context 0,1 notes.txt"
 oracle = "accepts"
 
+# With -Pattern named, `1` becomes the path: the call fails (probed: "path not found").
+[[row]]
+id = "bad-param-a-hinted-number-after-a-named-pattern"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Pattern b -A 1"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Context 0,1: Select-String -Pattern b -Context 0,1"
+oracle = "accepts"
+
+# A splat may bind any parameter, so the positions are not counted (probed: this runs).
+[[row]]
+id = "bad-param-allow-a-splat"
+os = "any"
+shell = "pwsh"
+command = "$p = @{ PassThru = $true }; Set-Location D:\\x @p"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# Words pwsh 7.7 binds as arguments, not parameters (probed: no binding error): after `--`,
+# after `--%`, a quoted dash word and a negative number.
+[[row]]
+id = "bad-param-allow-a-dash-word-after-the-end-of-parameters"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -- -la"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-dash-word-after-stop-parsing"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem --% -la"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-quoted-dash-word"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem '-la'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-negative-number"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -1"
+level = "ok"
+rules = []
+oracle = "accepts"
+
 # A value parameter takes the next dash token as its value unless the token names a static
 # parameter (probed in pwsh 7.7: `-l -a` and `-l -File` list a path named so, `-Pattern -NoProfile`
 # searches for the text; `-l -Force` and `-Pattern -Quiet` are "Missing an argument").
@@ -720,6 +779,16 @@ fix = "assign $text"
 oracle = "accepts"
 
 [[row]]
+id = "stale-content-after-a-named-path"
+os = "any"
+shell = "pwsh"
+command = "Set-Content -Path report.md $text"
+level = "break"
+rules = ["stale-write-var"]
+fix = "assign $text"
+oracle = "accepts"
+
+[[row]]
 id = "stale-allow-assigned-first"
 os = "any"
 shell = "pwsh"
@@ -881,6 +950,15 @@ id = "prose-allow-the-other-family"
 os = "any"
 shell = "pwsh"
 command = "gh pr create --title x --body 'Zmiana \u201Ex\u201D gotowa'"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "prose-allow-a-subcommand-that-takes-no-prose"
+os = "any"
+shell = "pwsh"
+command = "gh repo create x --title \"A „b” c\""
 level = "ok"
 rules = []
 oracle = "accepts"

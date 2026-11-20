@@ -59,7 +59,10 @@ mod tests {
     use super::*;
 
     fn metachars(arg: &str, ps_quoted: bool) -> String {
-        reparse_bat_arg(arg, ps_quoted).metachars.into_iter().collect()
+        reparse_bat_arg(arg, ps_quoted)
+            .metachars
+            .into_iter()
+            .collect()
     }
 
     #[test]

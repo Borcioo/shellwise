@@ -4,15 +4,15 @@
 
 use tree_sitter::{Node, Parser};
 
-use super::bind::{Arg, Problem, bind_args, named, positional, switch_on};
+use super::bind::{Arg, Problem, bind_args, ends_parameters, named, positional, switch_on};
 use super::table::{ALL_SETS, Cmdlet, Facts};
 use super::{
     Ctx, ENV_SCOPE, Rule, Site, Walk, command_tagged, elem_span, finding, has_folder, is_native,
     is_pwsh, lint, literal, plain_var, program, replaced, table_name, text, upstream, walk,
 };
+use crate::Os;
 use crate::ir::{Elem, Quote, SimpleCommand, Stmt, WordPart};
 use crate::level::{Finding, Level, Span};
-use crate::Os;
 
 // ---------------------------------------------------------------------------------------------
 // gate-truncated-pipeline
@@ -248,7 +248,13 @@ impl Rule for BadParameter {
                         ),
                     ),
                 };
-                out.push(finding(PS_BAD_PARAMETER, Level::Break, word.span, message, fix));
+                out.push(finding(
+                    PS_BAD_PARAMETER,
+                    Level::Break,
+                    word.span,
+                    message,
+                    fix,
+                ));
                 break;
             }
             if out.len() == before && !other_provider {
@@ -268,8 +274,13 @@ fn on_another_provider(c: &SimpleCommand, cmd: &Cmdlet) -> bool {
     c.args.iter().filter_map(literal).any(|v| {
         v.split_once(':').is_some_and(|(drive, _)| {
             drive.len() > 1
-                && drive.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                && drive.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+                && drive
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                && drive
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_alphabetic())
         })
     })
 }
@@ -279,7 +290,12 @@ fn hint_finding(ctx: &Ctx, c: &SimpleCommand, cmd: &Cmdlet) -> Option<Finding> {
     let src = ctx.input.command;
     let row = program(ctx, cmd.name)?;
     let hints = lint(row, "flag_hints");
+    // After `--` every word is an argument (`Get-ChildItem -- -la` lists the path `-la`).
+    let over = c.args.iter().position(|w| ends_parameters(src, w));
     for (k, a) in c.args.iter().enumerate() {
+        if over.is_some_and(|o| k > o) {
+            break;
+        }
         if a.quote != Quote::None {
             continue;
         }
@@ -327,7 +343,10 @@ fn hint_finding(ctx: &Ctx, c: &SimpleCommand, cmd: &Cmdlet) -> Option<Finding> {
             }
             let (message, fix) = if replacement.is_empty() {
                 (
-                    format!("`{typed}` is cmd.exe or bash syntax that `{}` refuses", cmd.name),
+                    format!(
+                        "`{typed}` is cmd.exe or bash syntax that `{}` refuses",
+                        cmd.name
+                    ),
                     format!("remove `{typed}`: {}", replaced(src, c.span, a.span, "")),
                 )
             } else {
@@ -342,7 +361,13 @@ fn hint_finding(ctx: &Ctx, c: &SimpleCommand, cmd: &Cmdlet) -> Option<Finding> {
                     ),
                 )
             };
-            return Some(finding(PS_BAD_PARAMETER, Level::Break, a.span, message, fix));
+            return Some(finding(
+                PS_BAD_PARAMETER,
+                Level::Break,
+                a.span,
+                message,
+                fix,
+            ));
         }
     }
     None
@@ -676,10 +701,9 @@ impl Rule for StaleWriteVar {
             if WRITE_ALL
                 .iter()
                 .any(|(t, p)| *t == ty && method.starts_with(p))
+                && let Some(a) = m.args.get(1)
             {
-                if let Some(a) = m.args.get(1) {
-                    contents.push((a.span, text(src, a.span).to_string()));
-                }
+                contents.push((a.span, text(src, a.span).to_string()));
             }
         }
         let mut bound: Vec<String> = w.assigned.clone();
@@ -722,15 +746,18 @@ impl Rule for StaleWriteVar {
             }
             let path_named = PATH_PARAMS.iter().any(|p| named(&args, p).is_some());
             let content_named = CONTENT_PARAMS.iter().any(|p| named(&args, p).is_some());
-            if !content_named {
-                if let Some(pos) = lint(row, "content_position")
+            if !content_named
+                && let Some(pos) = lint(row, "content_position")
                     .first()
                     .and_then(|s| s.parse::<usize>().ok())
-                {
-                    let pos = if path_named { pos.saturating_sub(1) } else { pos };
-                    if let Some(word) = positional(&args).get(pos) {
-                        contents.push((word.span, text(src, word.span).to_string()));
-                    }
+            {
+                let pos = if path_named {
+                    pos.saturating_sub(1)
+                } else {
+                    pos
+                };
+                if let Some(word) = positional(&args).get(pos) {
+                    contents.push((word.span, text(src, word.span).to_string()));
                 }
             }
             if let Some(Elem::Expr(x)) = upstream(site) {
@@ -792,7 +819,10 @@ fn tree_bound_names(src: &str) -> Vec<String> {
     while let Some(n) = stack.pop() {
         let mut cursor = n.walk();
         if matches!(n.kind(), "foreach_statement" | "script_parameter") {
-            if let Some(k) = n.named_children(&mut cursor).find(|k| k.kind() == "variable") {
+            if let Some(k) = n
+                .named_children(&mut cursor)
+                .find(|k| k.kind() == "variable")
+            {
                 let name = src.get(k.start_byte()..k.end_byte()).unwrap_or("");
                 names.push(plain_var(name.trim_start_matches('$')));
             }
@@ -1190,6 +1220,10 @@ mod tests {
             // ShouldProcess parameters only on cmdlets that support them.
             ("get-childitem", "whatif", "missing"),
             ("remove-item", "whatif", "whatif"),
+            // An exact name or alias wins over the longer ones it is a prefix of (`-Skip` and
+            // -SkipLast; `-type`, an alias of -MemberType, and -TypeName).
+            ("select-object", "Skip", "skip"),
+            ("add-member", "type", "membertype"),
         ];
         for (cmd, typed, want) in table {
             assert_eq!(bound(cmd, typed), want, "{cmd} -{typed}");

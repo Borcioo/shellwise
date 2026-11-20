@@ -7,9 +7,9 @@ use super::{
     Ctx, ENV_SCOPE, Rule, command_tagged, finding, has_folder, is_native, is_pwsh, lint, literal,
     program_of, replaced, table_name, text, walk,
 };
+use crate::Os;
 use crate::ir::{Quote, WordPart};
 use crate::level::{Finding, Level};
-use crate::Os;
 
 pub const PS_UNIX_COMMAND: &str = "ps-unix-command";
 
@@ -281,8 +281,7 @@ impl Rule for StdinScript {
             };
             let stdin = lint(row, "stdin_args");
             let reads = c.args.is_empty()
-                || c
-                    .args
+                || c.args
                     .iter()
                     .any(|a| literal(a).is_some_and(|v| stdin.contains(&v.as_str())));
             if !reads {

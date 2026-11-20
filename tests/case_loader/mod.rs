@@ -94,11 +94,7 @@ pub fn verdict(row: &Row) -> Verdict {
         origin: Origin::CommandLine,
         problem: None,
     };
-    analyse(
-        &input,
-        &config(row),
-        &Deadline::new(Instant::now(), 8000),
-    )
+    analyse(&input, &config(row), &Deadline::new(Instant::now(), 8000))
 }
 
 /// What is wrong with a row's verdict, or `None` when it matches.
@@ -135,6 +131,10 @@ fn config(row: &Row) -> Config {
     let path = dir.join(format!("{}.toml", row.id));
     std::fs::write(&path, text).unwrap();
     let (cfg, findings) = Config::load(Some(&path), None, None);
-    assert!(findings.is_empty(), "{}: the config gave {findings:?}", row.id);
+    assert!(
+        findings.is_empty(),
+        "{}: the config gave {findings:?}",
+        row.id
+    );
     cfg
 }

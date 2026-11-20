@@ -7,7 +7,7 @@ PowerShell ends a string at a typographic quote of the same family as the one th
 | A typographic quote of the opening quote's family inside the value of a prose flag | `break` | The text arrives torn. |
 | A typographic quote of the other family, or a body file | `ok` |  |
 
-Derived from Specter's `AvoidSmartQuotes` (https://github.com/rjmholt/Specter, MIT License, Copyright (c) Specter Contributors; the full notice is in the header of `src/rules/pwsh_lint.rs`).
+Derived from Specter's `AvoidSmartQuotes` (https://github.com/rjmholt/Specter, MIT License, Copyright (c) Specter Contributors; the full notice is in the header of `src/rules/pwsh_lint/mod.rs`).
 
 ## Deny
 
