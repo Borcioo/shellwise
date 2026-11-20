@@ -1950,6 +1950,40 @@ command = "bash -c 'rm -rf .git'"
 level = "warn"
 rules = ["opaque-destructive"]
 
+# Only the words the delete acts on count: not the wrapper's own switch (Git Bash's `//c`),
+# not a path in another statement of the same code.
+[[row]]
+id = "gb-cmd-switch-before-the-delete-is-no-path"
+os = "windows"
+shell = "gitbash"
+command = 'cmd //c "rmdir node_modules"'
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-a-cd-to-the-repo-root-is-no-delete-target"
+os = "windows"
+shell = "gitbash"
+command = "powershell.exe -NoProfile -Command \"cd FX_REPO; Remove-Item 'x.txt'\""
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-a-cd-after-the-delete-is-no-delete-target"
+os = "windows"
+shell = "gitbash"
+command = "powershell.exe -NoProfile -Command \"Remove-Item 'x.txt'; cd FX_REPO\""
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-the-repo-root-after-the-delete-verb"
+os = "windows"
+shell = "gitbash"
+command = "powershell.exe -NoProfile -Command \"cd build; Remove-Item -Recurse FX_REPO\""
+level = "danger"
+rules = ["opaque-destructive"]
+
 # ---------------------------------------------------------------- Ruling 122 item 2: resolver gaps
 
 # A literal assigned earlier in the same command, and a loop over a literal list, resolve.

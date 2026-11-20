@@ -282,6 +282,35 @@ fn unread_hits(c: &SimpleCommand, command: &str) -> bool {
 }
 
 /// The words of raw command text, split at whitespace, quotes and shell punctuation.
+/// The words a destructive hit acts on: those after its command's name, up to the end of that
+/// statement (`;`, `&`, `|`, a newline), so a wrapper's own switch (Git Bash's `//c`) or a `cd`
+/// before the delete is no target. Every word for a hit no table row names (a `.Delete()`).
+fn target_words(text: &str, kind: scan::Kind) -> Vec<&str> {
+    let entry = match kind {
+        scan::Kind::Row(k) => scan::table().get(k),
+        _ => None,
+    };
+    let Some(entry) = entry else {
+        return raw_words(text).collect();
+    };
+    let verbs: Vec<&str> = entry
+        .names
+        .iter()
+        .filter_map(|n| n.last().map(String::as_str))
+        .collect();
+    let mut out = Vec::new();
+    for statement in text.split([';', '&', '|', '\n']) {
+        let words: Vec<&str> = raw_words(statement).collect();
+        if let Some(i) = words
+            .iter()
+            .position(|w| verbs.iter().any(|v| w.eq_ignore_ascii_case(v)))
+        {
+            out.extend_from_slice(&words[i + 1..]);
+        }
+    }
+    out
+}
+
 fn raw_words(text: &str) -> impl Iterator<Item = &str> {
     text.split(|c: char| c.is_whitespace() || "'\"`;&|()<>=,".contains(c))
         .filter(|w| !w.is_empty())
@@ -916,8 +945,8 @@ impl<'a> Scene<'a> {
         let words: Vec<String> = scan::hits(scan::table(), text)
             .into_iter()
             .filter(|h| h.kind != scan::Kind::Unreadable)
-            .filter_map(|h| text.get(h.span.start..h.span.end))
-            .flat_map(raw_words)
+            .filter_map(|h| Some((h.kind, text.get(h.span.start..h.span.end)?)))
+            .flat_map(|(kind, t)| target_words(t, kind))
             .map(str::to_string)
             .collect();
         let protected = words.iter().find_map(|w| self.protected_word(w));

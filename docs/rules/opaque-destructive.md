@@ -6,7 +6,9 @@ an option the program table does not model. It is a finding only when its raw te
 command that deletes or discards data (Ruling 91a): an unknown tool, or such a command with no
 delete in it, is ok.
 
-Level `danger` when its words also spell a protected location literally: an absolute path that is
+Level `danger` when a word the delete acts on (after the delete command's name, in the same
+statement: not a wrapper's switch such as Git Bash's `//c`, not a `cd` before or after it) spells
+a protected location literally: an absolute path that is
 a drive root, `/`, a system folder, the home folder, the repo root or a protected path (or an
 ancestor of one), `~` or `$HOME`, or `.git` from the repo root (Ruling 122 (b)). Level `warn`
 otherwise.
@@ -25,6 +27,7 @@ bash -c 'rm -rf "$HOME" && make'
 ```bash
 bash -c 'rm -rf build && make'
 timeout --weird 60 rm -rf build
+cmd //c "rmdir node_modules"
 ```
 
 ## Allow
