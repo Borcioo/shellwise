@@ -744,16 +744,16 @@ rules = []
 id = "unquoted-path-argument"
 os = "any"
 shell = "gitbash"
-command = 'ls C:\Users\dev\notes'
+command = 'ls C:\work\app\notes'
 level = "break"
 rules = ["bash-unquoted-backslash-path"]
-fix = "write C:/Users/dev/notes with forward slashes"
+fix = "write C:/work/app/notes with forward slashes"
 
 [[row]]
 id = "unquoted-path-allow-double-quoted"
 os = "any"
 shell = "gitbash"
-command = 'ls "C:\Users\dev"'
+command = 'ls "C:\work\app"'
 level = "ok"
 rules = []
 
@@ -761,7 +761,7 @@ rules = []
 id = "unquoted-path-allow-single-quoted"
 os = "any"
 shell = "gitbash"
-command = "ls 'C:\\Users\\dev'"
+command = "ls 'C:\\work\\app'"
 level = "ok"
 rules = []
 
@@ -769,7 +769,7 @@ rules = []
 id = "unquoted-path-allow-forward-slashes"
 os = "any"
 shell = "gitbash"
-command = 'ls C:/Users/dev'
+command = 'ls C:/work/app'
 level = "ok"
 rules = []
 
@@ -777,6 +777,6 @@ rules = []
 id = "unquoted-path-posix-is-ok"
 os = "any"
 shell = "bash"
-command = 'ls C:\Users\dev'
+command = 'ls C:\work\app'
 level = "ok"
 rules = []
