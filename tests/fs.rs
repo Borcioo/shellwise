@@ -8780,10 +8780,10 @@ fn a_cd_on_one_branch_of_a_join_leaves_the_location_uncertain() {
 #[test]
 fn a_cd_in_a_heredoc_substitution_is_seen() {
     let nl = '\n';
-    // An expanding body runs its `$(…)`: a nested `cd` makes the location unknown
-    // (`elem_nests_location_change` reads the body through `cmd_words`).
+    // An expanding body runs its `$(…)` in a subshell: a nested `cd` leaves this shell where it
+    // is (Ruling 122).
     let open = format!("cat <<EOF{nl}$(cd /tmp/x){nl}EOF{nl}rm -rf .");
-    assert_eq!(last_target_bash(&open), MAY_BE_CRITICAL, "{open}");
+    assert_eq!(last_target_bash(&open), paths(&["/w/repo"]), "{open}");
     // A quoted delimiter keeps the body literal: nothing runs.
     let q = '\'';
     let quoted = format!("cat <<{q}EOF{q}{nl}$(cd /tmp/x){nl}EOF{nl}rm -rf .");

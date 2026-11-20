@@ -69,6 +69,11 @@ const NEW_FILES: &[(&str, &[&str], &str)] = &[
         &["Bash", "PowerShell"],
         "the corpus rows' tool names, compared to pick the shell",
     ),
+    (
+        "src/fs/assigned.rs",
+        &["foreach"],
+        "the PowerShell loop keyword a loop header starts with, not a command",
+    ),
 ];
 
 /// The file that reads `data/programs.toml`: its literals are the table's own keys.

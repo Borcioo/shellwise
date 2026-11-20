@@ -107,7 +107,8 @@ fn no_file_system_call_on_a_share_or_device_spelling() {
             bash,
             "rm -rf build".into(),
             share_cwd,
-            Level::Danger,
+            // An unknown location is a warn (Ruling 122).
+            Level::Warn,
             r"\\192.0.2.1\share\repo",
         ),
         (
@@ -164,7 +165,7 @@ fn no_file_system_call_on_a_share_or_device_spelling() {
             pwsh,
             r"Remove-Item -Recurse -Force \\localhost\C$\sometool-build".into(),
             &repo,
-            Level::Danger,
+            Level::Warn,
             r"C:\sometool-build",
         ),
     ];

@@ -7,7 +7,8 @@ mod case_loader;
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use case_loader::Row;
@@ -134,21 +135,45 @@ const LINKS: [(&str, &str); 5] = [
     ("allowed/box", "outside/target"),
 ];
 
-fn fixture() -> &'static Fixture {
-    static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| {
-        let root = std::env::temp_dir().join(format!("shellwise-delete-{}", std::process::id()));
+impl Fixture {
+    /// Remove the tree: each link first (so nothing is deleted through it), the locked folder
+    /// opened, then the rest.
+    fn remove(&self) {
+        for (link, _) in LINKS {
+            unlink(&self.at(link));
+        }
+        unlock(&self.at(LOCKED));
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
+/// The fixture, shared by the tests that run at the same time and removed when the last of them
+/// drops it: each test holds it for its whole body. A static that never drops would leave one
+/// tree per run in the temp folder.
+fn fixture() -> Arc<Fixture> {
+    static LIVE: Mutex<Weak<Fixture>> = Mutex::new(Weak::new());
+    static BUILT: AtomicUsize = AtomicUsize::new(0);
+    let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(fx) = live.upgrade() {
+        return fx;
+    }
+    let n = BUILT.fetch_add(1, Ordering::SeqCst);
+    let fx = Arc::new({
+        let root =
+            std::env::temp_dir().join(format!("shellwise-delete-{}-{n}", std::process::id()));
         assert!(
             !root.to_string_lossy().contains(' '),
             "the fixture path {root:?} holds a space; the rows write paths unquoted"
         );
         let fx = Fixture { root };
         if fx.root.exists() {
-            for (link, _) in LINKS {
-                unlink(&fx.at(link));
-            }
-            unlock(&fx.at(LOCKED));
-            std::fs::remove_dir_all(&fx.root).unwrap();
+            fx.remove();
         }
         for dir in [
             "repo/.git",
@@ -191,7 +216,42 @@ fn fixture() -> &'static Fixture {
             panic!("the non-repo fixture lies inside the repo {repo:?}");
         }
         fx
-    })
+    });
+    *live = Arc::downgrade(&fx);
+    fx
+}
+
+/// Two runs of a test that builds the fixture leave the temp folder as empty as they found it.
+/// The child runs see a temp folder of their own, so other runs on the machine do not count.
+#[test]
+fn the_fixture_is_removed_when_its_tests_end() {
+    let temp = std::env::temp_dir().join(format!("shellwise-fixture-leak-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    mkdir(&temp);
+    let exe = std::env::current_exe().unwrap();
+    let mut counts = Vec::new();
+    for _ in 0..2 {
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", "git_rows", "--test-threads=1"])
+            .env("TEMP", &temp)
+            .env("TMP", &temp)
+            .env("TMPDIR", &temp)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "the child run: {stdout} {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        counts.push(std::fs::read_dir(&temp).unwrap().count());
+    }
+    let left: Vec<PathBuf> = std::fs::read_dir(&temp)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let _ = std::fs::remove_dir_all(&temp);
+    assert_eq!(counts, [0, 0], "left in the temp folder: {left:?}");
 }
 
 // ---------------------------------------------------------------- running a row
@@ -284,6 +344,7 @@ fn mismatch(row: &Row) -> Option<String> {
 }
 
 fn run_file(name: &str) {
+    let _fx = fixture();
     let rows = case_loader::rows(name);
     let wrong: Vec<String> = rows.iter().filter_map(mismatch).collect();
     assert!(
@@ -339,8 +400,9 @@ fn ported_rows_keep_their_count() {
 }
 
 /// Every finding id the two rules report (`tests/rules_meta.rs` sees only each rule's own id).
-const FINDING_IDS: [&str; 14] = [
+const FINDING_IDS: [&str; 15] = [
     shellwise::rules::delete::DELETE_CRITICAL,
+    shellwise::rules::delete::DELETE_EMPTY_EXPANSION,
     shellwise::rules::delete::DELETE_THROUGH_LINK,
     shellwise::rules::delete::DELETE_OUTSIDE_PROJECT,
     shellwise::rules::delete::DELETE_ALLOWED_ROOT,
@@ -360,6 +422,17 @@ const FINDING_IDS: [&str; 14] = [
 /// answers before it: `analyse` waits on the same deadline, so the verdict is then
 /// `analysis-incomplete`, danger from the raw scan of the delete. No row can pin that race.
 const NO_ROW: [&str; 1] = [shellwise::rules::delete::WALK_TIMEOUT];
+
+/// Findings that are only ever warn (Ruling 122): a row where they fire stands in for the deny row.
+const WARN_ONLY: [&str; 7] = [
+    shellwise::rules::delete::DELETE_THROUGH_LINK,
+    shellwise::rules::delete::DELETE_OUTSIDE_PROJECT,
+    shellwise::rules::delete::DELETE_ALLOWED_ROOT,
+    shellwise::rules::delete::DELETE_UNKNOWN_LOCATION,
+    shellwise::rules::delete::DYNAMIC_TARGET,
+    shellwise::rules::delete::WALK_UNREADABLE,
+    shellwise::rules::git::GIT_UNREADABLE,
+];
 
 #[test]
 fn every_finding_id_has_a_deny_row_a_row_without_it_and_a_doc() {
@@ -386,9 +459,14 @@ fn every_finding_id_has_a_deny_row_a_row_without_it_and_a_doc() {
         if NO_ROW.contains(&id) {
             continue;
         }
-        let deny = rows.iter().any(|r| {
-            fires(r, id) && ["danger", "critical"].contains(&r["level"].as_str().unwrap())
-        });
+        let want: &[&str] = if WARN_ONLY.contains(&id) {
+            &["warn"]
+        } else {
+            &["danger", "critical"]
+        };
+        let deny = rows
+            .iter()
+            .any(|r| fires(r, id) && want.contains(&r["level"].as_str().unwrap()));
         if !deny || rows.iter().all(|r| fires(r, id)) {
             wrong.push(format!("{id}: no deny row, or no row without it"));
         }
@@ -519,7 +597,8 @@ fn a_configured_level_applies_to_the_length_stage_and_to_an_incomplete_analysis(
 
 #[test]
 fn allowed_roots_come_from_the_user_file_and_never_from_the_repo_file() {
-    let dir = fixture().at("cfg");
+    let fx = fixture();
+    let dir = fx.at("cfg");
     mkdir(&dir);
     let user = dir.join("config.toml");
     let repo = dir.join(shellwise::config::REPO_FILE);

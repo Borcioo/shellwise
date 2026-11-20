@@ -216,6 +216,7 @@ value_options = ["-Filter", "-Include", "-Exclude", "-Credential", "-Stream", "-
 lint = { tags = ["children-delete"], flag_hints = ["-rf=-Recurse -Force", "-fr=-Recurse -Force", "-Rf=-Recurse -Force"] }
 [program.delete]
 recursive = ["-Recurse"]
+forced = ["-Force"]
 dry_run = ["-WhatIf"]
 target_options = ["-Path", "-LiteralPath"]
 
@@ -233,6 +234,7 @@ name = "rm"
 kind = ["delete"]
 [program.delete]
 recursive = ["-r", "-R", "--recursive"]
+forced = ["-f", "--force"]
 
 [[program]]
 name = "rmdir"
@@ -334,6 +336,8 @@ source_options = ["-s", "--source"]
 hunk_options = ["--ours", "--theirs", "-p", "--patch", "-m", "--merge"]
 branch_options = ["-b", "-B", "--orphan", "--detach", "-d"]
 clean_value_options = ["-e", "--exclude"]
+clean_dirs_options = ["-d"]
+force_options = ["-f", "--force"]
 
 [[program.discard.subcommands]]
 words = "commit"

@@ -2377,6 +2377,11 @@ fn looked_up_alias<'t>(
 }
 
 fn elem_nests_location_change(e: &Elem, shell: Shell, defined: &[String]) -> bool {
+    // A Bash substitution or child-shell body runs in a subshell: a `cd` there cannot move this
+    // shell (Ruling 122). PowerShell runs `$( )` and `( )` in the session itself.
+    if matches!(shell, Shell::Bash(_)) {
+        return false;
+    }
     let words: Vec<&Word> = match e {
         Elem::Cmd(c) => cmd_words(c),
         Elem::Method(m) => m.args.iter().collect(),
@@ -2824,8 +2829,15 @@ const PS_ITEM_WRITERS: [&str; 30] = [
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
 /// command or a script call (PowerShell) may assign anything.
 pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
+    mark_assigned_except(env, script, command, &[]);
+}
+
+/// `mark_assigned`, except the assignments of the commands whose span is in `skip` (the literal
+/// assignments `assigned::resolve_assigned` reads itself).
+pub fn mark_assigned_except(env: &mut EnvView, script: &Script, command: &str, skip: &[Span]) {
     // The dialect is not known here: read the script as pwsh too.
     visit_script(script, &script_aliases(script, true), &mut |n| match n {
+        Node::Cmd(c) if skip.contains(&c.span) => {}
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {
             let ty = m.type_name.to_ascii_lowercase();
@@ -3089,7 +3101,7 @@ const NON_FS_DRIVES: [&str; 6] = ["env", "variable", "cert", "hkcu", "hklm", "ws
 
 /// `text` is a path on one of `NON_FS_DRIVES` (`Env:FOO`, `hkcu:\x`) with no `.` or `..` step,
 /// no stream suffix and no `,` or `;` (`Env:FOO,bar` is a list that holds the file `bar`).
-fn on_non_fs_drive(text: &str) -> bool {
+pub fn on_non_fs_drive(text: &str) -> bool {
     let Some((drive, rest)) = text.split_once(':') else {
         return false;
     };
@@ -3147,7 +3159,7 @@ fn strip_fs_provider(s: &str) -> &str {
     s
 }
 
-fn is_pwd(name: &str, shell: Shell) -> bool {
+pub(crate) fn is_pwd(name: &str, shell: Shell) -> bool {
     match shell {
         Shell::Pwsh | Shell::Powershell5 => name.eq_ignore_ascii_case("PWD"),
         Shell::Bash(_) => name == "PWD",
@@ -3583,6 +3595,20 @@ pub fn target(
     fs: &SharedFs,
     deadline: &Deadline,
 ) -> Target {
+    target_how(word, loc, env, by, fs, deadline, true)
+}
+
+/// `target`, for a delete that is `recursive` or not: a delete that is not removes a link an
+/// earlier statement makes as the link only, so that link's own path is no unknown location.
+pub fn target_how(
+    word: &Word,
+    loc: &Location,
+    env: &EnvView,
+    by: DeleteBy,
+    fs: &SharedFs,
+    deadline: &Deadline,
+    recursive: bool,
+) -> Target {
     let pwsh = matches!(loc.shell, Shell::Pwsh | Shell::Powershell5);
     let mut plans = Vec::new();
     for base in loc.bases() {
@@ -3677,13 +3703,22 @@ pub fn target(
         }
         all
     };
-    if paths.iter().any(|p| loc.near_new_link(p)) {
+    if paths
+        .iter()
+        .any(|p| loc.near_new_link(p) && (recursive || !loc.is_new_link(p)))
+    {
         return Target::UnknownLocation(UnknownKind::MayBeCritical);
     }
     Target::Paths(paths.into_iter().map(PathBuf::from).collect())
 }
 
 impl Location {
+    /// `p` is a link an earlier statement creates, by its compared text.
+    fn is_new_link(&self, p: &str) -> bool {
+        let key = path_key(p, self.os);
+        !self.new_link_unknown && self.new_links.iter().any(|l| path_key(l, self.os) == key)
+    }
+
     /// `p` holds a link an earlier statement creates, or lies beside one.
     fn near_new_link(&self, p: &str) -> bool {
         if self.new_link_unknown {

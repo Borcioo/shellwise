@@ -2,20 +2,23 @@
 
 The guard cannot tell which folder a delete's target names: there is no cwd, or before the
 delete the command moves to a folder it cannot follow, maps a drive, runs a script or makes a
-link, or the target is on a drive nothing shows is the file system the guard sees. Level
-`danger`.
+link, or the target is on a share, a device or a drive nothing shows is the file system the guard
+sees. A `Remove-Item` on `Env:`, the registry or another built-in drive that is no file system
+deletes no file and is no finding, unless the command visibly remaps a drive or runs a script.
 
-`Fix: use the full path of the folder, or, if this is intended, run the same command again with
-` # shellwise: allow` at its end`
+Level `warn` (Ruling 122).
 
-## Deny
+`Fix: use the full path of the folder so the guard can check it`
+
+## Warns
 
 ```powershell
-New-Item -ItemType Junction -Path box -Target ..\outside; Remove-Item -Recurse -Force box
+cd $dir; Remove-Item -Recurse -Force build
 ```
 
 ## Allow
 
 ```powershell
 Remove-Item -Recurse -Force build
+Remove-Item Env:MY_VAR
 ```

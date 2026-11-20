@@ -1,20 +1,24 @@
-//! The delete guard (Ruling 98(2), F14). Each target of a command in the delete family is
-//! resolved as the shell would and judged in this order, the first match deciding:
+//! The delete guard (Rulings 98(2) and 122, F14): deleting is allowed and signalled; a block is
+//! for what is truly dangerous. Each target of a command in the delete family is resolved as the
+//! shell would and judged in this order, the first match deciding:
 //!
 //! 1. **critical:** a system path, a drive root, `/`, the home folder, the root of the repo
-//!    holding the cwd, a protected path, or an ancestor of one of them;
-//! 2. **danger:** a target the guard cannot place (dynamic, unknown location, a walk that did
-//!    not finish) or a delete that goes through a link;
-//! 3. **ok:** inside an allowed root (`cfg.allowed_roots`); deleting an allowed root itself is
-//!    danger;
-//! 4. **ok:** inside the project (the repo root of the cwd, or the cwd outside any repo);
-//! 5. **danger:** anything else.
+//!    holding the cwd, its `.git`, a protected path, or an ancestor of one of them;
+//! 2. **danger** (`delete-empty-expansion`): a recursive or forced delete whose target, with
+//!    every variable or substitution the guard cannot read taken as empty, is one of those or
+//!    their direct contents (`rm -rf "$X/"`, `Remove-Item -Recurse "$x\*"`);
+//! 3. **warn:** a target the guard cannot place (dynamic, unknown location, a walk that did not
+//!    finish), a delete that passes a link, an allowed root itself;
+//! 4. **ok:** inside an allowed root (`cfg.allowed_roots`) or inside the project (the repo root
+//!    of the cwd, or the cwd outside any repo);
+//! 5. **warn:** anything else (`delete-outside-project`).
 //!
 //! The family and its flags come from `data/destructive.toml`; which words a program deletes
 //! comes from its `delete` facts in `data/programs.toml` (`Program::extra`). A command whose
 //! code the guard cannot read (an opaque name, a shell or eval body, an unread wrapper) is
-//! danger only when its raw text names a destructive command (Ruling 91a). The git commands
-//! are judged in `git.rs`.
+//! flagged only when its raw text names a destructive command (Ruling 91a): danger when its
+//! words also hold a literal protected location, warn otherwise. The git commands are judged in
+//! `git.rs`.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -24,6 +28,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use super::{Ctx, Rule};
+use crate::fs::assigned::{Assigned, resolve_assigned};
 use crate::fs::resolve::{self, DeleteBy, Location, Target, UnknownKind};
 use crate::fs::walk::{self, WalkResult, is_within};
 use crate::fs::{TimedOut, bounded};
@@ -42,6 +47,8 @@ pub(crate) struct DeleteFacts {
     /// Options that make the delete recursive: a native short flag matches inside a cluster
     /// (`-rf`), a cmdlet parameter by prefix (`-r`, `-Rec`).
     pub recursive: Vec<String>,
+    /// Options that force the delete (`-f`, `-Force`), matched as `recursive` is.
+    pub forced: Vec<String>,
     /// Every call is recursive (`robocopy /MIR`).
     pub always_recursive: bool,
     /// Options that make it delete nothing (`-WhatIf`, robocopy's `/L`).
@@ -114,6 +121,7 @@ pub const DYNAMIC_TARGET: &str = "dynamic-target";
 pub const WALK_TIMEOUT: &str = "walk-timeout";
 pub const WALK_UNREADABLE: &str = "walk-unreadable";
 pub const OPAQUE_DESTRUCTIVE: &str = "opaque-destructive";
+pub const DELETE_EMPTY_EXPANSION: &str = "delete-empty-expansion";
 
 /// The Fix line of every danger the marker may confirm.
 pub(crate) const CONFIRM_FIX: &str =
@@ -147,7 +155,7 @@ impl Rule for DeleteRule {
         walk_script(ctx.script, &mut loc, &env, &mut |node, loc| {
             let found = match node {
                 Node::Cmd { cmd, piped } => match read_call(cmd, piped, shell, os) {
-                    Read::Unread if unread_hits(cmd, command) => Some(opaque(cmd, command)),
+                    Read::Unread if unread_hits(cmd, command) => Some(scene.opaque(cmd)),
                     Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
                         scene.judge_call(&call, prog, loc)
                     }
@@ -271,18 +279,10 @@ fn unread_hits(c: &SimpleCommand, command: &str) -> bool {
         .is_some_and(|t| scan::destructive_row(t).is_some())
 }
 
-fn opaque(c: &SimpleCommand, command: &str) -> Finding {
-    let text = command.get(c.span.start..c.span.end).unwrap_or_default();
-    let shown: String = text.chars().take(80).collect();
-    finding(
-        OPAQUE_DESTRUCTIVE,
-        Level::Danger,
-        format!(
-            "the guard cannot read what `{shown}` runs, and its text names a command that deletes or discards data"
-        ),
-        "run the delete as a plain command of its own, or, if this is intended, run the same command again with ` # shellwise: allow` at its end".to_string(),
-        c.span,
-    )
+/// The words of raw command text, split at whitespace, quotes and shell punctuation.
+fn raw_words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| c.is_whitespace() || "'\"`;&|()<>=,".contains(c))
+        .filter(|w| !w.is_empty())
 }
 
 // ------------------------------------------------------------------ the family
@@ -394,6 +394,7 @@ fn exec_deletes(args: &[Word], facts: &DeleteFacts, shell: Shell, os: Os) -> boo
 struct Picked {
     words: Vec<Word>,
     recursive: bool,
+    forced: bool,
     contents: bool,
     dry_run: bool,
 }
@@ -447,6 +448,8 @@ fn cmdlet_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
             p.dry_run = true;
         } else if pwsh_matches(&facts.recursive, lead) {
             p.recursive = true;
+        } else if pwsh_matches(&facts.forced, lead) {
+            p.forced = true;
         } else if pwsh_matches(&facts.target_options, lead) {
             match (inline, whole) {
                 (Some(v), Some(_)) if !v.is_empty() => p.words.push(word_of(&v, w)),
@@ -491,6 +494,7 @@ fn native_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
             if option {
                 seen_option = true;
                 p.recursive |= facts.recursive.iter().any(|e| scan::flag_matches(e, t));
+                p.forced |= facts.forced.iter().any(|e| scan::flag_matches(e, t));
                 p.dry_run |= facts.dry_run.iter().any(|e| scan::flag_matches(e, t));
                 if facts.exec_options.iter().any(|e| e == t) {
                     // The clause runs once per match: what it deletes lies inside the targets.
@@ -550,6 +554,9 @@ pub(crate) fn elements(w: &Word) -> Vec<Word> {
 pub(crate) struct Scene<'a> {
     pub ctx: &'a Ctx<'a>,
     pub env: EnvView,
+    /// Names with several literal values (a pwsh list, a loop over a literal list): a target
+    /// that uses one is judged once per value.
+    multi: Vec<Assigned>,
     home: Option<PathBuf>,
     repo: Option<Result<Option<PathBuf>, TimedOut>>,
 }
@@ -558,16 +565,18 @@ pub(crate) struct Scene<'a> {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct How {
     pub recursive: bool,
+    pub forced: bool,
     pub contents: bool,
 }
 
 impl<'a> Scene<'a> {
     pub fn new(ctx: &'a Ctx<'a>) -> Scene<'a> {
         let mut env = ctx.input.env.clone();
-        resolve::mark_assigned(&mut env, ctx.script, ctx.input.command);
+        let multi = resolve_assigned(&mut env, ctx.script, ctx.input.command, ctx.input.shell);
         Scene {
             ctx,
             env,
+            multi,
             // Read before any marking: a command that assigns `HOME` does not move the home
             // folder critical paths are compared with.
             home: ctx.input.env.home().map(PathBuf::from),
@@ -665,9 +674,9 @@ impl<'a> Scene<'a> {
             if rk == key && !how.contents {
                 return Some(finding(
                     DELETE_ALLOWED_ROOT,
-                    Level::Danger,
+                    Level::Warn,
                     format!(
-                        "`{}` is an allowed scratch or temp root itself: deleting it removes every other session's files in it",
+                        "this deletes `{}`, an allowed scratch or temp root itself, with every other session's files in it",
                         p.display()
                     ),
                     format!(
@@ -710,15 +719,14 @@ impl<'a> Scene<'a> {
                     let first = links.first().map(|l| l.path.clone()).unwrap_or_default();
                     Some(through_link(p, &first, shell, span))
                 }
-                WalkResult::Unreadable(at) => Some(finding(
+                WalkResult::Unreadable(at) => Some(warn(
                     WALK_UNREADABLE,
-                    Level::Danger,
                     format!(
-                        "the guard cannot read `{}` inside the tree `{}` deletes, so it cannot tell whether a link there leads outside it",
-                        at.display(),
-                        shown
+                        "this deletes the tree `{}`, and the guard cannot read `{}` inside it to tell whether a link there leads outside it",
+                        p.display(),
+                        at.display()
                     ),
-                    CONFIRM_FIX.to_string(),
+                    None,
                     span,
                 )),
                 WalkResult::Timeout => Some(self.timeout(span, shown)),
@@ -746,35 +754,166 @@ impl<'a> Scene<'a> {
     }
 
     pub fn timeout(&self, span: Span, shown: &str) -> Finding {
-        finding(
+        warn(
             WALK_TIMEOUT,
-            self.ctx.cfg.dynamic_target,
-            format!(
-                "the guard ran out of time while checking what `{shown}` deletes, so it cannot tell whether that is safe"
-            ),
-            CONFIRM_FIX.to_string(),
+            format!("the guard ran out of time and could not read what `{shown}` deletes"),
+            None,
             span,
         )
     }
 
     pub fn dynamic(&self, span: Span, shown: &str, why: &str) -> Finding {
-        finding(
+        warn(
             DYNAMIC_TARGET,
-            self.ctx.cfg.dynamic_target,
-            format!("the guard cannot tell what `{shown}` deletes: {why}"),
-            "write the path literally, or, if this is intended, run the same command again with ` # shellwise: allow` at its end".to_string(),
+            format!("the guard could not read what `{shown}` deletes: {why}"),
+            Some("write the path literally so the guard can check it".to_string()),
             span,
         )
     }
 
     pub fn unknown_location(&self, span: Span, shown: &str, why: &str) -> Finding {
-        finding(
+        warn(
             DELETE_UNKNOWN_LOCATION,
-            Level::Danger,
-            format!("the guard cannot tell which folder `{shown}` names: {why}"),
-            "use the full path of the folder, or, if this is intended, run the same command again with ` # shellwise: allow` at its end".to_string(),
+            format!("the guard could not read which folder `{shown}` deletes: {why}"),
+            Some("use the full path of the folder so the guard can check it".to_string()),
             span,
         )
+    }
+
+    /// Danger (a) of Ruling 122: a recursive or forced delete of `word` that, with every
+    /// variable or substitution the guard cannot read taken as empty, names a protected
+    /// location or its direct contents (`rm -rf "$X/"`, `rm -rf $X/*`, `Remove-Item "$x\*"`).
+    fn empty_expansion(
+        &mut self,
+        word: &Word,
+        loc: &Location,
+        by: DeleteBy,
+        how: How,
+        span: Span,
+        shown: &str,
+    ) -> Option<Finding> {
+        if !(how.recursive || how.forced) {
+            return None;
+        }
+        let mut text = String::new();
+        for part in &word.parts {
+            match part {
+                WordPart::Literal(s) | WordPart::Glob(s) => text.push_str(s),
+                WordPart::Var(name) => text.push_str(self.env.get(name).unwrap_or_default()),
+                WordPart::Tilde => text.push_str(self.env.home()?),
+                WordPart::Subst(_) | WordPart::Block(_) => {}
+                WordPart::ListSep => return None,
+            }
+        }
+        // The last step all glob (`*`, `.*`): the delete takes the folder's direct contents.
+        let (folder, contents) = match text.rfind(['/', '\\']) {
+            Some(i) if is_all_glob(&text[i + 1..]) => (text[..=i].to_string(), true),
+            None if is_all_glob(&text) => (".".to_string(), true),
+            _ => (text.clone(), false),
+        };
+        if folder.trim().is_empty() {
+            return None;
+        }
+        // An absolute text is judged as written (a Git Bash `/x` may map anywhere); a relative
+        // one from the location the delete runs in.
+        let hit = if Path::new(&folder).is_absolute() || folder.starts_with(['/', '\\']) {
+            let repo = self.repo().ok().flatten();
+            let p = PathBuf::from(&folder);
+            let home = self.home.as_deref();
+            resolve::critical_reason(&p, repo.as_deref(), home, &self.ctx.cfg.protected)
+                .map(|r| (p, r))
+        } else {
+            let as_word = Word {
+                parts: vec![WordPart::Literal(folder)],
+                span: word.span,
+                quote: Quote::Single,
+            };
+            match resolve::target(&as_word, loc, &self.env, by, self.ctx.fs, self.ctx.deadline) {
+                Target::Paths(paths) => paths
+                    .into_iter()
+                    .find_map(|p| self.critical(&p, false).ok().flatten().map(|r| (p, r))),
+                _ => None,
+            }
+        };
+        let (p, reason) = hit?;
+        let what = if contents {
+            format!("everything inside `{}`, the {reason}", p.display())
+        } else {
+            format!("`{}`, the {reason}", p.display())
+        };
+        let fix = if is_pwsh(self.ctx.input.shell) {
+            "test the variable first, for example `if ($x) { Remove-Item -Recurse -Force \"$x\\build\" }`"
+        } else {
+            "write each variable as `${X:?}` so an empty value stops the command, for example `rm -rf \"${X:?}/build\"`"
+        };
+        Some(finding(
+            DELETE_EMPTY_EXPANSION,
+            Level::Danger,
+            format!("if the variable or substitution in `{shown}` is empty, this deletes {what}"),
+            format!("{fix}; or, {CONFIRM_FIX}"),
+            span,
+        ))
+    }
+
+    /// The finding for code the guard does not read whose text names a destructive command:
+    /// danger when its words hold a literal protected location (Ruling 122 (b)), else warn.
+    fn opaque(&mut self, c: &SimpleCommand) -> Finding {
+        let command = self.ctx.input.command;
+        let text = command.get(c.span.start..c.span.end).unwrap_or_default();
+        let shown: String = text.chars().take(80).collect();
+        let protected = raw_words(text).find_map(|w| self.protected_word(w));
+        match protected {
+            Some((p, reason)) => finding(
+                OPAQUE_DESTRUCTIVE,
+                Level::Danger,
+                format!(
+                    "the guard cannot read what `{shown}` runs; its text names a command that deletes or discards data, and `{p}`, the {reason}"
+                ),
+                format!(
+                    "run the delete as a plain command of its own, or, if this is intended, {CONFIRM_FIX}"
+                ),
+                c.span,
+            ),
+            None => warn(
+                OPAQUE_DESTRUCTIVE,
+                format!(
+                    "the guard could not read what `{shown}` runs, and its text names a command that deletes or discards data"
+                ),
+                Some(
+                    "run the delete as a plain command of its own so the guard can check it"
+                        .to_string(),
+                ),
+                c.span,
+            ),
+        }
+    }
+
+    /// A raw word that spells a protected location literally: an absolute path, `~` or `$HOME`
+    /// for the home folder, `.git` from the repo root.
+    fn protected_word(&mut self, w: &str) -> Option<(String, &'static str)> {
+        let lower = w.to_ascii_lowercase();
+        let home_spelling = matches!(
+            lower.trim_end_matches(['/', '\\']),
+            "~" | "$home" | "${home}" | "$env:userprofile" | "$env:home" | "%userprofile%"
+        );
+        if home_spelling {
+            return self.home.clone().map(|_| (w.to_string(), "home folder"));
+        }
+        let path = if lower == ".git" || lower == "./.git" || lower == ".\\.git" {
+            self.ctx.input.cwd.as_ref()?.join(".git")
+        } else if Path::new(w).is_absolute() || w.starts_with(['/', '\\']) {
+            PathBuf::from(w)
+        } else {
+            return None;
+        };
+        let repo = self.repo().ok().flatten();
+        let reason = resolve::critical_reason(
+            &path,
+            repo.as_deref(),
+            self.home.as_deref(),
+            &self.ctx.cfg.protected,
+        )?;
+        Some((w.to_string(), reason))
     }
 
     /// The finding for one target word (each list element resolved; the highest level wins).
@@ -788,10 +927,46 @@ impl<'a> Scene<'a> {
     ) -> Option<Finding> {
         let mut worst: Option<Finding> = None;
         for el in elements(word) {
-            let found = self.judge_element(&el, loc, by, how, span);
+            let found = match self.multi_in(&el) {
+                // Once per value, the highest level winning.
+                Some(a) => {
+                    let mut w = None;
+                    for v in &a.values {
+                        let one = with_value(&el, &a.name, v, is_pwsh(self.ctx.input.shell));
+                        w = max_finding(w, self.judge_element(&one, loc, by, how, span));
+                    }
+                    w
+                }
+                None => self.judge_element(&el, loc, by, how, span),
+            };
             worst = max_finding(worst, found);
         }
         worst
+    }
+
+    /// The first name with several values that `w` uses where it holds them.
+    fn multi_in(&self, w: &Word) -> Option<Assigned> {
+        let fold = is_pwsh(self.ctx.input.shell);
+        let same = |a: &str, b: &str| {
+            let (a, b) = (a.trim_start_matches('$'), b.trim_start_matches('$'));
+            if fold {
+                a.eq_ignore_ascii_case(b)
+            } else {
+                a == b
+            }
+        };
+        w.parts.iter().find_map(|p| match p {
+            WordPart::Var(n) => self
+                .multi
+                .iter()
+                .find(|a| {
+                    same(&a.name, n)
+                        && a.within
+                            .is_none_or(|l| w.span.start >= l.start && w.span.end <= l.end)
+                })
+                .cloned(),
+            _ => None,
+        })
     }
 
     fn judge_element(
@@ -816,7 +991,15 @@ impl<'a> Scene<'a> {
         {
             return Some(critical(Path::new(&text), reason, span));
         }
-        let target = resolve::target(word, loc, &self.env, by, self.ctx.fs, self.ctx.deadline);
+        let target = resolve::target_how(
+            word,
+            loc,
+            &self.env,
+            by,
+            self.ctx.fs,
+            self.ctx.deadline,
+            how.recursive || how.contents,
+        );
         match target {
             Target::Paths(paths) => {
                 let mut worst = None;
@@ -826,16 +1009,29 @@ impl<'a> Scene<'a> {
                 }
                 worst
             }
-            Target::Dynamic(_) | Target::UnknownLocation(UnknownKind::Dynamic) => Some(self.dynamic(
-                span,
-                &shown,
-                "it holds a variable or a substitution the command sets or the guard cannot read",
-            )),
+            Target::Dynamic(_) | Target::UnknownLocation(UnknownKind::Dynamic) => self
+                .empty_expansion(word, loc, by, how, span, &shown)
+                .or_else(|| {
+                    Some(self.dynamic(
+                        span,
+                        &shown,
+                        "it holds a variable or a substitution the command sets or the guard cannot read",
+                    ))
+                }),
             Target::UnknownLocation(UnknownKind::MayBeCritical) => Some(self.unknown_location(
                 span,
                 &shown,
                 "the command moves to a folder the guard cannot follow, defines a function or alias, maps a drive, runs a script or makes a link before it",
             )),
+            // `Env:X`, the registry or another built-in drive that is no file system, which the
+            // command does not visibly remap: no file is deleted (Ruling 122).
+            Target::DriveUnproven { .. }
+                if word
+                    .static_value(&self.env)
+                    .is_some_and(|t| resolve::on_non_fs_drive(&t)) =>
+            {
+                None
+            }
             Target::DriveUnproven { drive, .. } => Some(self.unknown_location(
                 span,
                 &shown,
@@ -873,6 +1069,7 @@ impl<'a> Scene<'a> {
         }
         let how = How {
             recursive: picked.recursive,
+            forced: picked.forced,
             contents: picked.contents,
         };
         if picked.words.is_empty() {
@@ -896,6 +1093,7 @@ impl<'a> Scene<'a> {
         // a link or a file.
         let how = How {
             recursive: m.args.len() >= 2,
+            forced: false,
             contents: false,
         };
         self.judge_word(target, loc, DeleteBy::Native, how, m.span)
@@ -926,6 +1124,50 @@ pub(crate) fn finding(
     }
 }
 
+/// A warn finding: it blocks nothing, so the allow marker plays no part in its Fix line.
+pub(crate) fn warn(
+    rule: &'static str,
+    message: String,
+    fix: Option<String>,
+    span: Span,
+) -> Finding {
+    Finding {
+        rule,
+        level: Level::Warn,
+        message,
+        fix,
+        span,
+    }
+}
+
+/// `w` with each use of the variable `name` written as `value`.
+fn with_value(w: &Word, name: &str, value: &str, fold: bool) -> Word {
+    let name = name.trim_start_matches('$');
+    let parts = w
+        .parts
+        .iter()
+        .map(|p| match p {
+            WordPart::Var(n)
+                if (fold && n.trim_start_matches('$').eq_ignore_ascii_case(name))
+                    || n.trim_start_matches('$') == name =>
+            {
+                WordPart::Literal(value.to_string())
+            }
+            other => other.clone(),
+        })
+        .collect();
+    Word {
+        parts,
+        span: w.span,
+        quote: w.quote,
+    }
+}
+
+/// A path step made only of glob stars and dots (`*`, `.*`, `*.*`).
+fn is_all_glob(step: &str) -> bool {
+    step.contains('*') && step.chars().all(|c| c == '*' || c == '.')
+}
+
 pub(crate) fn critical(p: &Path, reason: &str, span: Span) -> Finding {
     finding(
         DELETE_CRITICAL,
@@ -945,22 +1187,16 @@ pub(crate) fn critical(p: &Path, reason: &str, span: Span) -> Finding {
 fn outside(p: &Path, is_cwd: bool, span: Span) -> Finding {
     let message = if is_cwd {
         format!(
-            "`{}` is the working folder itself (outside any repo): deleting it removes everything the session works in",
+            "this deletes `{}`, the working folder itself (outside any repo), with everything the session works in",
             p.display()
         )
     } else {
         format!(
-            "`{}` is outside the project and outside every allowed scratch or temp root",
+            "this deletes `{}`, which is outside the project and outside every allowed scratch or temp root",
             p.display()
         )
     };
-    finding(
-        DELETE_OUTSIDE_PROJECT,
-        Level::Danger,
-        message,
-        CONFIRM_FIX.to_string(),
-        span,
-    )
+    warn(DELETE_OUTSIDE_PROJECT, message, None, span)
 }
 
 fn through_link(p: &Path, link: &Path, shell: Shell, span: Span) -> Finding {
@@ -970,17 +1206,16 @@ fn through_link(p: &Path, link: &Path, shell: Shell, span: Span) -> Finding {
         let shown = link.display().to_string().replace('\\', "/");
         format!("rm '{shown}'")
     };
-    finding(
+    warn(
         DELETE_THROUGH_LINK,
-        Level::Danger,
         format!(
-            "deleting `{}` goes through the link `{}`, so it would also delete files outside the tree",
+            "this deletes `{}`, which holds or lies below the link `{}`; a tool that follows links would delete files outside the tree",
             p.display(),
             link.display()
         ),
-        format!(
-            "remove the link itself first with `{unlink}` in a command of its own, then run the delete again"
-        ),
+        Some(format!(
+            "remove the link itself first with `{unlink}` in a command of its own"
+        )),
         span,
     )
 }

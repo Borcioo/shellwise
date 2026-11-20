@@ -1,12 +1,10 @@
 # walk-timeout
 
 The guard ran out of its time budget (`walk_budget_ms`, under the hook timeout) while checking a
-delete: the folder walk, the repo lookup or a target's resolution did not finish. Level from the
-config's `dynamic_target` (default `danger`).
+delete: the folder walk, the repo lookup or a target's resolution did not finish. Level `warn`
+(Ruling 122): the message says the target could not be read.
 
-`Fix: if this is intended, run the same command again with ` # shellwise: allow` at its end`
-
-## Deny
+## Warns
 
 A recursive delete of a tree too large to walk within the budget.
 

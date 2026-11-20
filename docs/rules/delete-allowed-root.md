@@ -3,11 +3,11 @@
 A delete of an allowed root itself (`allowed_roots`, by default the OS temp folder): every
 other session's files live there too. Deleting inside it is ok.
 
-Level `danger`.
+Level `warn` (Ruling 122).
 
 `Fix: delete only what you made inside it, for example `<root>\<name>``
 
-## Deny
+## Warns
 
 ```powershell
 Remove-Item -Recurse -Force $env:TEMP

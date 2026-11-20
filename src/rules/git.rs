@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use super::delete::{
     self, CONFIRM_FIX, Call, How, Node, Read, Scene, facts_of, finding, is_pwsh, literal, literals,
-    max_finding, read_call, row_holds, walk_script,
+    max_finding, read_call, row_holds, walk_script, warn,
 };
 use super::{Ctx, Rule};
 use crate::fs::bounded;
@@ -46,6 +46,10 @@ pub(crate) struct GitFacts {
     pub branch_options: Vec<String>,
     /// `clean`: options whose next word is a pattern, not a pathspec.
     pub clean_value_options: Vec<String>,
+    /// `clean`: the option that removes untracked folders too (`-d`), matched inside a cluster.
+    pub clean_dirs_options: Vec<String>,
+    /// `worktree remove`: the options that remove a worktree holding untracked files.
+    pub force_options: Vec<String>,
     pub subcommands: Vec<GitSub>,
 }
 
@@ -155,16 +159,30 @@ fn subcommand_like(t: &str) -> bool {
 }
 
 fn unreadable(scene: &Scene, w: &Word, span: Span) -> Finding {
-    finding(
+    warn(
         GIT_UNREADABLE,
-        scene.ctx.cfg.dynamic_target,
         format!(
-            "the guard cannot tell what git runs here: `{}` stands before or in the subcommand and is a variable or an expression, so a `worktree remove` or a `checkout` would go unchecked",
+            "the guard could not read what git runs here: `{}` stands before or in the subcommand and is a variable or an expression",
             shown(scene, w)
         ),
-        "write git's options and the subcommand literally, for example `git -C <path> <subcommand> ...`".to_string(),
+        Some("write git's options and the subcommand literally, for example `git -C <path> <subcommand> ...`".to_string()),
         span,
     )
+}
+
+/// After global options from `k` on, the next word is a literal subcommand name.
+fn names_subcommand(facts: &GitFacts, lits: &[Option<String>], mut k: usize) -> bool {
+    while let Some(Some(t)) = lits.get(k) {
+        if !t.starts_with('-') {
+            return subcommand_like(t);
+        }
+        k += if facts.global_value_options.contains(t) {
+            2
+        } else {
+            1
+        };
+    }
+    false
 }
 
 /// The one finding of a git call, in this order: what the guard cannot read, skipped hooks,
@@ -187,11 +205,7 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
                 // Bash splits an unquoted expansion; PowerShell an array or a list: either
                 // may carry the subcommand, unless a literal name follows it.
                 let splits = !pwsh || whole_expansion(v);
-                let named_next = lits
-                    .get(i + 2)
-                    .and_then(|x| x.as_deref())
-                    .is_some_and(subcommand_like);
-                if splits && !named_next {
+                if splits && !names_subcommand(facts, &lits, i + 2) {
                     return Some(unreadable(scene, v, call.span()));
                 }
             }
@@ -242,7 +256,7 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
                 call.span(),
             )
         }
-        GitAction::WorktreeRemove => worktree_remove(scene, rest, rest_lits, &git_loc, call),
+        GitAction::WorktreeRemove => worktree_remove(scene, facts, rest, rest_lits, &git_loc, call),
         GitAction::CheckoutPaths | GitAction::RestorePaths => {
             if rest_lits
                 .iter()
@@ -405,6 +419,7 @@ fn exists(scene: &Scene, p: &Path) -> Option<bool> {
 /// removes only a registered worktree, and refuses a dirty one without `--force`.
 fn worktree_remove(
     scene: &mut Scene,
+    facts: &GitFacts,
     rest: &[Word],
     rest_lits: &[Option<String>],
     git_loc: &Location,
@@ -422,15 +437,21 @@ fn worktree_remove(
         }
     }
     let word = rest.get(j)?;
+    // Without `--force` git refuses a worktree that holds a junction (an untracked file); git
+    // reads options after the path too.
+    let forced = rest_lits
+        .iter()
+        .flatten()
+        .take_while(|t| *t != "--")
+        .any(|t| facts.force_options.contains(t));
     let text = shown(scene, word);
     let cannot_tell = |why: &str| {
-        finding(
+        warn(
             GIT_WORKTREE_JUNCTION,
-            Level::Danger,
             format!(
-                "`git worktree remove` deletes through junctions inside the tree and empties their targets, and the guard cannot tell which folder `{text}` is: {why}"
+                "the guard could not read which worktree `{text}` removes, so it cannot check it for junctions, which `git worktree remove --force` deletes through: {why}"
             ),
-            "pass the worktree's full path".to_string(),
+            Some("pass the worktree's full path".to_string()),
             call.span(),
         )
     };
@@ -479,29 +500,42 @@ fn worktree_remove(
                     } else {
                         format!("rm '{}'", link.display().to_string().replace('\\', "/"))
                     };
-                    Some(finding(
-                        GIT_WORKTREE_JUNCTION,
-                        Level::Danger,
-                        format!(
-                            "`git worktree remove` deletes through junctions, with or without --force: `{}` holds `{}`, so git would empty its target",
-                            p.display(),
-                            link.display()
-                        ),
-                        format!(
-                            "remove each link inside it first with `{unlink}` in a command of its own, then remove the worktree"
-                        ),
-                        call.span(),
-                    ))
+                    let fix = format!(
+                        "remove each link inside it first with `{unlink}` in a command of its own, then remove the worktree"
+                    );
+                    Some(if forced {
+                        finding(
+                            GIT_WORKTREE_JUNCTION,
+                            Level::Danger,
+                            format!(
+                                "`git worktree remove --force` deletes through junctions: `{}` holds `{}`, so git would empty its target",
+                                p.display(),
+                                link.display()
+                            ),
+                            fix,
+                            call.span(),
+                        )
+                    } else {
+                        warn(
+                            GIT_WORKTREE_JUNCTION,
+                            format!(
+                                "`{}` holds the junction `{}`: git refuses to remove it without --force, and with --force it would empty the junction's target",
+                                p.display(),
+                                link.display()
+                            ),
+                            Some(fix),
+                            call.span(),
+                        )
+                    })
                 }
-                WalkResult::Unreadable(at) => Some(finding(
+                WalkResult::Unreadable(at) => Some(warn(
                     delete::WALK_UNREADABLE,
-                    Level::Danger,
                     format!(
-                        "the guard cannot read `{}` inside the worktree `{}`, so it cannot tell whether a junction there leads outside it",
-                        at.display(),
-                        p.display()
+                        "this removes the worktree `{}`, and the guard cannot read `{}` inside it to tell whether a junction there leads outside it",
+                        p.display(),
+                        at.display()
                     ),
-                    CONFIRM_FIX.to_string(),
+                    None,
                     call.span(),
                 )),
                 WalkResult::Timeout => Some(scene.timeout(call.span(), &text)),
@@ -529,7 +563,6 @@ fn restore(
             .is_some_and(|t| t.len() == 1 && t.starts_with('.'))
     };
     let mut paths: Vec<&Word> = Vec::new();
-    let mut unknown = false;
     if sub.action == GitAction::CheckoutPaths {
         if let Some(e) = end {
             paths.extend(&rest[e + 1..]);
@@ -544,29 +577,22 @@ fn restore(
             // A branch operation: git takes no path here.
             return None;
         } else {
-            // A word on disk is a path; a word the guard cannot place may be one.
+            // A word on disk is a path. A word the guard cannot place is read as the branch,
+            // tag or commit it most often is: switching deletes nothing (Ruling 122).
             for (w, t) in rest.iter().zip(rest_lits) {
                 if t.as_deref().is_some_and(|t| t.starts_with('-')) {
                     continue;
                 }
-                match resolve::target(
+                if let Target::Paths(ps) = resolve::target(
                     w,
                     git_loc,
                     &scene.env,
                     DeleteBy::Native,
                     scene.ctx.fs,
                     scene.ctx.deadline,
-                ) {
-                    Target::Paths(ps) => {
-                        if ps.iter().any(|p| exists(scene, p) != Some(false)) {
-                            paths.push(w);
-                        }
-                    }
-                    Target::NotAFile | Target::SessionCommand => {}
-                    _ => {
-                        unknown = true;
-                        paths.push(w);
-                    }
+                ) && ps.iter().any(|p| exists(scene, p) != Some(false))
+                {
+                    paths.push(w);
                 }
             }
         }
@@ -604,29 +630,45 @@ fn restore(
     }
     let names: Vec<String> = paths.iter().take(3).map(|w| shown(scene, w)).collect();
     let list = names.join(" ");
-    let message = if unknown && end.is_none() {
-        format!(
-            "the guard cannot tell whether `{}` names a file here, and `git {}` on a file throws away every uncommitted edit in it",
-            names[0], sub.words
-        )
-    } else {
-        format!(
-            "`git {}` on {list} throws away every uncommitted edit in those files, not only yours",
-            sub.words
-        )
-    };
-    let fix = if unknown && end.is_none() {
-        "switch branches with `git switch <branch>`; to restore a file, name it after `--`, or, if this is intended, run the same command again with ` # shellwise: allow` at its end".to_string()
-    } else {
-        format!("look at `git diff --stat -- {list}` first; {CONFIRM_FIX}")
-    };
-    Some(finding(
+    // The whole tree: a path that is the repo root (`.` there). Danger (Ruling 122 (c)).
+    let repo = scene.repo().ok().flatten();
+    let whole = repo.is_some_and(|root| {
+        paths.iter().any(|w| {
+            matches!(
+                resolve::target(w, git_loc, &scene.env, DeleteBy::Native, scene.ctx.fs, scene.ctx.deadline),
+                Target::Paths(ps) if ps.iter().any(|p| same_path(scene, p, &root))
+            )
+        })
+    });
+    if whole {
+        return Some(finding(
+            GIT_RESTORE_DISCARDS,
+            Level::Danger,
+            format!(
+                "`git {}` on {list} at the repo root throws away every uncommitted edit in the whole working tree",
+                sub.words
+            ),
+            format!(
+                "look at `git diff --stat` first and restore only the files you mean; or, {CONFIRM_FIX}"
+            ),
+            span,
+        ));
+    }
+    Some(warn(
         GIT_RESTORE_DISCARDS,
-        Level::Danger,
-        message,
-        fix,
+        format!(
+            "`git {}` on {list} throws away the uncommitted edits in those files",
+            sub.words
+        ),
+        Some(format!("look at `git diff --stat -- {list}` first")),
         span,
     ))
+}
+
+/// `a` and `b` name the same folder by their compared text.
+fn same_path(scene: &Scene, a: &Path, b: &Path) -> bool {
+    let os = scene.ctx.input.os;
+    resolve::path_key(&a.to_string_lossy(), os) == resolve::path_key(&b.to_string_lossy(), os)
 }
 
 /// `git clean -f` deletes untracked files inside the folder git runs in, or inside the
@@ -645,6 +687,7 @@ fn clean(
     }
     let how = How {
         recursive: false,
+        forced: false,
         contents: true,
     };
     let mut specs: Vec<&Word> = Vec::new();
@@ -676,12 +719,32 @@ fn clean(
                 }
             }
             None => {
-                return Some(scene.unknown_location(
+                worst = Some(scene.unknown_location(
                     call.span(),
                     &shown_cmd,
                     "the folder git runs in is not known",
                 ));
             }
+        }
+        // `clean -fd` over the whole folder git runs in: a whole-tree discard (Ruling 122 (c)).
+        let dirs_too = rest_lits.iter().flatten().any(|t| {
+            facts
+                .clean_dirs_options
+                .iter()
+                .any(|e| scan::flag_matches(e, t))
+        });
+        if dirs_too && worst.as_ref().is_none_or(|f| f.level < Level::Danger) {
+            return Some(finding(
+                GIT_DISCARD,
+                Level::Danger,
+                format!(
+                    "`{shown_cmd}` deletes every untracked file and folder in the tree git runs in, which no commit or stash holds"
+                ),
+                format!(
+                    "look at `git clean -nd` first and delete only what you mean; or, {CONFIRM_FIX}"
+                ),
+                call.span(),
+            ));
         }
         return worst;
     }

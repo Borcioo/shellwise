@@ -31,7 +31,7 @@ id = "sg-restore-checkout-dashdash"
 os = "any"
 shell = "pwsh"
 command = "git checkout -- src/b.js"
-level = "danger"
+level = "warn"
 rules = ["git-restore-discards"]
 fix = "git diff --stat -- src/b.js"
 
@@ -40,7 +40,7 @@ id = "sg-restore-checkout-dashdash-with-C"
 os = "windows"
 shell = "pwsh"
 command = "git -C D:\\x checkout HEAD -- src/b.js src/c.js"
-level = "danger"
+level = "warn"
 rules = ["git-restore-discards"]
 
 [[row]]
@@ -56,7 +56,7 @@ id = "sg-restore-restore-a-file"
 os = "any"
 shell = "pwsh"
 command = "git restore src/b.js"
-level = "danger"
+level = "warn"
 rules = ["git-restore-discards"]
 
 [[row]]
@@ -64,7 +64,7 @@ id = "sg-restore-staged-and-worktree"
 os = "any"
 shell = "pwsh"
 command = "git restore --staged --worktree src/b.js"
-level = "danger"
+level = "warn"
 rules = ["git-restore-discards"]
 
 [[row]]
@@ -72,7 +72,7 @@ id = "sg-restore-bash-checkout-dashdash"
 os = "windows"
 shell = "gitbash"
 command = "git checkout -- b.txt && npm test"
-level = "danger"
+level = "warn"
 rules = ["git-restore-discards"]
 
 [[row]]
@@ -80,9 +80,8 @@ id = "nocwd-sg-restore-checkout-a-word"
 os = "any"
 shell = "pwsh"
 command = "git checkout main"
-level = "danger"
-rules = ["git-restore-discards"]
-fix = "git switch <branch>"
+level = "ok"
+rules = []
 
 [[row]]
 id = "sg-restore-staged-only"
@@ -121,7 +120,7 @@ id = "sg-restore-marker"
 os = "any"
 shell = "pwsh"
 command = "git checkout -- b.txt # baseline-guard: allow"
-level = "ok"
+level = "warn"
 rules = ["git-restore-discards"]
 
 [[row]]
@@ -129,7 +128,7 @@ id = "restore-checkout-a-file-on-disk"
 os = "any"
 shell = "pwsh"
 command = "git checkout src/a.txt"
-level = "danger"
+level = "warn"
 rules = ["git-restore-discards"]
 
 [[row]]
@@ -230,8 +229,8 @@ id = "clean-in-the-repo"
 os = "any"
 shell = "pwsh"
 command = "git clean -fdx"
-level = "ok"
-rules = []
+level = "danger"
+rules = ["git-discard"]
 
 [[row]]
 id = "clean-a-pathspec"
@@ -255,7 +254,7 @@ os = "any"
 shell = "pwsh"
 command = "git -C FX_OUTSIDE clean -fd"
 level = "danger"
-rules = ["delete-outside-project"]
+rules = ["git-discard"]
 
 [[row]]
 id = "clean-in-home"
@@ -271,7 +270,7 @@ os = "any"
 shell = "pwsh"
 command = "git clean -fd"
 level = "danger"
-rules = ["delete-unknown-location"]
+rules = ["git-discard"]
 
 # `-n` only lists what it would remove, wherever it points.
 [[row]]
@@ -323,7 +322,7 @@ id = "worktree-remove-with-a-junction"
 os = "windows"
 shell = "gitbash"
 command = "git worktree remove wt"
-level = "danger"
+level = "warn"
 rules = ["git-worktree-junction"]
 fix = "rm '"
 
@@ -340,7 +339,7 @@ id = "worktree-remove-after-set-location"
 os = "any"
 shell = "pwsh"
 command = "Set-Location FX_REPO; git worktree remove wt"
-level = "danger"
+level = "warn"
 rules = ["git-worktree-junction"]
 
 [[row]]
@@ -350,7 +349,6 @@ shell = "pwsh"
 command = "$w = 'FX_REPO\\wt'; git worktree remove --force $w"
 level = "danger"
 rules = ["git-worktree-junction"]
-fix = "pass the worktree's full path"
 
 [[row]]
 id = "worktree-remove-clean"
@@ -373,7 +371,7 @@ id = "worktree-remove-a-bare-name"
 os = "any"
 shell = "pwsh"
 command = "git worktree remove feature-y"
-level = "danger"
+level = "warn"
 rules = ["git-worktree-junction"]
 fix = "pass the worktree's full path"
 
@@ -392,7 +390,7 @@ id = "sg-unreadable-variable-before-the-subcommand"
 os = "any"
 shell = "pwsh"
 command = "git $x worktree remove wt"
-level = "danger"
+level = "warn"
 rules = ["git-unreadable"]
 fix = "write git's options and the subcommand literally"
 
@@ -401,7 +399,7 @@ id = "sg-unreadable-variable-subcommand"
 os = "windows"
 shell = "pwsh"
 command = "git -C D:\\x $s"
-level = "danger"
+level = "warn"
 rules = ["git-unreadable"]
 
 [[row]]
@@ -409,7 +407,7 @@ id = "sg-unreadable-substitution"
 os = "windows"
 shell = "gitbash"
 command = "git $(cat opts) worktree remove wt"
-level = "danger"
+level = "warn"
 rules = ["git-unreadable"]
 
 [[row]]
@@ -417,7 +415,7 @@ id = "sg-unreadable-git-dir-variable"
 os = "any"
 shell = "pwsh"
 command = "git --git-dir=$gd log"
-level = "danger"
+level = "warn"
 rules = ["git-unreadable"]
 
 [[row]]
@@ -425,7 +423,7 @@ id = "sg-unreadable-bash-split-value"
 os = "windows"
 shell = "gitbash"
 command = "git -C $v --force"
-level = "danger"
+level = "warn"
 rules = ["git-unreadable"]
 
 [[row]]
@@ -644,5 +642,90 @@ id = "policy-off-commit-no-verify"
 os = "any"
 shell = "pwsh"
 command = "git commit --no-verify -m 'fix: y'"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- Ruling 122 (c): whole-tree discards
+
+[[row]]
+id = "restore-restore-dot-at-the-root"
+os = "any"
+shell = "pwsh"
+command = "git restore ."
+level = "danger"
+rules = ["git-restore-discards"]
+fix = "# shellwise: allow"
+
+[[row]]
+id = "restore-checkout-dashdash-dot-at-the-root"
+os = "windows"
+shell = "gitbash"
+command = "git checkout -- ."
+level = "danger"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "restore-checkout-dashdash-dot-in-a-subfolder"
+os = "windows"
+shell = "gitbash"
+command = "cd src && git checkout -- ."
+level = "warn"
+rules = ["git-restore-discards"]
+
+[[row]]
+id = "clean-files-only"
+os = "any"
+shell = "pwsh"
+command = "git clean -f"
+level = "ok"
+rules = []
+
+[[row]]
+id = "worktree-remove-force-after-the-path"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove wt --force"
+level = "danger"
+rules = ["git-worktree-junction"]
+
+# ---------------------------------------------------------------- Ruling 122 item 2: git gaps
+
+[[row]]
+id = "unreadable-c-var-then-config-then-subcommand"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" -c core.quotepath=off status'
+level = "ok"
+rules = []
+
+[[row]]
+id = "unreadable-c-var-then-config-then-subcommand-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git -C $d -c core.autocrlf=false log -1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "unreadable-c-var-then-config-then-a-variable-subcommand"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" -c core.quotepath=off $s'
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "restore-checkout-a-branch-in-an-unknown-folder"
+os = "windows"
+shell = "gitbash"
+command = 'git -C "$d" checkout main'
+level = "ok"
+rules = []
+
+[[row]]
+id = "restore-checkout-a-variable"
+os = "any"
+shell = "pwsh"
+command = "git checkout $b"
 level = "ok"
 rules = []
