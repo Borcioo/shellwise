@@ -161,6 +161,9 @@ fn config(row: &Row) -> Config {
         ..Config::default()
     };
     cfg.policies.git_no_verify = !row.id.starts_with("policy-off-");
+    if row.id.starts_with("scratch-") {
+        cfg.scratch_dir = Some(fx.at("outside"));
+    }
     cfg
 }
 

@@ -13,7 +13,8 @@
 #   FX_ROOT       the folder holding all of them.
 #
 # The runner replaces each FX_ name with its path (forward slashes for bash rows). A row whose
-# id starts with `nocwd-` runs with no cwd. Every path the fixture uses has no space.
+# id starts with `nocwd-` runs with no cwd, `norepo-` with the cwd FX_NOREPO, and `scratch-`
+# with `scratch_dir` set to FX_OUTSIDE. Every path the fixture uses has no space.
 # The rows are synthetic and ranked by the corpus counts of their shapes (2026-11-19, 50,862
 # rows): `git worktree remove` 320, `[IO.Directory]::Delete` 260, `Remove-Item` with
 # `-ErrorAction` 215, `Remove-Item -Recurse` 199, `rm -rf` 152, `rm <file>` 141,
@@ -1082,3 +1083,228 @@ shell = "pwsh"
 command = "Invoke-Expression 'Remove-Item -Recurse -Force build'"
 level = "danger"
 rules = ["opaque-destructive"]
+
+# ---------------------------------------------------------------- the repo's .git (product rule)
+
+[[row]]
+id = "gb-rm-rf-dot-git"
+os = "any"
+shell = "bash"
+command = "rm -rf .git"
+level = "critical"
+rules = ["delete-critical"]
+fix = "<name>"
+
+[[row]]
+id = "ps-ri-dot-git"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force .git"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-dirdelete-dot-git-full-path"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('FX_REPO\\.git', $true)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "marker-does-not-touch-dot-git"
+os = "any"
+shell = "bash"
+command = "rm -rf .git # shellwise: allow"
+level = "critical"
+rules = ["delete-critical"]
+
+# Inside `.git` is the project: a stale lock is a common, safe delete.
+[[row]]
+id = "gb-rm-git-index-lock"
+os = "any"
+shell = "bash"
+command = "rm -f .git/index.lock"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- one row per system folder
+
+[[row]]
+id = "ps-ri-windows-folder"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force C:\Windows\Temp\sometool'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-program-files-x86"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force 'C:\\Program Files (x86)\\SomeTool'"
+level = "critical"
+rules = ["delete-critical"]
+
+# A name that only starts like a system folder is not one.
+[[row]]
+id = "ps-ri-windows-lookalike"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force C:\WindowsApps-old\sometool'
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-ri-programdata-lookalike"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force C:\ProgramDataBackup\sometool'
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "px-rm-rf-bin"
+os = "posix"
+shell = "bash"
+command = "rm -rf /bin/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-sbin"
+os = "posix"
+shell = "bash"
+command = "rm -rf /sbin/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-lib64"
+os = "posix"
+shell = "bash"
+command = "rm -rf /lib64/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-system"
+os = "posix"
+shell = "bash"
+command = "rm -rf /System/Library/sometool"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "px-rm-rf-usr-lookalike"
+os = "posix"
+shell = "bash"
+command = "rm -rf /usrdata/sometool"
+level = "danger"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "px-rm-rf-opt"
+os = "posix"
+shell = "bash"
+command = "rm -rf /opt/sometool"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# A system folder name below another folder is no system folder.
+[[row]]
+id = "px-rm-rf-a-bin-folder-in-the-repo"
+os = "posix"
+shell = "bash"
+command = "rm -rf FX_REPO/bin"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-ri-a-windows-folder-in-the-repo"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force FX_REPO\\Windows"
+level = "ok"
+rules = []
+
+# ---------------------------------------------------------------- network and device paths (Ruling 114(f))
+# The guard makes no file-system call on them: 192.0.2.1 is a documentation address no host
+# answers, so any call would run into the deadline.
+
+[[row]]
+id = "ps-ri-unc-share"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\192.0.2.1\share\build'
+level = "danger"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "gb-rm-rf-unc-share"
+os = "windows"
+shell = "gitbash"
+command = "rm -rf //192.0.2.1/share/build"
+level = "danger"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-dirdelete-unc-verbatim"
+os = "windows"
+shell = "pwsh"
+command = "[IO.Directory]::Delete('\\\\?\\UNC\\192.0.2.1\\share\\build', $true)"
+level = "danger"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-ri-device-path"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\.\PhysicalDrive9\x'
+level = "danger"
+rules = ["delete-unknown-location"]
+
+# The share root itself reads as a drive root.
+[[row]]
+id = "ps-ri-unc-share-root"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Recurse -Force \\192.0.2.1\share'
+level = "critical"
+rules = ["delete-critical"]
+
+# ---------------------------------------------------------------- writer arguments that resolve
+
+[[row]]
+id = "ps-ri-temp-child-unresolved"
+os = "windows"
+shell = "pwsh"
+command = "Remove-Item -Recurse -Force $env:NOT_IN_THE_HOOK_ENV\\tmp1"
+level = "danger"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "gb-rm-tilde-file"
+os = "windows"
+shell = "gitbash"
+command = "rm -f ~/f.txt"
+level = "danger"
+rules = ["delete-outside-project"]
+
+# ---------------------------------------------------------------- the scratch root
+
+[[row]]
+id = "scratch-rm-rf-inside-the-scratch-dir"
+os = "any"
+shell = "bash"
+command = "rm -rf FX_OUTSIDE/data"
+level = "ok"
+rules = []
+
+[[row]]
+id = "scratch-rm-rf-the-scratch-dir-itself"
+os = "any"
+shell = "bash"
+command = "rm -rf FX_OUTSIDE"
+level = "danger"
+rules = ["delete-allowed-root"]

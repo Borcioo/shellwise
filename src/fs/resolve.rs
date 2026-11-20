@@ -195,10 +195,12 @@ pub fn critical_reason(
         }
     };
     let key = key_of(&text);
+    let git_dir = cwd_repo.map(repo_git);
     let named: Vec<(&Path, &'static str, &'static str)> = home
         .map(|h| (h, "home folder", "ancestor of the home folder"))
         .into_iter()
         .chain(cwd_repo.map(|r| (r, "repo root", "ancestor of the repo root")))
+        .chain(git_dir.as_deref().map(|g| (g, REPO_GIT, "ancestor of the repo root")))
         .chain(protected.iter().map(|p| {
             (
                 p.as_path(),
@@ -268,6 +270,7 @@ pub fn critical_by_identity(
     }
     if let Some(r) = cwd_repo {
         named.push((r.to_path_buf(), "repo root", "ancestor of the repo root"));
+        named.push((repo_git(r), REPO_GIT, "ancestor of the repo root"));
     }
     for x in protected {
         named.push((x.clone(), "protected path", "ancestor of a protected path"));
@@ -299,6 +302,14 @@ pub fn critical_by_identity(
         }
         Ok(None)
     })?
+}
+
+const REPO_GIT: &str = "repo's .git, which holds every commit";
+
+/// The `.git` folder (or the file of a worktree) of the repo rooted at `root`. Deleting it is
+/// critical; deleting inside it (`.git/index.lock`) is judged as any path in the project.
+fn repo_git(root: &Path) -> PathBuf {
+    root.join(".git")
 }
 
 /// The root of the repo holding `cwd`: the nearest folder with a `.git` folder or file.
