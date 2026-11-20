@@ -21,8 +21,11 @@ use rshellcheck_core::{CheckSpec, Position, Severity, check_script};
 use shellwise::level::{Finding, Level, Span};
 use shellwise::{ANALYSIS_INCOMPLETE, Deadline, MAX_INPUT_BYTES, Shell};
 
-/// The largest file the dataflow analysis runs on, in bytes.
-pub const DATAFLOW_MAX_BYTES: usize = 15 * 1024;
+/// The largest file the dataflow analysis runs on, in bytes. Measured on dense corpus Bash (release,
+/// spawn included, p50): `lint` takes 43 ms at 20 KiB with it and 47 ms at 24 KiB, against the
+/// 50 ms budget; without it 32 ms at 24 KiB. The analysis doubles ShellCheck's time and spares
+/// most SC2086 notes.
+pub const DATAFLOW_MAX_BYTES: usize = 20 * 1024;
 
 /// The largest file ShellCheck runs on, in bytes: the size `analyse` itself parses.
 pub const MAX_BYTES: usize = MAX_INPUT_BYTES;

@@ -853,14 +853,20 @@ fn sc2164_is_left_out_of_a_linted_file() {
 }
 
 /// With the dataflow analysis ShellCheck knows `$x` holds `1` and asks for no quotes; without it,
-/// above `DATAFLOW_MAX_BYTES` (15 KiB), it does.
+/// above `DATAFLOW_MAX_BYTES` (20 KiB), it does.
 #[test]
-fn the_dataflow_analysis_runs_on_small_files_only() {
+fn the_dataflow_analysis_runs_on_files_up_to_20_kib() {
     let script = "x=1\necho $x\n";
+    let sized = |len: usize| {
+        let text = format!("{script}{}\n", "#".repeat(len - script.len() - 1));
+        assert_eq!(text.len(), len);
+        text
+    };
     let (path, r) = lint_cli("sc_dataflow_small", "small.sh", script);
     assert_eq!(r.stdout, format!("{}: ok\n", path.display()));
-    let big = format!("{script}{}\n", "#".repeat(15 * 1024));
-    let (path, r) = lint_cli("sc_dataflow_big", "big.sh", &big);
+    let (path, r) = lint_cli("sc_dataflow_at", "at.sh", &sized(20 * 1024));
+    assert_eq!(r.stdout, format!("{}: ok\n", path.display()));
+    let (path, r) = lint_cli("sc_dataflow_over", "over.sh", &sized(20 * 1024 + 1));
     assert_eq!(places(&path, &r), ["2:6: warn SC2086"], "{}", r.stdout);
 }
 
