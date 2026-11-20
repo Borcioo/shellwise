@@ -4,7 +4,10 @@ A recursive or forced delete whose target, with every variable or substitution t
 read taken as empty, is a protected location (a drive root, `/`, a system folder, the home
 folder, the repo root, its `.git`, a protected path) or the direct contents of one. When the
 variable is empty at run time, the delete takes that location. A variable the command assigns a
-literal earlier, or a loop over a literal list, is read with its value, not as empty.
+literal earlier, or a loop over a literal list, is read with its value where the name still holds
+it (see `dynamic-target`), not as empty. Recursive or forced is read as the tool parses its
+options: `rm` takes a unique prefix of a long option (`--recurs`, `--forc`), and a `--` option the
+guard does not know counts as forced.
 
 Level `danger`: the trailing allow marker confirms it.
 

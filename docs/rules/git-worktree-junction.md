@@ -4,8 +4,9 @@ Ported from baseline-guard. `git worktree remove --force <path>` deletes through
 the worktree and empties their targets. The worktree is walked for links whose target is outside
 it. Without `--force` git refuses a worktree that holds one (the junction is an untracked file).
 
-Level `danger` with `--force` (or `-f`, before or after the path) and a junction found (Ruling 122
-(c)). Level `warn` without `--force`, and for a worktree the guard cannot place (a variable, an
+Level `danger` with `--force` and a junction found (Ruling 122 (c)). The force option is matched
+as git parses it: `-f` alone or in a cluster (`-ff`), a prefix of `--force` (`--forc`), before or
+after the path; an option word the guard cannot read (`$opt`) counts as forced. Level `warn` without `--force`, and for a worktree the guard cannot place (a variable, an
 unknown folder, or a bare name that is no folder here, which git may match to a registered
 worktree by its name). A worktree outside the project is no finding by itself: git removes only a
 registered worktree.

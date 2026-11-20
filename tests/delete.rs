@@ -424,13 +424,11 @@ const FINDING_IDS: [&str; 15] = [
 const NO_ROW: [&str; 1] = [shellwise::rules::delete::WALK_TIMEOUT];
 
 /// Findings that are only ever warn (Ruling 122): a row where they fire stands in for the deny row.
-const WARN_ONLY: [&str; 7] = [
-    shellwise::rules::delete::DELETE_THROUGH_LINK,
+const WARN_ONLY: [&str; 5] = [
     shellwise::rules::delete::DELETE_OUTSIDE_PROJECT,
     shellwise::rules::delete::DELETE_ALLOWED_ROOT,
     shellwise::rules::delete::DELETE_UNKNOWN_LOCATION,
     shellwise::rules::delete::DYNAMIC_TARGET,
-    shellwise::rules::delete::WALK_UNREADABLE,
     shellwise::rules::git::GIT_UNREADABLE,
 ];
 

@@ -69,6 +69,13 @@ pub(crate) struct GitSub {
     /// `hooks`: long options that take the next word as their value.
     #[serde(default)]
     pub value_long: Vec<String>,
+    /// `discard`: the options that make it a whole-tree discard (danger); with none of them a
+    /// discard the table names is a warn (`reset --keep` refuses to lose an edit).
+    #[serde(default)]
+    pub danger_options: Vec<String>,
+    /// `discard`: always a warn (Ruling 122 item 3: its corpus rows were not harmful).
+    #[serde(default)]
+    pub warn_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -290,15 +297,35 @@ fn discard(call: &Call, sub: &GitSub, rest_lits: &[Option<String>]) -> Option<Fi
         Some(h) => h,
         None => sub.action == GitAction::Discard,
     };
-    hit.then(|| {
+    if !hit {
+        return None;
+    }
+    let whole = !sub.warn_only
+        && (sub.danger_options.is_empty()
+            || rest_lits
+                .iter()
+                .flatten()
+                .any(|a| sub.danger_options.iter().any(|e| scan::flag_matches(e, a))));
+    let message = format!(
+        "`git {}` throws away uncommitted work that no commit or stash holds",
+        sub.words
+    );
+    Some(if whole {
         finding(
             GIT_DISCARD,
             Level::Danger,
+            message,
+            CONFIRM_FIX.to_string(),
+            call.span(),
+        )
+    } else {
+        warn(
+            GIT_DISCARD,
             format!(
-                "`git {}` throws away uncommitted work that no commit or stash holds",
+                "`git {}` removes work from the tree or the stash list; check it is what you mean",
                 sub.words
             ),
-            CONFIRM_FIX.to_string(),
+            None,
             call.span(),
         )
     })
@@ -425,25 +452,35 @@ fn worktree_remove(
     git_loc: &Location,
     call: &Call,
 ) -> Option<Finding> {
-    let mut j = 0;
-    while j < rest.len() {
-        match rest_lits[j].as_deref() {
-            Some("--") => {
-                j += 1;
-                break;
-            }
-            Some(t) if t.starts_with('-') => j += 1,
-            _ => break,
-        }
-    }
+    // The worktree: the word after `--`, else the last word that is no literal option (a word
+    // the guard cannot read before it may be an option).
+    let dashdash = rest_lits.iter().position(|t| t.as_deref() == Some("--"));
+    let j = match dashdash {
+        Some(e) => e + 1,
+        None => rest_lits
+            .iter()
+            .rposition(|t| !t.as_deref().is_some_and(|t| t.starts_with('-')))?,
+    };
     let word = rest.get(j)?;
     // Without `--force` git refuses a worktree that holds a junction (an untracked file); git
     // reads options after the path too.
+    // As git parses them: a short flag inside a cluster (`-vf`), a long option by a unique
+    // prefix (`--forc`); a word the guard cannot read may be `--force`.
     let forced = rest_lits
         .iter()
-        .flatten()
-        .take_while(|t| *t != "--")
-        .any(|t| facts.force_options.contains(t));
+        .enumerate()
+        .take_while(|(_, t)| t.as_deref() != Some("--"))
+        .any(|(k, t)| match t {
+            None => k != j,
+            Some(t) if t.starts_with("--") && t.len() > 2 => facts
+                .force_options
+                .iter()
+                .any(|e| e.starts_with("--") && e.starts_with(t.as_str())),
+            Some(t) => facts
+                .force_options
+                .iter()
+                .any(|e| !e.starts_with("--") && scan::flag_matches(e, t)),
+        });
     let text = shown(scene, word);
     let cannot_tell = |why: &str| {
         warn(
@@ -528,16 +565,24 @@ fn worktree_remove(
                         )
                     })
                 }
-                WalkResult::Unreadable(at) => Some(warn(
-                    delete::WALK_UNREADABLE,
-                    format!(
+                WalkResult::Unreadable(at) => {
+                    let message = format!(
                         "this removes the worktree `{}`, and the guard cannot read `{}` inside it to tell whether a junction there leads outside it",
                         p.display(),
                         at.display()
-                    ),
-                    None,
-                    call.span(),
-                )),
+                    );
+                    Some(if forced {
+                        finding(
+                            delete::WALK_UNREADABLE,
+                            Level::Danger,
+                            message,
+                            CONFIRM_FIX.to_string(),
+                            call.span(),
+                        )
+                    } else {
+                        warn(delete::WALK_UNREADABLE, message, None, call.span())
+                    })
+                }
                 WalkResult::Timeout => Some(scene.timeout(call.span(), &text)),
             },
         };
@@ -563,6 +608,7 @@ fn restore(
             .is_some_and(|t| t.len() == 1 && t.starts_with('.'))
     };
     let mut paths: Vec<&Word> = Vec::new();
+    let mut unknown = false;
     if sub.action == GitAction::CheckoutPaths {
         if let Some(e) = end {
             paths.extend(&rest[e + 1..]);
@@ -577,22 +623,31 @@ fn restore(
             // A branch operation: git takes no path here.
             return None;
         } else {
-            // A word on disk is a path. A word the guard cannot place is read as the branch,
-            // tag or commit it most often is: switching deletes nothing (Ruling 122).
+            // A word on disk is a path; a word that is no path here is the branch, tag or
+            // commit git switches to, which deletes nothing (Ruling 122). A word or a folder
+            // the guard cannot read may be either.
             for (w, t) in rest.iter().zip(rest_lits) {
                 if t.as_deref().is_some_and(|t| t.starts_with('-')) {
                     continue;
                 }
-                if let Target::Paths(ps) = resolve::target(
+                match resolve::target(
                     w,
                     git_loc,
                     &scene.env,
                     DeleteBy::Native,
                     scene.ctx.fs,
                     scene.ctx.deadline,
-                ) && ps.iter().any(|p| exists(scene, p) != Some(false))
-                {
-                    paths.push(w);
+                ) {
+                    Target::Paths(ps) => {
+                        if ps.iter().any(|p| exists(scene, p) != Some(false)) {
+                            paths.push(w);
+                        }
+                    }
+                    Target::NotAFile | Target::SessionCommand => {}
+                    _ => {
+                        unknown = true;
+                        paths.push(w);
+                    }
                 }
             }
         }
@@ -630,15 +685,23 @@ fn restore(
     }
     let names: Vec<String> = paths.iter().take(3).map(|w| shown(scene, w)).collect();
     let list = names.join(" ");
-    // The whole tree: a path that is the repo root (`.` there). Danger (Ruling 122 (c)).
+    // The whole tree: a path that is the repo root, or `.` where git runs in a folder the guard
+    // cannot place (it may be the root). Danger (Ruling 122 (c)).
     let repo = scene.repo().ok().flatten();
-    let whole = repo.is_some_and(|root| {
-        paths.iter().any(|w| {
-            matches!(
-                resolve::target(w, git_loc, &scene.env, DeleteBy::Native, scene.ctx.fs, scene.ctx.deadline),
-                Target::Paths(ps) if ps.iter().any(|p| same_path(scene, p, &root))
-            )
-        })
+    let whole = paths.iter().any(|w| {
+        match resolve::target(
+            w,
+            git_loc,
+            &scene.env,
+            DeleteBy::Native,
+            scene.ctx.fs,
+            scene.ctx.deadline,
+        ) {
+            Target::Paths(ps) => repo
+                .as_ref()
+                .is_some_and(|root| ps.iter().any(|p| same_path(scene, p, root))),
+            _ => literal(w).is_some_and(|t| t.len() == 1 && t.starts_with('.')),
+        }
     });
     if whole {
         return Some(finding(
@@ -650,6 +713,20 @@ fn restore(
             ),
             format!(
                 "look at `git diff --stat` first and restore only the files you mean; or, {CONFIRM_FIX}"
+            ),
+            span,
+        ));
+    }
+    if unknown && end.is_none() {
+        return Some(warn(
+            GIT_RESTORE_DISCARDS,
+            format!(
+                "the guard could not read whether `{}` names a file, and `git {}` on a file throws away the uncommitted edits in it",
+                names[0], sub.words
+            ),
+            Some(
+                "switch branches with `git switch <branch>`; to restore a file, name it after `--`"
+                    .to_string(),
             ),
             span,
         ));
@@ -689,6 +766,7 @@ fn clean(
         recursive: false,
         forced: false,
         contents: true,
+        follows_links: false,
     };
     let mut specs: Vec<&Word> = Vec::new();
     let mut ended = false;

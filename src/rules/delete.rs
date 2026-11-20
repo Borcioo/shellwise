@@ -68,6 +68,8 @@ pub(crate) struct DeleteFacts {
     /// It deletes nothing itself but runs the command after its options on names read from
     /// its input (`xargs rm`).
     pub runner: bool,
+    /// It deletes through a link inside the tree and empties the link's target (`robocopy /MIR`).
+    pub follows_links: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -495,6 +497,16 @@ fn native_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
                 seen_option = true;
                 p.recursive |= facts.recursive.iter().any(|e| scan::flag_matches(e, t));
                 p.forced |= facts.forced.iter().any(|e| scan::flag_matches(e, t));
+                if !facts.forced.is_empty() && t.starts_with("--") && t.len() > 2 {
+                    // GNU reads a long option by any unique prefix (`--recur`, `--forc`); one
+                    // the table does not list may force or recurse, for the danger gate.
+                    let name = t.split('=').next().unwrap_or(t);
+                    let prefix_of = |list: &[String]| list.iter().any(|e| e.starts_with(name));
+                    let rec = prefix_of(&facts.recursive);
+                    p.recursive |= rec;
+                    p.forced |=
+                        !rec && !prefix_of(&facts.dry_run) && !prefix_of(&prog.value_options);
+                }
                 p.dry_run |= facts.dry_run.iter().any(|e| scan::flag_matches(e, t));
                 if facts.exec_options.iter().any(|e| e == t) {
                     // The clause runs once per match: what it deletes lies inside the targets.
@@ -567,6 +579,8 @@ pub(crate) struct How {
     pub recursive: bool,
     pub forced: bool,
     pub contents: bool,
+    /// The program deletes through a link inside the tree (`DeleteFacts::follows_links`).
+    pub follows_links: bool,
 }
 
 impl<'a> Scene<'a> {
@@ -717,16 +731,27 @@ impl<'a> Scene<'a> {
                 WalkResult::Clean => None,
                 WalkResult::Outside(links) => {
                     let first = links.first().map(|l| l.path.clone()).unwrap_or_default();
-                    Some(through_link(p, &first, shell, span))
+                    let mut f = through_link(p, &first, shell, span);
+                    if how.follows_links {
+                        // `robocopy /MIR` empties a junction's target (probed, also with /XJ).
+                        f.level = Level::Danger;
+                        f.message = format!(
+                            "this empties `{}` and follows the link `{}` inside it, deleting the files of its target outside the tree",
+                            p.display(),
+                            first.display()
+                        );
+                    }
+                    Some(f)
                 }
-                WalkResult::Unreadable(at) => Some(warn(
+                WalkResult::Unreadable(at) => Some(finding(
                     WALK_UNREADABLE,
+                    Level::Danger,
                     format!(
                         "this deletes the tree `{}`, and the guard cannot read `{}` inside it to tell whether a link there leads outside it",
                         p.display(),
                         at.display()
                     ),
-                    None,
+                    CONFIRM_FIX.to_string(),
                     span,
                 )),
                 WalkResult::Timeout => Some(self.timeout(span, shown)),
@@ -861,7 +886,16 @@ impl<'a> Scene<'a> {
         let command = self.ctx.input.command;
         let text = command.get(c.span.start..c.span.end).unwrap_or_default();
         let shown: String = text.chars().take(80).collect();
-        let protected = raw_words(text).find_map(|w| self.protected_word(w));
+        // Only the words of the destructive commands themselves: a `cd` to the repo root
+        // elsewhere in the body names no target.
+        let words: Vec<String> = scan::hits(scan::table(), text)
+            .into_iter()
+            .filter(|h| h.kind != scan::Kind::Unreadable)
+            .filter_map(|h| text.get(h.span.start..h.span.end))
+            .flat_map(raw_words)
+            .map(str::to_string)
+            .collect();
+        let protected = words.iter().find_map(|w| self.protected_word(w));
         match protected {
             Some((p, reason)) => finding(
                 OPAQUE_DESTRUCTIVE,
@@ -959,11 +993,7 @@ impl<'a> Scene<'a> {
             WordPart::Var(n) => self
                 .multi
                 .iter()
-                .find(|a| {
-                    same(&a.name, n)
-                        && a.within
-                            .is_none_or(|l| w.span.start >= l.start && w.span.end <= l.end)
-                })
+                .find(|a| same(&a.name, n) && a.holds_at(w.span))
                 .cloned(),
             _ => None,
         })
@@ -1070,6 +1100,7 @@ impl<'a> Scene<'a> {
         let how = How {
             recursive: picked.recursive,
             forced: picked.forced,
+            follows_links: facts.follows_links,
             contents: picked.contents,
         };
         if picked.words.is_empty() {
@@ -1095,6 +1126,7 @@ impl<'a> Scene<'a> {
             recursive: m.args.len() >= 2,
             forced: false,
             contents: false,
+            follows_links: false,
         };
         self.judge_word(target, loc, DeleteBy::Native, how, m.span)
     }

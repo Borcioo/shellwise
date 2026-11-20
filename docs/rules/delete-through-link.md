@@ -5,13 +5,21 @@ is outside the tree, or that is a link itself; or any delete of a path below a l
 walked breadth first without following links, within the walk budget (`walk-timeout` when it runs
 out).
 
-Level `warn` (Ruling 122): `rm -rf`, `Remove-Item -Recurse`, `[IO.Directory]::Delete(p, $true)`
-and `rd /s` remove a junction without emptying its target (probed on pwsh 7.7, Git Bash 5.2), so
-the warning is for a tool that follows links. `git worktree remove --force` does empty it: that is
-`git-worktree-junction`. A non-recursive delete of the link itself is ok.
+Level `warn` for the tools that remove a junction without emptying its target: `rm -rf`,
+`Remove-Item -Recurse` and `[IO.Directory]::Delete(p, $true)` (probed on pwsh 7.7, Windows
+PowerShell 5.1 and Git Bash 5.2), and `rd /s`. Level `danger` for a tool that follows links:
+`robocopy /MIR` empties the target (`follows_links` in `data/programs.toml`). `git worktree
+remove --force` empties it too: that is `git-worktree-junction`. A non-recursive delete of the
+link itself is ok.
 
 `Fix: remove the link itself first with `[IO.Directory]::Delete('<link>')` (PowerShell) or
 `rm '<link>'` (Bash) in a command of its own`
+
+## Deny
+
+```powershell
+robocopy empty linked /MIR   # linked\out is a junction: its target is emptied
+```
 
 ## Warns
 

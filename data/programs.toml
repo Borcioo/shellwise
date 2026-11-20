@@ -271,6 +271,7 @@ name = "robocopy"
 [program.delete]
 targets = "second"
 always_recursive = true
+follows_links = true
 slash_options = true
 dry_run = ["/L"]
 
@@ -386,6 +387,7 @@ action = "worktree-remove"
 [[program.discard.subcommands]]
 words = "reset"
 action = "discard"
+danger_options = ["--hard", "--merge"]
 
 [[program.discard.subcommands]]
 words = "switch"
@@ -394,6 +396,7 @@ action = "discard"
 [[program.discard.subcommands]]
 words = "stash drop"
 action = "discard"
+warn_only = true
 
 [[program.discard.subcommands]]
 words = "stash clear"

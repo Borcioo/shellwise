@@ -1,36 +1,66 @@
-//! Names a command gives literal values before it uses them (Ruling 122, item 2): a top-level
-//! `X=build` or `$x = 'C:\tmp\x'` (a pwsh list `'a','b'` too) and a top-level loop over a
-//! literal list (`for d in a b`, `foreach ($d in 'a','b')`, `foreach ($d in $list)`). Such a
-//! name resolves to its values; every other assigned name stays dynamic (`mark_assigned`).
+//! Names a command gives literal values (Ruling 122, item 2): a top-level `X=build` or
+//! `$x = 'C:\tmp\x'` (a pwsh list `'a','b'` too) and a top-level loop over a literal list
+//! (`for d in a b`, `foreach ($d in 'a','b')`, `foreach ($d in $list)`). Such a name holds its
+//! values where it is still valid; every other assigned name stays dynamic (`mark_assigned`).
 //!
-//! A name resolves only when all of these hold, else it stays dynamic:
-//! - its one assignment is a statement of its own at the top level (no prefix `X=a cmd`, no
-//!   branch, function, loop body, substitution, pipeline element or background `&`), written
-//!   `X=` or `$x =` (no `+=`, no index), with a value of literals and names resolved before it;
-//! - nothing else in the command assigns it (another assignment, `export`, `read`, a loop, a
-//!   `source` or `eval` that may assign anything);
-//! - every use of it stands after the assignment (for a loop variable: inside the loop);
+//! Validity is decided per name before any value is passed on:
+//! - the assignment is a statement of its own at the top level (no prefix `X=a cmd`, no branch,
+//!   function, loop body, subshell, substitution, pipeline element or background `&`), written
+//!   `X=` or `$x =` (no `+=`, no index), with a value of literals and of names valid at every
+//!   use (a value built from a name that is reassigned anywhere is no literal);
+//! - no assignment of the name stands before it, and nothing else in the command marks it
+//!   (`export`, `read`, a `source` or `eval` that may assign anything);
+//! - it holds from the end of its statement up to the next assignment of the name (any kind,
+//!   anywhere), never inside a loop that assigns the name again; a loop variable holds inside
+//!   its loop only;
 //! - it is no name the shell or the guard keeps for itself (`HOME`, `PWD`).
-
-use std::collections::BTreeMap;
+//!
+//! A use where the name does not hold sees it dynamic, which the empty-expansion rule reads as
+//! empty.
 
 use super::resolve::{is_pwd, mark_assigned_except};
 use crate::Shell;
 use crate::ir::{Elem, EnvView, Pipeline, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::level::Span;
 
-/// A name with several values: a pwsh list or a loop variable. `within`: the loop, which holds
-/// every use of a loop variable.
+/// A name with literal values that holds only in part of the command, or with several values
+/// (a pwsh list, a loop variable): a target that uses it where it holds is judged once per
+/// value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assigned {
     pub name: String,
     pub values: Vec<String>,
+    /// It holds from this offset (the end of its assignment, or its loop's start)...
+    pub from: usize,
+    /// ...up to the next assignment of the name.
+    pub until: usize,
+    /// A loop variable: the loop.
     pub within: Option<Span>,
+    /// Loops that assign the name again: a later pass sees another value.
+    pub blocked: Vec<Span>,
 }
 
-/// A name, its values, the offset its uses must follow, the loop holding them, and the span of
-/// the statement that assigns it.
-type Candidate = (String, Vec<String>, usize, Option<Span>, Span);
+impl Assigned {
+    /// The name holds these values for a use at `s`.
+    pub fn holds_at(&self, s: Span) -> bool {
+        let inside = |l: &Span| s.start >= l.start && s.end <= l.end;
+        s.start >= self.from
+            && s.start < self.until
+            && self.within.as_ref().is_none_or(inside)
+            && !self.blocked.iter().any(inside)
+    }
+}
+
+/// A top-level assignment or literal loop: the name, its values, where it starts to hold, the
+/// loop, the offset of its own assignment, and the statement `mark_assigned` skips.
+struct Candidate {
+    name: String,
+    values: Vec<String>,
+    from: usize,
+    within: Option<Span>,
+    at: usize,
+    stmt: Option<Span>,
+}
 
 /// More values than this and a name stays dynamic: each value is judged on its own.
 const MAX_VALUES: usize = 32;
@@ -40,8 +70,8 @@ const MAX_VALUES: usize = 32;
 const KEPT: [&str; 5] = ["home", "userprofile", "oldpwd", "cdpath", "ifs"];
 
 /// Mark what `script` assigns in `env` as `mark_assigned` does, except the names the command
-/// gives literal values first: a name with one value is set in `env`; the names with several
-/// are returned.
+/// gives literal values: a name valid at every use with one value is set in `env`; the others
+/// that hold somewhere are returned (and stay dynamic in `env`).
 pub fn resolve_assigned(
     env: &mut EnvView,
     script: &Script,
@@ -57,76 +87,19 @@ pub fn resolve_assigned(
             n.to_string()
         }
     };
-    // Candidates, in order: each value is read with the names resolved before it.
-    let mut known = env.clone();
-    let mut found: Vec<Candidate> = Vec::new();
-    for st in &script.stmts {
-        match st {
-            Stmt::Pipeline(p) => {
-                if let Some((c, name, value)) = plain_assignment(p, command, pwsh) {
-                    let values: Option<Vec<String>> = value
-                        .parts
-                        .split(|p| *p == WordPart::ListSep)
-                        .map(|parts| {
-                            Word {
-                                parts: parts.to_vec(),
-                                span: value.span,
-                                quote: value.quote,
-                            }
-                            .static_value(&known)
-                        })
-                        .collect();
-                    // A pwsh list (`'a','b'`, `@('a', 'b')`) is lowered as an expression: read
-                    // its text.
-                    let values = values.or_else(|| {
-                        let text = command.get(value.span.start..value.span.end)?;
-                        (pwsh && (text.contains(',') || text.starts_with("@(")))
-                            .then(|| list_values(text, true))
-                            .flatten()
-                    });
-                    let values = values.filter(|v| !v.is_empty() && v.len() <= MAX_VALUES);
-                    if let Some(values) = values {
-                        if let [one] = values.as_slice() {
-                            known.set(&name, one);
-                        }
-                        found.push((name, values, c.span.end, None, c.span));
-                    }
-                }
-            }
-            Stmt::Loop { span, .. } => {
-                if let Some((name, list)) = loop_header(command, *span, pwsh)
-                    && let Some(values) = loop_values(&list, &known, &found, &key, pwsh)
-                {
-                    found.push((name, values, span.start, Some(*span), *span));
-                }
-            }
-            _ => {}
-        }
-    }
-    let skip: Vec<Span> = found
-        .iter()
-        .filter(|f| f.3.is_none())
-        .map(|f| f.4)
-        .collect();
-    // Marked with the values in sight: `Remove-Item $d` may name a drive path only when `$d`
-    // cannot be read, so a resolved `$d` marks nothing (a list or loop name by its first value).
-    for (name, values, ..) in &found {
-        if let Some(first) = values.first() {
-            env.set(name, first);
-        }
-    }
-    mark_assigned_except(env, script, command, &skip);
-    // Every assignment of each name anywhere, and the earliest use of each.
-    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    // Every assignment of each name anywhere (by offset), every loop, every use.
+    let mut events: Vec<(String, usize)> = Vec::new();
+    let mut loops: Vec<Span> = Vec::new();
     let mut uses: Vec<(String, Span)> = Vec::new();
     each_command(script, &mut |c| {
         for (n, _) in &c.assigns {
-            *count.entry(key(n)).or_default() += 1;
+            events.push((key(n), c.span.start));
         }
     });
     each_loop(script, &mut |span| {
+        loops.push(span);
         if let Some((n, _)) = loop_header(command, span, pwsh) {
-            *count.entry(key(&n)).or_default() += 1;
+            events.push((key(&n), span.start));
         }
     });
     each_word(script, &mut |w| {
@@ -136,38 +109,194 @@ pub fn resolve_assigned(
             }
         }
     });
-    let mut multi = Vec::new();
-    for (name, values, from, within, _) in found {
-        let k = key(&name);
-        let ok = count.get(&k) == Some(&1)
-            && !env.is_assigned(&name)
-            && !KEPT.contains(&k.to_ascii_lowercase().trim_start_matches("env:"))
-            && !is_pwd(&name, shell)
-            && uses
-                .iter()
-                .filter(|(n, _)| *n == k)
-                .all(|(_, s)| match within {
-                    Some(l) => s.start >= l.start && s.end <= l.end,
-                    None => s.start >= from,
-                });
-        if !ok {
-            env.mark_dynamic(&name);
-            continue;
-        }
-        match (values.as_slice(), within) {
-            ([one], None) => env.set(&name, one),
-            // Read only where a target writes it out (`with_value` in the delete rule).
-            _ => {
-                env.mark_dynamic(&name);
-                multi.push(Assigned {
-                    name,
-                    values,
-                    within,
-                })
+    // Which names something else marks: a pass with every candidate's literal in sight, so a
+    // `Remove-Item $d` with a literal `$d` marks no drive path.
+    let mut naive_known = env.clone();
+    let naive = candidates(
+        script,
+        command,
+        pwsh,
+        &key,
+        &mut naive_known,
+        &mut |c, known| {
+            if let [one] = c.values.as_slice() {
+                known.set(&c.name, one);
             }
+            c.within.is_none().then(|| Assigned {
+                name: c.name.clone(),
+                values: c.values.clone(),
+                from: c.from,
+                until: usize::MAX,
+                within: None,
+                blocked: Vec::new(),
+            })
+        },
+    );
+    let mut probe = env.clone();
+    for c in &naive {
+        probe.set(&c.name, &c.values[0]);
+    }
+    let skip: Vec<Span> = naive.iter().filter_map(|c| c.stmt).collect();
+    // Plain assignments anywhere are the events above, placed by offset: the probe skips them.
+    let mut plain: Vec<Span> = Vec::new();
+    each_command(script, &mut |c| {
+        if c.typed.is_empty() && c.args.is_empty() && !c.opaque && !c.assigns.is_empty() {
+            plain.push(c.span);
+        }
+    });
+    mark_assigned_except(&mut probe, script, command, &plain);
+    // In order, each value built only from names valid at every use.
+    let mut everywhere: Vec<String> = Vec::new();
+    let mut held: Vec<Assigned> = Vec::new();
+    let mut known = env.clone();
+    candidates(script, command, pwsh, &key, &mut known, &mut |c, known| {
+        let k = key(&c.name);
+        let mine: Vec<usize> = events
+            .iter()
+            .filter(|(n, _)| *n == k)
+            .map(|(_, at)| *at)
+            .collect();
+        if mine.iter().any(|at| *at < c.at)
+            || probe.is_assigned(&c.name)
+            || KEPT.contains(&k.to_ascii_lowercase().trim_start_matches("env:"))
+            || is_pwd(&c.name, shell)
+        {
+            return None;
+        }
+        let later: Vec<usize> = mine.iter().copied().filter(|at| *at > c.at).collect();
+        let a = Assigned {
+            name: c.name.clone(),
+            values: c.values.clone(),
+            from: c.from,
+            until: later.iter().copied().min().unwrap_or(usize::MAX),
+            within: c.within,
+            blocked: loops
+                .iter()
+                .filter(|l| Some(**l) != c.within)
+                .filter(|l| later.iter().any(|at| *at >= l.start && *at < l.end))
+                .copied()
+                .collect(),
+        };
+        let mine_used: Vec<Span> = uses
+            .iter()
+            .filter(|(n, _)| *n == k)
+            .map(|(_, s)| *s)
+            .collect();
+        if !mine_used.iter().any(|s| a.holds_at(*s)) {
+            return None;
+        }
+        // Set in `env` (and usable in later values) only when never assigned again: `env` is
+        // one view for the whole command, so a name reassigned later holds where `holds_at`
+        // says and nowhere else.
+        if a.values.len() == 1
+            && a.within.is_none()
+            && a.until == usize::MAX
+            && mine_used.iter().all(|s| a.holds_at(*s))
+        {
+            known.set(&a.name, &a.values[0]);
+            everywhere.push(k);
+        } else {
+            held.push(a.clone());
+        }
+        Some(a)
+    });
+    // The final marks, with the literals in sight; then every candidate name that is not valid
+    // at every use is dynamic.
+    for c in &naive {
+        env.set(&c.name, &c.values[0]);
+    }
+    mark_assigned_except(env, script, command, &skip);
+    for c in &naive {
+        if !everywhere.contains(&key(&c.name)) {
+            env.mark_dynamic(&c.name);
         }
     }
-    multi
+    for a in &held {
+        env.mark_dynamic(&a.name);
+    }
+    held
+}
+
+/// The top-level candidates in order, each offered to `accept`, which may update `known` (the
+/// names a later value may be built from) and returns the name's reading when it takes it; a
+/// loop over `$list` reads a list taken before it, where it holds at the loop.
+fn candidates(
+    script: &Script,
+    command: &str,
+    pwsh: bool,
+    key: &dyn Fn(&str) -> String,
+    known: &mut EnvView,
+    accept: &mut dyn FnMut(&Candidate, &mut EnvView) -> Option<Assigned>,
+) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    let mut taken: Vec<Assigned> = Vec::new();
+    for st in &script.stmts {
+        let c = match st {
+            Stmt::Pipeline(p) => plain_assignment(p, command, pwsh).and_then(|(c, name, value)| {
+                let values: Option<Vec<String>> = value
+                    .parts
+                    .split(|p| *p == WordPart::ListSep)
+                    .map(|parts| {
+                        Word {
+                            parts: parts.to_vec(),
+                            span: value.span,
+                            quote: value.quote,
+                        }
+                        .static_value(known)
+                    })
+                    .collect();
+                // A pwsh list (`'a','b'`, `@('a', 'b')`) is lowered as an expression: read its
+                // text.
+                let values = values.or_else(|| {
+                    let text = command.get(value.span.start..value.span.end)?;
+                    (pwsh && (text.contains(',') || text.starts_with("@(")))
+                        .then(|| list_values(text, true))
+                        .flatten()
+                });
+                values
+                    .filter(|v| !v.is_empty() && v.len() <= MAX_VALUES)
+                    .map(|values| Candidate {
+                        name,
+                        values,
+                        from: c.span.end,
+                        within: None,
+                        at: c.span.start,
+                        stmt: Some(c.span),
+                    })
+            }),
+            Stmt::Loop { span, .. } => {
+                loop_header(command, *span, pwsh).and_then(|(name, list)| {
+                    let at_loop = Span {
+                        start: span.start,
+                        end: span.start,
+                    };
+                    let lists = |var: &str| {
+                        taken
+                            .iter()
+                            .rev()
+                            .find(|a| key(&a.name) == key(var) && a.holds_at(at_loop))
+                            .map(|a| a.values.clone())
+                    };
+                    loop_values(&list, known, &lists, pwsh).map(|values| Candidate {
+                        name,
+                        values,
+                        from: span.start,
+                        within: Some(*span),
+                        at: span.start,
+                        stmt: None,
+                    })
+                })
+            }
+            _ => None,
+        };
+        if let Some(c) = c {
+            if let Some(a) = accept(&c, known) {
+                taken.push(a);
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// `X=value` or `$x = value` alone in its statement, written so: `(command, name, value)`.
@@ -273,8 +402,7 @@ fn closing_paren(t: &str) -> Option<usize> {
 fn loop_values(
     list: &str,
     known: &EnvView,
-    found: &[Candidate],
-    key: &dyn Fn(&str) -> String,
+    lists: &dyn Fn(&str) -> Option<Vec<String>>,
     pwsh: bool,
 ) -> Option<Vec<String>> {
     let list = list.trim();
@@ -282,14 +410,7 @@ fn loop_values(
         if !var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return None;
         }
-        if let Some(f) = found
-            .iter()
-            .rev()
-            .find(|f| f.3.is_none() && key(&f.0) == key(var))
-        {
-            return Some(f.1.clone());
-        }
-        return known.get(var).map(|v| vec![v.to_string()]);
+        return lists(var).or_else(|| known.get(var).map(|v| vec![v.to_string()]));
     }
     list_values(list, pwsh)
 }
