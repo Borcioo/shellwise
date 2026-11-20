@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-20
+
+The first release. An early version: expect rough edges and tell us about wrong verdicts.
+
 ### Added
 
 - `shellwise check`: judges one Bash or PowerShell command and answers `ok`, `warn`, `break`,
@@ -17,14 +21,3 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   system locations, git commands that discard work). One document per rule in `docs/rules/`.
 - A user config file and a per-repository `.shellwise.toml` that can only raise levels.
 - `SHELLWISE=off` turns the check off.
-
-### Changed
-
-- The allow marker is `# shellwise: allow` alone: the transition alias the design notes named no
-  longer confirms a command.
-
-### Fixed
-
-- On Windows, a temp folder, allowed root, project, home folder or protected path given in its
-  8.3 short spelling (`C:\LONGFO~1\Temp`, as `TEMP` is on GitHub's runners) is now recognised
-  for a delete whose target is spelled long.
