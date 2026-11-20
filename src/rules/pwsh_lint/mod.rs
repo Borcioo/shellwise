@@ -1,9 +1,10 @@
 //! The PowerShell lint rules: commands that break, write the wrong thing or hang when an agent
 //! runs them in the PowerShell tool.
 //!
-//! - `ports`: the installed baseline-guard rules, at its level (break): `gate-truncated-pipeline`,
-//!   `ps-bad-parameter`, `ps-bare-bash`, `ps-native-nonewline`, `ps-dotnet-relative-path`,
-//!   `stale-write-var`, `ps-git-commit-stdin`, `cli-inline-prose`; `bat` holds `bat-metachar`.
+//! - `ports`: the installed baseline-guard rules: `ps-bad-parameter`, `ps-native-nonewline`,
+//!   `stale-write-var`, `ps-git-commit-stdin` and `cli-inline-prose` at its level (break);
+//!   `gate-truncated-pipeline`, `ps-bare-bash` and `ps-dotnet-relative-path` at warn. `bat` holds
+//!   `bat-metachar` (break).
 //! - `catalogue`: the rules from the trap catalogue (warn).
 //! - `table` and `bind`: the generated pwsh 7 command table and the parameter binder.
 //!

@@ -99,14 +99,86 @@ pub(super) fn launcher_named(name: &str, patterns: &[String]) -> bool {
         } else {
             (base.as_str(), vec![p.clone()])
         };
+        let subject: Vec<char> = subject.chars().collect();
         globs.iter().any(|g| {
-            globset::GlobBuilder::new(g)
-                .literal_separator(false)
-                .backslash_escape(false)
-                .build()
-                .is_ok_and(|m| m.compile_matcher().is_match(subject))
+            let g: Vec<char> = g.chars().collect();
+            glob_match(&g, &subject)
         })
     })
+}
+
+/// `s` matches the glob `p` whole: `*` any run of characters (`/` included), `?` one character,
+/// `[...]` one of a set (`a-z` ranges, `!` or `^` first negates). A `[` with no closing `]` is a
+/// literal. Linear in practice: one remembered `*` position, no recursion, so no backtracking
+/// blow-up on long input.
+fn glob_match(p: &[char], s: &[char]) -> bool {
+    let (mut pi, mut si) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while si < s.len() {
+        match p.get(pi) {
+            Some('*') => {
+                star = Some((pi, si));
+                pi += 1;
+                continue;
+            }
+            Some('?') => {
+                pi += 1;
+                si += 1;
+                continue;
+            }
+            Some('[') => {
+                if let Some((hit, next)) = class(p, pi, s[si]) {
+                    if hit {
+                        pi = next;
+                        si += 1;
+                        continue;
+                    }
+                } else if s[si] == '[' {
+                    pi += 1;
+                    si += 1;
+                    continue;
+                }
+            }
+            Some(c) if *c == s[si] => {
+                pi += 1;
+                si += 1;
+                continue;
+            }
+            _ => {}
+        }
+        // A mismatch: let the last `*` take one more character, or fail.
+        let Some((sp, ss)) = star else { return false };
+        star = Some((sp, ss + 1));
+        pi = sp + 1;
+        si = ss + 1;
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
+/// Whether `c` is in the `[...]` set opening at `p[at]`, and the index after its `]`; `None`
+/// when the set never closes.
+fn class(p: &[char], at: usize, c: char) -> Option<(bool, usize)> {
+    let mut i = at + 1;
+    let negate = matches!(p.get(i), Some('!' | '^'));
+    if negate {
+        i += 1;
+    }
+    let mut hit = false;
+    let mut first = true;
+    while let Some(&x) = p.get(i) {
+        if x == ']' && !first {
+            return Some((hit != negate, i + 1));
+        }
+        if p.get(i + 1) == Some(&'-') && p.get(i + 2).is_some_and(|y| *y != ']') {
+            hit |= (x..=p[i + 2]).contains(&c);
+            i += 3;
+        } else {
+            hit |= x == c;
+            i += 1;
+        }
+        first = false;
+    }
+    None
 }
 
 /// PowerShell's rule for a native argument to a batch file: it wraps the value in double quotes
@@ -422,6 +494,47 @@ mod tests {
         for n in ["php7", "phpx", r"vendor\phpunit", "rg"] {
             assert!(!launcher_named(n, &pats), "{n}");
         }
+    }
+
+    #[test]
+    fn a_glob_matches_the_whole_name() {
+        let m = |p: &str, s: &str| {
+            glob_match(
+                &p.chars().collect::<Vec<_>>(),
+                &s.chars().collect::<Vec<_>>(),
+            )
+        };
+        let table = [
+            ("php", "php", true),
+            ("php", "php8", false),
+            ("php8[0-9]", "php84", true),
+            ("php8[0-9]", "php8x", false),
+            ("php8[!0-4]", "php85", true),
+            ("php8[!0-4]", "php84", false),
+            ("php8[^0-4]", "php84", false),
+            ("p?p", "pxp", true),
+            ("p?p", "pp", false),
+            ("*/vendor/bin/*", "x/vendor/bin/phpunit", true),
+            ("vendor/bin/*", "vendor/bin/a/b", true),
+            ("vendor/bin/*", "vendor/phpunit", false),
+            ("a*b*c", "aXXbYYc", true),
+            ("a*b*c", "aXXbYY", false),
+            ("*", "", true),
+            ("", "x", false),
+            ("[ab", "[ab", true),
+            ("[]]", "]", true),
+            ("[a-]", "-", true),
+        ];
+        for (p, s, want) in table {
+            assert_eq!(m(p, s), want, "{p:?} on {s:?}");
+        }
+        // No backtracking blow-up: 40 repeats of each repeated token, against a near miss.
+        let start = Instant::now();
+        for token in ["*a", "?", "[a-z]", "*"] {
+            let p = token.repeat(40) + "b";
+            assert!(!m(&p, &"a".repeat(400)), "{token}");
+        }
+        assert!(start.elapsed().as_millis() < 200, "{:?}", start.elapsed());
     }
 
     #[test]

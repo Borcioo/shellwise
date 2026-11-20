@@ -4,7 +4,7 @@
 
 | Case | Level | Why |
 |---|---|---|
-| A literal relative path (including `~`) in a path argument | `break` | It names another file. |
+| A literal relative path (including `~`) in a path argument | `warn` | It names another file whenever the process directory differs from the location. Warn: in the corpus it also fired on runs that worked (the two were the same folder). |
 | A rooted path, or a path built with Join-Path | `ok` |  |
 
 ## Deny
@@ -13,7 +13,7 @@
 [IO.File]::ReadAllText('tools\x.php')
 ```
 
-`break`: `Fix: pass an absolute path: [IO.File]::ReadAllText((Join-Path $PWD 'tools\x.php'))`
+`warn`: `Fix: pass an absolute path: [IO.File]::ReadAllText((Join-Path $PWD 'tools\x.php'))`
 
 ## Allow
 

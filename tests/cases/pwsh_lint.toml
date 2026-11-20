@@ -106,7 +106,7 @@ id = "gate-tee-then-select-first"
 os = "any"
 shell = "pwsh"
 command = "npm test 2>&1 | Tee-Object run.log | Select-Object -First 30"
-level = "break"
+level = "warn"
 rules = ["gate-truncated-pipeline"]
 fix = "$out = npm test 2>&1 | Tee-Object run.log 2>&1; $out | Select-Object -Last 20"
 oracle = "accepts"
@@ -127,7 +127,7 @@ id = "gate-tee-then-select-f-prefix"
 os = "any"
 shell = "pwsh"
 command = "npm test 2>&1 | Tee-Object run.log | Select-Object -f 30"
-level = "break"
+level = "warn"
 rules = ["gate-truncated-pipeline"]
 fix = "$out = npm test"
 oracle = "accepts"
@@ -137,7 +137,7 @@ id = "gate-tee-then-head-is-also-a-unix-tool"
 os = "any"
 shell = "pwsh"
 command = "npm test 2>&1 | Tee-Object run.log | head -40"
-level = "break"
+level = "warn"
 rules = ["gate-truncated-pipeline", "ps-unix-command"]
 fix = "$out = npm test"
 oracle = "accepts"
@@ -147,7 +147,7 @@ id = "gate-tee-behind-a-foreach"
 os = "any"
 shell = "pwsh"
 command = "npm test 2>&1 | Tee-Object run.log | ForEach-Object { $_ } | Select-Object -First 5"
-level = "break"
+level = "warn"
 rules = ["gate-truncated-pipeline"]
 fix = "$out = npm test"
 oracle = "accepts"
@@ -366,14 +366,135 @@ level = "ok"
 rules = []
 oracle = "accepts"
 
-# --- ps-bare-bash (break, Windows): `bash` in PowerShell is WSL ---
+# `-A 1` alone: `-A` binds -AllMatches and `1` becomes the pattern, so the call runs (probed).
+[[row]]
+id = "bad-param-allow-a-hinted-number-that-takes-the-first-position"
+os = "any"
+shell = "pwsh"
+command = "Select-String -A 1 -Path notes.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-a-hinted-number-after-a-file"
+os = "any"
+shell = "pwsh"
+command = "Select-String b -A 1 notes.txt"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "use -Context 0,1: Select-String b -Context 0,1 notes.txt"
+oracle = "accepts"
+
+# A value parameter takes the next dash token as its value unless the token names a static
+# parameter (probed in pwsh 7.7: `-l -a` and `-l -File` list a path named so, `-Pattern -NoProfile`
+# searches for the text; `-l -Force` and `-Pattern -Quiet` are "Missing an argument").
+[[row]]
+id = "bad-param-allow-a-dash-value-that-names-no-parameter"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Path notes.txt -Pattern -NoProfile"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-dynamic-name-as-a-value"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem -l -File"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-an-ambiguous-name-after-a-value-parameter"
+os = "any"
+shell = "pwsh"
+command = "Select-String -Path notes.txt -Pattern -i"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "give -pattern a value or remove it: Select-String -Path notes.txt -i"
+oracle = "accepts"
+
+# `-Name:` and a space: the next word is the value, for a switch too (probed: both run). Known gap
+# (Task 27): the parser does not model the shape yet, so only its warn fires; the binder already
+# takes the next word, and these rows become ok once the parser reads it.
+[[row]]
+id = "bad-param-allow-a-colon-then-a-space"
+os = "any"
+shell = "pwsh"
+command = "Get-Content notes.txt | Select-Object -First: 2"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-switch-colon-then-a-space"
+os = "any"
+shell = "pwsh"
+command = "Set-Location -PassThru: $false D:\\x"
+level = "warn"
+rules = ["parse-error"]
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-two-paths-for-one-position"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.txt b.txt"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "name the parameter for `b.txt` or remove it: Get-Content a.txt"
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-allow-a-list-for-one-position"
+os = "any"
+shell = "pwsh"
+command = "Get-Content -Path a.txt,b.txt"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# A simple function (no CmdletBinding) takes an unknown name into $args.
+[[row]]
+id = "bad-param-allow-a-simple-function"
+os = "any"
+shell = "pwsh"
+command = "Clear-Host -Nope"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# Another provider's drive has other dynamic parameters than the FileSystem ones the table holds.
+[[row]]
+id = "bad-param-allow-another-provider-s-dynamic-parameter"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem Cert:\\CurrentUser -CodeSigningCert"
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "bad-param-that-dynamic-parameter-on-a-folder"
+os = "any"
+shell = "pwsh"
+command = "Get-ChildItem D:\\x -CodeSigningCert"
+level = "break"
+rules = ["ps-bad-parameter"]
+fix = "remove `-CodeSigningCert`: Get-ChildItem D:\\x"
+oracle = "accepts"
+
+# --- ps-bare-bash (warn, Windows): `bash` in PowerShell is WSL ---
 
 [[row]]
 id = "bare-bash-script"
 os = "windows"
 shell = "pwsh"
 command = "bash tools/x.sh"
-level = "break"
+level = "warn"
 rules = ["ps-bare-bash"]
 fix = "& \"$env:ProgramFiles\\Git\\bin\\bash.exe\" tools/x.sh"
 oracle = "accepts"
@@ -383,7 +504,7 @@ id = "bare-bash-after-a-chain"
 os = "windows"
 shell = "pwsh"
 command = "npm run build && bash scripts/deploy.sh"
-level = "break"
+level = "warn"
 rules = ["ps-bare-bash"]
 fix = "Git\\bin\\bash.exe\" scripts/deploy.sh"
 oracle = "accepts"
@@ -393,7 +514,7 @@ id = "bare-bash-exe-in-capitals"
 os = "windows"
 shell = "pwsh"
 command = "BASH.exe x.sh"
-level = "break"
+level = "warn"
 rules = ["ps-bare-bash"]
 fix = "Git\\bin\\bash.exe\" x.sh"
 oracle = "accepts"
@@ -403,7 +524,7 @@ id = "bare-bash-in-a-foreach-block"
 os = "windows"
 shell = "pwsh"
 command = "Get-ChildItem *.sh | ForEach-Object { bash $_.FullName }"
-level = "break"
+level = "warn"
 rules = ["ps-bare-bash"]
 fix = "Git\\bin\\bash.exe\""
 oracle = "accepts"
@@ -483,7 +604,7 @@ id = "dotnet-read-relative"
 os = "any"
 shell = "pwsh"
 command = "[IO.File]::ReadAllText('tools\\x.php')"
-level = "break"
+level = "warn"
 rules = ["ps-dotnet-relative-path"]
 fix = "pass an absolute path: [IO.File]::ReadAllText((Join-Path $PWD 'tools\\x.php'))"
 oracle = "accepts"
@@ -493,7 +614,7 @@ id = "dotnet-write-relative-system-prefix"
 os = "any"
 shell = "pwsh"
 command = "[System.IO.File]::WriteAllText(\"src\\a.ts\", 'x')"
-level = "break"
+level = "warn"
 rules = ["ps-dotnet-relative-path"]
 fix = "(Join-Path $PWD \"src\\a.ts\")"
 oracle = "accepts"
@@ -503,7 +624,7 @@ id = "dotnet-directory-move-second-path"
 os = "any"
 shell = "pwsh"
 command = "[IO.Directory]::Move('X:\\tmp\\a', 'b')"
-level = "break"
+level = "warn"
 rules = ["ps-dotnet-relative-path"]
 fix = "(Join-Path $PWD 'b')"
 oracle = "accepts"
@@ -513,7 +634,7 @@ id = "dotnet-tilde-is-relative"
 os = "any"
 shell = "pwsh"
 command = "[io.file]::readalllines('~/.claude/x')"
-level = "break"
+level = "warn"
 rules = ["ps-dotnet-relative-path"]
 fix = "(Join-Path $PWD '~/.claude/x')"
 oracle = "accepts"

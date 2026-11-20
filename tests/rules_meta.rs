@@ -36,6 +36,9 @@ const WARN_DEFAULT: &[&str] = &[
     "rg-follow-L",
     "wsl-argv-rejoin",
     "claude-cmd-live-config",
+    "gate-truncated-pipeline",
+    "ps-bare-bash",
+    "ps-dotnet-relative-path",
 ];
 
 fn is_deny(level: &str) -> bool {

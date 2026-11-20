@@ -128,6 +128,14 @@ pub enum Problem {
     NoValue(&'static str),
 }
 
+/// Whether `w` is a parameter token that names a static parameter of `cmd`, alone or among
+/// several. Only then does it end the previous parameter's value: pwsh takes `-a` (no static
+/// match), `-File` (a dynamic one) or `-NoProfile` (none) as the value itself (probed: `-l -a`
+/// lists the path `-a`, `-l -Force` is "Missing an argument").
+fn names_static(src: &str, w: &Word, cmd: &Cmdlet) -> bool {
+    param_token(src, w).is_some_and(|t| bind_among(cmd, t.name, false) != Bound::Missing)
+}
+
 /// The arguments of `c` bound against `cmd`, as PowerShell's binder reads them; `None` after
 /// `--%`, which hands the rest to the program as text.
 pub fn bind_args<'w>(src: &str, c: &'w SimpleCommand, cmd: &Cmdlet) -> Option<Vec<Arg<'w>>> {
@@ -164,7 +172,7 @@ pub fn bind_args<'w>(src: &str, c: &'w SimpleCommand, cmd: &Cmdlet) -> Option<Ve
         let mut value = None;
         if (!switch && t.attached.is_none()) || (colon_alone && bound.is_some()) {
             match c.args.get(i + 1) {
-                Some(next) if param_token(src, next).is_none() && !stops_parsing(src, next) => {
+                Some(next) if !stops_parsing(src, next) && !names_static(src, next, cmd) => {
                     value = Some(next);
                     i += 1;
                 }

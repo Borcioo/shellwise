@@ -1,5 +1,6 @@
-//! The installed baseline-guard PowerShell rules, at its level (break), except `bat-metachar`
-//! (`bat.rs`).
+//! The installed baseline-guard PowerShell rules, except `bat-metachar` (`bat.rs`). They are break,
+//! as in baseline-guard, except `gate-truncated-pipeline`, `ps-bare-bash` and
+//! `ps-dotnet-relative-path`: warn, because in the corpus each also fired on runs that worked.
 
 use tree_sitter::{Node, Parser};
 
@@ -55,7 +56,7 @@ impl Rule for GateTruncatedPipeline {
             .trim();
             out.push(finding(
                 GATE_TRUNCATED_PIPELINE,
-                Level::Break,
+                Level::Warn,
                 site.cmd.span,
                 format!(
                     "`{blamed}` is piped into `{}`, which stops the producer as soon as it has its lines: the exit code then reads as success and the log is cut off; `Select-Object -Last N` reads the whole stream and is fine",
@@ -303,6 +304,9 @@ fn hint_finding(ctx: &Ctx, c: &SimpleCommand, cmd: &Cmdlet) -> Option<Finding> {
                 else {
                     continue;
                 };
+                if number_takes_the_first_position(src, c, cmd, next) {
+                    continue;
+                }
                 let cut = Span {
                     start: a.span.start,
                     end: next.span.end,
@@ -342,6 +346,28 @@ fn hint_finding(ctx: &Ctx, c: &SimpleCommand, cmd: &Cmdlet) -> Option<Finding> {
         }
     }
     None
+}
+
+/// The number after a hinted flag is the call's only positional word and the parameter at
+/// position 0 is not named: the call binds (`Select-String -A 1 -Path f` searches for `1`), so
+/// PowerShell does not refuse it (probed in pwsh 7.7).
+fn number_takes_the_first_position(
+    src: &str,
+    c: &SimpleCommand,
+    cmd: &Cmdlet,
+    number: &crate::ir::Word,
+) -> bool {
+    let Some(args) = bind_args(src, c, cmd) else {
+        return false;
+    };
+    let given = positional(&args);
+    if !(given.len() == 1 && given[0].span == number.span) {
+        return false;
+    }
+    !cmd.params
+        .iter()
+        .filter(|p| p.sets.iter().any(|m| m.position == 0))
+        .any(|p| named(&args, p.name).is_some())
 }
 
 /// More positional arguments than any parameter set has positions for: PowerShell refuses the
@@ -438,7 +464,7 @@ impl Rule for BareBash {
             .trim();
             out.push(finding(
                 PS_BARE_BASH,
-                Level::Break,
+                Level::Warn,
                 c.name.span,
                 format!(
                     "`{}` typed in PowerShell runs the System32 bash.exe, which is WSL, not Git Bash: Windows paths and CRLF scripts break there; use the Bash tool, or call wsl on purpose",
@@ -568,7 +594,7 @@ impl Rule for DotnetRelativePath {
                 let call = format!("[{}]::{}", m.type_name, m.method);
                 out.push(finding(
                     PS_DOTNET_RELATIVE_PATH,
-                    Level::Break,
+                    Level::Warn,
                     arg.span,
                     format!(
                         "`{call}` resolves the relative path `{head}` against the process directory, not the location `cd` / Set-Location set, so it reads or writes a file in another folder"
