@@ -3,7 +3,7 @@
 //! only the first 8186 characters of that text. A command cut inside the quote runs none of it
 //! (`unexpected EOF`); one cut after it runs, but the wrapper's own tail is lost. The rule runs on
 //! the raw text, before the size cap and the parse (`rules::length_rules`), so it still fires on a
-//! command over `MAX_INPUT_BYTES`.
+//! command over `MAX_INPUT_BYTES`. The limit is `limits.git_bash_command` from the config.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,10 +14,6 @@ use crate::level::{Finding, Level, Span};
 use crate::{BashProfile, Shell};
 
 pub const TOO_LONG: &str = "too-long";
-
-/// The shortest escaped length Git Bash cuts: its 8186-character limit less the Bash tool's
-/// 515-character wrapper, plus one.
-const GIT_BASH_ESCAPED_LIMIT: usize = 7672;
 
 /// The length of the command once the wrapper has escaped it: UTF-16 units, as the Windows command
 /// line counts them, and four more for each `'` (written as `'"'"'`).
@@ -42,18 +38,24 @@ impl Rule for TooLong {
         }
         let command = ctx.input.command;
         let escaped = escaped_len(command);
-        if escaped < GIT_BASH_ESCAPED_LIMIT {
+        let limit = ctx.cfg.limits.git_bash_command;
+        if escaped < limit {
             return;
         }
         let file = scratch_file(ctx);
+        let shell_file = if file.contains(' ') {
+            format!("'{file}'")
+        } else {
+            file.clone()
+        };
         out.push(Finding {
             rule: TOO_LONG,
             level: Level::Break,
             message: format!(
-                "the command is {escaped} characters once the Bash tool escapes it, and Git Bash cuts it from {GIT_BASH_ESCAPED_LIMIT}: it would fail or lose its end"
+                "the command is {escaped} characters once the Bash tool escapes it, at or over the Git Bash limit of {limit}: Git Bash would cut it, so it would fail or lose its end"
             ),
             fix: Some(format!(
-                "write the command to {file} with the Write tool, run shellwise lint {file}, then run bash {file}"
+                "write the command to {file} with the Write tool, run shellwise lint {shell_file}, then run bash {shell_file}"
             )),
             span: Span {
                 start: 0,
@@ -144,7 +146,7 @@ mod tests {
 
     #[test]
     fn the_escape_counts_utf16_units_and_four_more_per_quote() {
-        // The wrapper of the Bash tool (CLI 2.1.327) writes `a'b` as `a'"'"'b`.
+        // The wrapper of the Bash tool (CLI 2.1.326) writes `a'b` as `a'"'"'b`.
         assert_eq!(escaped_len("a'b"), 7);
         assert_eq!(escaped_len("''"), 10);
         assert_eq!(escaped_len("abc"), 3);
@@ -186,6 +188,35 @@ mod tests {
         assert!(p[0] == p[1] && p[1] == p[2], "{line}");
         let name = p[0].strip_prefix("/work/scratch/command-").expect(&line);
         assert!(name.ends_with(".sh") && !name.contains('/'), "{line}");
+    }
+
+    /// `limits.git_bash_command` moves the boundary. 7672 is the boundary measured on CLI 2.1.326
+    /// with a 515-character wrapper, of which Git Bash keeps 8186 characters.
+    #[test]
+    fn the_configured_limit_moves_the_boundary() {
+        let cfg = Config {
+            limits: crate::config::Limits {
+                git_bash_command: 7672,
+            },
+            ..Config::default()
+        };
+        let echo = |n: usize| format!("echo {}", "a".repeat(n - 5));
+        assert!(!fired(&git_bash(&echo(7671), Origin::CommandLine, &cfg)));
+        assert!(fired(&git_bash(&echo(7672), Origin::CommandLine, &cfg)));
+    }
+
+    /// A path with a space is quoted where a shell reads it, and only there.
+    #[test]
+    fn a_scratch_path_with_a_space_is_quoted_for_the_shell() {
+        let cfg = Config {
+            scratch_dir: Some(PathBuf::from("/work/my scratch")),
+            ..Config::default()
+        };
+        let line = fix_line(&cfg);
+        let p = paths(&line);
+        assert!(p[0].starts_with("/work/my scratch/command-"), "{line}");
+        let quoted = format!("'{}'", p[0]);
+        assert!(p[1] == quoted && p[2] == quoted, "{line}");
     }
 
     /// Ruling 109: parallel agents must never be sent to the same file.

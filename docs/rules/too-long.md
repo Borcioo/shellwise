@@ -7,25 +7,33 @@ with `unexpected EOF` and runs none of it; one cut in the wrapper's tail runs, b
 an error and may write a file at a cut path.
 
 The rule measures the escaped length: characters as the Windows command line counts them (UTF-16
-units, so a Polish letter is one, not two bytes), plus four for each `'`. It is `break` from 7672
-and `ok` below. It checks command lines only, never a script file, and only for Git Bash (a POSIX
-Bash and PowerShell have no such cut). It runs before the size cap and the parse, so a command over
-64 KB gets this finding and also `analysis-incomplete`. The allow marker does not change it.
+units, so a Polish letter is one, not two bytes), plus four for each `'`. It is `break` from the
+limit `limits.git_bash_command` (default 7500) and `ok` below. It checks command lines only, never
+a script file, and only for Git Bash (a POSIX Bash and PowerShell have no such cut). It runs before
+the size cap and the parse, so a command over 64 KB gets this finding and also
+`analysis-incomplete`. The allow marker does not change it.
 
-The wrapper's length depends on the machine (the home folder's path appears in it several times)
-and on the CLI version: 7672 is the limit measured with CLI 2.1.327 on a short home path.
+The real boundary depends on the machine and the CLI version. Measured with CLI 2.1.326 on a home
+path of 14 characters, the wrapper was 515 characters and a command was cut from 7672. The wrapper
+holds the home path about four times, so the default 7500 leaves room for a home path about 40
+characters longer. Set the limit in the user or integration config file (a repo file cannot):
+
+```toml
+[limits]
+git_bash_command = 7672
+```
 
 The Fix line names a new script file on each call, so parallel agents never write the same file:
 `command-<pid>-<time>-<n>.sh` in `scratch_dir` from the config, else in `shellwise-<user>` under
-the OS temp directory.
+the OS temp directory. A path with a space is quoted where a shell reads it.
 
 ## Deny
 
-A Git Bash command whose escaped length is 7672 or more, for example a long heredoc:
+A Git Bash command whose escaped length is 7500 or more, for example a long heredoc:
 
 ```bash
 cat > notes.txt <<'EOF'
-…7,700 characters of text…
+…7,500 characters of text…
 EOF
 ```
 
@@ -37,4 +45,4 @@ EOF
 echo hi
 ```
 
-`ok`. The same text at 7671 escaped characters is `ok` too; the line is exact.
+`ok`. The same text at 7499 escaped characters is `ok` too; the line is exact.
