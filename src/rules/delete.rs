@@ -741,6 +741,30 @@ impl<'a> Scene<'a> {
         Ok(reason)
     }
 
+    /// Why deleting `p` is critical with the cwd's repo root left out, by text and by identity:
+    /// whether any other reason holds for a linked worktree that is that root.
+    pub fn critical_but_the_repo(&self, p: &Path) -> Result<Option<&'static str>, TimedOut> {
+        let (home, protected) = (self.home.as_deref(), &self.ctx.cfg.protected);
+        if resolve::is_network_or_device(p, self.os()) {
+            return Ok(resolve::critical_reason(
+                p,
+                None,
+                home,
+                protected,
+                self.os(),
+            ));
+        }
+        resolve::critical_by_identity(
+            p,
+            None,
+            home,
+            protected,
+            self.ctx.fs,
+            self.ctx.deadline,
+            self.os(),
+        )
+    }
+
     /// The finding for one resolved path, or `None` when deleting it is ok.
     pub fn judge_path(&mut self, p: &Path, how: How, span: Span, shown: &str) -> Option<Finding> {
         // The critical match first: a share or device spelling of a protected folder stays

@@ -621,8 +621,15 @@ fn worktree_remove(
             Err(_) => return Some(scene.timeout(call.span(), &text)),
             // A linked worktree that is the cwd's repo root (Ruling 132): git removes only the
             // worktree and its entry, never the main repository's `.git`.
-            // Only that reason: a protected path inside it stays critical.
-            Ok(Some(reason)) if reason == resolve::REPO_ROOT && is_linked_worktree(scene, &p) => {}
+            // Only that reason: when the worktree is also another critical location (the home
+            // folder, a protected path, by text or identity), that reason stands.
+            Ok(Some(reason)) if reason == resolve::REPO_ROOT && is_linked_worktree(scene, &p) => {
+                match scene.critical_but_the_repo(&p) {
+                    Err(_) => return Some(scene.timeout(call.span(), &text)),
+                    Ok(Some(other)) => return Some(delete::critical(&p, other, call.span())),
+                    Ok(None) => {}
+                }
+            }
             Ok(Some(reason)) => return Some(delete::critical(&p, reason, call.span())),
             Ok(None) => {}
         }

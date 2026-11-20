@@ -70,6 +70,8 @@ fn touch(p: &Path) {
 
 /// A linked worktree of the real repo FX_MAIN, where the host setup puts its own (item 5).
 const LINKED: &str = "main/.claude/worktrees/lw";
+/// A folder link to LINKED, outside the repos.
+const LINKED_LINK: &str = "lwlink";
 
 /// `git` with `args` in `dir`, which must succeed. The identity is passed per call, so no
 /// config is read or written.
@@ -179,6 +181,7 @@ impl Fixture {
         for (link, _) in LINKS {
             unlink(&self.at(link));
         }
+        unlink(&self.at(LINKED_LINK));
         unlock(&self.at(LOCKED));
         let _ = std::fs::remove_dir_all(&self.root);
     }
@@ -261,6 +264,7 @@ fn fixture() -> Arc<Fixture> {
             &["worktree", "add", "-q", "--detach", linked],
         );
         assert!(fx.at(LINKED).join(".git").is_file());
+        dir_link(&fx.at(LINKED_LINK), &fx.at(LINKED));
         touch(&fx.at(&format!("{LOCKED}/f.txt")));
         lock(&fx.at(LOCKED));
         if let Some(repo) = fx
@@ -322,8 +326,14 @@ fn config(row: &Row) -> Config {
     };
     cfg.policies.git_no_verify = !row.id.starts_with("policy-off-");
     // A protected path inside the linked worktree (item 5).
-    if row.id.starts_with("linkedwt-protected-") {
+    // A protected path inside the linked worktree, the worktree itself, or a junction to it
+    // (matched by identity only) (item 5).
+    if row.id.starts_with("linkedwt-protected-inside-") {
         cfg.protected.push(fx.at(LINKED).join("keep"));
+    } else if row.id.starts_with("linkedwt-protected-exact-") {
+        cfg.protected.push(fx.at(LINKED));
+    } else if row.id.starts_with("linkedwt-protected-link-") {
+        cfg.protected.push(fx.at(LINKED_LINK));
     }
     if row.id.starts_with("scratch-") {
         cfg.scratch_dir = Some(fx.at("outside"));

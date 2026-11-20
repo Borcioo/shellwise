@@ -1090,8 +1090,26 @@ rules = ["delete-critical"]
 
 # A linked worktree that holds a protected path stays critical for that reason.
 [[row]]
-id = "linkedwt-protected-remove-itself-force"
+id = "linkedwt-protected-inside-remove-itself-force"
 os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]
+
+# A linked worktree that is itself a protected path, by its text or through a link (identity
+# only), stays critical.
+[[row]]
+id = "linkedwt-protected-exact-remove-itself-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_LINKED"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "linkedwt-protected-link-remove-itself-force"
+os = "windows"
 shell = "pwsh"
 command = "git worktree remove --force FX_LINKED"
 level = "critical"
