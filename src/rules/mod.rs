@@ -7,6 +7,7 @@ use crate::level::Finding;
 use crate::parse::ParseError;
 use crate::{CheckInput, Deadline, Origin};
 
+pub mod length;
 pub mod parse_error;
 
 pub struct Ctx<'a> {
@@ -50,6 +51,7 @@ pub trait Rule {
 /// empty script and no parse error.
 pub fn length_rules() -> Vec<Box<dyn Rule>> {
     vec![
+        Box::new(length::TooLong),
         #[cfg(feature = "testhooks")]
         Box::new(testhooks::LengthHook),
     ]

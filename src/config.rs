@@ -52,6 +52,8 @@ pub struct Config {
     /// Levels the repo file raised: a floor under `levels` and the rule's default. Read rule
     /// levels through `Config::level`, never from `levels` alone.
     pub repo_floor: HashMap<String, Level>,
+    /// Where the `too-long` Fix line says to write the command; else a per-user temp folder.
+    pub scratch_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -79,6 +81,7 @@ impl Default for Config {
             tool_paths: HashMap::new(),
             policies: Policies::default(),
             repo_floor: HashMap::new(),
+            scratch_dir: None,
         }
     }
 }
@@ -169,6 +172,10 @@ impl Config {
                 "protected" => paths(value, dir).map(|v| self.protected = v),
                 "gate_commands" => strings(value).map(|v| self.gate_commands = v),
                 "bat_launchers" => strings(value).map(|v| self.bat_launchers = v),
+                "scratch_dir" => value
+                    .as_str()
+                    .map(|s| self.scratch_dir = Some(dir.join(s)))
+                    .ok_or_else(|| "expected a string".to_string()),
                 "tool_paths" => {
                     self.apply_tool_paths(value, dir, layer, out);
                     Ok(())
@@ -445,4 +452,41 @@ fn repo_ignored(key: &str, why: &str) -> Finding {
         CONFIG_REPO_IGNORED,
         format!("repo config key `{key}` is ignored: {why}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder of this test's own under the temp dir, holding `name` with `text`.
+    fn file(tag: &str, name: &str, text: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("shellwise-config-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn scratch_dir_is_read_from_the_user_file_relative_to_it() {
+        let user = file("scratch-user", "config.toml", "scratch_dir = 'work'\n");
+        let (cfg, out) = Config::load(None, Some(&user), None);
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(cfg.scratch_dir, Some(user.parent().unwrap().join("work")));
+
+        let bad = file("scratch-bad", "config.toml", "scratch_dir = 1\n");
+        let (cfg, out) = Config::load(None, Some(&bad), None);
+        assert_eq!(cfg.scratch_dir, None);
+        assert!(out.iter().any(|f| f.rule == CONFIG_INVALID), "{out:?}");
+    }
+
+    #[test]
+    fn a_repo_file_cannot_set_scratch_dir() {
+        let repo = file("scratch-repo", REPO_FILE, "scratch_dir = 'work'\n");
+        let (cfg, out) = Config::load(None, None, Some(&repo));
+        assert_eq!(cfg.scratch_dir, None);
+        assert!(out.iter().any(|f| f.rule == CONFIG_REPO_IGNORED), "{out:?}");
+    }
 }
