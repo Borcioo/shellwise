@@ -1,23 +1,21 @@
 # will-hang
 
-The command can wait without end in the hook's tool. The tool gives a command no terminal and an
-open stdin that never ends, so a prompt is never answered and a read of stdin never returns. The
-host stops the call only at its own timeout.
+The command can wait without end in the hook's tool. The Bash tool gives a command no terminal and
+a stdin that is an open pipe that never ends, so a read of stdin never returns. The host stops the
+call only at its own timeout.
 
 The rule reads command lines only. A script file may run in a terminal, where a prompt is answered.
-It never blocks an unknown program: a dynamic argument might hold the bound, so it ends the check
+It never blocks an unknown program, and a dynamic argument that might hold the bound ends the check
 without a finding.
 
 | Shape | Level | Why | Fix |
 |---|---|---|---|
-| Bash `read` with no input: no `-t`, no `-u`, no `<`, here-string or here-document, not after a pipe, not in a loop, group or function | `break` | `read` waits on stdin, which stays open and empty. Confirmed in the tool: it blocks until the outer timer. | `set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"` |
-| PowerShell `Read-Host` | `warn` | Waits for a console answer. Not yet confirmed for the PowerShell tool. | `pass the value as a parameter or a variable instead of asking for it` |
-| `ssh` with no `BatchMode=yes` option | `warn` | A password or host-key prompt would never be answered. Not yet confirmed: a probe against an unroutable address failed fast. | `ssh -o BatchMode=yes <host> '<command>'` |
-| Bash `claude -p` or `claude --print` with no `timeout` before it | `warn` | Against an unreachable API it retries for about 10 × 2 minutes. | `timeout 120 claude -p <prompt>` |
-| A PowerShell function named like a built-in alias (`md`, `rd`) | `warn` | The alias outranks the function, so the call runs the aliased command with the function's arguments and the function body never runs. | `rename the function <name> to a Verb-Noun name and call it by that name` |
+| Bash `read` with no input: no `-t` or `-u` (alone or in a cluster such as `-rt 5`), no input redirect on stdin (`<`, `0<`, `<&`, here-string, here-document), not after a pipe, not in the background, not inside a compound command or a function | `break` | `read` waits on stdin, which stays open and empty. Probed in Git Bash: it waits until the outer timer. | `set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"` |
+| Bash `claude -p` or `claude --print` with no `timeout` before it | `warn` | Against an unreachable API it retries about 10 times at 2 minutes or more each. | `timeout 120 claude -p <prompt>` |
+| A PowerShell 7 function named like a built-in alias (`md`, `rd`) | `warn` | The alias outranks the function, so the call runs the aliased command with the function's arguments and the function body never runs. | `rename the function <name> to a Verb-Noun name and call it by that name` |
 
-The levels follow the landing rule: a rule is `break` only when its corpus replay denies at most 5
-`ok` rows. `read` is the only break; the others match more `ok` rows than that.
+PowerShell's `Read-Host` and ssh without `BatchMode` are not findings: in the PowerShell tool a
+prompt fails at once, and no ssh wait was shown.
 
 ## Deny
 
@@ -28,10 +26,17 @@ read x
 `break`: `Fix: set the variable directly (x=<value>) or feed read its input: read x <<< "<value>"`
 
 ```bash
-read x | cat
+v=$(read y)
 ```
 
-`break`: `read` is the first command of the pipeline, so nothing feeds it.
+`break`: a substitution reads the stdin of the command it is in.
+
+```bash
+read x 2>/dev/null
+read x 3< answers.txt
+```
+
+`break`: neither redirect feeds stdin.
 
 ## Warn
 
@@ -51,26 +56,25 @@ function md { New-Item -ItemType Directory -Path $args[0] }
 
 ```bash
 read -t 5 x
+read -rt 5 x
 read x < answers.txt
 read x <<< "yes"
 echo yes | read x
+read x & wait
 while read -r line; do echo "$line"; done < list
+if read x; then echo "$x"; fi < answers.txt
 timeout 120 claude -p "summarise the diff"
 ```
 
 `ok`: each one bounds or feeds the wait.
 
-```powershell
-ssh -o BatchMode=yes my-server 'ls'
-function New-Dir { New-Item -ItemType Directory -Path $args[0] }
-```
-
-`ok`.
-
 ## Limits
 
+- A `read` inside a loop, an `if`, a `case`, a group or a function is never flagged: the input
+  may come from a redirect or a pipe on the compound command, which the IR does not carry. So
+  `if true; then read x; fi` is a missed wait.
+- An earlier `exec < file` that feeds the rest of the script is not seen: a later `read x` is
+  flagged.
+- A `read` with a dynamic word (`read -p "$prompt" x`) is not judged.
 - Only the outermost wrapper counts as a bound: `nohup timeout 120 claude -p x` reads as unbounded.
-- `claude -p` is checked in Bash only. PowerShell has no one-line bound to name.
-- `ssh -o "BatchMode yes"` (a space, not `=`) and a `BatchMode` set in the user's ssh config are not seen.
-- A `read` inside a loop, a group or a function is never flagged: its input may come from the
-  enclosing redirect or pipe, which the IR does not carry.
+- `claude -p` is checked in Bash only.

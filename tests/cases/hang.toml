@@ -1,15 +1,15 @@
 # The will-hang rule through analyse: commands that wait for input nobody can give in the hook's
 # tool, and a PowerShell function a built-in alias outranks. Every row goes through the real
-# parsers. Levels follow the landing rule: `read` is break (no corpus match was counted for it);
-# ssh, `claude -p` and the alias helper are warn (109, 70 and 6 `ok` corpus rows match their
-# draft shapes, over the 5-row limit for break).
+# parsers; the program table (`data/programs.toml`) carries the facts.
 #
-# Rows whose id starts with `s3-` depend on spike S3 (does the tool wait on a prompt?). If S3
-# shows a fast failure for the candidate, delete its rows and its data/programs.toml row.
+# Spike S3 (Ruling 110): the Bash tool's stdin is an open pipe that never ends, so a Bash `read`
+# with nothing to read waits; PowerShell's `Read-Host` fails at once, and no ssh wait was shown.
+# Those two are no findings here. Every `read` row's wait or return was probed in Git Bash 5.2
+# with stdin an open empty pipe under a 2 s timer.
 #
-# Row shapes are synthetic; the program table (`data/programs.toml`) carries the facts.
+# Row shapes are synthetic.
 
-# --- Bash: read with nothing to read ---
+# --- Bash: read with nothing to read (probed: waits) ---
 
 [[row]]
 id = "bash-read-bare"
@@ -30,7 +30,16 @@ rules = ["will-hang"]
 fix = 'feed read its input'
 
 [[row]]
-id = "gitbash-read-bare"
+id = "bash-read-prompt-value-looks-like-an-option"
+os = "any"
+shell = "bash"
+command = 'read -rp -t x'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "gitbash-read-after-another-command"
 os = "windows"
 shell = "gitbash"
 command = 'echo start; read x'
@@ -48,19 +57,73 @@ rules = ["will-hang"]
 fix = 'feed read its input'
 
 [[row]]
-id = "bash-read-in-an-if-branch"
+id = "bash-read-with-an-output-redirect"
 os = "any"
 shell = "bash"
-command = 'if true; then read x; fi'
+command = 'read x 2>/dev/null'
 level = "break"
 rules = ["will-hang"]
 fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-from-another-fd-redirect"
+os = "any"
+shell = "bash"
+command = 'read x 3< answers.txt'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-in-a-substitution"
+os = "any"
+shell = "bash"
+command = 'echo "$(read x)"'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-in-an-assigned-substitution"
+os = "any"
+shell = "bash"
+command = 'v=$(read y)'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+[[row]]
+id = "bash-read-in-a-substitution-before-the-outer-redirect"
+os = "any"
+shell = "bash"
+command = 'cat "$(read x)" < answers.txt'
+level = "break"
+rules = ["will-hang"]
+fix = 'feed read its input'
+
+# --- Bash: read that is bounded or fed (probed: returns) ---
 
 [[row]]
 id = "bash-read-timeout-option-is-ok"
 os = "any"
 shell = "bash"
 command = 'read -t 5 x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-timeout-in-a-cluster-is-ok"
+os = "any"
+shell = "bash"
+command = 'read -rt 5 x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-timeout-glued-is-ok"
+os = "any"
+shell = "bash"
+command = 'read -t5 x'
 level = "ok"
 rules = []
 
@@ -89,6 +152,22 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "bash-read-from-fd-0-is-ok"
+os = "any"
+shell = "bash"
+command = 'read x 0< answers.txt'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-from-a-duplicated-fd-is-ok"
+os = "any"
+shell = "bash"
+command = 'read x <&3'
+level = "ok"
+rules = []
+
+[[row]]
 id = "bash-read-here-string-is-ok"
 os = "any"
 shell = "bash"
@@ -109,6 +188,14 @@ id = "bash-read-after-a-pipe-is-ok"
 os = "any"
 shell = "bash"
 command = 'echo yes | read x'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-the-background-is-ok"
+os = "any"
+shell = "bash"
+command = 'read x & wait'
 level = "ok"
 rules = []
 
@@ -137,6 +224,46 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "bash-read-in-an-if-fed-by-a-redirect-is-ok"
+os = "any"
+shell = "bash"
+command = 'if read x; then echo "$x"; fi < answers.txt'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-piped-if-is-ok"
+os = "any"
+shell = "bash"
+command = 'printf "a\n" | if read x; then echo "$x"; fi'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-function-is-ok"
+os = "any"
+shell = "bash"
+command = 'ask() { read x; }; ask < answers.txt'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-fed-substitution-is-ok"
+os = "any"
+shell = "bash"
+command = 'echo "$(read x <<< yes; echo "$x")"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-read-in-a-substitution-of-a-piped-command-is-ok"
+os = "any"
+shell = "bash"
+command = 'echo yes | cat "$(read x)"'
+level = "ok"
+rules = []
+
+[[row]]
 id = "bash-read-with-a-dynamic-option-is-ok"
 os = "any"
 shell = "bash"
@@ -144,121 +271,66 @@ command = 'read $opts x'
 level = "ok"
 rules = []
 
+# Probed: fails at once (`invalid option`, rc 2).
+[[row]]
+id = "bash-read-with-an-unknown-option-is-ok"
+os = "any"
+shell = "bash"
+command = 'read -k x'
+level = "ok"
+rules = []
+
+# Probed: waits. A dynamic argument ends the check (Ruling 91a), so this wait is not judged.
+[[row]]
+id = "bash-read-with-a-dynamic-prompt-is-not-judged"
+os = "any"
+shell = "bash"
+command = 'read -p "$prompt" x'
+level = "ok"
+rules = []
+
 [[row]]
 id = "pwsh-read-is-not-a-program-there"
 os = "any"
 shell = "pwsh"
-command = 'Write-Output read'
+command = 'read x'
 level = "ok"
 rules = []
 
-# --- PowerShell: Read-Host (S3 for PowerShell has not run) ---
+# --- Dropped by S3 (Ruling 110): no wait in the tool ---
 
 [[row]]
-id = "s3-pwsh-read-host"
-os = "any"
-shell = "pwsh"
-command = 'Read-Host "Name"'
-level = "warn"
-rules = ["will-hang"]
-
-[[row]]
-id = "s3-pwsh-read-host-assigned"
+id = "pwsh-read-host-fails-fast-is-ok"
 os = "any"
 shell = "pwsh"
 command = '$name = Read-Host -Prompt "Name"'
-level = "warn"
-rules = ["will-hang"]
-
-[[row]]
-id = "s3-pwsh-get-content-is-ok"
-os = "any"
-shell = "pwsh"
-command = '$name = Get-Content name.txt'
 level = "ok"
 rules = []
 
-# --- ssh without BatchMode (S3: ssh to an unroutable host failed fast, so a prompt is unproven) ---
-
 [[row]]
-id = "s3-bash-ssh-no-batchmode"
+id = "bash-ssh-without-batchmode-is-ok"
 os = "any"
 shell = "bash"
 command = "ssh web-host 'cd public_html && ls'"
-level = "warn"
-rules = ["will-hang"]
-
-[[row]]
-id = "s3-pwsh-ssh-no-batchmode"
-os = "any"
-shell = "pwsh"
-command = "ssh web-host 'wp cache flush'"
-level = "warn"
-rules = ["will-hang"]
-
-[[row]]
-id = "s3-pwsh-ssh-other-option-only"
-os = "any"
-shell = "pwsh"
-command = "ssh -o ConnectTimeout=5 web-host 'ls'"
-level = "warn"
-rules = ["will-hang"]
-
-[[row]]
-id = "s3-ssh-batchmode-is-ok"
-os = "any"
-shell = "pwsh"
-command = "ssh -o BatchMode=yes web-host 'ls'"
 level = "ok"
 rules = []
 
-[[row]]
-id = "s3-ssh-batchmode-among-options-is-ok"
-os = "any"
-shell = "bash"
-command = "ssh -o ConnectTimeout=5 -o BatchMode=yes web-host 'ls'"
-level = "ok"
-rules = []
-
-[[row]]
-id = "s3-ssh-batchmode-glued-is-ok"
-os = "any"
-shell = "bash"
-command = "ssh -oBatchMode=yes web-host 'ls'"
-level = "ok"
-rules = []
-
-[[row]]
-id = "s3-ssh-batchmode-in-another-case-is-ok"
-os = "any"
-shell = "pwsh"
-command = "ssh -o batchmode=yes web-host 'ls'"
-level = "ok"
-rules = []
-
-[[row]]
-id = "s3-ssh-dynamic-argument-is-ok"
-os = "any"
-shell = "bash"
-command = 'ssh $opts web-host ls'
-level = "ok"
-rules = []
-
-[[row]]
-id = "s3-ssh-add-is-another-program"
-os = "any"
-shell = "bash"
-command = 'ssh-add -l'
-level = "ok"
-rules = []
-
-# --- claude -p without a bound ---
+# --- claude -p without a bound (the host setup catalogue: about 10 retries of 2+ minutes against a dead API) ---
 
 [[row]]
 id = "bash-claude-print-unbounded"
 os = "any"
 shell = "bash"
 command = 'claude -p "summarise the diff"'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
+id = "bash-claude-print-with-a-dynamic-prompt-unbounded"
+os = "any"
+shell = "bash"
+command = 'claude -p "$prompt"'
 level = "warn"
 rules = ["will-hang"]
 fix = 'timeout 120 claude -p'
@@ -273,10 +345,28 @@ rules = ["will-hang"]
 fix = 'timeout 120 claude -p'
 
 [[row]]
+id = "bash-claude-print-after-the-prompt-unbounded"
+os = "any"
+shell = "bash"
+command = 'claude "summarise the diff" -p'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
 id = "bash-claude-print-in-a-pipeline-unbounded"
 os = "any"
 shell = "bash"
 command = 'echo "summarise" | claude -p'
+level = "warn"
+rules = ["will-hang"]
+fix = 'timeout 120 claude -p'
+
+[[row]]
+id = "bash-claude-print-under-nice-is-unbounded"
+os = "any"
+shell = "bash"
+command = 'nice claude -p "summarise the diff"'
 level = "warn"
 rules = ["will-hang"]
 fix = 'timeout 120 claude -p'
@@ -290,19 +380,10 @@ level = "ok"
 rules = []
 
 [[row]]
-id = "bash-claude-print-under-nice-is-unbounded"
-os = "any"
-shell = "bash"
-command = 'nice claude -p "summarise the diff"'
-level = "warn"
-rules = ["will-hang"]
-fix = 'timeout 120 claude -p'
-
-[[row]]
 id = "bash-claude-without-print-is-ok"
 os = "any"
 shell = "bash"
-command = 'claude --version'
+command = 'claude --resume'
 level = "ok"
 rules = []
 
@@ -314,7 +395,7 @@ command = 'claude -p "summarise the diff"'
 level = "ok"
 rules = []
 
-# --- a PowerShell function named like a built-in alias ---
+# --- a PowerShell 7 function named like a built-in alias ---
 
 [[row]]
 id = "pwsh-function-named-md"
@@ -344,15 +425,6 @@ rules = ["will-hang"]
 fix = 'rename the function md to a Verb-Noun name'
 
 [[row]]
-id = "powershell5-function-named-md"
-os = "windows"
-shell = "powershell5"
-command = 'function md { New-Item -ItemType Directory -Path $args[0] }'
-level = "warn"
-rules = ["will-hang"]
-fix = 'rename the function md to a Verb-Noun name'
-
-[[row]]
 id = "pwsh-function-named-ls-on-windows"
 os = "windows"
 shell = "pwsh"
@@ -366,6 +438,14 @@ id = "pwsh-function-named-ls-on-posix-is-ok"
 os = "posix"
 shell = "pwsh"
 command = 'function ls { Get-ChildItem -Force }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "powershell5-is-not-checked"
+os = "windows"
+shell = "powershell5"
+command = 'function md { New-Item -ItemType Directory -Path $args[0] }'
 level = "ok"
 rules = []
 
