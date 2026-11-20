@@ -241,32 +241,28 @@ fn reaches_cmd(ctx: &Ctx, name: &str) -> bool {
             .map(str::to_string),
     );
     exts.push(String::new());
-    let (folders, base): (Vec<PathBuf>, String) = if has_folder(name) {
-        let p = Path::new(name);
-        let full = if local_drive_path(p) {
-            p.to_path_buf()
+    // Windows paths on any host (the bench replays Windows rows on Linux too): PATH splits on `;`
+    // and both separators count, never the host's rules.
+    let (folders, base): (Vec<String>, String) = if has_folder(name) {
+        let full = if local_drive_path(Path::new(name)) {
+            name.to_string()
         } else if is_relative(name) {
             match &ctx.input.cwd {
-                Some(cwd) => cwd.join(p),
+                Some(cwd) => win_join(&cwd.to_string_lossy(), name),
                 None => return true,
             }
         } else {
             // A UNC, device or root-relative name: unresolved, without a lookup.
             return true;
         };
-        let base = full
-            .file_name()
-            .map(|b| b.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        (
-            full.parent().map(Path::to_path_buf).into_iter().collect(),
-            base,
-        )
+        let cut = full.rfind(['\\', '/']).unwrap_or(0);
+        (vec![full[..cut].to_string()], full[cut + 1..].to_string())
     } else {
         let path = env_value(ctx, "PATH").unwrap_or_default();
         (
-            std::env::split_paths(&path)
-                .filter(|d| !d.as_os_str().is_empty())
+            path.split(';')
+                .filter(|d| !d.is_empty())
+                .map(str::to_string)
                 .collect(),
             name.to_string(),
         )
@@ -275,7 +271,7 @@ fn reaches_cmd(ctx: &Ctx, name: &str) -> bool {
         .iter()
         .flat_map(|folder| {
             exts.iter()
-                .map(|ext| folder.join(format!("{base}{ext}")))
+                .map(|ext| PathBuf::from(win_join(folder, &format!("{base}{ext}"))))
                 .collect::<Vec<_>>()
         })
         .filter(|c| local_drive_path(c))
@@ -291,6 +287,11 @@ fn reaches_cmd(ctx: &Ctx, name: &str) -> bool {
         Ok(None) => has_folder(name),
         Err(fs::TimedOut) => true,
     }
+}
+
+/// `folder\name` as Windows joins them: one `\` between, whichever separator `folder` ends with.
+fn win_join(folder: &str, name: &str) -> String {
+    format!("{}\\{name}", folder.trim_end_matches(['\\', '/']))
 }
 
 /// A relative name PowerShell resolves against the current location (`tools\x`, `.\x`): no drive,
