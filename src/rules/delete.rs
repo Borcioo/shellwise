@@ -607,6 +607,19 @@ impl<'a> Scene<'a> {
         self.ctx.input.os
     }
 
+    /// The temp folder of the hook's environment as the check sees it: `TEMP` on Windows (the
+    /// folder Git Bash's `/tmp` maps to), `/tmp` on POSIX.
+    fn env_temp(&self) -> Option<PathBuf> {
+        let env = &self.ctx.input.env;
+        match self.os() {
+            Os::Posix => Some(PathBuf::from("/tmp")),
+            Os::Windows => env
+                .get("TEMP")
+                .or_else(|| env.get("env:TEMP"))
+                .map(PathBuf::from),
+        }
+    }
+
     fn key(&self, p: &Path) -> String {
         resolve::path_key(&p.to_string_lossy(), self.os())
     }
@@ -681,7 +694,21 @@ impl<'a> Scene<'a> {
         let key = self.key(p);
         let mut placed = false;
         let cfg = self.ctx.cfg;
-        for root in cfg.allowed_roots.iter().chain(cfg.scratch_dir.as_ref()) {
+        // The default root, the analysing process's temp folder, stands for the temp folder of
+        // the environment the check sees (the same folder in the hook; a synthetic one in the
+        // bench).
+        let process_temp = std::env::temp_dir();
+        let env_temp = self.env_temp();
+        let roots: Vec<PathBuf> = cfg
+            .allowed_roots
+            .iter()
+            .map(|r| match &env_temp {
+                Some(t) if *r == process_temp => t.clone(),
+                _ => r.clone(),
+            })
+            .chain(cfg.scratch_dir.clone())
+            .collect();
+        for root in &roots {
             let rk = self.key(root);
             if rk == key && !how.contents {
                 return Some(finding(

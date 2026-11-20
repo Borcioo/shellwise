@@ -593,6 +593,82 @@ fn a_configured_level_applies_to_the_length_stage_and_to_an_incomplete_analysis(
     }
 }
 
+/// The default temp root is the temp folder of the environment the check sees (`TEMP` on
+/// Windows, `/tmp` on POSIX), not the analysing process's own: the bench replays rows with a
+/// synthetic environment.
+#[test]
+fn the_default_temp_root_is_the_temp_of_the_checked_environment() {
+    let level_of = |shell: Shell, os: Os, vars: &[(&str, &str)], command: &str, cwd: &str| {
+        let env = env_view(
+            shell,
+            os,
+            vars.iter().map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+        let input = AnalyseInput {
+            bytes: command.as_bytes(),
+            shell,
+            os,
+            cwd: Some(PathBuf::from(cwd)),
+            env,
+            origin: Origin::CommandLine,
+            problem: None,
+        };
+        let v = analyse(
+            &input,
+            &Config::default(),
+            &Deadline::new(Instant::now(), 8000),
+        );
+        let rules: Vec<&str> = v.findings.iter().map(|f| f.rule).collect();
+        format!("{} {rules:?}", v.level.as_str())
+    };
+    let win = [
+        ("USERPROFILE", r"C:\Profiles\bench"),
+        ("TEMP", r"C:\Profiles\bench\AppData\Local\Temp"),
+        ("TMP", r"C:\Profiles\bench\AppData\Local\Temp"),
+    ];
+    let cwd = r"C:\Profiles\bench\work";
+    let got = [
+        level_of(
+            Shell::Pwsh,
+            Os::Windows,
+            &win,
+            r"Remove-Item C:\Profiles\bench\AppData\Local\Temp\x.txt",
+            cwd,
+        ),
+        level_of(
+            Shell::Bash(BashProfile::GitBash),
+            Os::Windows,
+            &win,
+            "rm /tmp/x.txt",
+            cwd,
+        ),
+        level_of(
+            Shell::Bash(BashProfile::Posix),
+            Os::Posix,
+            &[("HOME", "/h/bench")],
+            "rm /tmp/x.txt",
+            "/h/bench/work",
+        ),
+        // The twin: a folder outside both temp and the project.
+        level_of(
+            Shell::Pwsh,
+            Os::Windows,
+            &win,
+            r"Remove-Item C:\Profiles\other\x.txt",
+            cwd,
+        ),
+    ];
+    assert_eq!(
+        got,
+        [
+            "ok []",
+            "ok []",
+            "ok []",
+            r#"warn ["delete-outside-project"]"#
+        ]
+    );
+}
+
 #[test]
 fn allowed_roots_come_from_the_user_file_and_never_from_the_repo_file() {
     let fx = fixture();
