@@ -10,7 +10,10 @@ thing. Every finding carries a `Fix:` line the agent can copy, so it corrects it
 It is a seatbelt, not armour: it guards against an honest agent's mistakes, not against someone
 trying to get around it.
 
-Status: version 1 is in final review. Not released; build it from source.
+[![ci](https://github.com/Borcioo/shellwise/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Borcioo/shellwise/actions/workflows/ci.yml)
+
+Status: the first version is in final review. There is no release yet; build it from source.
+`develop` holds the current code, `main` will hold released versions.
 
 ## What it catches
 
@@ -52,11 +55,16 @@ text is named in the reason.
 
 ## Install
 
-Build from source with the toolchain `rust-toolchain.toml` pins:
+Build from source; `rustup` installs the toolchain `rust-toolchain.toml` pins:
 
 ```
+git clone https://github.com/Borcioo/shellwise
+cd shellwise
 cargo build --release
 ```
+
+Prebuilt binaries for Windows, Linux and macOS will be attached to each
+[release](https://github.com/Borcioo/shellwise/releases) once the first one is out.
 
 The binary is `target/release/shellwise` (`shellwise.exe` on Windows). It needs no service, no
 network and no interpreter.
@@ -159,11 +167,17 @@ Known gap: `lint` on a whole script is slower than its target of 50 ms per 500 l
 
 ## Develop
 
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and report a wrong verdict;
+[SECURITY.md](SECURITY.md) says what counts as a security problem; changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
+
+The maintainers' full gate:
+
 ```
 pwsh -NoProfile -File scripts/gate.ps1
 ```
 
-The gate runs `cargo fmt --check`, clippy, the tests on Windows and in WSL, `cargo deny check` and
+It runs `cargo fmt --check`, clippy, the tests on Windows and in WSL, `cargo deny check` and
 a leak check. The leak check needs two private inputs outside the repo: `SHELLWISE_CORPUS` (the
 folder with the mined command corpus) and `SHELLWISE_DENYLIST` (a file of terms that must never
 appear in the repo, one regex per line, `#` comments).
