@@ -133,7 +133,7 @@ Known gap: `lint` on a whole script is slower than its target of 50 ms per 500 l
 
 ## What it is not
 
-- Not an antivirus or a sandbox: it does not stop an attacker.
+- Not a security boundary: it catches mistakes, not someone deliberately working around it.
 - Not a permission system: it does not decide which tools an agent may use.
 - Not a replacement for backups, version control or reading the diff.
 
