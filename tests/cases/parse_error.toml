@@ -86,6 +86,16 @@ fix = "correct the syntax at column"
 oracle = "refuses"
 
 [[row]]
+id = "pwsh-a-comment-inside-a-subexpression-is-no-unclosed-quote"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$(Get-Date # c)\""
+level = "warn"
+rules = ["parse-error"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
 id = "pwsh-clean"
 os = "any"
 shell = "pwsh"
