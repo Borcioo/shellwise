@@ -146,7 +146,57 @@ rules = ["ps-var-colon"]
 fix = "write \"${za\u017c}:\" instead of \"$za\u017c:\""
 oracle = "refuses"
 
+[[row]]
+id = "in-a-try-block"
+os = "any"
+shell = "pwsh"
+command = 'try { Write-Output "$n: x" } catch { }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-subexpression-operand"
+os = "any"
+shell = "pwsh"
+command = '$c + $(Write-Output "$n: x")'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "a-bare-string-statement"
+os = "any"
+shell = "pwsh"
+command = '"$n: done"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
 # --- Allow twins ---
+
+# Inside $(...) and ${...} the outer string's rules do not apply: a single-quoted string there is
+# literal, and a braced name may hold a colon.
+[[row]]
+id = "single-quoted-inside-a-subexpression"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$('$n: x')\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "braced-name-holding-a-colon"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "${x $n: y}"'
+level = "ok"
+rules = []
+oracle = "accepts"
 
 # `::` after the name is a static member; `?` and a letter outside ASCII (U+0105) are name
 # characters, so `$n:?z` and `$n:` U+0105 `z` are drive references.

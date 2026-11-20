@@ -220,5 +220,7 @@ mod tests {
     #[test]
     fn single_quoted_text_beside_a_double_quoted_part_is_skipped() {
         assert_eq!(names("'$a: '\"$b: \""), ["b"]);
+        // Double quotes inside single-quoted text open no string.
+        assert!(names("x'\"$n: y\"'").is_empty());
     }
 }
