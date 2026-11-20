@@ -2,9 +2,10 @@
 //!
 //! Each `[[row]]` holds `id`, `os` (`"windows"`, `"posix"` or `"any"`), `shell` (`"pwsh"`,
 //! `"powershell5"`, `"bash"` or `"gitbash"`), `command`, the expected `level`, the expected rule
-//! ids in order (`rules`), and optionally `fix` (a text the first finding's Fix line holds) and
-//! `oracle` (`"refuses"` or `"accepts"`: what the real shell's parser does with the text). A row
-//! for another OS is skipped and counted; loading fails when no row runs.
+//! ids in order (`rules`), and optionally `fix` (a text the first finding's Fix line holds),
+//! `oracle` (`"refuses"` or `"accepts"`: what the real shell's parser does with the text) and
+//! `config` (the text of an integration config file the row runs under, loaded by `Config::load`).
+//! A row for another OS is skipped and counted; loading fails when no row runs.
 
 #![allow(dead_code)]
 
@@ -27,6 +28,7 @@ pub struct Row {
     pub rules: Vec<String>,
     pub fix: Option<String>,
     pub oracle: Option<String>,
+    pub config: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +60,16 @@ impl Row {
             s => panic!("{}: unknown os {s:?}", self.id),
         }
     }
+}
+
+/// Every row of `tests/cases/<name>`, for whatever OS: for checks of what the table declares,
+/// never for verdicts. Panics on an empty file.
+pub fn all_rows(name: &str) -> Vec<Row> {
+    let path = format!("{}/tests/cases/{name}", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let file: File = toml::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert!(!file.row.is_empty(), "{name}: no rows");
+    file.row
 }
 
 /// The rows of `tests/cases/<name>` that run on this OS. Prints how many were skipped and why;
@@ -92,11 +104,7 @@ pub fn verdict(row: &Row) -> Verdict {
         origin: Origin::CommandLine,
         problem: None,
     };
-    analyse(
-        &input,
-        &Config::default(),
-        &Deadline::new(Instant::now(), 8000),
-    )
+    analyse(&input, &config(row), &Deadline::new(Instant::now(), 8000))
 }
 
 /// What is wrong with a row's verdict, or `None` when it matches.
@@ -120,4 +128,23 @@ pub fn mismatch(row: &Row) -> Option<String> {
         }
     }
     (!wrong.is_empty()).then(|| format!("{}: {}", row.id, wrong.join("; ")))
+}
+
+/// The row's config: the defaults, or its `config` text loaded as an integration file, which
+/// must load without a finding.
+fn config(row: &Row) -> Config {
+    let Some(text) = &row.config else {
+        return Config::default();
+    };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("case_configs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{}.toml", row.id));
+    std::fs::write(&path, text).unwrap();
+    let (cfg, findings) = Config::load(Some(&path), None, None);
+    assert!(
+        findings.is_empty(),
+        "{}: the config gave {findings:?}",
+        row.id
+    );
+    cfg
 }

@@ -26,6 +26,19 @@ const WARN_DEFAULT: &[&str] = &[
     "bash-msys-path-mangle",
     "bash-versioned-php",
     "bash-vendor-bin-shebang",
+    "ps-unix-command",
+    "pwsh-file-list-arg",
+    "ps-kill-wrapper",
+    "ps-auto-variable",
+    "ps-remove-item-star",
+    "ps-stdin-script",
+    "ps-empty-arg",
+    "rg-follow-L",
+    "wsl-argv-rejoin",
+    "claude-cmd-live-config",
+    "gate-truncated-pipeline",
+    "ps-bare-bash",
+    "ps-dotnet-relative-path",
 ];
 
 fn is_deny(level: &str) -> bool {
@@ -55,7 +68,15 @@ fn case_files() -> Vec<(String, Vec<case_loader::Row>)> {
 
 #[test]
 fn every_rule_has_a_deny_row_an_allow_row_and_a_doc() {
-    let files = case_files();
+    // What the tables declare, rows for another OS included: a Windows-only rule (bat-metachar)
+    // has its rows on a posix host too, where its case file skips them.
+    let files: Vec<(String, Vec<case_loader::Row>)> = case_files()
+        .into_iter()
+        .map(|(f, _)| {
+            let rows = case_loader::all_rows(&f);
+            (f, rows)
+        })
+        .collect();
     let mut wrong = Vec::new();
     let ids = rule_ids();
     for id in WARN_DEFAULT.iter().filter(|id| !ids.contains(id)) {
