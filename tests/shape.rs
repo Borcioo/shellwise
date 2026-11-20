@@ -175,6 +175,12 @@ fn collect_program_names(v: &toml::Value, out: &mut BTreeSet<String>) {
                     ("aliases", toml::Value::Array(a)) => {
                         out.extend(a.iter().filter_map(|x| x.as_str()).map(str::to_lowercase));
                     }
+                    // `aliases = { bash = [...], pwsh_windows = [...] }`: one list per shell.
+                    ("aliases", toml::Value::Table(t)) => {
+                        for a in t.values().filter_map(|v| v.as_array()) {
+                            out.extend(a.iter().filter_map(|x| x.as_str()).map(str::to_lowercase));
+                        }
+                    }
                     _ => collect_program_names(v, out),
                 }
             }
@@ -526,6 +532,17 @@ fn wrapped(name: &str, word: &[u8]) -> bool {
         || name == "-u" || word == b"rm" || name == "powershell"
 }
 "#;
+
+#[test]
+fn a_per_shell_alias_of_the_program_table_is_a_name() {
+    let text =
+        "[[program]]\nname = \"tool\"\naliases = { bash = [\"Tb\"], pwsh_windows = [\"tw\"] }\n";
+    let table: toml::Table = toml::from_str(text).unwrap();
+    let mut out = BTreeSet::new();
+    collect_program_names(&toml::Value::Table(table), &mut out);
+    let want: BTreeSet<String> = ["tool", "tb", "tw"].map(String::from).into();
+    assert_eq!(out, want);
+}
 
 #[test]
 fn a_new_file_naming_a_wrapper_shell_echo_or_byte_string_program_is_caught() {

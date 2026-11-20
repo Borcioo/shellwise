@@ -7,6 +7,7 @@ use crate::level::Finding;
 use crate::parse::ParseError;
 use crate::{CheckInput, Deadline, Origin};
 
+pub mod bash_lint;
 pub mod length;
 pub mod parse_error;
 pub mod ps_var_colon;
@@ -60,13 +61,15 @@ pub fn length_rules() -> Vec<Box<dyn Rule>> {
 
 /// Every rule, in the order they run.
 pub fn all() -> Vec<Box<dyn Rule>> {
-    vec![
+    let mut rules: Vec<Box<dyn Rule>> = vec![
         Box::new(parse_error::ParseErrorRule),
         Box::new(parse_error::ParseErrorDestructiveRule),
         Box::new(ps_var_colon::PsVarColon),
-        #[cfg(feature = "testhooks")]
-        Box::new(testhooks::TestHook),
-    ]
+    ];
+    rules.extend(bash_lint::rules());
+    #[cfg(feature = "testhooks")]
+    rules.push(Box::new(testhooks::TestHook));
+    rules
 }
 
 /// Test-only behaviour selected by `SHELLWISE_TESTHOOK`: `panic` panics inside the rule, `sleep`

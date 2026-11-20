@@ -12,6 +12,7 @@ pub mod fs;
 pub mod ir;
 pub mod level;
 pub mod parse;
+pub mod programs;
 pub mod rules;
 pub mod scan;
 
