@@ -74,7 +74,136 @@ rules = ["ps-var-colon"]
 fix = 'write "${n}:" instead of "$n:"'
 oracle = "refuses"
 
+# An unquoted $(...) holding the string: one finding, from the inner string only.
+[[row]]
+id = "unquoted-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output $(Write-Output "$n: y")'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-an-if-block"
+os = "any"
+shell = "pwsh"
+command = 'if ($a) { Write-Output "$n: x" }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-loop-body"
+os = "any"
+shell = "pwsh"
+command = 'foreach ($i in 1) { Write-Output "$n: x" }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-function-body"
+os = "any"
+shell = "pwsh"
+command = 'function f { Write-Output "$n: x" }'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-method-argument"
+os = "any"
+shell = "pwsh"
+command = '$x.Add("$n: x")'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+[[row]]
+id = "in-a-redirection-target"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output x > "$n: y.txt"'
+level = "break"
+rules = ["ps-var-colon"]
+fix = 'write "${n}:" instead of "$n:"'
+oracle = "refuses"
+
+# A name with a letter outside ASCII (U+017C): PowerShell reads it whole.
+[[row]]
+id = "name-with-a-non-ascii-letter"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$za\u017c: x\""
+level = "break"
+rules = ["ps-var-colon"]
+fix = "write \"${za\u017c}:\" instead of \"$za\u017c:\""
+oracle = "refuses"
+
 # --- Allow twins ---
+
+# `::` after the name is a static member; `?` and a letter outside ASCII (U+0105) are name
+# characters, so `$n:?z` and `$n:` U+0105 `z` are drive references.
+[[row]]
+id = "question-mark-after-the-colon"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$n:?z"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "static-member-after-the-name"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$t::Now"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "non-ascii-letter-after-the-colon"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"$n:\u0105z\""
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "static-member-inside-a-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "now $($t::Now)"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+[[row]]
+id = "dollar-dollar-then-a-name"
+os = "any"
+shell = "pwsh"
+command = 'Write-Output "$$n: x"'
+level = "ok"
+rules = []
+oracle = "accepts"
+
+# U+0060 (backtick) escapes the $.
+[[row]]
+id = "escaped-dollar"
+os = "any"
+shell = "pwsh"
+command = "Write-Output \"\u0060$n: x\""
+level = "ok"
+rules = []
+oracle = "accepts"
 
 [[row]]
 id = "braced-name"

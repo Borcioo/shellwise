@@ -9,6 +9,7 @@ use crate::{CheckInput, Deadline, Origin};
 
 pub mod length;
 pub mod parse_error;
+pub mod ps_var_colon;
 
 pub struct Ctx<'a> {
     pub input: &'a CheckInput<'a>,
@@ -62,6 +63,7 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(parse_error::ParseErrorRule),
         Box::new(parse_error::ParseErrorDestructiveRule),
+        Box::new(ps_var_colon::PsVarColon),
         #[cfg(feature = "testhooks")]
         Box::new(testhooks::TestHook),
     ]

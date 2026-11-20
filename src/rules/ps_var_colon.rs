@@ -48,14 +48,23 @@ impl Rule for PsVarColon {
     }
 }
 
-fn is_name(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+/// A character of a PowerShell variable name: a letter or digit of any script, `_` or `?`.
+fn is_name(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '?'
+}
+
+/// The byte offset just past the variable name starting at `start`.
+fn name_end(text: &str, start: usize) -> usize {
+    text[start..]
+        .char_indices()
+        .find(|&(_, c)| !is_name(c))
+        .map_or(text.len(), |(k, _)| start + k)
 }
 
 /// The `$name:` references in the double-quoted parts of `text` (one word as written), as the
 /// byte offset of the `$` and the name. A `:` followed by a name character is a drive or scope
-/// reference (`$env:TEMP`, `$script:x`) and is skipped; `${…}`, `$(…)` and single-quoted text are
-/// not read.
+/// reference (`$env:TEMP`, `$script:x`) and one followed by `:` a static member (`$t::Now`); both
+/// are skipped. `${…}`, `$(…)` and single-quoted text are not read.
 fn colon_variables(text: &str) -> Vec<(usize, &str)> {
     let b = text.as_bytes();
     let mut found = Vec::new();
@@ -95,15 +104,19 @@ fn colon_variables(text: &str) -> Vec<(usize, &str)> {
                     i += 2;
                     continue;
                 }
-                Some(n) if is_name(n) => {
-                    let end = (i + 1..b.len()).find(|&j| !is_name(b[j])).unwrap_or(b.len());
-                    if b.get(end) == Some(&b':') && !b.get(end + 1).is_some_and(|&n| is_name(n)) {
-                        found.push((i, &text[i + 1..end]));
+                _ => {
+                    let end = name_end(text, i + 1);
+                    if end > i + 1 {
+                        let after = text[end..].strip_prefix(':').map(|t| t.chars().next());
+                        if let Some(next) = after
+                            && !next.is_some_and(|n| is_name(n) || n == ':')
+                        {
+                            found.push((i, &text[i + 1..end]));
+                        }
+                        i = end;
+                        continue;
                     }
-                    i = end;
-                    continue;
                 }
-                _ => {}
             }
         }
         i += 1;
