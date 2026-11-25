@@ -482,7 +482,13 @@ impl Walk<'_, '_> {
     /// the `!` before them.
     fn bash_condition(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> String {
         let stmts = self.text_of(cond);
-        let header = self.header(span, rest, false);
+        let header = match self.bash_do(span, rest) {
+            Some(d) => self.slice(Span {
+                start: span.start,
+                end: d,
+            }),
+            None => self.slice(span),
+        };
         let c = header
             .trim_start()
             .split_once(char::is_whitespace)
@@ -504,14 +510,43 @@ impl Walk<'_, '_> {
         if negated { format!("! {stmts}") } else { stmts }
     }
 
-    /// A Bash loop's body as written: from its first statement to the loop's closing `done`,
-    /// without the `;` before it. `None` when the loop's text does not end in `done` (a redirect
-    /// after it).
-    fn bash_body(&self, span: Span, rest: &[Stmt]) -> Option<String> {
+    /// Where a Bash loop's `do` stands: the last `do` word before the body's first statement
+    /// (whose span may start inside a `{` or `(` the body opens with).
+    fn bash_do(&self, span: Span, rest: &[Stmt]) -> Option<usize> {
         let r = range(rest)?;
-        let t = self.src.get(r.start..span.end)?.trim_end();
+        let head = self.src.get(span.start..r.start)?;
+        head.match_indices("do")
+            .filter(|&(i, _)| {
+                let before = head[..i].chars().next_back();
+                let after = head[i + 2..].chars().next();
+                before.is_none_or(|b| b.is_whitespace() || matches!(b, ';' | ')' | '}'))
+                    && after.is_none_or(char::is_whitespace)
+            })
+            .last()
+            .map(|(i, _)| span.start + i)
+    }
+
+    /// A Bash loop's body as written: from after its `do` to the loop's closing `done`, without
+    /// the `;` before it. `None` when the loop's text does not end in `done` (a redirect after
+    /// it).
+    fn bash_body(&self, span: Span, rest: &[Stmt]) -> Option<String> {
+        let start = self.bash_do(span, rest)? + 2;
+        let t = self.src.get(start..span.end)?.trim();
         let t = t.strip_suffix("done")?.trim_end();
         Some(t.strip_suffix(';').unwrap_or(t).trim_end().to_string())
+    }
+
+    /// A PowerShell loop's body as written: the text inside its braces, so a `try` or another
+    /// statement the lowering opens without its first word stays whole. The braces follow the
+    /// condition (`while (…) {`), or open the loop (`do {`).
+    fn pwsh_body(&self, span: Span, cond: &[Stmt], at_end: bool) -> Option<String> {
+        let from = match range(cond) {
+            Some(r) if !at_end => r.end,
+            _ => span.start,
+        };
+        let open = from + self.src.get(from..span.end)?.find('{')?;
+        let close = open + closing_brace(self.src.get(open..span.end)?)?;
+        Some(self.src.get(open + 1..close)?.trim().to_string())
     }
 
     /// The loop's header: its text before the body (after it for `do … while`), the whole loop
@@ -619,11 +654,20 @@ impl Walk<'_, '_> {
             at_end,
         } = form;
         let (shell, os) = (self.shell, self.os);
-        // A Bash body as written up to its `done`: the spans of an `if`, a group or a subshell
-        // stop before their closing word, and the last statement's `&` is outside its text.
-        let source_body = matches!(shell, Shell::Bash(_))
-            .then(|| self.bash_body(span, rest))
-            .flatten();
+        // The body as written: the spans of a Bash `if`, group or subshell stop before their
+        // closing word, the last statement's `&` is outside its text, and a group or a `try`
+        // starts at its first inner statement.
+        let source_body = if matches!(shell, Shell::Bash(_)) {
+            self.bash_body(span, rest)
+        } else {
+            let n = all.len() - rest.len();
+            let cond = if at_end {
+                &all[rest.len()..]
+            } else {
+                &all[..n]
+            };
+            self.pwsh_body(span, cond, at_end)
+        };
         let mut body = source_body.clone().unwrap_or_else(|| self.text_of(rest));
         if source_body.is_none()
             && matches!(
@@ -1223,6 +1267,39 @@ fn tokens(text: &str) -> Vec<&str> {
         out.push(&text[s..]);
     }
     out
+}
+
+/// Where the `}` that closes the `{` at the start of `text` stands, braces in PowerShell quotes
+/// (`'…'`, `"…"` with its backtick escape) aside; `None` when it is not closed.
+fn closing_brace(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if let Some(q) = quote {
+            if ch == '`' && q == '"' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+        } else {
+            match ch {
+                '`' => escaped = true,
+                '\'' | '"' => quote = Some(ch),
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 fn balance(parts: &[&str]) -> isize {

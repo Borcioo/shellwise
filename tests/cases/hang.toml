@@ -1549,6 +1549,64 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "for i in $(seq 1 120); do\n  sleep 5\n  if grep -q done log; then\n    break\n  fi\n  [ \"$i\" -lt 120 ]\ndone  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
 
+# A body that starts with a compound command keeps its opening word (`{`, `try {`).
+[[row]]
+id = "wl-bash-fix-of-a-body-starting-with-a-group"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do { sleep 5; }; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; { sleep 5; }; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-ps-fix-of-a-body-starting-with-a-try"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { try { if (Test-Path done.txt) { break } } catch { }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { try { if (Test-Path done.txt) { break } } catch { }; Start-Sleep 5 }; if ($i -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
+
+[[row]]
+id = "wl-ps-fix-of-a-do-until-body-that-is-a-try"
+os = "any"
+shell = "pwsh"
+command = "do { try { Start-Sleep 5 } catch { } } until (Test-Path done.txt)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { try { Start-Sleep 5 } catch { }; if (Test-Path done.txt) { break } }; if ($i -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
+
+# The body starts after the loop's `do` keyword, not after a `do` inside a word or a comment.
+[[row]]
+id = "wl-bash-fix-of-a-body-with-a-comment-holding-do"
+os = "any"
+shell = "bash"
+command = "while true; do\n  # undo it; do: check\n  sleep 5\n  grep -q done log && break\ndone"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 120); do\n  # undo it; do: check\n  sleep 5\n  grep -q done log && break\n  [ \"$i\" -lt 120 ]\ndone  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+# The body's braces: those after the condition, a script block in the condition and a quoted
+# brace aside.
+[[row]]
+id = "wl-ps-fix-of-a-condition-holding-a-script-block"
+os = "any"
+shell = "pwsh"
+command = "while (-not (Get-ChildItem | Where-Object { $_.Name -eq 'x' })) { Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { if (-not (-not (Get-ChildItem | Where-Object { $_.Name -eq 'x' }))) { break }; Start-Sleep 5 }; if ($i -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
+
+[[row]]
+id = "wl-ps-fix-of-a-body-holding-a-quoted-brace"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { Write-Host '}'; Start-Sleep 5; if (Test-Path done.txt) { break } }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for ($i = 0; $i -lt 120; $i++) { Write-Host '}'; Start-Sleep 5; if (Test-Path done.txt) { break } }; if ($i -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
+
 # A comment after the condition is left out of the Fix: there it would comment out the rest of the
 # one-line loop.
 [[row]]
