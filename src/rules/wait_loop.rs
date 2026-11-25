@@ -540,7 +540,17 @@ impl Walk<'_, '_> {
             at_end,
         } = form;
         let (shell, os) = (self.shell, self.os);
-        let body = self.text_of(rest);
+        let mut body = self.text_of(rest);
+        // The last statement's `&` is its chain operator, outside its text.
+        if matches!(
+            rest.last(),
+            Some(Stmt::Pipeline(Pipeline {
+                chain: Some(ChainOp::Background),
+                ..
+            }))
+        ) {
+            body.push_str(" &");
+        }
         let n = attempts(all, shell, os);
         let var = if words(whole).any(|w| w == "i") {
             "attempt"

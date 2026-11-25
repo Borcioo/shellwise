@@ -1136,6 +1136,24 @@ command = 'while ($true) { if (Test-Path done.txt) { Write-Host "done $(Get-Date
 level = "break"
 rules = ["wait-loop-unbounded"]
 
+# A parameter named like a clock inside a compared operand, and a clock word in a quoted literal
+# there, are no clock either.
+[[row]]
+id = "wl-ps-seconds-parameter-in-an-operand-is-no-clock"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { if ($span -gt (New-TimeSpan -Seconds 30)) { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-clock-word-in-a-literal-operand-is-no-clock"
+os = "any"
+shell = "bash"
+command = "until [ \"$(grep -c 'SECONDS' run.log)\" -ge 3 ]; do sleep 10; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
 # Allow twins: the same loops with a clock compared in the guard.
 [[row]]
 id = "wl-ps-stopwatch-compared-in-a-guard-with-an-else"
@@ -1392,6 +1410,16 @@ command = "while (-not (Test-Path done.txt)) { Start-Sleep 5 }; Write-Host deplo
 level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "for ($i = 0; $i -lt 120; $i++) { if (-not (-not (Test-Path done.txt))) { break }; Start-Sleep 5 }; if ($i -eq 120) { throw 'the wait timed out' }; Write-Host deployed  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
+
+# A body that ends in a background command takes the round test after its `&`, not after `;`.
+[[row]]
+id = "wl-bash-fix-after-a-background-command"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do sleep 5; ./ping.sh & done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; ./ping.sh & [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
 
 # A10: a tool call's shell never has the PID as a child, so the hint names no `wait <pid>`.
 [[row]]
