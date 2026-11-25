@@ -1041,7 +1041,7 @@ shell = "gitbash"
 command = '& "C:/path/tool.exe" args'
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix = '"C:/path/tool.exe" args'
+fix_exact = '"C:/path/tool.exe" args'
 
 [[row]]
 id = "call-op-double-quoted-path-posix-bash"
@@ -1050,7 +1050,7 @@ shell = "bash"
 command = '& "C:/path/tool.exe" args'
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix = '"C:/path/tool.exe" args'
+fix_exact = '"C:/path/tool.exe" args'
 
 # Git Bash starts a quoted path with backslashes: the operand stays as written.
 [[row]]
@@ -1060,7 +1060,7 @@ shell = "gitbash"
 command = '& "C:\Program Files\Git\bin\bash.exe" -c x'
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix = '"C:\Program Files\Git\bin\bash.exe" -c x'
+fix_exact = '"C:\Program Files\Git\bin\bash.exe" -c x'
 
 [[row]]
 id = "call-op-single-quoted-name"
@@ -1069,7 +1069,7 @@ shell = "gitbash"
 command = "& 'x.exe'"
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix = "'x.exe'"
+fix_exact = "'x.exe'"
 
 [[row]]
 id = "call-op-variable"
@@ -1096,7 +1096,7 @@ shell = "gitbash"
 command = '&"C:/t/a.exe" b'
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix = '"C:/t/a.exe" b'
+fix_exact = '"C:/t/a.exe" b'
 
 [[row]]
 id = "call-op-after-and-and"
