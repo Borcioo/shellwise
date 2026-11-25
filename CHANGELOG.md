@@ -16,6 +16,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   (`[ $n -gt 100 ] && { echo timeout; exit 1; }`) or compares with `-eq`, `-ne`, `==` or `!=`.
 - `wait-loop-unbounded` no longer blocks a `while read` loop that sleeps between lines: it ends
   with its input.
+- The `wait-loop-unbounded` Fix keeps the loop's condition as written: a compound condition
+  (`while ! a && ! b`) no longer turns into a test that breaks on the wrong thing.
+- The `wait-loop-unbounded` Fix now fails when its rounds run out (Bash exit status 1, PowerShell
+  `throw`), so `… && deploy.sh` no longer runs after a timeout.
+- The `wait-loop-unbounded` Fix of a loop over several lines is the loop with its own lines, not
+  placeholders; a loop holding a here-document gets a sentence.
+- The `wait-loop-unbounded` Fix counts `sleep 1m` as a minute (it read 1 s, making a 10-hour loop).
+- The `wait-loop-unbounded` hint names `timeout 600 tail --pid=<pid> -f /dev/null` instead of
+  `wait <pid>`, which fails in a tool call's shell.
 - `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
   `[Threading.Thread]::Sleep` in PowerShell.
 

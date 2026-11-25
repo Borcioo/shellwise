@@ -12,7 +12,7 @@ A loop is judged when its body waits (`sleep`, `Start-Sleep`, `Wait-Process`, `W
 
 | Shape | Level | Why | Fix |
 |---|---|---|---|
-| Bash `while`/`until` and PowerShell `while`/`do … while`/`do … until`/`for (;;)` that waits or is always true, with no bound | `break` | Its end depends only on something outside the loop, which may never come. | `for i in $(seq 1 <N>); do <the stop test> && break; <the body>; done`, or in PowerShell `for ($i = 0; $i -lt <N>; $i++) { if (<the stop test>) { break }; <the body> }`. The rule fills in the loop's own condition and body, and an N that makes about ten minutes of the loop's own sleep. |
+| Bash `while`/`until` and PowerShell `while`/`do … while`/`do … until`/`for (;;)` that waits or is always true, with no bound | `break` | Its end depends only on something outside the loop, which may never come. | A counted loop that runs the condition as written first and fails when its rounds run out: `until C; do B; done` becomes `for i in $(seq 1 <N>); do C && break; B; [ "$i" -lt <N> ]; done` (`C \|\| break` for `while C`); in PowerShell `while (C) { B }` becomes `for ($i = 0; $i -lt <N>; $i++) { if (-not (C)) { break }; B }; if ($i -eq <N>) { throw 'the wait timed out' }` (`if (C)` for `until`). The rule fills in the loop's own condition and body, and an N that makes about ten minutes of the loop's own sleep (`sleep 1m` counts as 60 s). |
 | A `for` over a list or a range (`for i in $(seq 1 60)`, `foreach ($k in 1..10)`, `1..60 \| ForEach-Object`), a counted `for ((i=0; i<60; i++))` or `for ($i = 0; $i -lt 60; $i++)` | `ok` | It ends with its items or its counter. | |
 | The condition, or the test that guards a `break`, `exit`, `return` or `throw` in the body (also through `&& { echo timeout; exit 1; }` or `\|\| { …; break; }`), compares (`-lt`, `-le`, `-gt`, `-ge`, `-eq`, `-ne`, `<`, `>`, `==`, `!=` in `(( ))`) a clock (`$SECONDS`, `date +%s`, `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`, `ElapsedMilliseconds`) or a counter: a variable whose new value reads its old one (`n=$((n+1))`, `((n++))`, `let n++`, `n+=1`, `$i++`, `$i += 1`, `$i = $i + 1`) | `ok` | A deadline or a counter ends it. | |
 | A clock word that is no operand of a comparison (`grep -q "took 5 seconds"`, `"out-$(date +%F).txt"`, `echo "$(date) done"`, `Start-Sleep -Seconds 5`), or a comparison on a polled value (`c=$(ls out \| wc -l); [ $c -ge 10 ] && break`, `$c = (Get-ChildItem out).Count`) | `break` | A message or a file name reads no time, and a polled value may never reach its mark. | as above |
@@ -21,8 +21,16 @@ A loop is judged when its body waits (`sleep`, `Start-Sleep`, `Wait-Process`, `W
 | A condition that is a `read` without `-t` (`while read -r h; do sleep 1; done < hosts.txt`, `cat f \| while IFS= read -r l; do …; done`), a sleep in the body or not | `ok` | It ends with its input; a sleep only paces it. A follow that feeds it (`tail -f log \| while read l`) is `follow-unbounded`. | |
 | A body that runs a command the guard cannot read (`$step`, `eval`) | `ok` | That command may end the loop. | |
 
-The Fix line is the whole command with the loop rewritten (a command of one line; else the loop alone), and it ends with one sentence as a trailing comment, so it still runs as pasted: when what you wait for is a process, wait on the process
-(`wait <pid>`, `Wait-Process -Id <pid> -Timeout <seconds>`) rather than on a line in its log.
+The Fix line is the whole command with the loop rewritten (a command of one line; else the loop
+alone, over as many lines as the loop had), and it ends with one sentence as a trailing comment, so
+it still runs as pasted. The condition keeps its text, a leading `!` and every `&&`/`||` included;
+a condition of several commands is grouped (`{ a; b; } && break`). When the rounds run out the
+fixed loop fails (Bash: exit status 1; PowerShell: `throw`), so a command after it with `&&`
+(Bash) or `;` (PowerShell) does not run. A loop whose body holds a here-document gets a sentence
+instead of a command. The trailing sentence: when what you wait for is a process, wait on the
+process (`timeout 600 tail --pid=<pid> -f /dev/null`, `Wait-Process -Id <pid> -Timeout <seconds>`)
+rather than on a line in its log; a tool call's shell never has that process as its child, so
+`wait <pid>` fails there.
 
 ## Deny
 
@@ -30,7 +38,7 @@ The Fix line is the whole command with the loop rewritten (a command of one line
 until grep -q '^done' /tmp/x/run.log 2>/dev/null; do sleep 15; done; cat /tmp/x/summary.txt
 ```
 
-`break`: `Fix: for i in $(seq 1 40); do grep -q '^done' /tmp/x/run.log 2>/dev/null && break; sleep 15; done; cat /tmp/x/summary.txt  # when you wait for a process, wait on the process (wait <pid>) rather than on a line in its log`
+`break`: `Fix: for i in $(seq 1 40); do grep -q '^done' /tmp/x/run.log 2>/dev/null && break; sleep 15; [ "$i" -lt 40 ]; done; cat /tmp/x/summary.txt  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log`
 
 ```bash
 while ! curl -sf http://localhost:3000/health; do sleep 2; done
@@ -48,7 +56,13 @@ count, not a counter, and the last one names seconds only in its pattern.
 while (-not (Test-Path done.txt)) { Start-Sleep 5 }
 ```
 
-`break`: `Fix: for ($i = 0; $i -lt 120; $i++) { if ((Test-Path done.txt)) { break }; Start-Sleep 5 }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log`
+`break`: `Fix: for ($i = 0; $i -lt 120; $i++) { if (-not (-not (Test-Path done.txt))) { break }; Start-Sleep 5 }; if ($i -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log`
+
+```bash
+while ! grep -q a log && ! grep -q b log; do sleep 5; done
+```
+
+`break`: `Fix: for i in $(seq 1 120); do ! grep -q a log && ! grep -q b log || break; sleep 5; [ "$i" -lt 120 ]; done  # …`: the loop ends as the original does, as soon as either line is there.
 
 ## Allow
 

@@ -242,6 +242,7 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 #                 it (`read -t`) its own wait ends the loop instead of pacing it
 # loop_wait_ms    for "wait": with one of these options its number is milliseconds
 # loop_wait_in_ms for "wait": its number is always milliseconds (`[Threading.Thread]::Sleep(500)`)
+# loop_wait_units for "wait": the seconds of each unit suffix its number may carry (`sleep 1m`)
 # loop_body       on a shell row: the option whose next word is a script the rule reads too
 #                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
 # A .NET method is a row named `[type]::method` as written, lowercase.
@@ -250,6 +251,7 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 name = "sleep"
 shells = ["bash"]
 loop_role = ["wait"]
+loop_wait_units = { s = 1, m = 60, h = 3600, d = 86400 }
 
 [[program]]
 name = "[threading.thread]::sleep"
@@ -787,5 +789,6 @@ clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopw
 # (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
 compares = ["-lt", "-le", "-gt", "-ge", "-eq", "-ne", "<", "<=", ">", ">=", "==", "!="]
 # The sentence after the Fix line.
-hint_bash = "when you wait for a process, wait on the process (wait <pid>) rather than on a line in its log"
+# A tool call's shell never has the process as its child, so `wait <pid>` fails (127).
+hint_bash = "when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
 hint_pwsh = "when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"

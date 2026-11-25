@@ -33,6 +33,7 @@ const ROLE: &str = "loop_role";
 const WAIT_WHEN: &str = "loop_wait_when";
 const WAIT_MS: &str = "loop_wait_ms";
 const WAIT_IN_MS: &str = "loop_wait_in_ms";
+const WAIT_UNITS: &str = "loop_wait_units";
 const READS_INPUT: &str = "loop_reads_input";
 const BODY: &str = "loop_body";
 const BOUNDS: &str = "bounds_wait";
@@ -114,8 +115,12 @@ struct Form {
     until: bool,
     /// The condition comes after the body (`do … while`).
     at_end: bool,
-    /// A Bash `!` before the condition.
-    negated: bool,
+}
+
+/// A loop's Fix: the command that replaces it, or a sentence when no command can be built.
+enum Fixed {
+    Command(String),
+    Sentence(String),
 }
 
 struct Walk<'a, 'b> {
@@ -324,26 +329,46 @@ impl Walk<'_, '_> {
         if tests.iter().any(|t| bounds(t, &counters, fold)) {
             return;
         }
-        // `while ! C`: the Bash lowering keeps no `!`; it stands between the keyword and C.
-        let negated = range(cond).is_some_and(|r| {
-            self.slice(Span {
-                start: span.start,
-                end: r.start,
-            })
-            .trim_end()
-            .ends_with('!')
-        });
+        // The Fix runs the condition as written (Ruling 136). `while ! C`: the Bash lowering
+        // keeps no `!`; it stands between the keyword and C. A list of commands is grouped, so
+        // `&& break` reads its last command's status as the loop did.
+        let mut cond_src = cond_text;
+        if matches!(shell, Shell::Bash(_)) {
+            let negated = range(cond).is_some_and(|r| {
+                self.slice(Span {
+                    start: span.start,
+                    end: r.start,
+                })
+                .trim_end()
+                .ends_with('!')
+            });
+            if negated {
+                cond_src = format!("! {cond_src}");
+            }
+            let list = cond.iter().rev().skip(1).any(|s| {
+                !matches!(
+                    s,
+                    Stmt::Pipeline(Pipeline {
+                        chain: Some(ChainOp::And | ChainOp::Or),
+                        ..
+                    })
+                )
+            });
+            if list {
+                cond_src = format!("{{ {cond_src}; }}");
+            }
+        }
         let fix = self.fix_line(
             span,
             self.fix(
-                &cond_text,
+                &cond_src,
+                stmts,
                 rest,
                 whole,
                 Form {
                     always,
                     until,
                     at_end,
-                    negated,
                 },
             ),
         );
@@ -366,12 +391,16 @@ impl Walk<'_, '_> {
     /// The whole command with the loop at `span` replaced by `loop_fix`, when the command is one
     /// line and not a child shell's script; then the hint as a trailing comment, so the line
     /// still runs as pasted.
-    fn fix_line(&self, span: Span, loop_fix: String) -> String {
+    fn fix_line(&self, span: Span, loop_fix: Fixed) -> String {
         let loops = programs::loops();
         let hint = if matches!(self.shell, Shell::Bash(_)) {
             &loops.hint_bash
         } else {
             &loops.hint_pwsh
+        };
+        let loop_fix = match loop_fix {
+            Fixed::Command(c) => c,
+            Fixed::Sentence(s) => return format!("{s}; {hint}"),
         };
         let whole = match (self.src.get(..span.start), self.src.get(span.end..)) {
             (Some(before), Some(after)) if self.outer.is_none() && !self.src.contains('\n') => {
@@ -469,77 +498,90 @@ impl Walk<'_, '_> {
         out
     }
 
-    /// The Fix line: the loop rewritten with a counter that ends it after about ten minutes.
-    fn fix(&self, cond: &str, rest: &[Stmt], whole: &str, form: Form) -> String {
+    /// The Fix (Ruling 136): a counted loop of about ten minutes that runs the condition's own
+    /// text first (`C || break` for `while C`, `C && break` for `until C`) and fails when its
+    /// rounds run out, so a command after `&&` does not run: Bash ends the body with `[ "$i" -lt
+    /// N ]`, PowerShell throws after the loop. A loop over several lines keeps its lines; a loop
+    /// whose text cannot be rebuilt (a here-document) gets a sentence.
+    fn fix(&self, cond: &str, all: &[Stmt], rest: &[Stmt], whole: &str, form: Form) -> Fixed {
         let Form {
             always,
             until,
             at_end,
-            negated,
         } = form;
+        let (shell, os) = (self.shell, self.os);
         let body = self.text_of(rest);
-        let n = attempts(rest, self.shell, self.os);
+        let n = attempts(all, shell, os);
         let var = if words(whole).any(|w| w == "i") {
             "attempt"
         } else {
             "i"
         };
         let multi = body.contains('\n') || cond.contains('\n');
-        if matches!(self.shell, Shell::Bash(_)) {
-            // The loop ends when its condition holds (`until C`, `while ! C`) or fails (`while
-            // C`, `until ! C`): the Fix breaks on the same.
-            let stop = if always {
-                String::new()
-            } else if until != negated {
-                format!("{cond} && break; ")
-            } else {
-                format!("{cond} || break; ")
-            };
-            let body = if multi || body.is_empty() {
-                "<the loop body>".to_string()
-            } else {
-                body
-            };
-            let stop = if multi {
-                if always {
-                    String::new()
+        let mut parts: Vec<String> = Vec::new();
+        if matches!(shell, Shell::Bash(_)) {
+            let heredoc = commands(all).iter().any(|c| {
+                c.redirects
+                    .iter()
+                    .any(|r| matches!(r, Redirect::Heredoc { .. }))
+            });
+            if heredoc {
+                let test = if always {
+                    ""
                 } else {
-                    "<the stop test> && break; ".to_string()
-                }
-            } else {
-                stop
-            };
-            format!("for {var} in $(seq 1 {n}); do {stop}{body}; done")
+                    " that runs its condition first and breaks on it, and"
+                };
+                return Fixed::Sentence(format!(
+                    "rewrite the loop as a loop of at most {n} rounds{test} that fails when the rounds run out (no command is built: the loop holds a here-document)"
+                ));
+            }
+            if !always {
+                let op = if until { "&&" } else { "||" };
+                parts.push(format!("{cond} {op} break"));
+            }
+            if !body.is_empty() {
+                parts.push(body);
+            }
+            parts.push(format!("[ \"${var}\" -lt {n} ]"));
+            let head = format!("for {var} in $(seq 1 {n}); do");
+            if multi {
+                let lines: String = parts.iter().map(|p| format!("  {p}\n")).collect();
+                return Fixed::Command(format!("{head}\n{lines}done"));
+            }
+            let mut joined = String::new();
+            for p in &parts {
+                joined.push_str(p);
+                // A command sent to the background ends with its `&`: a `;` after it is an error.
+                let background = p.ends_with('&') && !p.ends_with("&&");
+                joined.push_str(if background { " " } else { "; " });
+            }
+            Fixed::Command(format!("{head} {joined}done"))
         } else {
-            let negated = cond
-                .get(..5)
-                .filter(|p| p.eq_ignore_ascii_case("-not "))
-                .map(|_| cond[5..].trim_start());
-            let test = if always {
-                String::new()
-            } else if until {
-                format!("if ({cond}) {{ break }}")
-            } else if let Some(c) = negated {
-                format!("if ({c}) {{ break }}")
+            let test = (!always).then(|| {
+                if until {
+                    format!("if ({cond}) {{ break }}")
+                } else {
+                    format!("if (-not ({cond})) {{ break }}")
+                }
+            });
+            let body = (!body.is_empty()).then_some(body);
+            parts.extend(
+                if at_end { [body, test] } else { [test, body] }
+                    .into_iter()
+                    .flatten(),
+            );
+            let head = format!("for (${var} = 0; ${var} -lt {n}; ${var}++)");
+            let tail = format!("if (${var} -eq {n}) {{ throw 'the wait timed out' }}");
+            if multi {
+                let lines: String = parts.iter().map(|p| format!("  {p}\n")).collect();
+                return Fixed::Command(format!("{head} {{\n{lines}}}\n{tail}"));
+            }
+            let inner = if parts.is_empty() {
+                " ".to_string()
             } else {
-                format!("if (-not ({cond})) {{ break }}")
+                format!(" {} ", parts.join("; "))
             };
-            let body = if multi || body.is_empty() {
-                "<the loop body>".to_string()
-            } else {
-                body
-            };
-            let test = if multi && !always {
-                "if (<the stop test>) { break }".to_string()
-            } else {
-                test
-            };
-            let inner = match (test.is_empty(), at_end) {
-                (true, _) => body,
-                (false, true) => format!("{body}; {test}"),
-                (false, false) => format!("{test}; {body}"),
-            };
-            format!("for (${var} = 0; ${var} -lt {n}; ${var}++) {{ {inner} }}")
+            Fixed::Command(format!("{head} {{{inner}}}; {tail}"))
         }
     }
 }
@@ -1133,15 +1175,28 @@ fn attempts(rest: &[Stmt], shell: Shell, os: Os) -> u64 {
         .into_iter()
         .filter(|c| waits(c, shell, os))
         .find_map(|c| {
-            let ms = row(c, shell, os)
-                .map(|p| strings(p, WAIT_MS))
-                .unwrap_or_default();
+            let p = row(c, shell, os)?;
+            let ms = strings(p, WAIT_MS);
+            let units = p.extra.get(WAIT_UNITS).and_then(|v| v.as_table());
             let args: Vec<String> = c.args.iter().filter_map(literal).collect();
             let in_ms = args
                 .iter()
                 .any(|a| ms.iter().any(|o| o.eq_ignore_ascii_case(a)));
+            // `sleep 1m`: a number with a unit suffix the row lists, in that unit's seconds.
+            let secs = |a: &str| -> Option<f64> {
+                if let Ok(v) = a.parse::<f64>() {
+                    return Some(v);
+                }
+                let units = units?;
+                let (num, unit) = a.split_at(a.char_indices().last()?.0);
+                let factor = units.get(unit)?;
+                let factor = factor
+                    .as_float()
+                    .or(factor.as_integer().map(|i| i as f64))?;
+                num.parse::<f64>().ok().map(|v| v * factor)
+            };
             args.iter()
-                .find_map(|a| a.trim_end_matches('s').parse::<f64>().ok())
+                .find_map(|a| secs(a))
                 .map(|v| if in_ms { v / 1000.0 } else { v })
         });
     let method_secs = || {
