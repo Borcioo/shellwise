@@ -37,6 +37,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - `wait-loop-unbounded` reads a counter in backticks (``n=`expr $n + 1` ``) and `((--n))`.
 - `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
   `[Threading.Thread]::Sleep` in PowerShell.
+- `lint` keeps a ShellCheck SC1xxx finding at break only where the shellwise parser fails at the
+  same place (its line, or the end of the file for an unterminated construct); a file Bash parses
+  no longer fails because of an unrelated parse gap elsewhere in it.
+- `Remove-Item`/`Set-Location` with `-Path:`/`-LiteralPath:` and a variable value (`-Path: $HOME`,
+  `-Path:$HOME`, `-Path: "$HOME"`, `-Path: $env:USERPROFILE`) now read the value as the uncoloned
+  spelling does, so a home-folder delete is critical again.
+- `git worktree remove` of the main working tree is critical from any folder, a linked worktree
+  beside the main tree included.
 
 ## [0.1.0] - 2026-11-20
 
