@@ -659,6 +659,38 @@ pub(crate) fn inline_value_word(w: &Word) -> Option<Word> {
     })
 }
 
+/// How a switch is set by the word that names it, as pwsh 7.7 binds the value after its colon:
+/// `-Name` alone, `:$true` or a nonzero number turn it on, `:$false` or `:0` off, and any other
+/// value (`:$flag`, `:(…)`, nothing after the colon) may do either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwitchState {
+    On,
+    Off,
+    Either,
+}
+
+/// The state of the switch the parameter word `w` (`-Recurse`, `-Confirm:$false`) sets.
+pub(crate) fn switch_state(w: &Word) -> SwitchState {
+    let inline = match w.parts.first() {
+        Some(WordPart::Literal(lead)) => param_token(lead).and_then(|(_, v)| v),
+        _ => None,
+    };
+    if inline.is_none() {
+        return SwitchState::On;
+    }
+    let value = inline_value_word(w).map(|v| v.parts).unwrap_or_default();
+    match value.as_slice() {
+        [WordPart::Var(n)] if n.eq_ignore_ascii_case("true") => SwitchState::On,
+        [WordPart::Var(n)] if n.eq_ignore_ascii_case("false") => SwitchState::Off,
+        [WordPart::Literal(t)] => match t.parse::<i64>() {
+            Ok(0) => SwitchState::Off,
+            Ok(_) => SwitchState::On,
+            Err(_) => SwitchState::Either,
+        },
+        _ => SwitchState::Either,
+    }
+}
+
 /// How PowerShell binds `written` (`-Ty`, `-ItemType:Junction`) for `cmdlet`: ignoring case, a
 /// full name or alias first, then any prefix of a name or alias; when the prefix fits several
 /// parameters and exactly one of them is the cmdlet's own (not a common one), that one.
@@ -3291,6 +3323,59 @@ const PS_ITEM_WRITERS: [&str; 30] = [
     "cp",
 ];
 
+// The parameter spellings (names and aliases) of the item writers above, from pwsh 7.7:
+// `(Get-Command <cmdlet>).Parameters.Values`, split by `SwitchParameter`, over Set-Item,
+// New-Item, Remove-Item, Clear-Item, Set-Content, Add-Content, Clear-Content, Rename-Item,
+// Move-Item and Copy-Item.
+
+/// Switch spellings of the item writers.
+const WRITER_SWITCHES: [&str; 14] = [
+    "asbytestream",
+    "cf",
+    "confirm",
+    "container",
+    "db",
+    "debug",
+    "force",
+    "nonewline",
+    "passthru",
+    "recurse",
+    "vb",
+    "verbose",
+    "whatif",
+    "wi",
+];
+
+/// One value-parameter spelling of the item writers for each prefix a switch spelling shares
+/// with one (`c`, `d`, `de`, `f`, `n`, `p`, `pa`, `v`, `w`): the full list of their value
+/// spellings shares no other.
+const WRITER_VALUES: [&str; 7] = [
+    "credential",
+    "destination",
+    "filter",
+    "name",
+    "path",
+    "value",
+    "warningaction",
+];
+
+/// `w` is a writer's switch with its colon value (`-Confirm:$false`, `-Recurse:$flag`): the name
+/// is a switch spelling or a prefix of one, and no value spelling starts with it (no switch
+/// spelling is itself the start of a value one). Such a value turns the switch on or off; it
+/// names no path and no variable. (The parser refuses a substitution after the colon,
+/// `-Confirm:$(…)`.)
+fn writer_switch_word(w: &Word) -> bool {
+    let Some(WordPart::Literal(lead)) = w.parts.first() else {
+        return false;
+    };
+    let Some((name, Some(_))) = param_token(lead) else {
+        return false;
+    };
+    let name = name.to_lowercase();
+    WRITER_SWITCHES.iter().any(|s| s.starts_with(&name))
+        && !WRITER_VALUES.iter().any(|v| v.starts_with(&name))
+}
+
 /// Mark every name the command may assign as dynamic: assignments, `env X=`, `export`,
 /// `unset`, `read`, `$env:X =`, `Set-Item env:`, `[Environment]::SetEnvironmentVariable`, a
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
@@ -3428,6 +3513,8 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     for (w, a) in c.args.iter().zip(&args) {
         match a {
             Some(t) => mark_drive_path(env, t),
+            // A switch with its colon value (`-Confirm:$false`) names no drive path.
+            None if writer && writer_switch_word(w) => {}
             // A word that resolves now (`$env:TEMP\x`, `~`) names that text; any other word
             // may name any drive path.
             None if writer => match w.static_value(env) {
