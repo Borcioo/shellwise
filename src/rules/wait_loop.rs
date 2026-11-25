@@ -387,9 +387,14 @@ impl Walk<'_, '_> {
         let whole = self.slice(span);
         let fold = !matches!(shell, Shell::Bash(_));
         let counters = counters(whole, fold);
-        let mut tests = vec![self.header(span, rest, at_end)];
-        tests.extend(self.guards(rest));
-        if tests.iter().any(|t| bounds(t, &counters, fold)) {
+        let header = match head {
+            LoopHead::Test { .. } if !cond.is_empty() => {
+                let from = if at_end { stmts.len() - cond.len() } else { 0 };
+                self.condition_bounds(body, from, cond.len(), until, &counters)
+            }
+            _ => bounds(&self.header(span, rest, at_end), &counters, fold),
+        };
+        if header || self.guards(rest).iter().any(|t| bounds(t, &counters, fold)) {
             return;
         }
         // The Fix runs the condition as written (Ruling 136). A list of commands is grouped, so
@@ -568,6 +573,55 @@ impl Walk<'_, '_> {
             }
         };
         self.slice(part).to_string()
+    }
+
+    /// The loop's condition (`n` statements of `body` from `from`) ends it by a bound (Ruling
+    /// 141): reaching the bound stops the loop whatever the other tests say. `until A || bound`
+    /// and `while A && bound` do; `until A && bound` and `while A || bound` wait for `A` too. The
+    /// tests are read left to right, as both shells bind `&&`/`||` and `-and`/`-or`; a group or a
+    /// test command (`( … )`, `[[ … ]]`) is one test.
+    fn condition_bounds(
+        &self,
+        body: &Script,
+        from: usize,
+        n: usize,
+        until: bool,
+        counters: &[String],
+    ) -> bool {
+        let stmts = &body.stmts[from..from + n];
+        let fold = !matches!(self.shell, Shell::Bash(_));
+        let terms: Vec<(Option<ChainOp>, String)> = if fold {
+            pwsh_terms(&self.text_of(stmts))
+        } else {
+            let op = |j: usize| {
+                body.join(from + j).or(match &stmts[j - 1] {
+                    Stmt::Pipeline(p) => p.chain,
+                    _ => None,
+                })
+            };
+            // A list's last and-or chain decides: it starts after the last `;`.
+            let first = (1..n)
+                .rev()
+                .find(|&j| !matches!(op(j), Some(ChainOp::And | ChainOp::Or)))
+                .unwrap_or(0);
+            (first..n)
+                .map(|j| {
+                    let op = if j > first { op(j) } else { None };
+                    (op, self.text_of(&stmts[j..=j]))
+                })
+                .collect()
+        };
+        // Whether a bound can make the tests so far true, and whether it can make them false.
+        let mut can = (false, false);
+        for (k, (op, t)) in terms.iter().enumerate() {
+            let b = bounds(t, counters, fold);
+            can = match op {
+                Some(ChainOp::And) if k > 0 => (can.0 && b, can.1 || b),
+                Some(ChainOp::Or) if k > 0 => (can.0 || b, can.1 && b),
+                _ => (b, b),
+            };
+        }
+        if until { can.0 } else { can.1 }
     }
 
     /// The text of every test that guards an exit in `stmts`: an `if` whose text holds an exit
@@ -1305,6 +1359,51 @@ fn counters(text: &str, fold: bool) -> Vec<String> {
             out.push(name.to_string());
         }
     }
+    out
+}
+
+/// A PowerShell condition split into its tests at the `-and` and `-or` outside brackets and
+/// quotes, each with the operator before it.
+fn pwsh_terms(text: &str) -> Vec<(Option<ChainOp>, String)> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let (mut depth, mut quote, mut from, mut op) = (0usize, None, 0, None);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b' ' | b'\t' if depth == 0 => {
+                let word = text[i + 1..].split([' ', '\t', '(']).next().unwrap_or("");
+                let next = if word.eq_ignore_ascii_case("-and") {
+                    Some(ChainOp::And)
+                } else if word.eq_ignore_ascii_case("-or") {
+                    Some(ChainOp::Or)
+                } else {
+                    None
+                };
+                if next.is_some() {
+                    out.push((op, text[from..i].to_string()));
+                    op = next;
+                    i += 1 + word.len();
+                    from = i;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push((op, text[from..].to_string()));
     out
 }
 

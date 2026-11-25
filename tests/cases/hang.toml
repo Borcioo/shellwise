@@ -1615,6 +1615,83 @@ command = "$script:i = 0; while (-not (Test-Path done.txt)) { $script:i = $scrip
 level = "ok"
 rules = []
 
+# --- A bound in the header ends the loop only where reaching it ends the loop (Ruling 141) ---
+# `until C` ends when C holds: a bound joined by `||` does it, one joined by `&&` waits for the
+# other side too; `while C` the other way round.
+
+[[row]]
+id = "wl-bash-until-a-and-bound-is-unbounded"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q ok log && [ $n -ge 1 ]; do n=$((n+1)); sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-until-a-or-bound-is-bounded"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q ok log || [ $n -ge 60 ]; do n=$((n+1)); sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-while-a-and-bound-is-bounded"
+os = "any"
+shell = "bash"
+command = "n=0; while ! grep -q ok log && [ $n -lt 60 ]; do n=$((n+1)); sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-while-a-or-bound-is-unbounded"
+os = "any"
+shell = "bash"
+command = "n=0; while ! grep -q ok log || [ $n -lt 60 ]; do n=$((n+1)); sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Bash `&&` and `||` bind left to right: `(A || bound) && B` waits for B.
+[[row]]
+id = "wl-bash-until-a-or-bound-and-b-is-unbounded"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q a log || [ $n -ge 60 ] && grep -q b log; do n=$((n+1)); sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-while-a-or-bound-is-unbounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok) -or $n -lt 60) { $n++; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-while-a-and-bound-is-bounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok) -AND $n -lt 60) { $n++; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-do-until-a-and-bound-is-unbounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; do { $n++; Start-Sleep 5 } until ((Test-Path ok) -and $n -ge 60)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-do-until-a-or-bound-is-bounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; do { $n++; Start-Sleep 5 } until ((Test-Path ok) -or $n -ge 60)"
+level = "ok"
+rules = []
+
 # --- A wait in the condition is a wait ---
 
 [[row]]
