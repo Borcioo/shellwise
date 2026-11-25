@@ -2,7 +2,7 @@
 //!
 //! - `lookup` finds the row a typed name runs in a shell.
 //! - `strip_wrappers` reads past `timeout`, `nice`, `env NAME=…`, `sudo`, `command` and `nohup` to
-//!   the command they run.
+//!   the command they run; `wrapper_chain` lists the wrappers it read through.
 //! - `commands` lists every simple command of a script, nested ones included.
 //!
 //! Rule code names no program and no option: it asks the table (`tests/shape.rs`).
@@ -354,6 +354,32 @@ pub fn lookup(typed: &str, shell: Shell, os: Os) -> Option<&'static Program> {
 /// name is not static. A wrapped name that is not static gives an opaque command, and so does a
 /// wrapper still in front after `MAX_WRAPPERS` strips: a command may sit behind it.
 pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, SimpleCommand> {
+    strip(cmd, shell, os, None)
+}
+
+/// One wrapper `strip_wrappers` read through.
+pub struct Wrapped {
+    pub row: &'static Program,
+    /// The span of its name word.
+    pub name: Span,
+    /// The words it took as operands, in order (`timeout -k 5 60 tail` gives `60`).
+    pub operands: Vec<Word>,
+}
+
+/// The wrappers `strip_wrappers` reads through, outermost first (`nohup timeout 60 tail` gives
+/// `nohup`, then `timeout`).
+pub fn wrapper_chain(cmd: &SimpleCommand, shell: Shell, os: Os) -> Vec<Wrapped> {
+    let mut chain = Vec::new();
+    strip(cmd, shell, os, Some(&mut chain));
+    chain
+}
+
+fn strip<'c>(
+    cmd: &'c SimpleCommand,
+    shell: Shell,
+    os: Os,
+    mut chain: Option<&mut Vec<Wrapped>>,
+) -> Cow<'c, SimpleCommand> {
     let env = EnvView::new();
     let wrapper_of = |c: &SimpleCommand| {
         c.name
@@ -365,8 +391,18 @@ pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, Simp
         let Some(wrapper) = wrapper_of(&current) else {
             return current;
         };
-        match unwrap_once(&current, wrapper, shell, os) {
-            Some(next) => current = Cow::Owned(next),
+        let mut operands = Vec::new();
+        match unwrap_once(&current, wrapper, shell, os, &mut operands) {
+            Some(next) => {
+                if let Some(chain) = chain.as_deref_mut() {
+                    chain.push(Wrapped {
+                        row: wrapper,
+                        name: current.name.span,
+                        operands,
+                    });
+                }
+                current = Cow::Owned(next);
+            }
             None => return current,
         }
     }
@@ -421,12 +457,14 @@ fn read_option(wrapper: &Program, v: &str) -> WrapperOption {
     WrapperOption::Words(1)
 }
 
-/// The command one wrapper runs, or `None` when it runs none.
+/// The command one wrapper runs, or `None` when it runs none; the words it took as operands go
+/// into `taken`.
 fn unwrap_once(
     cmd: &SimpleCommand,
     wrapper: &Program,
     shell: Shell,
     os: Os,
+    taken: &mut Vec<Word>,
 ) -> Option<SimpleCommand> {
     let env = EnvView::new();
     let mut assigns = cmd.assigns.clone();
@@ -441,6 +479,7 @@ fn unwrap_once(
             if operands > 0 {
                 operands -= 1;
                 options = false;
+                taken.push(w.clone());
                 i += 1;
                 continue;
             }
@@ -477,6 +516,7 @@ fn unwrap_once(
         } else if operands > 0 {
             operands -= 1;
             options = false;
+            taken.push(w.clone());
             i += 1;
         } else {
             break;

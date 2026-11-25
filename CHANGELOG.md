@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- `follow-unbounded`: the Bash Fix puts `timeout 60` after the follow's assignments and leading
+  redirects (`LC_ALL=C timeout 60 tail -f log`) and keeps a line continuation before the name;
+  under any wrapper other than `env`, `nice` and `nohup` (`command`, `exec`, `builtin`, `sudo`),
+  or after an assignment to `PATH`, it gives a sentence that names the bounded form instead of a
+  command. A bound after a wrapper counts (`nohup timeout 60 tail -f log` is ok); a duration of
+  `0`, `inf` or `infinity` is no bound (`timeout 0 tail -f log` now warns, Fix
+  `timeout 60 tail -f log`).
+- A PowerShell delete through an alias the same command defines before it
+  (`Set-Alias zz Remove-Item; zz C:\Windows -Recurse`, `Set-Alias -Name zz -Value Remove-Item;
+  zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet
+  the alias names; an alias the guard cannot read, or one read more ways than it follows, warns
+  `dynamic-target` on a protected, unreadable or piped target.
+
 ## [0.1.1] - 2026-11-25
 
 ### Added
