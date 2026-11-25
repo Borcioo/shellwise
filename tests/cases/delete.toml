@@ -2020,6 +2020,54 @@ level = "critical"
 rules = ["delete-critical"]
 
 [[row]]
+id = "ps-ri-switch-alias-ri-recurse-true-home"
+os = "any"
+shell = "pwsh"
+command = 'ri $HOME -Recurse:$true -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-alias-rm-recurse-true-home"
+os = "windows"
+shell = "pwsh"
+command = 'rm $HOME -Recurse:$true -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-alias-del-recurse-true-home"
+os = "windows"
+shell = "pwsh"
+command = 'del $HOME -Recurse:$true -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-alias-ri-force-true-home"
+os = "any"
+shell = "pwsh"
+command = 'ri $HOME -Recurse -Force:$true'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-alias-rm-force-true-home"
+os = "windows"
+shell = "pwsh"
+command = 'rm $HOME -Recurse -Force:$true'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-alias-del-force-true-home"
+os = "windows"
+shell = "pwsh"
+command = 'del $HOME -Recurse -Force:$true'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
 id = "ps-ri-switch-tilde-twin"
 os = "any"
 shell = "pwsh"
@@ -2124,6 +2172,170 @@ command = 'Remove-Item $HOME -Recurse -Force -Confirm:$x'
 level = "critical"
 rules = ["delete-critical"]
 
+# Every switch spelling of the item writers, colon value and uncoloned twin.
+[[row]]
+id = "ps-ri-switch-common-aliases-twin"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item $HOME -Recurse -Force -cf -vb -db'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-common-aliases-false"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item $HOME -Recurse -Force -cf:$false -vb:$false -db:$false'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-common-names-twin"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item $HOME -Recurse -Force -Verbose -Debug'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-common-names-false"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item $HOME -Recurse -Force -Verbose:$false -Debug:$false'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-content-switches-twin"
+os = "any"
+shell = "pwsh"
+command = 'Set-Content out.txt x -NoNewline -AsByteStream; Remove-Item $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-content-switches-colon"
+os = "any"
+shell = "pwsh"
+command = 'Set-Content out.txt x -NoNewline:$true -AsByteStream:$false; Remove-Item $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-copy-switches-twin"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -Container -PassThru; Remove-Item $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-switch-copy-switches-colon"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -Container:$false -PassThru:$true; Remove-Item $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# A prefix a switch shares with a value parameter (`-C` Credential, `-De` Destination, `-F`
+# Filter, `-Pa` Path, `-V` Value, `-W` WarningAction) may take a value: it marks, like its twin.
+# On Copy-Item `-C`, `-F`, `-Pa` and `-W` also fit a switch, so pwsh refuses the call (break).
+[[row]]
+id = "ps-ri-switch-shared-prefix-c-twin"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -Credential $c; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-c"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -C:$c; Remove-Item $HOME -Recurse -Force'
+level = "break"
+rules = ["dynamic-target", "ps-bad-parameter"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-de-twin"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a -Destination $d; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-de"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a -De:$d; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-f-twin"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -Filter $f; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-f"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -F:$f; Remove-Item $HOME -Recurse -Force'
+level = "break"
+rules = ["dynamic-target", "ps-bad-parameter"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-pa-twin"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item -Path $p b; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-pa"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item -Pa:$p b; Remove-Item $HOME -Recurse -Force'
+level = "break"
+rules = ["dynamic-target", "ps-bad-parameter"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-v-twin"
+os = "any"
+shell = "pwsh"
+command = 'Set-Item variable:a -Value $v; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-v"
+os = "any"
+shell = "pwsh"
+command = 'Set-Item variable:a -V:$v; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-w-twin"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -WarningAction $w; Remove-Item $HOME -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-switch-shared-prefix-w"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item a b -W:$w; Remove-Item $HOME -Recurse -Force'
+level = "break"
+rules = ["dynamic-target", "ps-bad-parameter"]
+
 # A substitution after the colon is refused by the parser, so no switch value runs code.
 [[row]]
 id = "ps-ri-switch-confirm-subst-is-refused"
@@ -2182,6 +2394,22 @@ shell = "pwsh"
 command = 'Remove-Item .\build -Recurse -Force -Confirm:$false'
 level = "ok"
 rules = []
+
+[[row]]
+id = "ps-ri-switch-outside-twin"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item ..\outside -Recurse -Force'
+level = "warn"
+rules = ["delete-outside-project"]
+
+[[row]]
+id = "ps-ri-switch-confirm-false-outside"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item ..\outside -Recurse -Force -Confirm:$false'
+level = "warn"
+rules = ["delete-outside-project"]
 
 [[row]]
 id = "ps-ri-switch-recurse-true-inside"

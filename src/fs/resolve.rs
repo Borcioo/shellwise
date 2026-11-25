@@ -3326,12 +3326,10 @@ const PS_ITEM_WRITERS: [&str; 30] = [
 // The parameter spellings (names and aliases) of the item writers above, from pwsh 7.7:
 // `(Get-Command <cmdlet>).Parameters.Values`, split by `SwitchParameter`, over Set-Item,
 // New-Item, Remove-Item, Clear-Item, Set-Content, Add-Content, Clear-Content, Rename-Item,
-// Move-Item and Copy-Item (and the similar Out-File, *-ItemProperty and *-Variable, which only
-// add spellings).
+// Move-Item and Copy-Item.
 
 /// Switch spellings of the item writers.
-const WRITER_SWITCHES: [&str; 17] = [
-    "append",
+const WRITER_SWITCHES: [&str; 14] = [
     "asbytestream",
     "cf",
     "confirm",
@@ -3339,9 +3337,7 @@ const WRITER_SWITCHES: [&str; 17] = [
     "db",
     "debug",
     "force",
-    "noclobber",
     "nonewline",
-    "nooverwrite",
     "passthru",
     "recurse",
     "vb",
@@ -3350,38 +3346,24 @@ const WRITER_SWITCHES: [&str; 17] = [
     "wi",
 ];
 
-/// Spellings of the item writers' parameters that take a value, those that start with the
-/// letter of a switch spelling (no other can share a prefix with one).
-const WRITER_VALUES: [&str; 23] = [
+/// One value-parameter spelling of the item writers for each prefix a switch spelling shares
+/// with one (`c`, `d`, `de`, `f`, `n`, `p`, `pa`, `v`, `w`): the full list of their value
+/// spellings shares no other.
+const WRITER_VALUES: [&str; 7] = [
     "credential",
-    "description",
     "destination",
-    "filepath",
     "filter",
-    "fromsession",
     "name",
-    "newname",
     "path",
-    "pipelinevariable",
-    "proga",
-    "progressaction",
-    "propertytype",
-    "pspath",
-    "psproperty",
-    "pv",
     "value",
-    "visibility",
-    "wa",
     "warningaction",
-    "warningvariable",
-    "width",
-    "wv",
 ];
 
 /// `w` is a writer's switch with its colon value (`-Confirm:$false`, `-Recurse:$flag`): the name
-/// is a switch spelling, or a prefix of one that no value parameter shares. Such a value turns
-/// the switch on or off; it names no path and no variable. (The parser refuses a substitution
-/// after the colon, `-Confirm:$(…)`.)
+/// is a switch spelling or a prefix of one, and no value spelling starts with it (no switch
+/// spelling is itself the start of a value one). Such a value turns the switch on or off; it
+/// names no path and no variable. (The parser refuses a substitution after the colon,
+/// `-Confirm:$(…)`.)
 fn writer_switch_word(w: &Word) -> bool {
     let Some(WordPart::Literal(lead)) = w.parts.first() else {
         return false;
@@ -3390,9 +3372,8 @@ fn writer_switch_word(w: &Word) -> bool {
         return false;
     };
     let name = name.to_lowercase();
-    WRITER_SWITCHES.contains(&name.as_str())
-        || (WRITER_SWITCHES.iter().any(|s| s.starts_with(&name))
-            && !WRITER_VALUES.iter().any(|v| v.starts_with(&name)))
+    WRITER_SWITCHES.iter().any(|s| s.starts_with(&name))
+        && !WRITER_VALUES.iter().any(|v| v.starts_with(&name))
 }
 
 /// Mark every name the command may assign as dynamic: assignments, `env X=`, `export`,
