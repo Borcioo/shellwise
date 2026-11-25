@@ -40,8 +40,12 @@ const BOUNDS: &str = "bounds_wait";
 const FOLLOW: &str = "follow";
 const FOLLOW_WHEN: &str = "follow_when";
 const FOLLOW_SUB: &str = "follow_sub";
-const ENDS: &str = "ends_follow";
-const ENDS_WHEN: &str = "ends_follow_when";
+const FOLLOW_FIX: &str = "follow_fix";
+const FOLLOW_JOB: &str = "follow_job";
+const JOB_TIMEOUT_WHEN: &str = "job_timeout_when";
+/// The placeholders of a `follow_fix`.
+const COMMAND: &str = "<command>";
+const PIPELINE: &str = "<pipeline>";
 /// The `loop_role` of a command that pauses.
 const WAIT: &str = "wait";
 
@@ -69,15 +73,16 @@ impl Rule for WaitLoopRule {
             out,
             outer: None,
             mode: Mode::Loops,
+            job_timeout: false,
         }
         .script(ctx.script, false);
     }
 }
 
 /// `follow-unbounded`: a command that follows a file or a stream (`tail -f`, `Get-Content
-/// -Wait`, `watch`, `kubectl logs -f`) with no `timeout` and no later pipeline stage that ends it
-/// (`| head`, `| grep -m1`, `| Select-Object -First`). Warn: it may be meant to run in the
-/// background.
+/// -Wait`, `watch`, `kubectl logs -f`) with no time bound: no `timeout`, no job waited for with a
+/// timeout. A later stage that waits for a line (`| grep -m1`) is no bound. Warn: it may be meant
+/// to run in the background.
 pub struct FollowRule;
 
 impl Rule for FollowRule {
@@ -86,6 +91,10 @@ impl Rule for FollowRule {
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
+        let (shell, os) = (ctx.input.shell, ctx.input.os);
+        let job_timeout = commands(&ctx.script.stmts)
+            .iter()
+            .any(|c| waits_on_job_with_timeout(c, shell, os));
         Walk {
             src: ctx.input.command,
             shell: ctx.input.shell,
@@ -94,6 +103,7 @@ impl Rule for FollowRule {
             out,
             outer: None,
             mode: Mode::Follow,
+            job_timeout,
         }
         .script(ctx.script, false);
     }
@@ -133,6 +143,9 @@ struct Walk<'a, 'b> {
     out: &'b mut Vec<Finding>,
     /// The span of the command whose child-shell body this is: a finding points at it.
     outer: Option<Span>,
+    /// The command waits for a job with a timeout (`Wait-Job $j -Timeout 60`): a follow inside a
+    /// job bounds that way (Ruling 137).
+    job_timeout: bool,
 }
 
 impl Walk<'_, '_> {
@@ -183,6 +196,11 @@ impl Walk<'_, '_> {
         // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs.
         let bounded =
             bounded || programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS));
+        // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
+        let bounded = bounded
+            || (self.mode == Mode::Follow
+                && self.job_timeout
+                && named_row(c, shell, os).is_some_and(|p| flag(p, FOLLOW_JOB)));
         for w in std::iter::once(&c.name).chain(&c.args) {
             self.word(w, bounded);
         }
@@ -221,12 +239,14 @@ impl Walk<'_, '_> {
             out: self.out,
             outer: Some(self.outer.unwrap_or(at)),
             mode: self.mode,
+            job_timeout: self.job_timeout,
         }
         .script(&script, bounded);
     }
 
-    /// A follow command in `p` with no bound: not under `timeout`, and no later stage ends the
-    /// pipeline.
+    /// A follow command in `p` with no time bound: not under `timeout`, not in a job a `Wait-Job
+    /// -Timeout` waits for. A later stage that waits for a line or a count (`| grep -m1`, `|
+    /// head`) is no bound: it ends the follow only if the line comes (Ruling 137).
     fn follows(&mut self, p: &Pipeline, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
         let cmds: Vec<&SimpleCommand> = p
@@ -238,28 +258,15 @@ impl Walk<'_, '_> {
             })
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
-        for (i, c) in cmds.iter().enumerate() {
+        for c in cmds {
             let bounds_it = programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS));
-            if bounded || bounds_it || !follows(c, shell, os) {
+            if bounded || bounds_it {
                 continue;
             }
-            if cmds[i + 1..]
-                .iter()
-                .any(|later| ends_follow(later, shell, os))
-            {
+            let Some(row) = follows(c, shell, os) else {
                 continue;
-            }
-            let extent = c.args.iter().fold(c.span, |s, w| Span {
-                start: s.start.min(w.span.start),
-                end: s.end.max(w.span.end),
-            });
-            let span = self.outer.unwrap_or(c.span);
-            let text = self.slice(extent).trim().to_string();
-            let fix = if matches!(shell, Shell::Bash(_)) {
-                format!("timeout 60 {text}")
-            } else {
-                format!("{text} | Select-Object -First 20")
             };
+            let span = self.outer.unwrap_or(c.span);
             self.out.push(Finding {
                 rule: FOLLOW_UNBOUNDED,
                 level: Level::Warn,
@@ -267,10 +274,33 @@ impl Walk<'_, '_> {
                     "`{}` follows its input without end: nothing in the command stops it, so the call runs until the host's timeout",
                     c.typed
                 ),
-                fix: Some(fix),
+                fix: self.follow_fix(p, c, row),
                 span,
             });
         }
+    }
+
+    /// The Fix of the follow `c` in `p`, from its row's `follow_fix`: `<command>` is the follow
+    /// command, put back in its pipeline so the later stages stay; `<pipeline>` is the whole
+    /// pipeline.
+    fn follow_fix(&self, p: &Pipeline, c: &SimpleCommand, row: &Program) -> Option<String> {
+        let template = row.extra.get(FOLLOW_FIX).and_then(|v| v.as_str())?;
+        let whole = pipeline_extent(p)?;
+        let at = command_extent(c);
+        let background = if p.chain == Some(ChainOp::Background) {
+            " &"
+        } else {
+            ""
+        };
+        let text = if template.contains(PIPELINE) {
+            template.replace(PIPELINE, self.slice(whole).trim())
+        } else {
+            let before = self.src.get(whole.start..at.start)?;
+            let after = self.src.get(at.end..whole.end)?;
+            let filled = template.replace(COMMAND, self.slice(at).trim());
+            format!("{before}{filled}{after}")
+        };
+        Some(format!("{}{background}", text.trim()))
     }
 
     /// One loop, its children aside: a finding when it waits or never ends by its condition, and
@@ -668,46 +698,70 @@ fn has_opt(args: &[String], options: &[&str], fold: bool) -> bool {
     })
 }
 
-/// `c` follows a file or a stream: a `follow` row, or one of its `follow_when` options; with a
-/// `follow_sub` only after that subcommand (`kubectl logs -f`).
-fn follows(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+/// The row of `c` when it follows a file or a stream: a `follow` row, or one of its
+/// `follow_when` options; with a `follow_sub` only after that subcommand (`kubectl logs -f`).
+fn follows(c: &SimpleCommand, shell: Shell, os: Os) -> Option<&'static Program> {
     let c = programs::strip_wrappers(c, shell, os);
-    let Some(p) = named_row(&c, shell, os) else {
-        return false;
-    };
+    let p = named_row(&c, shell, os)?;
     let when = strings(p, FOLLOW_WHEN);
     if !flag(p, FOLLOW) && when.is_empty() {
-        return false;
+        return None;
     }
     let args: Vec<String> = c.args.iter().filter_map(literal).collect();
     if args.len() != c.args.len() {
         // A dynamic word might hold the bound.
-        return false;
+        return None;
     }
     let sub = p.extra.get(FOLLOW_SUB).and_then(|v| v.as_str());
     let args = match sub {
-        Some(s) => match args.iter().position(|a| a == s) {
-            Some(at) => args[at + 1..].to_vec(),
-            None => return false,
-        },
+        Some(s) => args[args.iter().position(|a| a == s)? + 1..].to_vec(),
         None => args,
     };
-    flag(p, FOLLOW) || has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
+    (flag(p, FOLLOW) || has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))).then_some(p)
 }
 
-/// A later pipeline stage that ends the pipeline: an `ends_follow` row, or one of its
-/// `ends_follow_when` options (`grep -m1`, `Select-Object -First 5`).
-fn ends_follow(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
-    let c = programs::strip_wrappers(c, shell, os);
-    let Some(p) = named_row(&c, shell, os) else {
-        return false;
+/// A job wait with a time bound (`Wait-Job $j -Timeout 60`): a `job_timeout_when` option.
+fn waits_on_job_with_timeout(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    named_row(c, shell, os).is_some_and(|p| {
+        let when = strings(p, JOB_TIMEOUT_WHEN);
+        let args: Vec<String> = c.args.iter().filter_map(literal).collect();
+        !when.is_empty() && has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
+    })
+}
+
+/// The extent of a command's text: its name, words and redirect targets (the Bash lowering gives
+/// a command with a redirect the span of its name only).
+fn command_extent(c: &SimpleCommand) -> Span {
+    let mut r = c.span;
+    let mut add = |s: Span| {
+        r = Span {
+            start: r.start.min(s.start),
+            end: r.end.max(s.end),
+        };
     };
-    if flag(p, ENDS) {
-        return true;
+    add(c.name.span);
+    c.args.iter().for_each(|w| add(w.span));
+    for rd in &c.redirects {
+        if let Redirect::File { target, .. } = rd {
+            add(target.span);
+        }
     }
-    let when = strings(p, ENDS_WHEN);
-    let args: Vec<String> = c.args.iter().filter_map(literal).collect();
-    !when.is_empty() && has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
+    r
+}
+
+/// The extent of a pipeline's text, from its first stage to its last.
+fn pipeline_extent(p: &Pipeline) -> Option<Span> {
+    p.elems
+        .iter()
+        .map(|e| match e {
+            Elem::Cmd(c) => command_extent(c),
+            Elem::Method(m) => m.span,
+            Elem::Expr(w) => w.span,
+        })
+        .reduce(|a, b| Span {
+            start: a.start.min(b.start),
+            end: a.end.max(b.end),
+        })
 }
 
 /// A command the guard cannot read: its name is not static, or it runs text as code.

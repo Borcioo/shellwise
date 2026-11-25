@@ -25,6 +25,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - The `wait-loop-unbounded` Fix counts `sleep 1m` as a minute (it read 1 s, making a 10-hour loop).
 - The `wait-loop-unbounded` hint names `timeout 600 tail --pid=<pid> -f /dev/null` instead of
   `wait <pid>`, which fails in a tool call's shell.
+- `follow-unbounded` now warns on a follow piped into a stage that waits for a line (`tail -f log
+  | grep -m1 done`, `| head`, `| Select-Object -First`): on a quiet log it never ends.
+- The `follow-unbounded` Fix keeps the later pipeline stages, and the PowerShell Fix is
+  time-bounded (a job with `Wait-Job -Timeout 60`) instead of `| Select-Object -First 20`, which
+  did not end on a quiet log.
 - `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
   `[Threading.Thread]::Sleep` in PowerShell.
 

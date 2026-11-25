@@ -1510,7 +1510,36 @@ shell = "pwsh"
 command = "Get-Content run.log -Wait -Tail 10"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "Get-Content run.log -Wait -Tail 10 | Select-Object -First 20"
+fix = "$j = Start-Job { Get-Content run.log -Wait -Tail 10 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# The PowerShell Fix runs the whole pipeline in a job bounded by `Wait-Job -Timeout`: a later
+# stage stays (shown to end after 60 s on a quiet log in pwsh 7.7, relative path read, no process
+# left).
+[[row]]
+id = "fu-ps-get-content-wait-into-select-string"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Select-String ready"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Get-Content log.txt -Wait | Select-String ready }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# A job is a time bound only with `Wait-Job -Timeout` (Ruling 137).
+[[row]]
+id = "fu-ps-job-with-a-timeout-is-ok"
+os = "any"
+shell = "pwsh"
+command = "$j = Start-Job { Get-Content log.txt -Wait }; Wait-Job $j -Timeout 30 | Out-Null; Receive-Job $j"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-ps-job-received-without-a-timeout"
+os = "any"
+shell = "pwsh"
+command = "$j = Start-Job { Get-Content log.txt -Wait }; Receive-Job $j -Wait"
+level = "warn"
+rules = ["follow-unbounded"]
 
 [[row]]
 id = "fu-ps-gc-alias-wait"
@@ -1527,6 +1556,16 @@ shell = "bash"
 command = "tail -f run.log | grep ERROR"
 level = "warn"
 rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f run.log | grep ERROR"
+
+[[row]]
+id = "fu-bash-tail-f-in-the-background"
+os = "any"
+shell = "bash"
+command = "tail -f run.log &"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f run.log &"
 
 [[row]]
 id = "fu-bash-tail-f-timeout"
@@ -1536,27 +1575,73 @@ command = "timeout 60 tail -f run.log"
 level = "ok"
 rules = []
 
+# Ruling 137: a stage that waits for a line or a count ends the follow only if the line comes
+# (`timeout 3 bash -c 'tail -f quiet.log | grep -m1 done'` ran on, 124): it is no bound.
 [[row]]
 id = "fu-bash-tail-f-head"
 os = "any"
 shell = "bash"
 command = "tail -f run.log | head -n 5"
-level = "ok"
-rules = []
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f run.log | head -n 5"
 
 [[row]]
 id = "fu-bash-tail-f-grep-m1"
 os = "any"
 shell = "bash"
 command = "tail -f run.log | grep -m1 done"
-level = "ok"
-rules = []
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f run.log | grep -m1 done"
 
 [[row]]
 id = "fu-bash-tail-f-grep-q"
 os = "any"
 shell = "bash"
 command = "tail -f run.log | grep -q done"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-tail-f-sed-q"
+os = "any"
+shell = "bash"
+command = "tail -f run.log | sed '/ready/q'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-kubectl-logs-f-grep-m1"
+os = "any"
+shell = "bash"
+command = "kubectl logs -f pod | grep -m1 ready"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 kubectl logs -f pod | grep -m1 ready"
+
+[[row]]
+id = "fu-bash-child-shell-tail-f-grep-m1"
+os = "any"
+shell = "bash"
+command = "bash -c 'tail -f run.log | grep -m1 done'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+# Allow twins: the same pipelines under a time bound.
+[[row]]
+id = "fu-bash-timeout-tail-f-grep-m1"
+os = "any"
+shell = "bash"
+command = "timeout 60 tail -f run.log | grep -m1 done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-child-shell-grep-m1"
+os = "any"
+shell = "bash"
+command = "timeout 3 bash -c 'tail -f quiet.log | grep -m1 done'"
 level = "ok"
 rules = []
 
@@ -1589,8 +1674,9 @@ id = "fu-ps-get-content-wait-first"
 os = "any"
 shell = "pwsh"
 command = "Get-Content run.log -Wait | Select-Object -First 5"
-level = "ok"
-rules = []
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Get-Content run.log -Wait | Select-Object -First 5 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 
 [[row]]
 id = "fu-ps-get-content-plain"
