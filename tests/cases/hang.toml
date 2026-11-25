@@ -2074,6 +2074,73 @@ command = "until grep -q done log\ndo\n  cat <<EOF\nwaiting\nEOF\n  sleep 5\ndon
 level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "rewrite the loop as a loop of at most 120 rounds that runs its condition first and breaks on it, and that fails when the rounds run out (no command is built: the loop holds a here-document); when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+# Ruling 142: the fixed loop's failure must reach the place the command goes on. A later stage of
+# a pipeline decides the pipeline's status, and a loop around it goes on: a sentence, no command.
+[[row]]
+id = "wl-bash-fix-of-a-loop-piped-into-a-stage-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do sleep 5; done | tee out.txt"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "rewrite the loop as a loop of at most 120 rounds that runs its condition first and breaks on it, and that fails when the rounds run out, and make the pipeline fail when the loop does (no command is built: a later stage of the pipeline decides its status); when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+[[row]]
+id = "wl-bash-fix-of-a-loop-inside-a-loop-is-a-sentence"
+os = "any"
+shell = "bash"
+command = 'for f in a b; do until [ -f "$f" ]; do sleep 1; done; done && echo all'
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "rewrite the loop as a loop of at most 600 rounds that runs its condition first and breaks on it, and that fails when the rounds run out, and end the loop around it with a failure then (no command is built: the loop around it would go on after a timeout); when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+# The control twins: the last stage of a pipeline decides its status, and `||` is no pipe.
+[[row]]
+id = "wl-bash-fix-of-a-loop-as-the-last-stage-of-a-pipeline"
+os = "any"
+shell = "bash"
+command = "echo go | until grep -q done log; do sleep 5; done && echo NEXT"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'echo go | for i in $(seq 1 120); do grep -q done log && break; sleep 5; [ "$i" -lt 120 ]; done && echo NEXT  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-of-a-loop-before-an-or"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do sleep 5; done || echo timeout"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; [ "$i" -lt 120 ]; done || echo timeout  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+# The Fix's counter is a name the whole command never uses (PowerShell: in any case).
+[[row]]
+id = "wl-bash-fix-counter-avoids-a-variable-outside-the-loop"
+os = "any"
+shell = "bash"
+command = 'i=7; until [ -f ok ]; do sleep 1; done; echo "$i"'
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'i=7; for attempt in $(seq 1 600); do [ -f ok ] && break; sleep 1; [ "$attempt" -lt 600 ]; done; echo "$i"  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-counter-avoids-both-names"
+os = "any"
+shell = "bash"
+command = 'i=7; attempt=1; until [ -f ok ]; do sleep 1; done; echo "$i$attempt"'
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'i=7; attempt=1; for attempt2 in $(seq 1 600); do [ -f ok ] && break; sleep 1; [ "$attempt2" -lt 600 ]; done; echo "$i$attempt"  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-ps-fix-counter-avoids-a-variable-in-another-case"
+os = "any"
+shell = "pwsh"
+command = "$I = 5; while (-not (Test-Path ok)) { Write-Host $I; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "$I = 5; for ($attempt = 0; $attempt -lt 120; $attempt++) { if (-not (-not (Test-Path ok))) { break }; Write-Host $I; Start-Sleep 5 }; if ($attempt -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
 # --- follow-unbounded (warn): a follow command nothing stops ---
 
 [[row]]

@@ -76,6 +76,8 @@ impl Rule for WaitLoopRule {
             mode: Mode::Loops,
             root: ctx.script,
             job_timeout: Some(false),
+            command: ctx.input.command,
+            in_loop: false,
         }
         .script(ctx.script, false);
     }
@@ -103,6 +105,8 @@ impl Rule for FollowRule {
             mode: Mode::Follow,
             root: ctx.script,
             job_timeout: None,
+            command: ctx.input.command,
+            in_loop: false,
         }
         .script(ctx.script, false);
     }
@@ -147,6 +151,10 @@ struct Walk<'a, 'b> {
     /// The command waits for a job with a timeout (`Wait-Job $j -Timeout 60`): a follow inside a
     /// job bounds that way (Ruling 137). Read from `root` once a job is met.
     job_timeout: Option<bool>,
+    /// The whole command's text: a Fix's counter is a name it never uses.
+    command: &'a str,
+    /// The walk is inside a loop's body: a fixed loop's failure would not end that loop.
+    in_loop: bool,
 }
 
 impl Walk<'_, '_> {
@@ -172,7 +180,9 @@ impl Walk<'_, '_> {
                     if !bounded && self.mode == Mode::Loops {
                         self.judge(body, *span, *head);
                     }
+                    let outer = std::mem::replace(&mut self.in_loop, true);
                     self.script(body, bounded);
+                    self.in_loop = outer;
                 }
                 Stmt::Cond { branches, .. } => {
                     for b in branches {
@@ -259,6 +269,8 @@ impl Walk<'_, '_> {
             mode: self.mode,
             root: self.root,
             job_timeout: Some(false),
+            command: self.command,
+            in_loop: self.in_loop,
         }
         .script(&script, bounded);
     }
@@ -421,7 +433,6 @@ impl Walk<'_, '_> {
                 &cond_src,
                 stmts,
                 rest,
-                whole,
                 Form {
                     always,
                     until,
@@ -694,15 +705,7 @@ impl Walk<'_, '_> {
     /// rounds run out, so a command after `&&` does not run: Bash ends the body with `[ "$i" -lt
     /// N ]`, PowerShell throws after the loop. A loop over several lines keeps its lines; a loop
     /// whose text cannot be rebuilt (a here-document) gets a sentence.
-    fn fix(
-        &self,
-        span: Span,
-        cond: &str,
-        all: &[Stmt],
-        rest: &[Stmt],
-        whole: &str,
-        form: Form,
-    ) -> Fixed {
+    fn fix(&self, span: Span, cond: &str, all: &[Stmt], rest: &[Stmt], form: Form) -> Fixed {
         let Form {
             always,
             until,
@@ -735,11 +738,19 @@ impl Walk<'_, '_> {
             body.push_str(" &");
         }
         let n = attempts(all, shell, os);
-        let var = if words(whole).any(|w| w == "i") {
-            "attempt"
-        } else {
-            "i"
+        // The counter is a name the whole command never uses (Ruling 142), in PowerShell in no
+        // case either.
+        let fold = !matches!(shell, Shell::Bash(_));
+        let taken = |v: &str| {
+            self.command
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|w| same(w, v, fold))
         };
+        let var = ["i".to_string(), "attempt".to_string()]
+            .into_iter()
+            .chain((2..).map(|k| format!("attempt{k}")))
+            .find(|v| !taken(v))
+            .unwrap_or_default();
         let multi = body.contains('\n') || cond.contains('\n');
         let mut parts: Vec<String> = Vec::new();
         if matches!(shell, Shell::Bash(_)) {
@@ -753,19 +764,37 @@ impl Walk<'_, '_> {
             let skips = commands(rest)
                 .iter()
                 .any(|c| row(c, shell, os).is_some_and(|p| flag(p, SKIPS_ROUND)));
-            if heredoc || skips {
+            // The fixed loop's failure must reach where the command goes on (Ruling 142): a later
+            // stage of a pipeline decides its status, and a loop around it goes on.
+            let piped = self.src.get(span.end..).is_some_and(|t| {
+                let t = t.trim_start_matches([' ', '\t']);
+                t.starts_with('|') && !t.starts_with("||")
+            });
+            let why = if heredoc {
+                Some(("", "the loop holds a here-document"))
+            } else if skips {
+                Some(("", "the body's `continue` would skip the round test"))
+            } else if piped {
+                Some((
+                    ", and make the pipeline fail when the loop does",
+                    "a later stage of the pipeline decides its status",
+                ))
+            } else if self.in_loop {
+                Some((
+                    ", and end the loop around it with a failure then",
+                    "the loop around it would go on after a timeout",
+                ))
+            } else {
+                None
+            };
+            if let Some((then, why)) = why {
                 let test = if always {
                     ""
                 } else {
                     " that runs its condition first and breaks on it, and"
                 };
-                let why = if heredoc {
-                    "the loop holds a here-document"
-                } else {
-                    "the body's `continue` would skip the round test"
-                };
                 return Fixed::Sentence(format!(
-                    "rewrite the loop as a loop of at most {n} rounds{test} that fails when the rounds run out (no command is built: {why})"
+                    "rewrite the loop as a loop of at most {n} rounds{test} that fails when the rounds run out{then} (no command is built: {why})"
                 ));
             }
             if !always {
