@@ -92,6 +92,54 @@ fn wait_and_follow_fix_lines_are_whole_and_settle() {
     eprintln!("hang.toml: {checked} Fix lines checked whole");
 }
 
+/// A Bash follow sentence names the form to write, after the first `: `` ` and before its reason,
+/// and that form reads ok: no finding of any rule. A weak model copies it as is.
+#[test]
+fn the_form_a_bash_follow_sentence_names_reads_ok() {
+    let rows = case_loader::rows("hang.toml");
+    let mut wrong = Vec::new();
+    let mut checked = 0;
+    for row in &rows {
+        let Some(fix) = &row.fix else { continue };
+        if !(row.is_bash()
+            && row.id.ends_with("-is-a-sentence")
+            && row.rules.iter().any(|r| r == "follow-unbounded"))
+        {
+            continue;
+        }
+        checked += 1;
+        let head = fix.split(" (no command is built:").next().unwrap_or_default();
+        let Some(form) = head
+            .split_once(": `")
+            .and_then(|(_, f)| f.strip_suffix('`'))
+        else {
+            wrong.push(format!("{}: the sentence names no form: {fix}", row.id));
+            continue;
+        };
+        let pasted = case_loader::Row {
+            command: form.to_string(),
+            fix: None,
+            ..row.clone()
+        };
+        let again: Vec<&str> = case_loader::verdict(&pasted)
+            .findings
+            .iter()
+            .map(|f| f.rule)
+            .collect();
+        if !again.is_empty() {
+            wrong.push(format!("{}: the form `{form}` gives {again:?}", row.id));
+        }
+    }
+    assert!(checked > 0, "no Bash follow sentence row");
+    assert!(
+        wrong.is_empty(),
+        "{} of {checked} rows:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    eprintln!("hang.toml: {checked} follow sentence forms read ok");
+}
+
 /// A script file may run in a terminal, where a prompt is answered: the rule reads command lines
 /// only. The same text as a command line is the control.
 #[test]

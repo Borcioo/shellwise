@@ -88,11 +88,14 @@ kind = ["wrapper"]
 value_options = ["-a"]
 flag_options = ["-c", "-l"]
 
-# `builtin shell-builtin [arguments]` (bash's `help builtin`).
+# `builtin shell-builtin [arguments]` (bash's `help builtin`). `builtins_only`: it runs only a shell
+# builtin, so a program after it fails (`builtin tail -f log`: "not a shell builtin", 1); read by
+# follow-unbounded's sentence.
 [[program]]
 name = "builtin"
 shells = ["bash"]
 kind = ["wrapper"]
+builtins_only = true
 
 # --- Programs that turn `\\` into `\` themselves (bash-backslash-collapse) ---
 
@@ -119,6 +122,9 @@ follow_when = ["-f", "--follow"]
 follow_sub = "logs"
 follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
+follow_fix_lookup_vars = ["PATH"]
+follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 docker logs -f app`"
 
 [[program]]
 name = "docker-compose"
@@ -141,6 +147,9 @@ follow_when = ["-f", "--follow"]
 follow_sub = "logs"
 follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
+follow_fix_lookup_vars = ["PATH"]
+follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 kubectl logs -f pod`"
 
 [[program]]
 name = "podman"
@@ -321,7 +330,8 @@ loop_role = ["wait"]
 # --- Follow commands (follow-unbounded, read by src/rules/wait_loop.rs) ---
 # Only a time bound ends a follow (Ruling 137): `timeout`, or a job a `Wait-Job -Timeout` waits
 # for. A later stage that waits for a line or a count (`| grep -m1`, `| head`, `| Select-Object
-# -First`) ends it only if the line comes.
+# -First`) ends it only if the line comes. A `bounds_wait` wrapper anywhere in the follow's wrapper
+# chain bounds it (`nohup timeout 60 tail -f log`, `sudo timeout 60 tail -f log`).
 # follow            true = the command always follows its input (`watch`)
 # follow_when       options that make it follow (`tail -f`)
 # follow_sub        the subcommand the options count after (`kubectl logs -f`)
@@ -330,11 +340,17 @@ loop_role = ["wait"]
 #                   `<pipeline>` is the whole pipeline; `<job>` a variable name the command never
 #                   uses. The Fix is the whole command with each follow replaced in place
 #                   (Ruling 148); where that cannot be built, a sentence (`follow_fix_sentence`, or
-#                   one made from `follow_fix`)
+#                   one made from `follow_fix`); its last backquoted text is a form to write
 # follow_fix_wrappers  the wrappers a `<command>` Fix may start with: ones `timeout` was shown to
 #                   run in Bash (`timeout 3 nohup tail -f quiet.log` ends, 124). Under any other
 #                   wrapper (`command` and `exec` are shell builtins, 127), or under any wrapper
-#                   of the chain not listed here (`nohup sudo tail`), the Fix is a sentence
+#                   of the chain not listed here (`nohup sudo tail`), the Fix is a sentence that
+#                   names the follow with the bound after its wrappers (`sudo timeout 60 tail -f
+#                   log`); a `builtins_only` wrapper is left out of that form
+# follow_fix_lookup_vars  assignments that, in front of the follow, would also set where the
+#                   bound is looked up (`PATH=/x timeout 60 tail`: 127): the Fix is a sentence
+#                   whose form is `follow_fix_lookup`, `<command>` the assignments and the program
+#                   (`timeout 60 env PATH=/x tail -f log`)
 # follow_job        true = a script block it runs is a job: a follow in it is bounded when the
 #                   command also runs a `job_timeout_when` option of a job wait (`Wait-Job -Timeout`)
 # The Get-Content row (PowerShell) carries `follow_when` and `follow_fix`.
@@ -345,6 +361,9 @@ shells = ["bash"]
 follow_when = ["-f", "-F", "--follow"]
 follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
+follow_fix_lookup_vars = ["PATH"]
+follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log`"
 
 [[program]]
 name = "watch"
@@ -352,6 +371,9 @@ shells = ["bash"]
 follow = true
 follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
+follow_fix_lookup_vars = ["PATH"]
+follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 watch ls`"
 
 [[program]]
 name = "start-job"

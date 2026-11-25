@@ -2,7 +2,7 @@
 //!
 //! - `lookup` finds the row a typed name runs in a shell.
 //! - `strip_wrappers` reads past `timeout`, `nice`, `env NAME=…`, `sudo`, `command` and `nohup` to
-//!   the command they run.
+//!   the command they run; `wrapper_chain` lists the wrappers it read through.
 //! - `commands` lists every simple command of a script, nested ones included.
 //!
 //! Rule code names no program and no option: it asks the table (`tests/shape.rs`).
@@ -354,6 +354,23 @@ pub fn lookup(typed: &str, shell: Shell, os: Os) -> Option<&'static Program> {
 /// name is not static. A wrapped name that is not static gives an opaque command, and so does a
 /// wrapper still in front after `MAX_WRAPPERS` strips: a command may sit behind it.
 pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, SimpleCommand> {
+    strip(cmd, shell, os, None)
+}
+
+/// The wrappers `strip_wrappers` reads through, outermost first: each one's row and the span of
+/// its name word (`nohup timeout 60 tail` gives `nohup`, then `timeout`).
+pub fn wrapper_chain(cmd: &SimpleCommand, shell: Shell, os: Os) -> Vec<(&'static Program, Span)> {
+    let mut chain = Vec::new();
+    strip(cmd, shell, os, Some(&mut chain));
+    chain
+}
+
+fn strip<'c>(
+    cmd: &'c SimpleCommand,
+    shell: Shell,
+    os: Os,
+    mut chain: Option<&mut Vec<(&'static Program, Span)>>,
+) -> Cow<'c, SimpleCommand> {
     let env = EnvView::new();
     let wrapper_of = |c: &SimpleCommand| {
         c.name
@@ -366,7 +383,12 @@ pub fn strip_wrappers(cmd: &SimpleCommand, shell: Shell, os: Os) -> Cow<'_, Simp
             return current;
         };
         match unwrap_once(&current, wrapper, shell, os) {
-            Some(next) => current = Cow::Owned(next),
+            Some(next) => {
+                if let Some(chain) = chain.as_deref_mut() {
+                    chain.push((wrapper, current.name.span));
+                }
+                current = Cow::Owned(next);
+            }
             None => return current,
         }
     }
