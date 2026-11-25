@@ -5496,6 +5496,38 @@ level = "critical"
 rules = ["delete-critical"]
 
 [[row]]
+id = "ps-alias-variable-drive-windows"
+os = "windows"
+shell = "pwsh"
+command = "$alias:zz = 'Remove-Item'; zz C:\\Windows -Recurse -Force"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-set-item-alias-drive-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Item alias:zz Remove-Item; zz C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-through-an-alias-of-set-alias-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias sa Set-Alias; sa zz Remove-Item; zz C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-of-a-defined-alias-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; Set-Alias yy zz; yy C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
 id = "ps-alias-to-rm-twin-windows"
 os = "windows"
 shell = "pwsh"

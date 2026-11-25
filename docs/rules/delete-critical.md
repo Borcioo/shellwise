@@ -49,7 +49,10 @@ rm -rf build
   `Set-Alias zz Remove-Item; zz C:\Windows -Recurse` is critical. Every earlier definition
   counts, also one in a `& { }` block or one a later definition replaced: the stricter reading.
   A definition after the call is not read. A call of an alias whose value the guard cannot read
-  (`Set-Alias zz $x`) is `dynamic-target` when it names a protected folder.
+  (`Set-Alias zz $x`) is `dynamic-target` when a word of it spells a protected folder as an
+  absolute path, `~` or `$HOME`; a relative one (`zz .` from the repo root) is not judged.
+- A call of an alias the command defines counts as a possible move of the location, so a
+  relative delete after it (`zz build; zz src`) is `delete-unknown-location`.
 - A Bash alias is not read: bash expands none on the line that defines it, and a non-interactive
   bash none without `shopt -s expand_aliases`. A function that passes its arguments on
   (`zz() { rm -rf "$@"; }`, `function zz { Remove-Item @args }`) is `dynamic-target`, not
