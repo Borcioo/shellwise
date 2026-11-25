@@ -108,7 +108,10 @@ fn the_form_a_bash_follow_sentence_names_reads_ok() {
             continue;
         }
         checked += 1;
-        let head = fix.split(" (no command is built:").next().unwrap_or_default();
+        let head = fix
+            .split(" (no command is built:")
+            .next()
+            .unwrap_or_default();
         let Some(form) = head
             .split_once(": `")
             .and_then(|(_, f)| f.strip_suffix('`'))
