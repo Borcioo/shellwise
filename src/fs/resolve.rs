@@ -1,6 +1,7 @@
 //! Delete-target resolution: which folders a word names, as the shell would resolve it, from
 //! the location `cd` and friends left, the event's `cwd` and the variables the hook can trust.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -635,6 +636,61 @@ fn param_token(t: &str) -> Option<(&str, Option<&str>)> {
     })
 }
 
+/// The value of a `-Name:value` word whose value is not one literal (`-Path:$HOME`,
+/// `-Path: "$HOME"`, `-Path: $env:X\y`): the parts after the colon and its blanks, as the value
+/// word of `-Name value` holds them. `None` for any other word, and for a word with no value
+/// after the colon.
+pub(crate) fn inline_value_word(w: &Word) -> Option<Word> {
+    let Some(WordPart::Literal(lead)) = w.parts.first() else {
+        return None;
+    };
+    let (_, Some(inline)) = param_token(lead)? else {
+        return None;
+    };
+    let mut parts = Vec::with_capacity(w.parts.len());
+    if !inline.is_empty() {
+        parts.push(WordPart::Literal(inline.to_string()));
+    }
+    parts.extend(w.parts[1..].iter().cloned());
+    (!parts.is_empty()).then_some(Word {
+        parts,
+        span: w.span,
+        quote: w.quote,
+    })
+}
+
+/// How a switch is set by the word that names it, as pwsh 7.7 binds the value after its colon:
+/// `-Name` alone, `:$true` or a nonzero number turn it on, `:$false` or `:0` off, and any other
+/// value (`:$flag`, `:(…)`, nothing after the colon) may do either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwitchState {
+    On,
+    Off,
+    Either,
+}
+
+/// The state of the switch the parameter word `w` (`-Recurse`, `-Confirm:$false`) sets.
+pub(crate) fn switch_state(w: &Word) -> SwitchState {
+    let inline = match w.parts.first() {
+        Some(WordPart::Literal(lead)) => param_token(lead).and_then(|(_, v)| v),
+        _ => None,
+    };
+    if inline.is_none() {
+        return SwitchState::On;
+    }
+    let value = inline_value_word(w).map(|v| v.parts).unwrap_or_default();
+    match value.as_slice() {
+        [WordPart::Var(n)] if n.eq_ignore_ascii_case("true") => SwitchState::On,
+        [WordPart::Var(n)] if n.eq_ignore_ascii_case("false") => SwitchState::Off,
+        [WordPart::Literal(t)] => match t.parse::<i64>() {
+            Ok(0) => SwitchState::Off,
+            Ok(_) => SwitchState::On,
+            Err(_) => SwitchState::Either,
+        },
+        _ => SwitchState::Either,
+    }
+}
+
 /// How PowerShell binds `written` (`-Ty`, `-ItemType:Junction`) for `cmdlet`: ignoring case, a
 /// full name or alias first, then any prefix of a name or alias; when the prefix fits several
 /// parameters and exactly one of them is the cmdlet's own (not a common one), that one.
@@ -712,7 +768,8 @@ enum PwshArg<'a> {
 }
 
 enum PwshValue<'a> {
-    Word(&'a Word),
+    /// The next word, or the dynamic rest of a `-Name:$x` word.
+    Word(Cow<'a, Word>),
     /// The text after `-Name:`.
     Inline(String),
 }
@@ -721,7 +778,18 @@ enum PwshValue<'a> {
 fn pwsh_arg<'a>(cmdlet: &str, args: &'a [Word], i: usize) -> PwshArg<'a> {
     let w = &args[i];
     let Some(t) = literal(w) else {
-        return PwshArg::Opaque;
+        // `-Path:$x`, `-Path: "$x"`: the parameter with the rest of the word as its value.
+        return match (inline_value_word(w), w.parts.first()) {
+            (Some(v), Some(WordPart::Literal(lead))) => match bind(cmdlet, lead) {
+                Bound::One(p) => PwshArg::Param {
+                    name: p.name,
+                    value: Some(PwshValue::Word(Cow::Owned(v))),
+                    next: i + 1,
+                },
+                _ => PwshArg::Opaque,
+            },
+            _ => PwshArg::Opaque,
+        };
     };
     if w.quote == crate::ir::Quote::None && t.len() > 1 && t.starts_with('@') {
         return PwshArg::Opaque;
@@ -747,7 +815,7 @@ fn pwsh_arg<'a>(cmdlet: &str, args: &'a [Word], i: usize) -> PwshArg<'a> {
         _ => match args.get(i + 1) {
             Some(v) => PwshArg::Param {
                 name: p.name,
-                value: Some(PwshValue::Word(v)),
+                value: Some(PwshValue::Word(Cow::Borrowed(v))),
                 next: i + 2,
             },
             None => PwshArg::Unbound,
@@ -995,7 +1063,7 @@ fn new_item_links(args: &[Word]) -> Vec<Option<Word>> {
                     "ItemType" => kind = Some(text(&value).map(|k| k.to_ascii_lowercase())),
                     "Path" => {
                         path = match value {
-                            Some(PwshValue::Word(w)) => Some(w.clone()),
+                            Some(PwshValue::Word(w)) => Some(w.into_owned()),
                             Some(PwshValue::Inline(t)) => Some(Word {
                                 parts: vec![WordPart::Literal(t)],
                                 span: args[i].span,
@@ -1783,7 +1851,7 @@ impl Location {
                 if wild || (searched && cdpath) {
                     Dirs::unknown(UnknownKind::MayBeCritical)
                 } else {
-                    self.dir_from_word(w, env, self.location_reader())
+                    self.dir_from_word(&w, env, self.location_reader())
                 }
             }
             LocArg::Text(t) => {
@@ -1819,7 +1887,7 @@ impl Location {
             return None;
         }
         match bash_location_arg(args, push) {
-            LocArg::Word(w) => literal(w).filter(|t| is_msys_system_path(t)),
+            LocArg::Word(w) => literal(&w).filter(|t| is_msys_system_path(t)),
             _ => None,
         }
     }
@@ -1879,7 +1947,7 @@ impl Location {
 }
 
 enum LocArg<'a> {
-    Word(&'a Word),
+    Word(Cow<'a, Word>),
     /// An inline `-Path:value`.
     Text(String),
     /// An inline `-LiteralPath:value`.
@@ -1907,7 +1975,7 @@ fn bash_location_arg(args: &[Word], push: bool) -> LocArg<'_> {
         [] if !push => LocArg::Home,
         [w] => match literal(w) {
             Some(t) if t == "-" || t.starts_with('-') || t.starts_with('+') => LocArg::Unknown,
-            _ => LocArg::Word(w),
+            _ => LocArg::Word(Cow::Borrowed(w)),
         },
         _ => LocArg::Unknown,
     }
@@ -1940,13 +2008,13 @@ fn pwsh_location_arg<'a>(cmdlet: &str, args: &'a [Word]) -> LocArg<'a> {
                 i += 1;
                 match literal(w).as_deref() {
                     Some("-") | Some("+") => return LocArg::Unknown,
-                    _ => LocArg::Word(w),
+                    _ => LocArg::Word(Cow::Borrowed(w)),
                 }
             }
             // A variable is a positional value: it resolves as a dynamic word.
             PwshArg::Opaque if literal(&args[i]).is_none() => {
                 i += 1;
-                LocArg::Word(&args[i - 1])
+                LocArg::Word(Cow::Borrowed(&args[i - 1]))
             }
             PwshArg::Opaque | PwshArg::Unbound => return LocArg::Unknown,
         };
@@ -3221,6 +3289,18 @@ const LOOP_NAMES: [&str; 7] = [
     "PWD",
 ];
 
+/// The PowerShell cmdlets that set or remove the variable they name.
+const PS_VARIABLE_CMDLETS: [&str; 8] = [
+    "set-variable",
+    "sv",
+    "new-variable",
+    "nv",
+    "remove-variable",
+    "rv",
+    "clear-variable",
+    "clv",
+];
+
 /// Commands that write a PowerShell drive path (`env:X`, `variable:X`) they are given.
 const PS_ITEM_WRITERS: [&str; 30] = [
     "set-item",
@@ -3254,6 +3334,59 @@ const PS_ITEM_WRITERS: [&str; 30] = [
     "copy",
     "cp",
 ];
+
+// The parameter spellings (names and aliases) of the item writers above, from pwsh 7.7:
+// `(Get-Command <cmdlet>).Parameters.Values`, split by `SwitchParameter`, over Set-Item,
+// New-Item, Remove-Item, Clear-Item, Set-Content, Add-Content, Clear-Content, Rename-Item,
+// Move-Item and Copy-Item.
+
+/// Switch spellings of the item writers.
+const WRITER_SWITCHES: [&str; 14] = [
+    "asbytestream",
+    "cf",
+    "confirm",
+    "container",
+    "db",
+    "debug",
+    "force",
+    "nonewline",
+    "passthru",
+    "recurse",
+    "vb",
+    "verbose",
+    "whatif",
+    "wi",
+];
+
+/// One value-parameter spelling of the item writers for each prefix a switch spelling shares
+/// with one (`c`, `d`, `de`, `f`, `n`, `p`, `pa`, `v`, `w`): the full list of their value
+/// spellings shares no other.
+const WRITER_VALUES: [&str; 7] = [
+    "credential",
+    "destination",
+    "filter",
+    "name",
+    "path",
+    "value",
+    "warningaction",
+];
+
+/// `w` is a writer's switch with its colon value (`-Confirm:$false`, `-Recurse:$flag`): the name
+/// is a switch spelling or a prefix of one, and no value spelling starts with it (no switch
+/// spelling is itself the start of a value one). Such a value turns the switch on or off; it
+/// names no path and no variable. (The parser refuses a substitution after the colon,
+/// `-Confirm:$(…)`.)
+fn writer_switch_word(w: &Word) -> bool {
+    let Some(WordPart::Literal(lead)) = w.parts.first() else {
+        return false;
+    };
+    let Some((name, Some(_))) = param_token(lead) else {
+        return false;
+    };
+    let name = name.to_lowercase();
+    WRITER_SWITCHES.iter().any(|s| s.starts_with(&name))
+        && !WRITER_VALUES.iter().any(|v| v.starts_with(&name))
+}
 
 /// Mark every name the command may assign as dynamic: assignments, `env X=`, `export`,
 /// `unset`, `read`, `$env:X =`, `Set-Item env:`, `[Environment]::SetEnvironmentVariable`, a
@@ -3353,10 +3486,18 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
         return;
     }
     let args: Vec<Option<String>> = c.args.iter().map(literal).collect();
+    // A PowerShell variable cmdlet names its variable after a colon too (`-Name:t`).
+    let colon_names = PS_VARIABLE_CMDLETS.contains(&name.as_str());
     let mark_names = |env: &mut EnvView, with_eq_only: bool| {
         for a in &args {
             match a {
-                Some(t) if t.starts_with('-') => {}
+                Some(t) if t.starts_with('-') => {
+                    if let Some((_, Some(v))) = param_token(t).filter(|_| colon_names)
+                        && !v.is_empty()
+                    {
+                        env.mark_dynamic(v);
+                    }
+                }
                 Some(t) => match t.split_once('=') {
                     Some((n, _)) => env.mark_dynamic(n),
                     None if !with_eq_only => env.mark_dynamic(t),
@@ -3368,8 +3509,8 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     };
     match name.as_str() {
         "export" | "declare" | "typeset" | "local" | "readonly" | "unset" | "read" | "mapfile"
-        | "readarray" | "getopts" | "printf" | "let" | "set-variable" | "sv" | "new-variable"
-        | "nv" | "remove-variable" | "rv" | "clear-variable" | "clv" => mark_names(env, false),
+        | "readarray" | "getopts" | "printf" | "let" => mark_names(env, false),
+        _ if colon_names => mark_names(env, false),
         _ => {}
     }
     if command_name(c) == "env" {
@@ -3391,10 +3532,19 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     let writer = PS_ITEM_WRITERS.contains(&name.as_str());
     for (w, a) in c.args.iter().zip(&args) {
         match a {
-            Some(t) => mark_drive_path(env, t),
+            // `-Path:variable:t` names the path after its colon, as `-Path variable:t` does.
+            Some(t) => match param_token(t) {
+                Some((_, Some(v))) => mark_drive_path(env, v),
+                _ => mark_drive_path(env, t),
+            },
+            // A switch with its colon value (`-Confirm:$false`) names no drive path.
+            None if writer && writer_switch_word(w) => {}
             // A word that resolves now (`$env:TEMP\x`, `~`) names that text; any other word
-            // may name any drive path.
-            None if writer => match w.static_value(env) {
+            // may name any drive path. A coloned word (`-Path:$p`) names its value.
+            None if writer => match inline_value_word(w)
+                .unwrap_or_else(|| w.clone())
+                .static_value(env)
+            {
                 Some(t) => mark_drive_path(env, &t),
                 None => env.mark_all_dynamic(),
             },

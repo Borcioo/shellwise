@@ -23,6 +23,75 @@ fn hang_rows() {
     eprintln!("hang.toml: {} rows ran", rows.len());
 }
 
+const LOOP_RULES: [&str; 2] = ["wait-loop-unbounded", "follow-unbounded"];
+
+/// A wait-loop or follow row's `fix` is that finding's whole Fix text, not a part of it (every
+/// follow finding of the command carries it); and the Fix, run back through the same check, is
+/// no finding of its rule: a weak model copies it as is. A Fix that is a command draws no finding
+/// of any rule, in Windows PowerShell 5.1 too for a PowerShell row.
+#[test]
+fn wait_and_follow_fix_lines_are_whole_and_settle() {
+    let rows = case_loader::rows("hang.toml");
+    let mut wrong = Vec::new();
+    let mut checked = 0;
+    for row in &rows {
+        let Some(want) = &row.fix else { continue };
+        let Some(rule) = row.rules.iter().find(|r| LOOP_RULES.contains(&r.as_str())) else {
+            continue;
+        };
+        checked += 1;
+        let v = case_loader::verdict(row);
+        let lines: Vec<Option<String>> = v
+            .findings
+            .iter()
+            .filter(|f| f.rule == rule)
+            .map(|f| f.fix_line())
+            .collect();
+        let line = lines.first().cloned().flatten();
+        if line.as_deref() != Some(format!("Fix: {want}").as_str()) {
+            wrong.push(format!("{}: fix line {line:?}\n  want Fix: {want}", row.id));
+            continue;
+        }
+        if rule == "follow-unbounded" && lines.iter().any(|l| *l != line) {
+            wrong.push(format!("{}: the follow findings differ: {lines:?}", row.id));
+        }
+        // A Fix that is a command parses; a sentence (rows `…-is-a-sentence`) is no command.
+        let sentence = row.id.ends_with("-is-a-sentence");
+        let mut shells = vec![row.shell.clone()];
+        if !sentence && row.shell == "pwsh" {
+            shells.push("powershell5".to_string());
+        }
+        for shell in shells {
+            let pasted = case_loader::Row {
+                command: want.clone(),
+                fix: None,
+                shell,
+                ..row.clone()
+            };
+            let again: Vec<&str> = case_loader::verdict(&pasted)
+                .findings
+                .iter()
+                .map(|f| f.rule)
+                .filter(|r| !sentence || LOOP_RULES.contains(r))
+                .collect();
+            if !again.is_empty() {
+                wrong.push(format!(
+                    "{} ({}): the Fix itself gives {again:?}",
+                    row.id, pasted.shell
+                ));
+            }
+        }
+    }
+    assert!(checked > 0, "no wait-loop or follow row states a fix");
+    assert!(
+        wrong.is_empty(),
+        "{} of {checked} rows:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    eprintln!("hang.toml: {checked} Fix lines checked whole");
+}
+
 /// A script file may run in a terminal, where a prompt is answered: the rule reads command lines
 /// only. The same text as a command line is the control.
 #[test]

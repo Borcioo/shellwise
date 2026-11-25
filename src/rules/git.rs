@@ -536,6 +536,16 @@ fn is_linked_worktree(scene: &Scene, p: &Path) -> bool {
     )
 }
 
+/// Whether `p` is a main working tree's root: its `.git` is a folder. A read that fails: no;
+/// `None` when the deadline passed.
+fn is_main_worktree(scene: &Scene, p: &Path) -> Option<bool> {
+    let fs = Arc::clone(scene.ctx.fs);
+    let git = p.join(".git");
+    bounded(scene.ctx.deadline, move || fs.lstat(&git).map(|m| m.is_dir))
+        .ok()
+        .map(|r| r.unwrap_or(false))
+}
+
 /// Whether `p` exists now (`None` when the deadline passed).
 fn exists(scene: &Scene, p: &Path) -> Option<bool> {
     let fs = Arc::clone(scene.ctx.fs);
@@ -632,6 +642,13 @@ fn worktree_remove(
             }
             Ok(Some(reason)) => return Some(delete::critical(&p, reason, call.span())),
             Ok(None) => {}
+        }
+        // A main working tree from any cwd, a linked worktree beside it included: git refuses it
+        // ("is a main working tree").
+        match is_main_worktree(scene, &p) {
+            None => return Some(scene.timeout(call.span(), &text)),
+            Some(true) => return Some(delete::critical(&p, resolve::REPO_ROOT, call.span())),
+            Some(false) => {}
         }
         let found = match is_dir(scene, &p) {
             None => Some(scene.timeout(call.span(), &text)),
