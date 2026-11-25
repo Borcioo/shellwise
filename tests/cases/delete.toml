@@ -6240,6 +6240,22 @@ level = "critical"
 rules = ["delete-critical"]
 
 [[row]]
+id = "ps-alias-past-the-definition-bound-call-then-real-home"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_DISTINCT_97; a000 build; Remove-Item $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "bash-alias-past-the-call-bound-then-real-home"
+os = "any"
+shell = "bash"
+command = "alias zz='ls -la'; GEN_CALLS_33; rm -rf ~"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
 id = "ps-alias-past-the-definition-bound-then-real-home"
 os = "windows"
 shell = "pwsh"

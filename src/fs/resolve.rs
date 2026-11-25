@@ -1333,9 +1333,7 @@ impl Location {
     /// no file system is no file only when every part of the command is in a small harmless set
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
-        // Past the bound (Ruling 154) the table is not resolved: a call of a name the command
-        // defines in its own words is an unknown move, as below it.
-        let aliases = bounded_aliases(script, is_pwsh(self.shell));
+        let aliases = script_aliases(script, is_pwsh(self.shell));
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
@@ -2514,24 +2512,6 @@ fn script_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
     }
 }
 
-/// `script_aliases`, unless the pwsh reading of `s` passes the alias bound (`direct_aliases`,
-/// Ruling 154): then each name `s` defines in its own words, with a value the hook cannot read
-/// (the coarse reading of a call of it), without resolving the table.
-fn bounded_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
-    let (direct, unbounded) = if pwsh {
-        direct_aliases(s)
-    } else {
-        (Vec::new(), false)
-    };
-    if !unbounded {
-        return script_aliases(s, pwsh);
-    }
-    let mut out: Vec<Alias> = direct.into_iter().map(|(_, (n, _))| (n, None)).collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
 /// The aliases command `c` defines, whatever the dialect: a definition the shell does not run
 /// only adds a reading. pwsh: `$alias:n = v`, and each cmdlet the command word may be
 /// (`cmdlet_readings`) as `cmdlet_alias_defs` reads it, and where it cannot, an alias of any name
@@ -2925,8 +2905,8 @@ pub(crate) struct DefinedAliases {
 }
 
 /// The most alias definitions one command may spell, and calls of a name they define, before the
-/// delete guard and the location walk stop resolving its aliases (Ruling 154). Past either a
-/// call reads as an alias the hook cannot read, the stricter reading.
+/// delete guard stops resolving its aliases (Ruling 154). Past either every command after the
+/// first definition reads as a call of an alias the hook cannot read, the stricter reading.
 const MAX_ALIAS_DEFS: usize = 96;
 const MAX_ALIAS_CALLS: usize = 32;
 
@@ -3686,7 +3666,7 @@ pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
 /// assignments `assigned::resolve_assigned` reads itself).
 pub fn mark_assigned_except(env: &mut EnvView, script: &Script, command: &str, skip: &[Span]) {
     // The dialect is not known here: read the script as pwsh too.
-    visit_script(script, &bounded_aliases(script, true), &mut |n| match n {
+    visit_script(script, &script_aliases(script, true), &mut |n| match n {
         Node::Cmd(c) if skip.contains(&c.span) => {}
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {
