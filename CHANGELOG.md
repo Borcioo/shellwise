@@ -8,11 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ### Added
 
 - `bash-ps-call-operator` (break): a Bash command that starts with the PowerShell call operator
-  (`& "C:/path/tool.exe" args`), which bash refuses as a syntax error. The Fix runs the program by
-  its path (`"C:/path/tool.exe" args`); it replaces the `parse-error` warn for that error.
+  (`& "C:/path/tool.exe" args`, also after `;` as `;&`), which bash refuses as a syntax error. The
+  Fix runs the program by its path (`"C:/path/tool.exe" args`) when the rest of the command means
+  the same in bash, else a sentence; it replaces the `parse-error` warn for that error.
 - `gate-truncated-pipeline` now also warns in the Bash tool: a tee'd run or a configured gate
-  command piped into `head` (`npm test 2>&1 | tee run.log | head -n 5`), with a Fix that reads
-  the whole stream and keeps the exit code (`(set -o pipefail; … | tail -n 20)`).
+  command piped into `head` with a positive count (`npm test 2>&1 | tee run.log | head -n 5`),
+  with a Fix that keeps the whole command, reads the whole stream and keeps the exit code
+  (`cd sub && (set -o pipefail; … | tail -n 20)`).
 
 ### Fixed
 
