@@ -214,6 +214,42 @@ fn an_unbounded_wait_loop_in_a_sh_file_is_a_break() {
     assert!(lint(&ok).unwrap().findings.is_empty());
 }
 
+/// A PowerShell call operator in a script: the Fix holds the corrected lines, not the whole file.
+#[test]
+fn a_call_operator_in_a_sh_file_gets_the_corrected_lines_as_its_fix() {
+    let d = folder("call_operator");
+    let path = d.join("run.sh");
+    std::fs::write(
+        &path,
+        "#!/bin/bash\necho one\n& \"C:/t/a.exe\" b\necho two\n& 'C:/t/c.exe'\necho three\n",
+    )
+    .unwrap();
+    let report = lint(&path).unwrap();
+    let at = report
+        .findings
+        .iter()
+        .find(|l| l.finding.rule == "bash-ps-call-operator")
+        .unwrap_or_else(|| panic!("{:?}", ids(&report)));
+    assert_eq!((at.line, at.column), (3, 1));
+    assert_eq!(
+        at.finding.fix.as_deref(),
+        Some("\"C:/t/a.exe\" b\n'C:/t/c.exe'")
+    );
+    assert_eq!(report.exit_code(), 1);
+    // The parse fails there, so ShellCheck's parse errors on that line stay break.
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    let external: Vec<&str> = r
+        .stdout
+        .lines()
+        .filter(|l| l.contains(": SC1") || l.contains(" SC1"))
+        .collect();
+    assert!(!external.is_empty(), "{}", r.stdout);
+    for l in external {
+        let level = l.split(": ").nth(1).and_then(|s| s.split(' ').next());
+        assert_eq!(level, Some("break"), "{l}");
+    }
+}
+
 /// D6: Git Bash drops the CR of a CRLF script and runs it (Linux bash reads `$'\r'`). In the Git
 /// Bash profile (a Windows host) a CRLF `.sh` gets one warn, and the shellwise rules and the
 /// external linter read its LF twin.

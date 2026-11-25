@@ -13,7 +13,7 @@ use crate::ir::{Elem, EnvView, Redirect, Script, SimpleCommand, Stmt, Word, Word
 use crate::level::{Finding, Level, Span};
 use crate::parse::{self, ParseError, ParseKind};
 use crate::programs::{self, Escapes, Kind, Program};
-use crate::{BashProfile, Deadline, Os, Shell};
+use crate::{BashProfile, Deadline, Origin, Os, Shell};
 
 pub const BACKSLASH_COLLAPSE: &str = "bash-backslash-collapse";
 pub const MSYS_PATH_MANGLE: &str = "bash-msys-path-mangle";
@@ -740,11 +740,32 @@ pub const PS_CALL_OPERATOR_LEVEL: Level = Level::Break;
 /// How many call operators the Fix takes out of one text before it gives up for the sentence.
 const MAX_CALLS: usize = 8;
 
+/// How many bytes the Fix's parses may read together before it gives up for the sentence: 8
+/// rounds over a 60 KB text took 17.8 ms (p99, release) against the 5 ms analysis budget.
+const MAX_FIX_BYTES: usize = 16 * 1024;
+
 const CALL_SENTENCE: &str = "remove the leading & and start the program by its path, or run this command in the PowerShell tool";
 const CALL_PS1: &str = "run this command in the PowerShell tool: bash cannot run a .ps1 script";
 
-/// The scope prefix of a PowerShell environment variable, which bash does not have.
+/// The scope prefix of a PowerShell environment variable, which bash does not have; PowerShell
+/// reads it in any case.
 const PS_ENV: &str = "$env:";
+
+/// The lines of `after` that differ from those of `before`; all of `after` when the two do not
+/// have the same number of lines (an operand that held a line break).
+fn changed_lines(before: &str, after: &str) -> String {
+    let old: Vec<&str> = before.trim_end().lines().collect();
+    let new: Vec<&str> = after.lines().collect();
+    if old.len() != new.len() {
+        return after.to_string();
+    }
+    new.iter()
+        .zip(&old)
+        .filter(|(n, o)| n != o)
+        .map(|(n, _)| *n)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 pub struct PsCallOperator;
 
@@ -761,6 +782,10 @@ impl Rule for PsCallOperator {
         let operand = operand_start(command, at);
         let end = operand + word_len(&command[operand..]);
         let fix = match bash_way(command, at, profile, ctx.deadline) {
+            // A script's Fix is its corrected lines, not the whole file.
+            Call::Command(text) if ctx.input.origin == Origin::File => {
+                changed_lines(command, &text)
+            }
             Call::Command(text) => text,
             Call::Ps1 => CALL_PS1.to_string(),
             Call::Sentence => CALL_SENTENCE.to_string(),
@@ -852,16 +877,18 @@ enum Call {
 
 /// The text run the Bash way: each call operator taken out and its operand written as bash reads
 /// it, until the text parses. A PowerShell-only operand (a script block, `$env:X`, an expression)
-/// or a PowerShell assignment in the text gives the sentence, and so does the analysis deadline:
-/// each round parses the whole text again.
+/// or a PowerShell assignment in the text gives the sentence, and so do the analysis deadline and
+/// `MAX_FIX_BYTES`: each round parses the whole text again.
 fn bash_way(command: &str, first: usize, profile: BashProfile, deadline: &Deadline) -> Call {
-    if command.contains(PS_ENV) || has_ps_assignment(command) {
+    if command.to_ascii_lowercase().contains(PS_ENV) || has_ps_assignment(command) {
         return Call::Sentence;
     }
     let mut text = command.to_string();
     let mut at = first;
+    let mut read = 0usize;
     for _ in 0..MAX_CALLS {
-        if deadline.expired() {
+        read += text.len();
+        if deadline.expired() || read > MAX_FIX_BYTES {
             return Call::Sentence;
         }
         let start = operand_start(&text, at);
@@ -1024,6 +1051,18 @@ mod tests {
         let fix = |d: &Deadline| bash_way(command, 0, BashProfile::GitBash, d);
         assert_eq!(fix(&open), Call::Command("\"C:/t/a.exe\" x".to_string()));
         assert_eq!(fix(&gone), Call::Sentence);
+    }
+
+    /// The Fix's parses read at most `MAX_FIX_BYTES` together: a text past it gets the sentence.
+    #[test]
+    fn the_call_operator_fix_stops_at_its_byte_budget() {
+        let open = Deadline::new(std::time::Instant::now(), 8000);
+        let fix = |text: &str| bash_way(text, 0, BashProfile::GitBash, &open);
+        let call = "& \"C:/t/a.exe\" x\n";
+        let small = format!("{call}{}", "echo a\n".repeat(100));
+        let big = format!("{call}{}", "echo a\n".repeat(MAX_FIX_BYTES / 7));
+        assert!(matches!(fix(&small), Call::Command(_)));
+        assert_eq!(fix(&big), Call::Sentence);
     }
 
     #[test]

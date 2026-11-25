@@ -16,7 +16,9 @@ The finding takes the place of the parser's `parse-error` warn for that error; a
 its operand as bash runs it: a quoted path as written, `$name` in double quotes, a bare path with
 forward slashes. A PowerShell-only operand (a script block, `$env:X`, an expression) or a
 PowerShell assignment in the text gets a sentence instead, and a `.ps1` script is sent to the
-PowerShell tool. Both Bash profiles (Git Bash and POSIX bash).
+PowerShell tool. The Fix parses the text again once per `&` and gives the sentence once those
+parses would read more than 16 KiB. In `shellwise lint` the Fix holds only the corrected lines.
+Both Bash profiles (Git Bash and POSIX bash).
 
 ## Deny
 

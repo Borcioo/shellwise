@@ -42,6 +42,7 @@ bash-unterminated-quote = "parse-error"               # Task 22
 bash-vendor-bin-shebang = "bash-vendor-bin-shebang"   # Task 29
 bash-versioned-php = "bash-versioned-php"             # Task 29
 ps-unix-command = "ps-unix-command"                   # Task 30
+# Full set, named by neither corpus file: mapped so a later replay can count it.
 bash-ps-call-operator = "bash-ps-call-operator"       # Task 34
 
 # One line of evidence per rule: the gate in the code.
