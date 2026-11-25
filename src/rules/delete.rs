@@ -150,7 +150,7 @@ impl Rule for DeleteRule {
         let os = ctx.input.os;
         let command = ctx.input.command;
         // A call of an alias the command defined before it is also read as what it runs.
-        let aliases = resolve::DefinedAliases::of(ctx.script, shell, os);
+        let aliases = resolve::DefinedAliases::of(ctx.script, command, shell, os);
         let deletes_call = |run: &SimpleCommand| {
             matches!(read_call(run, false, shell, os),
                 Read::Call(call, prog) if in_family(&call, prog, shell, os))

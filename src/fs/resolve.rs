@@ -2895,10 +2895,36 @@ pub(crate) enum AliasRun {
     Unread,
 }
 
+/// The words one of which the text of every alias definition holds, lowercased: the shipped
+/// names of `Set-Alias` and `New-Alias` (`sal`, `nal`) and their noun, which `$alias:x` and an
+/// `Alias:` path spell too.
+fn alias_words() -> &'static [String] {
+    static WORDS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    WORDS.get_or_init(|| {
+        let mut out: Vec<String> = Vec::new();
+        for (a, target) in PWSH.aliases.iter().chain(POWERSHELL5.aliases) {
+            // A `const` has no one address: compare the parameter names.
+            let names = |ps: &[Param]| ps.iter().map(|p| p.name).collect::<Vec<_>>();
+            if cmdlet_params(target).is_some_and(|(own, _)| names(own) == names(SET_ALIAS)) {
+                out.push(a.to_string());
+                out.extend(target.rsplit('-').next().map(str::to_string));
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    })
+}
+
 impl DefinedAliases {
-    pub(crate) fn of(s: &Script, shell: Shell, os: Os) -> DefinedAliases {
+    /// `command` is the text `s` was parsed from: one that holds no `alias_words` defines none.
+    pub(crate) fn of(s: &Script, command: &str, shell: Shell, os: Os) -> DefinedAliases {
         let mut defs: Vec<(usize, Alias)> = Vec::new();
-        if is_pwsh(shell) {
+        let spells_one = || {
+            let lower = command.to_ascii_lowercase();
+            alias_words().iter().any(|w| lower.contains(w.as_str()))
+        };
+        if is_pwsh(shell) && spells_one() {
             let table = script_aliases(s, true);
             if table.iter().any(|(n, _)| n != "*") {
                 visit_script(s, &table, &mut |n| {
