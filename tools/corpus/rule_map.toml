@@ -42,6 +42,7 @@ bash-unterminated-quote = "parse-error"               # Task 22
 bash-vendor-bin-shebang = "bash-vendor-bin-shebang"   # Task 29
 bash-versioned-php = "bash-versioned-php"             # Task 29
 ps-unix-command = "ps-unix-command"                   # Task 30
+bash-ps-call-operator = "bash-ps-call-operator"       # Task 34
 
 # One line of evidence per rule: the gate in the code.
 [runs_on]
@@ -55,7 +56,8 @@ bash-unterminated-quote = { tools = ["Bash"], os = ["Windows", "Linux"], why = "
 bat-metachar = { tools = ["PowerShell"], os = ["Windows"], why = "is_pwsh and os == Windows, pwsh_lint/bat.rs" }
 ps-bare-bash = { tools = ["PowerShell"], os = ["Windows"], why = "is_pwsh and os == Windows, pwsh_lint/ports.rs" }
 cli-inline-prose = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs" }
-gate-truncated-pipeline = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs (the baseline guard also flags Bash)" }
+gate-truncated-pipeline = { tools = ["Bash", "PowerShell"], os = ["Windows", "Linux"], why = "no shell gate, ports.rs: tee and head carry its tags for Bash too" }
+bash-ps-call-operator = { tools = ["Bash"], os = ["Windows", "Linux"], why = "Shell::Bash(_), both profiles, bash_lint.rs" }
 ps-git-commit-stdin = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "is_pwsh, ports.rs" }
 ps-bad-parameter = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "Facts::for_shell (pwsh), ports.rs" }
 ps-native-nonewline = { tools = ["PowerShell"], os = ["Windows", "Linux"], why = "Facts::for_shell (pwsh), ports.rs" }

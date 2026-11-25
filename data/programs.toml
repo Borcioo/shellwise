@@ -591,6 +591,18 @@ name = "select-object"
 shells = ["pwsh"]
 lint = { tags = ["truncator"], truncate_params = ["first"], flag_hints = ["-n#=-First "] }
 
+# gate-truncated-pipeline in Bash: its tee and its truncator (any `head` stops after its count, as
+# the PowerShell `head` row does; `tail` and `sed -n 'Np'` read the whole stream).
+[[program]]
+name = "tee"
+shells = ["bash"]
+lint = { tags = ["tee-cmdlet"] }
+
+[[program]]
+name = "head"
+shells = ["bash"]
+lint = { tags = ["truncator"] }
+
 [[program]]
 name = "get-content"
 shells = ["pwsh"]

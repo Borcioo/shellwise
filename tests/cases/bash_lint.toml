@@ -1,12 +1,15 @@
 # The Git Bash rules (src/rules/bash_lint.rs), through analyse. Every rule fires only for the Git
 # Bash profile (shell = "gitbash"); each has a twin with shell = "bash" (the POSIX profile) that
-# stays ok. The rows are synthetic: none is a corpus command.
+# stays ok. Two blocks at the end fire in both profiles: bash-ps-call-operator, and
+# gate-truncated-pipeline in Bash (its rule lives in src/rules/pwsh_lint/ports.rs). The rows are
+# synthetic: none is a corpus command.
 #
 # baseline guard rows: 29
 # Rows whose id starts with "sg-" are ported from the baseline guard's tests/test_rules.py (its Bash rows
 # for these rules and its bash-backslash-collapse block). Left out, because another task owns the
 # rule: the 2 marker rows (Task 32), bat-metachar (Task 30), bash-unterminated-quote (2 rows,
-# parse-error), bash-ps-call-operator (dropped, F17) and bash-too-long (Task 25).
+# parse-error), bash-ps-call-operator (its rows are the call-op- block, not ported) and
+# bash-too-long (Task 25).
 #
 # Levels differ from the baseline guard's deny where the plan lands a rule as warn: msys (the plan), and
 # the landing-rule rules whose corpus replay denies more than 5 ok rows (versioned-php 33,
@@ -931,5 +934,398 @@ id = "d04-unquoted-path-command-name-with-an-inexact-span-is-silent"
 os = "any"
 shell = "gitbash"
 command = "echo $(echo a \\\n; C:\\x)"
+level = "ok"
+rules = []
+
+# --- gate-truncated-pipeline (warn) in Bash, both profiles: the PowerShell rule's decisions ---
+# A tee'd producer, or a configured gate command, piped at any later stage into `head` (any
+# count) is cut; `tail` reads the whole stream (the twin of `Select-Object -Last`), and so does
+# `sed -n 'Np'`. The Fix keeps the producer, reads it whole with `tail -n 20` and keeps its exit
+# code with `pipefail`, in a subshell so the option does not outlive the call.
+
+[[row]]
+id = "gate-bash-tee-then-head-n"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | head -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "(set -o pipefail; npm test 2>&1 | tee run.log | tail -n 20)"
+
+[[row]]
+id = "gate-posix-bash-tee-then-head-n"
+os = "any"
+shell = "bash"
+command = "npm test 2>&1 | tee run.log | head -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "(set -o pipefail; npm test 2>&1 | tee run.log | tail -n 20)"
+
+[[row]]
+id = "gate-bash-tee-then-bare-head"
+os = "any"
+shell = "gitbash"
+command = "cargo test 2>&1 | tee test.log | head"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+
+[[row]]
+id = "gate-bash-tee-then-a-filter-then-head"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | grep -v skipped | head -n 3"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "(set -o pipefail; npm test 2>&1 | tee run.log | grep -v skipped | tail -n 20)"
+
+[[row]]
+id = "gate-bash-configured-gate-then-head"
+os = "any"
+shell = "gitbash"
+command = "./scripts/run-gate.sh --all | head -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "(set -o pipefail; ./scripts/run-gate.sh --all | tail -n 20)"
+config = "gate_commands = ['run-gate*']\n"
+
+[[row]]
+id = "gate-bash-allow-a-configured-gate-into-tee-only"
+os = "any"
+shell = "gitbash"
+command = "./scripts/run-gate.sh --all | tee gate.log"
+level = "ok"
+rules = []
+config = "gate_commands = ['run-gate*']\n"
+
+[[row]]
+id = "gate-bash-allow-tee-alone"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-allow-head-without-a-gate-or-tee"
+os = "any"
+shell = "gitbash"
+command = "cat file | head -n 5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-allow-tail"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | tail -n 20"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-allow-sed-print-one-line"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | sed -n '5p'"
+level = "ok"
+rules = []
+
+# --- bash-ps-call-operator (break), both profiles: a command that starts with `&` ---
+# bash refuses the line (syntax error, exit 2); the rule replaces the parser's `parse-error` warn
+# for that error. The Fix is the user's text without the `&`; a PowerShell-only operand gets a
+# sentence.
+
+[[row]]
+id = "call-op-double-quoted-path"
+os = "any"
+shell = "gitbash"
+command = '& "C:/path/tool.exe" args'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = '"C:/path/tool.exe" args'
+
+[[row]]
+id = "call-op-double-quoted-path-posix-bash"
+os = "any"
+shell = "bash"
+command = '& "C:/path/tool.exe" args'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = '"C:/path/tool.exe" args'
+
+[[row]]
+id = "call-op-single-quoted-name"
+os = "any"
+shell = "gitbash"
+command = "& 'x.exe'"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "'x.exe'"
+
+[[row]]
+id = "call-op-variable"
+os = "any"
+shell = "gitbash"
+command = '& $tool --version'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = '"$tool" --version'
+
+[[row]]
+id = "call-op-backslash-path"
+os = "any"
+shell = "gitbash"
+command = '& path\tool.exe -v'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = 'path/tool.exe -v'
+
+[[row]]
+id = "call-op-attached-to-its-operand"
+os = "any"
+shell = "gitbash"
+command = '&"C:/t/a.exe" b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = '"C:/t/a.exe" b'
+
+[[row]]
+id = "call-op-after-and-and"
+os = "any"
+shell = "gitbash"
+command = 'cd build && & "C:/t/a.exe" b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = 'cd build && "C:/t/a.exe" b'
+
+[[row]]
+id = "call-op-in-a-pipeline-segment"
+os = "any"
+shell = "gitbash"
+command = 'echo hi | & "C:/t/a.exe" -'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = 'echo hi | "C:/t/a.exe" -'
+
+[[row]]
+id = "call-op-on-a-later-line"
+os = "any"
+shell = "gitbash"
+command = "cd build\n& \"C:/t/a.exe\" b\n"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "cd build\n\"C:/t/a.exe\" b"
+
+[[row]]
+id = "call-op-twice"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x; & "C:/t/b.exe" y'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = '"C:/t/a.exe" x; "C:/t/b.exe" y'
+
+[[row]]
+id = "call-op-braced-variable"
+os = "any"
+shell = "gitbash"
+command = '& ${tool} x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = '"${tool}" x'
+
+# PowerShell 7 `a && & "x"` written without the blank.
+[[row]]
+id = "call-op-glued-to-and-and"
+os = "any"
+shell = "gitbash"
+command = 'make &&& "C:/t/a.exe" b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = 'make &&"C:/t/a.exe" b'
+
+[[row]]
+id = "call-op-expression-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& $(Get-Command x) y'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-env-variable-in-an-argument-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" $env:TEMP'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-another-syntax-error-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x )'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-script-block-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& { Get-Date }'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-env-variable-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& $env:TOOL x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-after-a-powershell-assignment-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "$t = 'C:/t/a.exe'; & $t"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-ps1-script-gets-the-powershell-tool"
+os = "any"
+shell = "gitbash"
+command = '& .\build.ps1 -Release'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "bash cannot run a .ps1 script"
+
+[[row]]
+id = "call-op-scoped-variable-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& $script:tool x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-parenthesised-expression-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& (Join-Path $dir tool.exe)'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix = "start the program by its path"
+
+[[row]]
+id = "call-op-destructive-text-stays-danger"
+os = "any"
+shell = "gitbash"
+command = '& rm -rf build'
+level = "danger"
+rules = ["parse-error-destructive", "bash-ps-call-operator"]
+
+[[row]]
+id = "call-op-allow-a-background-job"
+os = "any"
+shell = "gitbash"
+command = "npm run dev &"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-a-background-job-then-a-command"
+os = "any"
+shell = "gitbash"
+command = "npm run dev & echo started"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-and-and"
+os = "any"
+shell = "gitbash"
+command = "cd build && make"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-jobs-and-wait"
+os = "any"
+shell = "bash"
+command = "sleep 1 & sleep 2 & wait"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-redirects"
+os = "any"
+shell = "gitbash"
+command = "make &>build.log; make &>>build.log; make 2>&1 | cat; make |& cat; cat <&3"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-a-leading-both-streams-redirect"
+os = "any"
+shell = "gitbash"
+command = "&>/dev/null make"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-quoted-text"
+os = "any"
+shell = "gitbash"
+command = "echo '& \"x.exe\"' \"& y\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-a-heredoc-body"
+os = "any"
+shell = "gitbash"
+command = "cat <<'EOF' > run.ps1\n& \"C:/t/a.exe\" b\nEOF\n"
+level = "ok"
+rules = []
+
+# A leading `&&` or a lone `&` is no call operator: the parser's own finding stays.
+[[row]]
+id = "call-op-leading-and-and-stays-a-parse-error"
+os = "any"
+shell = "gitbash"
+command = "&& make"
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "call-op-lone-ampersand-stays-a-parse-error"
+os = "any"
+shell = "gitbash"
+command = "&"
+level = "warn"
+rules = ["parse-error"]
+
+# PowerShell fails on this text at its `&`: the error stays its parser's.
+[[row]]
+id = "call-op-pwsh-parse-error-at-an-ampersand-stays-a-parse-error"
+os = "any"
+shell = "pwsh"
+command = '& $'
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "call-op-allow-pwsh"
+os = "any"
+shell = "pwsh"
+command = '& "C:/path/tool.exe" args'
 level = "ok"
 rules = []

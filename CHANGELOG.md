@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- `bash-ps-call-operator` (break): a Bash command that starts with the PowerShell call operator
+  (`& "C:/path/tool.exe" args`), which bash refuses as a syntax error. The Fix runs the program by
+  its path (`"C:/path/tool.exe" args`); it replaces the `parse-error` warn for that error.
+- `gate-truncated-pipeline` now also warns in the Bash tool: a tee'd run or a configured gate
+  command piped into `head` (`npm test 2>&1 | tee run.log | head -n 5`), with a Fix that reads
+  the whole stream and keeps the exit code (`(set -o pipefail; … | tail -n 20)`).
+
 ### Fixed
 
 - `wait-loop-unbounded` now catches a loop whose only "deadline" is a clock word in a message, a

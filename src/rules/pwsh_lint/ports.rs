@@ -26,7 +26,8 @@ pub const GATE_TRUNCATED_PIPELINE: &str = "gate-truncated-pipeline";
 /// A gate, test run or tee'd log piped into a truncator (`Select-Object -First`, `head`): the
 /// truncator stops the producer once it has its lines, so the exit code reads as success and the
 /// log is cut off. A producer is a gate when its name matches `cfg.gate_commands` or a script
-/// host runs a script that does; behind a `Tee-Object` any producer counts.
+/// host runs a script that does; behind a `Tee-Object` (Bash: `tee`) any producer counts. Every
+/// shell: the Bash tools carry the same tags in `data/programs.toml`.
 pub struct GateTruncatedPipeline;
 
 impl Rule for GateTruncatedPipeline {
@@ -35,9 +36,7 @@ impl Rule for GateTruncatedPipeline {
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
-        if !is_pwsh(ctx) {
-            return;
-        }
+        let pwsh = is_pwsh(ctx);
         let src = ctx.input.command;
         let w = walk(ctx.script);
         for site in &w.sites {
@@ -57,15 +56,28 @@ impl Rule for GateTruncatedPipeline {
                 },
             )
             .trim();
+            // Bash: `tail` reads the whole stream, and `pipefail` in a subshell keeps the
+            // producer's exit code without changing the caller's shell options.
+            let (whole, fix) = if pwsh {
+                (
+                    "Select-Object -Last N",
+                    format!("$out = {producer} 2>&1; $out | Select-Object -Last 20"),
+                )
+            } else {
+                (
+                    "tail -n N",
+                    format!("(set -o pipefail; {producer} | tail -n 20)"),
+                )
+            };
             out.push(finding(
                 GATE_TRUNCATED_PIPELINE,
                 Level::Warn,
                 site.cmd.span,
                 format!(
-                    "`{blamed}` is piped into `{}`, which stops the producer as soon as it has its lines: the exit code then reads as success and the log is cut off; `Select-Object -Last N` reads the whole stream and is fine",
+                    "`{blamed}` is piped into `{}`, which stops the producer as soon as it has its lines: the exit code then reads as success and the log is cut off; `{whole}` reads the whole stream and is fine",
                     site.cmd.typed
                 ),
-                format!("$out = {producer} 2>&1; $out | Select-Object -Last 20"),
+                fix,
             ));
             return;
         }
