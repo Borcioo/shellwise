@@ -2836,6 +2836,26 @@ level = "warn"
 rules = ["follow-unbounded"]
 fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs in a child shell)"
 
+# A follow that feeds a loop (`tail -f log | while read`, Ruling 134) is replaced in place: the
+# loop ends with the follow's input.
+[[row]]
+id = "fu-bash-fix-of-a-follow-feeding-a-loop"
+os = "any"
+shell = "bash"
+command = 'tail -f app.log | while read line; do echo "$line"; done; echo after'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = 'timeout 60 tail -f app.log | while read line; do echo "$line"; done; echo after'
+
+[[row]]
+id = "fu-bash-fix-in-a-subshell-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "( tail -f app.log )"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
 # One follow that cannot be rewritten makes the other's Fix a sentence too: a pasted command
 # would still follow without end.
 [[row]]

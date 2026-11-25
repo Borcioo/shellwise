@@ -420,11 +420,21 @@ impl Walk<'_, '_> {
         if self.outer.is_some() {
             return Err(IN_CHILD);
         }
-        let top = self
-            .root
-            .stmts
-            .iter()
-            .any(|s| matches!(s, Stmt::Pipeline(q) if std::ptr::eq(q, p)));
+        // A statement of the command, or the first stage of one whose later stage is a compound
+        // command (`tail -f log | while read l; do …; done`), which the lowering makes a block.
+        let feeds = pipeline_extent(p)
+            .and_then(|e| self.src.get(e.end..))
+            .is_some_and(|t| {
+                let t = t.trim_start_matches([' ', '\t']);
+                t.starts_with('|') && !t.starts_with("||")
+            });
+        let top = self.root.stmts.iter().any(|s| match s {
+            Stmt::Pipeline(q) => std::ptr::eq(q, p),
+            Stmt::Block(b) => {
+                feeds && matches!(b.stmts.first(), Some(Stmt::Pipeline(q)) if std::ptr::eq(q, p))
+            }
+            _ => false,
+        });
         let Some(whole) = pipeline_extent(p).filter(|_| top) else {
             return Err(NESTED);
         };

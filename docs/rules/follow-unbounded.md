@@ -21,7 +21,8 @@ in order, and each follow in it is bounded (60 s each). The PowerShell job takes
 own, and its variable is a name the command does not use. Where a follow cannot be replaced in
 place (in a child shell, an `if`, a function, a loop, a block, an assignment, a substitution, or a
 PowerShell pipeline joined to more by `&&` or `||`), the Fix is a sentence and no command, for
-every follow of the command. The PowerShell one was shown to end after its
+every follow of the command. A follow that feeds a loop (`tail -f log | while read l; do …; done`)
+is replaced in place: the loop ends with its input. The PowerShell one was shown to end after its
 timeout on a quiet log in pwsh 7.7 and Windows PowerShell 5.1, with a relative path and no process
 left behind; it ends with the job's output so far and exit status 0. A job sees none of the
 caller's variables and in Windows PowerShell 5.1 starts in Documents, so the Fix starts it in the
