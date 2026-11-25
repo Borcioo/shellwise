@@ -12,10 +12,10 @@ use super::{
     Ctx, ENV_SCOPE, Rule, Site, Walk, command_tagged, elem_span, finding, has_folder, is_native,
     is_pwsh, lint, literal, plain_var, program, replaced, table_name, text, upstream, walk,
 };
-use crate::Os;
-use crate::ir::{Elem, Quote, SimpleCommand, Stmt, WordPart};
+use crate::ir::{Elem, Quote, Redirect, SimpleCommand, Stmt, WordPart};
 use crate::level::{Finding, Level, Span};
 use crate::rules::Scope;
+use crate::{Origin, Os, Shell, parse};
 
 // ---------------------------------------------------------------------------------------------
 // gate-truncated-pipeline
@@ -46,19 +46,19 @@ impl Rule for GateTruncatedPipeline {
             let Some(blamed) = gate_upstream(ctx, site) else {
                 continue;
             };
-            let first = &site.pipe.elems[0];
-            let producer_end = elem_span(&site.pipe.elems[site.index - 1]).end;
-            let producer = text(
-                src,
-                Span {
-                    start: elem_span(first).start,
-                    end: producer_end,
-                },
-            )
-            .trim();
             // Bash: `tail` reads the whole stream, and `pipefail` in a subshell keeps the
             // producer's exit code without changing the caller's shell options.
             let (whole, fix) = if pwsh {
+                let first = &site.pipe.elems[0];
+                let producer_end = elem_span(&site.pipe.elems[site.index - 1]).end;
+                let producer = text(
+                    src,
+                    Span {
+                        start: elem_span(first).start,
+                        end: producer_end,
+                    },
+                )
+                .trim();
                 (
                     "Select-Object -Last N",
                     format!("$out = {producer} 2>&1; $out | Select-Object -Last 20"),
@@ -66,7 +66,12 @@ impl Rule for GateTruncatedPipeline {
             } else {
                 (
                     "tail -n N",
-                    format!("(set -o pipefail; {producer} | tail -n 20)"),
+                    bash_gate_fix(ctx, site).unwrap_or_else(|| {
+                        format!(
+                            "replace `{}` with `tail -n 20` and run the pipeline as `(set -o pipefail; … | tail -n 20)`, which reads the whole stream and keeps the producer's exit code",
+                            site.cmd.typed
+                        )
+                    }),
                 )
             };
             out.push(finding(
@@ -82,6 +87,98 @@ impl Rule for GateTruncatedPipeline {
             return;
         }
     }
+}
+
+/// Where a Bash stage's text lies, read from its words, since the parser's command span may end at
+/// the name when a redirect follows: from its first assignment or its name to its last word
+/// (`end`), and to its last argument (`words_end`).
+struct Extent {
+    start: usize,
+    words_end: usize,
+    end: usize,
+}
+
+/// `None` for a heredoc: the words after its operator start a byte early. A redirect whose target
+/// has no span of its own (the `2>&1` the parser adds for `|&`) is not text of the stage; one
+/// before the name is left before the Fix's `(`, which bash refuses, so the Fix's parse rejects
+/// it.
+fn stage_extent(c: &SimpleCommand) -> Option<Extent> {
+    let name = c.name.span;
+    let start = c
+        .assigns
+        .iter()
+        .map(|(_, v)| v.span.start)
+        .fold(name.start, usize::min);
+    let words_end = c.args.iter().map(|a| a.span.end).fold(name.end, usize::max);
+    let mut end = words_end;
+    for r in &c.redirects {
+        let Redirect::File { target, span, .. } = r else {
+            return None;
+        };
+        if target.span == *span {
+            continue;
+        }
+        end = end.max(target.span.end);
+    }
+    Some(Extent {
+        start,
+        words_end,
+        end,
+    })
+}
+
+/// The Bash Fix: the command with only the pipeline changed, so a list, `time` or a trailing `&`
+/// around it stays (in a script file, the lines the pipeline stands on). Every stage keeps its
+/// text; the cut's name and arguments become `tail -n 20`, its redirects stay. `None`, for the
+/// sentence, unless the pipeline is a statement of the top level (in a compound or a substitution
+/// a word may carry its outer word's span), every stage is placed and the result parses.
+fn bash_gate_fix(ctx: &Ctx, site: &Site) -> Option<String> {
+    let src = ctx.input.command;
+    let Shell::Bash(profile) = ctx.input.shell else {
+        return None;
+    };
+    let top = ctx
+        .script
+        .stmts
+        .iter()
+        .any(|s| matches!(s, Stmt::Pipeline(p) if std::ptr::eq(p, site.pipe)));
+    if !top {
+        return None;
+    }
+    let mut stages = Vec::with_capacity(site.pipe.elems.len());
+    for e in &site.pipe.elems {
+        let Elem::Cmd(c) = e else {
+            return None;
+        };
+        stages.push(stage_extent(c)?);
+    }
+    let cut = stages.get(site.index)?;
+    let redirect_inside = site.cmd.redirects.iter().any(|r| {
+        matches!(r, Redirect::File { target, span, .. }
+            if target.span != *span && target.span.start < cut.words_end)
+    });
+    if redirect_inside {
+        return None;
+    }
+    let (start, end) = (stages.first()?.start, stages.last()?.end);
+    let (from, to) = if ctx.input.origin == Origin::File {
+        (
+            src[..start].rfind('\n').map_or(0, |i| i + 1),
+            src[end..].find('\n').map_or(src.len(), |i| end + i),
+        )
+    } else {
+        (0, src.len())
+    };
+    let fix = format!(
+        "{}(set -o pipefail; {}tail -n 20{}){}",
+        &src[from..start],
+        &src[start..cut.start],
+        &src[cut.words_end..end],
+        &src[end..to]
+    );
+    let whole = format!("{}{fix}{}", &src[..from], &src[to..]);
+    parse::bash::parse(&whole, profile).ok()?;
+    Some(fix.trim_end().to_string())
 }
 
 /// `Select-Object -First` (a row tagged `truncator` whose `lint.truncate_params` names the
@@ -1241,6 +1338,37 @@ mod tests {
         assert_eq!(stale_var("\"say `$x\"", &bound, t), None);
         assert_eq!(stale_var("($t + 'x')", &bound, t).as_deref(), Some("t"));
         assert_eq!(stale_var("$script:report", &bound, t), None);
+    }
+
+    /// In a script file the Bash Fix is the line the pipeline stands on, with what the line holds
+    /// around it, not the whole file.
+    #[test]
+    fn a_bash_gate_fix_in_a_file_is_its_line() {
+        let text = "cd sub\ncd x && npm test 2>&1 | tee r.log | head -n 5\necho done\n";
+        let input = crate::AnalyseInput {
+            bytes: text.as_bytes(),
+            shell: Shell::Bash(crate::BashProfile::GitBash),
+            os: Os::Windows,
+            cwd: None,
+            env: crate::ir::EnvView::new(),
+            origin: Origin::File,
+            problem: None,
+        };
+        let cfg = crate::config::Config::default();
+        let deadline = crate::Deadline::new(std::time::Instant::now(), 8000);
+        let v = crate::analyse(&input, &cfg, &deadline);
+        let fixes: Vec<(&str, Option<&str>)> = v
+            .findings
+            .iter()
+            .map(|f| (f.rule, f.fix.as_deref()))
+            .collect();
+        assert_eq!(
+            fixes,
+            [(
+                GATE_TRUNCATED_PIPELINE,
+                Some("cd x && (set -o pipefail; npm test 2>&1 | tee r.log | tail -n 20)")
+            )]
+        );
     }
 
     #[test]

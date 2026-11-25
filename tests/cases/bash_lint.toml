@@ -1029,6 +1029,186 @@ command = "npm test 2>&1 | tee run.log | sed -n '5p'"
 level = "ok"
 rules = []
 
+# The Fix is the whole command with only the pipeline changed: every stage keeps its words and
+# redirects (the parser's command span may end at the name), the cut becomes `tail -n 20`, and
+# what stands around the pipeline (a list, `time`, a trailing `&`) stays where it was. A pipeline
+# the Fix cannot rebuild exactly (inside a compound or a substitution, a redirect before a name,
+# a heredoc) gets a sentence.
+
+[[row]]
+id = "gate-bash-fix-keeps-the-producer-arguments-and-redirect"
+os = "any"
+shell = "gitbash"
+command = "./scripts/run-gate.sh --all 2>&1 | head -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; ./scripts/run-gate.sh --all 2>&1 | tail -n 20)"
+config = "gate_commands = ['run-gate*']\n"
+
+[[row]]
+id = "gate-bash-fix-keeps-the-redirects-of-the-last-kept-stage-and-the-tee"
+os = "any"
+shell = "gitbash"
+command = "./fail.sh 2>&1 | tee run6.log 2>/dev/null | head -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; ./fail.sh 2>&1 | tee run6.log 2>/dev/null | tail -n 20)"
+
+[[row]]
+id = "gate-bash-fix-keeps-a-configured-gate-arguments"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | head -n 50"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test 2>&1 | tail -n 20)"
+config = "gate_commands = ['npm']\n"
+
+[[row]]
+id = "gate-bash-fix-keeps-an-input-redirect-of-the-tee"
+os = "any"
+shell = "gitbash"
+command = "tee run.log < in.txt | head"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; tee run.log < in.txt | tail -n 20)"
+
+[[row]]
+id = "gate-bash-fix-keeps-an-assignment-prefix"
+os = "any"
+shell = "gitbash"
+command = "CI=1 ./scripts/run-gate.sh | head"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; CI=1 ./scripts/run-gate.sh | tail -n 20)"
+config = "gate_commands = ['run-gate*']\n"
+
+[[row]]
+id = "gate-bash-fix-keeps-the-list-before-the-pipeline"
+os = "any"
+shell = "gitbash"
+command = "cd sub && ../fail.sh 2>&1 | tee run8.log | head -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "cd sub && (set -o pipefail; ../fail.sh 2>&1 | tee run8.log | tail -n 20)"
+
+[[row]]
+id = "gate-bash-fix-keeps-a-command-after-the-pipeline"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head -n 5; echo done"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test | tee run.log | tail -n 20); echo done"
+
+[[row]]
+id = "gate-bash-fix-keeps-an-and-and-tail"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head -n 5 && echo ok"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test | tee run.log | tail -n 20) && echo ok"
+
+[[row]]
+id = "gate-bash-fix-keeps-a-trailing-background-operator"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head &"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test | tee run.log | tail -n 20) &"
+
+[[row]]
+id = "gate-bash-fix-keeps-time"
+os = "any"
+shell = "gitbash"
+command = "time npm test | tee run.log | head"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "time (set -o pipefail; npm test | tee run.log | tail -n 20)"
+
+[[row]]
+id = "gate-bash-fix-keeps-the-stages-after-the-cut"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head -n 5 | grep x"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test | tee run.log | tail -n 20 | grep x)"
+
+[[row]]
+id = "gate-bash-fix-keeps-the-redirect-of-the-cut"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head -n 5 > out.txt"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test | tee run.log | tail -n 20 > out.txt)"
+
+[[row]]
+id = "gate-posix-bash-fix-keeps-a-pipe-of-both-streams"
+os = "any"
+shell = "bash"
+command = "./fail.sh |& tee run9.log | head"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; ./fail.sh |& tee run9.log | tail -n 20)"
+
+[[row]]
+id = "gate-bash-pipeline-inside-a-compound-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "if true; then npm test | tee run.log | head; fi"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "replace `head` with `tail -n 20` and run the pipeline as `(set -o pipefail; … | tail -n 20)`, which reads the whole stream and keeps the producer's exit code"
+
+[[row]]
+id = "gate-bash-pipeline-in-a-substitution-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "x=$(npm test | tee run.log | head -n 2)"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "run the pipeline as `(set -o pipefail; "
+
+[[row]]
+id = "gate-bash-redirect-before-the-producer-name-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "2>&1 npm test | tee run.log | head"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "run the pipeline as `(set -o pipefail; "
+
+[[row]]
+id = "gate-bash-redirect-before-the-cut-count-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head > out.txt -n 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "run the pipeline as `(set -o pipefail; "
+
+[[row]]
+id = "gate-bash-heredoc-in-the-pipeline-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "cat <<EOF | tee run.log | head\nline\nEOF\n"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "run the pipeline as `(set -o pipefail; "
+
+[[row]]
+id = "gate-bash-heredoc-on-the-cut-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "npm test | tee run.log | head <<EOF\nx\nEOF\n"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix = "run the pipeline as `(set -o pipefail; "
+
 # --- bash-ps-call-operator (break), both profiles: a command that starts with `&` ---
 # bash refuses the line (syntax error, exit 2); the rule replaces the parser's `parse-error` warn
 # for that error. The Fix is the user's text without the `&`; a PowerShell-only operand gets a
