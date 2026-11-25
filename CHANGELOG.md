@@ -43,6 +43,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - `Remove-Item`/`Set-Location` with `-Path:`/`-LiteralPath:` and a variable value (`-Path: $HOME`,
   `-Path:$HOME`, `-Path: "$HOME"`, `-Path: $env:USERPROFILE`) now read the value as the uncoloned
   spelling does, so a home-folder delete is critical again.
+- `Remove-Item` reads `-Confirm:$false`, `-Recurse:$true`, `-WhatIf:$false` as the switch on or off.
 - `git worktree remove` of the main working tree is critical from any folder, a linked worktree
   beside the main tree included.
 
