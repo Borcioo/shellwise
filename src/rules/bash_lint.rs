@@ -740,16 +740,17 @@ pub const PS_CALL_OPERATOR_LEVEL: Level = Level::Break;
 /// How many call operators the Fix takes out of one text before it gives up for the sentence.
 const MAX_CALLS: usize = 8;
 
-/// How many bytes the Fix's parses may read together before it gives up for the sentence: 8
-/// rounds over a 60 KB text took 17.8 ms (p99, release) against the 5 ms analysis budget.
+/// The longest text the Fix rebuilds and parses again; a longer one gets the sentence.
 const MAX_FIX_BYTES: usize = 16 * 1024;
 
 const CALL_SENTENCE: &str = "remove the leading & and start the program by its path, or run this command in the PowerShell tool";
 const CALL_PS1: &str = "run this command in the PowerShell tool: bash cannot run a .ps1 script";
 
-/// The scope prefix of a PowerShell environment variable, which bash does not have; PowerShell
-/// reads it in any case.
-const PS_ENV: &str = "$env:";
+/// Bash words after which a command starts, where a `&` is a call operator.
+const COMMAND_KEYWORDS: [&str; 8] = ["if", "then", "else", "elif", "do", "while", "until", "time"];
+
+/// PowerShell's constants and its pipeline variable: `$null` is empty in bash, `$true` too.
+const PS_CONSTANTS: [&str; 4] = ["null", "true", "false", "_"];
 
 /// The lines of `after` that differ from those of `before`; all of `after` when the two do not
 /// have the same number of lines (an operand that held a line break).
@@ -781,7 +782,7 @@ impl Rule for PsCallOperator {
         let command = ctx.input.command;
         let operand = operand_start(command, at);
         let end = operand + word_len(&command[operand..]);
-        let fix = match bash_way(command, at, profile, ctx.deadline) {
+        let fix = match bash_way(command, profile, ctx.deadline) {
             // A script's Fix is its corrected lines, not the whole file.
             Call::Command(text) if ctx.input.origin == Origin::File => {
                 changed_lines(command, &text)
@@ -804,7 +805,7 @@ impl Rule for PsCallOperator {
 }
 
 /// The offset of the PowerShell call operator the parse failed on, in a Bash shell: the syntax
-/// error sits at a `&` with an operand after it. Redirects (`&>`, `2>&1`, `<&3`), `|&`, `&&` and
+/// error sits at a `&` with an operand after it, or at the `;` of a `;&` before one. Redirects (`&>`, `2>&1`, `<&3`), `|&`, `&&` and
 /// a background `&` parse as operators, so no error sits at their `&`; nor in quotes or a heredoc
 /// body. With the Bash profile, for the Fix's parse.
 pub fn call_operator(ctx: &Ctx) -> Option<(usize, BashProfile)> {
@@ -818,7 +819,11 @@ fn call_operator_at(command: &str, e: &ParseError) -> Option<usize> {
     if e.kind != ParseKind::Syntax {
         return None;
     }
-    let at = e.span.start;
+    let mut at = e.span.start;
+    // `;&` outside a `case` arm, which bash lexes as one operator: the call operator after `;`.
+    if command.get(at..)?.starts_with(";&") {
+        at += 1;
+    }
     command.get(at..)?.strip_prefix('&')?;
     // An operand a call operator runs: a quoted name, a variable, a script block, an expression
     // or a path. Not another operator (`&&`, `&>`, `&;`) and not the end of the text.
@@ -875,39 +880,220 @@ enum Call {
     Sentence,
 }
 
-/// The text run the Bash way: each call operator taken out and its operand written as bash reads
-/// it, until the text parses. A PowerShell-only operand (a script block, `$env:X`, an expression)
-/// or a PowerShell assignment in the text gives the sentence, and so do the analysis deadline and
-/// `MAX_FIX_BYTES`: each round parses the whole text again.
-fn bash_way(command: &str, first: usize, profile: BashProfile, deadline: &Deadline) -> Call {
-    if command.to_ascii_lowercase().contains(PS_ENV) || has_ps_assignment(command) {
+/// The text run the Bash way, in one pass: each `&` where a command starts (a call operator) is
+/// taken out and its operand written as bash reads it, and every other word must be a form that
+/// means the same in bash and PowerShell (`same_word`). Anything else gives the sentence: a
+/// PowerShell-only operand (a script block, `$env:X`, an expression), a PowerShell assignment, a
+/// heredoc, more than `MAX_CALLS` call operators, a text over `MAX_FIX_BYTES`, the analysis
+/// deadline, or a result that does not parse (a `&` this pass does not take for a call operator
+/// stays, and bash still refuses it).
+fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
+    if command.len() > MAX_FIX_BYTES || has_ps_assignment(command) {
         return Call::Sentence;
     }
-    let mut text = command.to_string();
-    let mut at = first;
-    let mut read = 0usize;
-    for _ in 0..MAX_CALLS {
-        read += text.len();
-        if deadline.expired() || read > MAX_FIX_BYTES {
-            return Call::Sentence;
+    let b = command.as_bytes();
+    let mut out = String::with_capacity(command.len());
+    let (mut i, mut at_start, mut calls) = (0, true, 0);
+    while i < b.len() {
+        let next = b.get(i + 1).copied();
+        match b[i] {
+            b' ' | b'\t' => out.push(char::from(b[i])),
+            b'\n' | b';' | b'(' => {
+                out.push(char::from(b[i]));
+                at_start = true;
+            }
+            b')' => {
+                out.push(')');
+                at_start = false;
+            }
+            // A comment, in both shells.
+            b'#' => {
+                let end = command[i..].find('\n').map_or(b.len(), |n| i + n);
+                out.push_str(&command[i..end]);
+                i = end;
+                continue;
+            }
+            b'|' => {
+                out.push('|');
+                if let Some(c @ (b'|' | b'&')) = next {
+                    out.push(char::from(c));
+                    i += 1;
+                }
+                at_start = true;
+            }
+            b'&' if next == Some(b'&') => {
+                out.push_str("&&");
+                i += 1;
+                at_start = true;
+            }
+            b'&' if at_start => {
+                calls += 1;
+                if calls > MAX_CALLS {
+                    return Call::Sentence;
+                }
+                let start = operand_start(command, i);
+                let raw = &command[start..start + word_len(&command[start..])];
+                let operand = match bash_operand(raw) {
+                    Operand::Word(w) => w,
+                    Operand::Ps1 => return Call::Ps1,
+                    Operand::None => return Call::Sentence,
+                };
+                let same = if raw.starts_with(['"', '\'']) {
+                    same_word(&operand, 0).is_some_and(|(end, _)| end == operand.len())
+                } else {
+                    !is_cmdlet(&operand)
+                };
+                if !same {
+                    return Call::Sentence;
+                }
+                out.push_str(&operand);
+                i = start + raw.len();
+                at_start = false;
+                continue;
+            }
+            // A background job.
+            b'&' => {
+                out.push('&');
+                at_start = true;
+            }
+            b'<' if next == Some(b'<') => return Call::Sentence,
+            // `>&2`, `<&3`: a duplication, no call operator.
+            b'<' | b'>' => {
+                out.push(char::from(b[i]));
+                if next == Some(b'&') {
+                    out.push('&');
+                    i += 1;
+                }
+            }
+            _ => {
+                let Some((end, word)) = same_word(command, i) else {
+                    return Call::Sentence;
+                };
+                at_start = at_start && COMMAND_KEYWORDS.contains(&word.as_str());
+                out.push_str(&word);
+                i = end;
+                continue;
+            }
         }
-        let start = operand_start(&text, at);
-        let len = word_len(&text[start..]);
-        let operand = match bash_operand(&text[start..start + len]) {
-            Operand::Word(w) => w,
-            Operand::Ps1 => return Call::Ps1,
-            Operand::None => return Call::Sentence,
-        };
-        text = format!("{}{operand}{}", &text[..at], &text[start + len..]);
-        match parse::bash::parse(&text, profile) {
-            Ok(_) => return Call::Command(text.trim_end().to_string()),
-            Err(e) => match call_operator_at(&text, &e) {
-                Some(next) => at = next,
-                None => return Call::Sentence,
-            },
+        i += 1;
+    }
+    if deadline.expired() {
+        return Call::Sentence;
+    }
+    match parse::bash::parse(&out, profile) {
+        Ok(_) => Call::Command(out.trim_end().to_string()),
+        Err(_) => Call::Sentence,
+    }
+}
+
+/// The word at `i` written for bash, and where it ends, when every part of it means the same in
+/// bash and PowerShell: plain characters (letters, digits, `/._+=:%-`), a single-quoted string,
+/// a double-quoted string whose `$` starts a `$name`/`${name}` and whose backslashes bash keeps,
+/// both of printable ASCII and not doubled (`'it''s'` is one quote in PowerShell), or a whole word
+/// `$name`/`${name}`, which is quoted as PowerShell passes it whole. Not a `-Name:value`
+/// parameter nor a cmdlet name.
+fn same_word(text: &str, i: usize) -> Option<(usize, String)> {
+    let b = text.as_bytes();
+    let ends = |j: usize| {
+        b.get(j)
+            .is_none_or(|c| c.is_ascii_whitespace() || b"|&;()<>".contains(c))
+    };
+    if b[i] == b'$' {
+        let end = variable(text, i)?;
+        return ends(end).then(|| (end, format!("\"{}\"", &text[i..end])));
+    }
+    let printable = |c: u8| c == b'\t' || (b' '..=b'~').contains(&c);
+    let mut j = i;
+    while !ends(j) {
+        match b[j] {
+            b'\'' => {
+                let close = j + 1 + text[j + 1..].find('\'')?;
+                if !text.as_bytes()[j + 1..close].iter().all(|&c| printable(c)) {
+                    return None;
+                }
+                j = close + 1;
+                if b.get(j) == Some(&b'\'') {
+                    return None;
+                }
+            }
+            b'"' => {
+                j += 1;
+                loop {
+                    match *b.get(j)? {
+                        b'"' => break,
+                        b'`' => return None,
+                        b'\\'
+                            if matches!(b.get(j + 1), Some(b'"' | b'$' | b'`' | b'\\' | b'\n')) =>
+                        {
+                            return None;
+                        }
+                        b'$' => {
+                            j = variable(text, j)?;
+                            if b.get(j) == Some(&b':') {
+                                return None;
+                            }
+                        }
+                        c if printable(c) => j += 1,
+                        _ => return None,
+                    }
+                }
+                j += 1;
+                if b.get(j) == Some(&b'"') {
+                    return None;
+                }
+            }
+            c if c.is_ascii_alphanumeric() || b"/._+=:%-".contains(&c) => j += 1,
+            _ => return None,
         }
     }
-    Call::Sentence
+    // Another blank (`\r`) ends the word before it starts.
+    if j == i {
+        return None;
+    }
+    let word = &text[i..j];
+    if let Some(rest) = word.strip_prefix('-') {
+        let name = rest
+            .bytes()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_')
+            .count();
+        if name > 0 && rest[name..].starts_with(':') {
+            return None;
+        }
+    }
+    // A quoted word keeps its quotes here, so only a bare cmdlet name matches.
+    if is_cmdlet(word) {
+        return None;
+    }
+    Some((j, word.to_string()))
+}
+
+/// The end of the `$name` or `${name}` at `i`, a bash variable name that is no PowerShell
+/// constant.
+fn variable(text: &str, i: usize) -> Option<usize> {
+    let rest = &text[i + 1..];
+    let (name, end) = match rest.strip_prefix('{') {
+        Some(inner) => {
+            let n = inner.find('}')?;
+            (&inner[..n], i + 3 + n)
+        }
+        None => {
+            let n = rest
+                .bytes()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_')
+                .count();
+            (&rest[..n], i + 1 + n)
+        }
+    };
+    let constant = PS_CONSTANTS.iter().any(|c| c.eq_ignore_ascii_case(name));
+    (shell_name(name) && !constant).then_some(end)
+}
+
+/// A PowerShell cmdlet by its own name (`Out-Null`): an alias such as `ls` is a real program here.
+/// Every cmdlet name holds a `-`, which spares the table lookup for most words.
+fn is_cmdlet(word: &str) -> bool {
+    word.contains('-')
+        && crate::parse::pwsh::canonical(word, Shell::Pwsh, Os::Windows).as_deref()
+            == Some(word.to_lowercase().as_str())
 }
 
 enum Operand {
@@ -1048,7 +1234,7 @@ mod tests {
         let command = "& \"C:/t/a.exe\" x";
         let open = Deadline::new(std::time::Instant::now(), 8000);
         let gone = Deadline::new(std::time::Instant::now(), 0);
-        let fix = |d: &Deadline| bash_way(command, 0, BashProfile::GitBash, d);
+        let fix = |d: &Deadline| bash_way(command, BashProfile::GitBash, d);
         assert_eq!(fix(&open), Call::Command("\"C:/t/a.exe\" x".to_string()));
         assert_eq!(fix(&gone), Call::Sentence);
     }
@@ -1057,7 +1243,7 @@ mod tests {
     #[test]
     fn the_call_operator_fix_stops_at_its_byte_budget() {
         let open = Deadline::new(std::time::Instant::now(), 8000);
-        let fix = |text: &str| bash_way(text, 0, BashProfile::GitBash, &open);
+        let fix = |text: &str| bash_way(text, BashProfile::GitBash, &open);
         let call = "& \"C:/t/a.exe\" x\n";
         let small = format!("{call}{}", "echo a\n".repeat(100));
         let big = format!("{call}{}", "echo a\n".repeat(MAX_FIX_BYTES / 7));

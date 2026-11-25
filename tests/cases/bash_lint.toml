@@ -1366,6 +1366,324 @@ level = "break"
 rules = ["bash-ps-call-operator"]
 fix = '"${tool}" x'
 
+# The Fix keeps only forms that mean the same in bash and PowerShell: plain words without a
+# backslash, quoted strings, `$name` (quoted, as PowerShell passes it whole), bash operators and
+# comments. Anything else gets the sentence.
+[[row]]
+id = "call-op-after-then"
+os = "any"
+shell = "gitbash"
+command = 'if true; then & "C:/t/a.exe" x; fi'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = 'if true; then "C:/t/a.exe" x; fi'
+
+[[row]]
+id = "call-op-before-a-comment"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x # note'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" x # note'
+
+[[row]]
+id = "call-op-variable-argument-is-quoted"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" $out'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" "$out"'
+
+[[row]]
+id = "call-op-after-a-background-job"
+os = "any"
+shell = "gitbash"
+command = 'echo a & & "C:/t/a.exe" x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = 'echo a & "C:/t/a.exe" x'
+
+[[row]]
+id = "call-op-quoted-strings-and-options-stay"
+os = "any"
+shell = "gitbash"
+command = '''& "C:/t/a.exe" "$HOME/x" "${HOME}y" 'a $b' --n=1 -v'''
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '''"C:/t/a.exe" "$HOME/x" "${HOME}y" 'a $b' --n=1 -v'''
+
+[[row]]
+id = "call-op-redirects-stay"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x 2>&1 > out.txt'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" x 2>&1 > out.txt'
+
+# `>&2` where a command starts duplicates a descriptor: its `&` is no call operator.
+[[row]]
+id = "call-op-duplication-at-a-command-start-stays"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x; >&2 echo done'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" x; >&2 echo done'
+
+[[row]]
+id = "call-op-pipe-of-both-streams-stays"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x |& cat'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" x |& cat'
+
+[[row]]
+id = "call-op-in-a-subshell-then-a-background-job"
+os = "any"
+shell = "gitbash"
+command = '( & "C:/t/a.exe" x ) & echo b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '( "C:/t/a.exe" x ) & echo b'
+
+[[row]]
+id = "call-op-cmdlet-operand-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& Get-ChildItem x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-quoted-operand-with-a-subexpression-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "$($dir)/tool.exe" x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-backtick-in-a-string-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" "a`tb`n"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-non-ascii-double-quoted-string-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" "it’s"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-doubled-double-quote-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" "a""b"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-carriage-return-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "& \"C:/t/a.exe\" x\r\necho b\r\n"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-backtick-continuation-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "& \"C:/t/a.exe\" one `\n  two `\n  three"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-null-redirect-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x 2>$null'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-colon-parameter-with-a-variable-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" -Flag:$true'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-colon-parameter-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" -Path:out.txt'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-splat-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" @args'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-subexpression-in-a-string-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" "$($x.Name)"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-property-of-a-variable-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" $x.Name'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-scoped-variable-in-a-string-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" "$env:TEMP/x"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-backslash-escape-in-a-string-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" "cost\$5"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-doubled-quote-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = """& "C:/t/a.exe" 'it''s'"""
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-non-ascii-string-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = """& "C:/t/a.exe" 'it’s'"""
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-unquoted-backslash-argument-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" C:\data\in.txt'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-cmdlet-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x | Out-Null'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-heredoc-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "cat <<EOF\nhello\nEOF\n& \"C:/t/a.exe\" b"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-more-than-eight-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = "& a.exe\n& a.exe\n& a.exe\n& a.exe\n& a.exe\n& a.exe\n& a.exe\n& a.exe\n& a.exe\n"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+# `;&` with an operand after it outside a `case` arm is the call operator after `;`: bash lexes
+# it as a case terminator and refuses it. Inside a real `case` arm `;&` and `;;&` parse.
+[[row]]
+id = "call-op-after-a-semicolon"
+os = "any"
+shell = "gitbash"
+command = 'cd x;& "C:/t/a.exe" b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = 'cd x;"C:/t/a.exe" b'
+
+[[row]]
+id = "call-op-after-a-semicolon-attached-to-its-operand"
+os = "any"
+shell = "gitbash"
+command = 'echo a;&"C:/t/a.exe"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = 'echo a;"C:/t/a.exe"'
+
+[[row]]
+id = "call-op-allow-case-fall-through"
+os = "any"
+shell = "gitbash"
+command = "case a in a) echo a;& b) echo b;; esac"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-allow-case-continue"
+os = "any"
+shell = "gitbash"
+command = "case a in a) echo a;;& b) echo b;; esac"
+level = "ok"
+rules = []
+
+[[row]]
+id = "call-op-double-semicolon-ampersand-stays-a-parse-error"
+os = "any"
+shell = "gitbash"
+command = 'echo a;;& "C:/t/a.exe"'
+level = "warn"
+rules = ["parse-error"]
+
 # PowerShell 7 `a && & "x"` written without the blank.
 [[row]]
 id = "call-op-glued-to-and-and"
