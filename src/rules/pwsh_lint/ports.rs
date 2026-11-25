@@ -189,7 +189,7 @@ fn truncates(ctx: &Ctx, c: &SimpleCommand, w: &Walk) -> bool {
     };
     let params = lint(p, "truncate_params");
     if params.is_empty() {
-        return true;
+        return !negative_count(c, &lint(p, "count_options"));
     }
     let Some(t) = Facts::for_shell(ctx.input.shell) else {
         return false;
@@ -201,6 +201,37 @@ fn truncates(ctx: &Ctx, c: &SimpleCommand, w: &Walk) -> bool {
         return false;
     };
     params.iter().any(|p| named(&args, p).is_some())
+}
+
+/// A count option (`lint.count_options`) given a negative value, `-n -5`, `-n-5` or `--lines=-5`:
+/// `head` then prints all but the last N and reads the whole stream.
+fn negative_count(c: &SimpleCommand, options: &[&str]) -> bool {
+    let values: Vec<Option<String>> = c.args.iter().map(literal).collect();
+    let negative = |v: &str| v.len() > 1 && v.starts_with('-');
+    for (k, v) in values.iter().enumerate() {
+        let Some(v) = v.as_deref() else { continue };
+        for o in options {
+            if v == *o {
+                if values
+                    .get(k + 1)
+                    .and_then(|n| n.as_deref())
+                    .is_some_and(negative)
+                {
+                    return true;
+                }
+            } else if let Some(rest) = v.strip_prefix(o) {
+                let value = if o.starts_with("--") {
+                    rest.strip_prefix('=')
+                } else {
+                    Some(rest)
+                };
+                if value.is_some_and(negative) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// The producer to blame, nearest first: behind a tee, the command feeding it; a gate itself.

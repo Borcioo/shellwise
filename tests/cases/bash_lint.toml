@@ -1029,6 +1029,49 @@ command = "npm test 2>&1 | tee run.log | sed -n '5p'"
 level = "ok"
 rules = []
 
+# `head` with a negative count prints all but the last N lines or bytes, so it reads the whole
+# stream: no cut. A count without `-n` (`head -5`) is a positive count.
+[[row]]
+id = "gate-bash-allow-head-negative-line-count"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | head -n -5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-allow-head-negative-line-count-attached"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | head -n-5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-allow-head-negative-long-line-count"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | head --lines=-5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-allow-head-negative-byte-count"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | head -c -100"
+level = "ok"
+rules = []
+
+[[row]]
+id = "gate-bash-head-dash-count-is-a-cut"
+os = "any"
+shell = "gitbash"
+command = "npm test 2>&1 | tee run.log | head -5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+fix_exact = "(set -o pipefail; npm test 2>&1 | tee run.log | tail -n 20)"
+
 # The Fix is the whole command with only the pipeline changed: every stage keeps its words and
 # redirects (the parser's command span may end at the name), the cut becomes `tail -n 20`, and
 # what stands around the pipeline (a list, `time`, a trailing `&`) stays where it was. A pipeline
