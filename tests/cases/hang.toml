@@ -2313,6 +2313,17 @@ level = "warn"
 rules = ["follow-unbounded"]
 fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Select-String \"can't $using:pat\" }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 
+# `$using:p.ToLower()` does not parse (pwsh 7 and 5.1): a member, an element or a method is read
+# from `($using:p)`; inside a string `.x` is text and stays.
+[[row]]
+id = "fu-ps-fix-passes-a-variable-read-through-a-member"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $_ -match $p.ToLower() -or $_ -match $cfg.Pattern -or $_ -match ${arr}[0] -or $_ -eq \"$x.y\" }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match ($using:p).ToLower() -or $_ -match ($using:cfg).Pattern -or $_ -match (${using:arr})[0] -or $_ -eq \"$using:x.y\" } }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
 # A variable the pipeline assigns cannot go through `$using:`, nor one with a scope: a sentence,
 # no command.
 [[row]]

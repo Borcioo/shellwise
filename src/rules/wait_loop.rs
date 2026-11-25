@@ -1023,10 +1023,25 @@ fn pass_variables(text: &str, row: &Program) -> Option<String> {
                     if assigns(&out, after, &sets) {
                         return None;
                     }
+                    // `$using:p.ToLower()` is a parse error: outside a string a member, an
+                    // element or a static member is read from `($using:p)`.
+                    let close = usize::from(from == 2 && after.starts_with('}'));
+                    let next = &after[close..];
+                    let wrap = !dq
+                        && (next.starts_with('.')
+                            || next.starts_with('[')
+                            || next.starts_with("::"));
+                    if wrap {
+                        out.push('(');
+                    }
                     out.push_str(&rest[..from]);
                     out.push_str("using:");
                     out.push_str(name);
-                    i += from + name.len();
+                    out.push_str(&after[..close]);
+                    if wrap {
+                        out.push(')');
+                    }
+                    i += from + name.len() + close;
                     continue;
                 }
             }
