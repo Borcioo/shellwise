@@ -2335,7 +2335,7 @@ shell = "pwsh"
 command = "$pat = 'ready'; Get-Content log.txt -Wait | Where-Object { $_ -match $pat }"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match $using:pat } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+fix = "$pat = 'ready'; $j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match $using:pat } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 
 # Every spelling of a caller's variable is passed; `$_`, `$PSItem`, `$true`, `$env:`, a
 # single-quoted `$` and an escaped one stay.
@@ -2584,6 +2584,250 @@ shell = "bash"
 command = "nohup tail -f run.log"
 level = "warn"
 rules = ["follow-unbounded"]
+
+# Ruling 148: the Fix is the whole command with each follow replaced in place, every other
+# statement kept in order; where that cannot be built, a sentence and no command.
+[[row]]
+id = "fu-bash-fix-keeps-an-assignment-before-the-follow"
+os = "any"
+shell = "bash"
+command = 'pat=ready; tail -f log | grep --line-buffered "$pat"'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = 'pat=ready; timeout 60 tail -f log | grep --line-buffered "$pat"'
+
+[[row]]
+id = "fu-bash-fix-keeps-a-statement-after-the-follow"
+os = "any"
+shell = "bash"
+command = "tail -f log | grep --line-buffered ready; echo after"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log | grep --line-buffered ready; echo after"
+
+[[row]]
+id = "fu-bash-fix-keeps-a-cd-before-the-follow"
+os = "any"
+shell = "bash"
+command = "cd logs && tail -f x.log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "cd logs && timeout 60 tail -f x.log"
+
+# Two follows: each finding carries the same Fix, both follows bounded (60 s each).
+[[row]]
+id = "fu-bash-fix-of-two-follows-bounds-both"
+os = "any"
+shell = "bash"
+command = "tail -f a.log; tail -f b.log"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "timeout 60 tail -f a.log; timeout 60 tail -f b.log"
+
+[[row]]
+id = "fu-ps-fix-keeps-a-statement-after-the-follow"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Select-String ready; Write-Output after"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Select-String ready | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force; Write-Output after"
+
+[[row]]
+id = "fu-ps-fix-keeps-a-cd-before-the-follow"
+os = "any"
+shell = "pwsh"
+command = "Set-Location logs; Get-Content x.log -Wait"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Set-Location logs; $j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content x.log -Wait | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+[[row]]
+id = "fu-ps-fix-of-two-follows-bounds-both"
+os = "any"
+shell = "pwsh"
+command = "Get-Content a.log -Wait; Get-Content b.log -Wait"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content a.log -Wait | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force; $j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content b.log -Wait | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# The job's variable is a name the command never uses, so a later `$j` reads the caller's value.
+[[row]]
+id = "fu-ps-fix-job-variable-avoids-the-callers"
+os = "any"
+shell = "pwsh"
+command = "$j = 1; Get-Content log.txt -Wait; Write-Output $J"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = 1; $job = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Out-String -Stream -Width 4096 }; $null = Wait-Job $job -Timeout 60; Receive-Job $job; Remove-Job $job -Force; Write-Output $J"
+
+[[row]]
+id = "fu-bash-fix-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if [ -f log ]; then tail -f log; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-in-a-function-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "f() { tail -f log; }; f"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-in-a-loop-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "for f in a b; do tail -f run.log; done"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-in-a-substitution-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "x=$(tail -f log | grep -m1 ready)"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-in-a-child-shell-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "bash -c 'tail -f run.log | grep -m1 done'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs in a child shell)"
+
+# One follow that cannot be rewritten makes the other's Fix a sentence too: a pasted command
+# would still follow without end.
+[[row]]
+id = "fu-bash-fix-beside-a-follow-in-a-loop-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "tail -f a.log; for f in a b; do tail -f b.log; done"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-ps-fix-in-an-if-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "if (Test-Path log.txt) { Get-Content log.txt -Wait }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-ps-fix-of-an-assigned-follow-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "$lines = Get-Content log.txt -Wait | Select-Object -First 5"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-ps-fix-of-a-chained-follow-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Select-String ready && Write-Output ok"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: the follow pipeline is part of a longer statement)"
+
+# A variable the command assigns only after the follow is not passed through `$using:`.
+[[row]]
+id = "fu-ps-fix-of-a-variable-assigned-later-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $_ -match $pat }; $pat = 'x'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: a variable it reads is assigned only after it)"
+
+[[row]]
+id = "fu-ps-fix-of-a-variable-assigned-in-braces-later-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $_ -match $pat }; ${pat} = 'x'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: a variable it reads is assigned only after it)"
+
+# Set before the follow too, or another name set after it: the job reads the caller's value.
+[[row]]
+id = "fu-ps-fix-passes-a-variable-assigned-before-and-after"
+os = "any"
+shell = "pwsh"
+command = "$pat = 'a'; Get-Content log.txt -Wait | Where-Object { $_ -match $pat }; $pat = 'b'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$pat = 'a'; $j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match $using:pat } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force; $pat = 'b'"
+
+[[row]]
+id = "fu-ps-fix-passes-a-variable-when-a-longer-name-is-set-later"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $_ -match $pat }; $pattern = 'x'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match $using:pat } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force; $pattern = 'x'"
+
+[[row]]
+id = "fu-ps-fix-passes-a-variable-when-a-loop-sets-a-longer-name"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $_ -match $pat }; foreach ($pattern in 1, 2) { $pattern }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match $using:pat } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force; foreach ($pattern in 1, 2) { $pattern }"
+
+[[row]]
+id = "fu-ps-fix-of-a-follow-after-a-chain-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Write-Output start && Get-Content log.txt -Wait"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: the follow pipeline is part of a longer statement)"
+
+# Two follows in one PowerShell pipeline: the pipeline goes into one job.
+[[row]]
+id = "fu-ps-fix-of-two-follows-in-one-pipeline"
+os = "any"
+shell = "pwsh"
+command = "Get-Content paths.txt -Wait | Get-Content -Wait"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content paths.txt -Wait | Get-Content -Wait | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# A command over several lines keeps its lines.
+[[row]]
+id = "fu-bash-fix-keeps-the-lines-of-the-command"
+os = "any"
+shell = "bash"
+command = "cd logs\ntail -f x.log | grep -m1 ready\necho done"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "cd logs\ntimeout 60 tail -f x.log | grep -m1 ready\necho done"
+
+[[row]]
+id = "fu-ps-fix-keeps-the-lines-of-the-command"
+os = "any"
+shell = "pwsh"
+command = "Set-Location logs\nGet-Content x.log -Wait | Select-String ready\nWrite-Output done"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Set-Location logs\n$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content x.log -Wait | Select-String ready | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force\nWrite-Output done"
 # The Fix carries the command's own text, a redirect included.
 [[row]]
 id = "bash-read-fix-keeps-a-redirect"

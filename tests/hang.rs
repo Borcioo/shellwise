@@ -25,8 +25,10 @@ fn hang_rows() {
 
 const LOOP_RULES: [&str; 2] = ["wait-loop-unbounded", "follow-unbounded"];
 
-/// A wait-loop or follow row's `fix` is that finding's whole Fix text, not a part of it; and the
-/// Fix, run back through the same check, is no finding of its rule: a weak model copies it as is.
+/// A wait-loop or follow row's `fix` is that finding's whole Fix text, not a part of it (every
+/// follow finding of the command carries it); and the Fix, run back through the same check, is
+/// no finding of its rule: a weak model copies it as is. A Fix that is a command draws no finding
+/// of any rule, in Windows PowerShell 5.1 too for a PowerShell row.
 #[test]
 fn wait_and_follow_fix_lines_are_whole_and_settle() {
     let rows = case_loader::rows("hang.toml");
@@ -39,30 +41,45 @@ fn wait_and_follow_fix_lines_are_whole_and_settle() {
         };
         checked += 1;
         let v = case_loader::verdict(row);
-        let line = v
+        let lines: Vec<Option<String>> = v
             .findings
             .iter()
-            .find(|f| f.rule == rule)
-            .and_then(|f| f.fix_line());
+            .filter(|f| f.rule == rule)
+            .map(|f| f.fix_line())
+            .collect();
+        let line = lines.first().cloned().flatten();
         if line.as_deref() != Some(format!("Fix: {want}").as_str()) {
             wrong.push(format!("{}: fix line {line:?}\n  want Fix: {want}", row.id));
             continue;
         }
-        let pasted = case_loader::Row {
-            command: want.clone(),
-            fix: None,
-            ..row.clone()
-        };
+        if rule == "follow-unbounded" && lines.iter().any(|l| *l != line) {
+            wrong.push(format!("{}: the follow findings differ: {lines:?}", row.id));
+        }
         // A Fix that is a command parses; a sentence (rows `…-is-a-sentence`) is no command.
         let sentence = row.id.ends_with("-is-a-sentence");
-        let again: Vec<&str> = case_loader::verdict(&pasted)
-            .findings
-            .iter()
-            .map(|f| f.rule)
-            .filter(|r| LOOP_RULES.contains(r) || (!sentence && *r == "parse-error"))
-            .collect();
-        if !again.is_empty() {
-            wrong.push(format!("{}: the Fix itself gives {again:?}", row.id));
+        let mut shells = vec![row.shell.clone()];
+        if !sentence && row.shell == "pwsh" {
+            shells.push("powershell5".to_string());
+        }
+        for shell in shells {
+            let pasted = case_loader::Row {
+                command: want.clone(),
+                fix: None,
+                shell,
+                ..row.clone()
+            };
+            let again: Vec<&str> = case_loader::verdict(&pasted)
+                .findings
+                .iter()
+                .map(|f| f.rule)
+                .filter(|r| !sentence || LOOP_RULES.contains(r))
+                .collect();
+            if !again.is_empty() {
+                wrong.push(format!(
+                    "{} ({}): the Fix itself gives {again:?}",
+                    row.id, pasted.shell
+                ));
+            }
         }
     }
     assert!(checked > 0, "no wait-loop or follow row states a fix");

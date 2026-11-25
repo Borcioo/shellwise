@@ -55,6 +55,14 @@ const JOB_TIMEOUT_WHEN: &str = "job_timeout_when";
 /// The placeholders of a `follow_fix`.
 const COMMAND: &str = "<command>";
 const PIPELINE: &str = "<pipeline>";
+const JOB: &str = "<job>";
+/// Why a follow Fix is a sentence (Ruling 148).
+const IN_CHILD: &str = "the follow runs in a child shell";
+const NESTED: &str = "the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution";
+const IN_STATEMENT: &str = "the follow pipeline is part of a longer statement";
+const SETS_VARIABLE: &str =
+    "the pipeline assigns a variable or names its scope, which `$using:` cannot pass";
+const SET_LATER: &str = "a variable it reads is assigned only after it";
 /// The `loop_role` of a command that pauses.
 const WAIT: &str = "wait";
 
@@ -80,6 +88,7 @@ impl Rule for WaitLoopRule {
             os: ctx.input.os,
             depth: 0,
             out,
+            sites: &mut Vec::new(),
             outer: None,
             mode: Mode::Loops,
             root: ctx.script,
@@ -103,12 +112,14 @@ impl Rule for FollowRule {
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
+        let mut sites = Vec::new();
         Walk {
             src: ctx.input.command,
             shell: ctx.input.shell,
             os: ctx.input.os,
             depth: 0,
             out,
+            sites: &mut sites,
             outer: None,
             mode: Mode::Follow,
             root: ctx.script,
@@ -117,7 +128,59 @@ impl Rule for FollowRule {
             in_loop: false,
         }
         .script(ctx.script, false);
+        follow_fixes(ctx.input.command, out, &sites);
     }
+}
+
+/// A follow finding and how its Fix replaces the follow in the command.
+struct Site {
+    /// The finding's index in the output.
+    at: usize,
+    row: &'static Program,
+    /// The text that replaces the follow in place, or why none can.
+    edit: Result<(Span, String), &'static str>,
+}
+
+/// Every follow finding's Fix (Ruling 148): the whole command with each follow replaced in place,
+/// the same text on each finding, so a pasted Fix follows nothing without end; when one follow
+/// cannot be replaced, every finding gets a sentence and no command.
+fn follow_fixes(command: &str, out: &mut [Finding], sites: &[Site]) {
+    let mut edits: Vec<(Span, &str)> = Vec::new();
+    for s in sites {
+        if let Ok((span, text)) = &s.edit
+            && !edits.iter().any(|(e, _)| e == span)
+        {
+            edits.push((*span, text));
+        }
+    }
+    // The replaced texts are the command's own statements (Bash: their follow commands), which
+    // never overlap; a PowerShell pipeline with two follows is replaced once. Right to left, so
+    // each span still points at its text.
+    edits.sort_by_key(|(s, _)| std::cmp::Reverse(s.start));
+    let mut text = command.to_string();
+    for (span, t) in &edits {
+        text.replace_range(span.start..span.end, t);
+    }
+    // Every finding gives the first reason, so each carries the same text.
+    let why = sites.iter().find_map(|s| s.edit.as_ref().err().copied());
+    for s in sites {
+        let Some(f) = out.get_mut(s.at) else { continue };
+        f.fix = match why {
+            None => Some(text.trim().to_string()),
+            Some(why) => follow_sentence(s.row, why),
+        };
+    }
+}
+
+/// A follow row's sentence: its `follow_fix_sentence`, or one made from its `follow_fix`, with
+/// why no command is built.
+fn follow_sentence(row: &Program, why: &str) -> Option<String> {
+    let text = |k: &str| row.extra.get(k).and_then(|v| v.as_str());
+    let head = match text(FOLLOW_FIX_SENTENCE) {
+        Some(s) => s.to_string(),
+        None => format!("rewrite each follow as `{}` in place", text(FOLLOW_FIX)?),
+    };
+    Some(format!("{head} (no command is built: {why})"))
 }
 
 /// What a walk looks for.
@@ -152,6 +215,8 @@ struct Walk<'a, 'b> {
     os: Os,
     depth: usize,
     out: &'b mut Vec<Finding>,
+    /// The follow findings, whose Fix is built once the whole command is read.
+    sites: &'b mut Vec<Site>,
     /// The span of the command whose child-shell body this is: a finding points at it.
     outer: Option<Span>,
     /// The whole script the check reads.
@@ -273,6 +338,7 @@ impl Walk<'_, '_> {
             os: self.os,
             depth: self.depth + 1,
             out: self.out,
+            sites: self.sites,
             outer: Some(self.outer.unwrap_or(at)),
             mode: self.mode,
             root: self.root,
@@ -316,46 +382,92 @@ impl Walk<'_, '_> {
                     "`{}` follows its input without end: nothing in the command stops it, so the call runs until the host's timeout",
                     c.typed
                 ),
-                fix: self.follow_fix(p, c, row),
+                fix: None,
                 span,
             });
+            if row.extra.contains_key(FOLLOW_FIX) {
+                self.sites.push(Site {
+                    at: self.out.len() - 1,
+                    row,
+                    edit: self.follow_edit(p, c, row),
+                });
+            }
         }
     }
 
-    /// The Fix of the follow `c` in `p`, from its row's `follow_fix`: `<command>` is the follow
-    /// command, put back in its pipeline so the later stages stay; `<pipeline>` is the whole
-    /// pipeline.
-    fn follow_fix(&self, p: &Pipeline, c: &SimpleCommand, row: &Program) -> Option<String> {
-        let template = row.extra.get(FOLLOW_FIX).and_then(|v| v.as_str())?;
-        let whole = pipeline_extent(p)?;
-        let at = command_extent(c);
-        let background = if p.chain == Some(ChainOp::Background) {
-            " &"
-        } else {
-            ""
+    /// How the follow `c` in `p` is replaced in the command (Ruling 148), from its row's
+    /// `follow_fix`: `<command>` is the follow command, put back in its pipeline so the later
+    /// stages stay; `<pipeline>` is the whole pipeline, which then must be a statement of its own
+    /// (the job is several). Only a follow among the command's own statements is replaced: in a
+    /// child shell, a block, a function, a loop or a substitution the Fix is a sentence.
+    fn follow_edit(
+        &self,
+        p: &Pipeline,
+        c: &SimpleCommand,
+        row: &Program,
+    ) -> Result<(Span, String), &'static str> {
+        let template = row
+            .extra
+            .get(FOLLOW_FIX)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if self.outer.is_some() {
+            return Err(IN_CHILD);
+        }
+        let top = self
+            .root
+            .stmts
+            .iter()
+            .any(|s| matches!(s, Stmt::Pipeline(q) if std::ptr::eq(q, p)));
+        let Some(whole) = pipeline_extent(p).filter(|_| top) else {
+            return Err(NESTED);
         };
-        let text = if template.contains(PIPELINE) {
-            let pipeline = self.slice(whole).trim();
-            // A job sees none of the caller's variables: they go in through `$using:` (Ruling 143).
-            let pipeline = if row.extra.contains_key(FOLLOW_FIX_LOCALS) {
-                match pass_variables(pipeline, row) {
-                    Some(p) => p,
-                    None => {
-                        let s = row.extra.get(FOLLOW_FIX_SENTENCE).and_then(|v| v.as_str());
-                        return s.map(str::to_string);
-                    }
-                }
-            } else {
-                pipeline.to_string()
+        if !template.contains(PIPELINE) {
+            let at = command_extent(c);
+            return Ok((at, template.replace(COMMAND, self.slice(at).trim())));
+        }
+        let (before, after) = (
+            self.src.get(..whole.start).unwrap_or_default(),
+            self.src.get(whole.end..).unwrap_or_default(),
+        );
+        let before_ends = before.trim_end_matches([' ', '\t']);
+        let after_starts = after.trim_start_matches([' ', '\t']);
+        let alone = (before_ends.is_empty() || before_ends.ends_with([';', '\n', '\r']))
+            && (after_starts.is_empty() || after_starts.starts_with([';', '\n', '\r']));
+        if !alone {
+            return Err(IN_STATEMENT);
+        }
+        // A job sees none of the caller's variables: they go in through `$using:` (Ruling 143),
+        // each one the command sets before the follow or not at all (Ruling 148).
+        let mut pipeline = self.slice(whole).trim().to_string();
+        if row.extra.contains_key(FOLLOW_FIX_LOCALS) {
+            let Some((text, names)) = pass_variables(&pipeline, row) else {
+                return Err(SETS_VARIABLE);
             };
-            template.replace(PIPELINE, &pipeline)
-        } else {
-            let before = self.src.get(whole.start..at.start)?;
-            let after = self.src.get(at.end..whole.end)?;
-            let filled = template.replace(COMMAND, self.slice(at).trim());
-            format!("{before}{filled}{after}")
+            let sets = strings(row, FOLLOW_FIX_SETS);
+            if names
+                .iter()
+                .any(|n| assigned_in(after, n, &sets) && !assigned_in(before, n, &sets))
+            {
+                return Err(SET_LATER);
+            }
+            pipeline = text;
+        }
+        // The job's variable is a name the command never uses, in no case either.
+        let taken = |v: &str| {
+            self.command
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|w| w.eq_ignore_ascii_case(v))
         };
-        Some(format!("{}{background}", text.trim()))
+        let job = ["j".to_string(), "job".to_string()]
+            .into_iter()
+            .chain((2..).map(|k| format!("job{k}")))
+            .find(|v| !taken(v))
+            .unwrap_or_default();
+        Ok((
+            whole,
+            template.replace(JOB, &job).replace(PIPELINE, &pipeline),
+        ))
     }
 
     /// One loop, its children aside: a finding when it waits or never ends by its condition, and
@@ -999,13 +1111,14 @@ fn past_redirects(t: &str) -> &str {
 /// pipeline or the shell sets (the row's `follow_fix_locals`: `$_`, `$true`), the scopes the job
 /// reads as the caller does (`follow_fix_scopes`: `$env:`), single-quoted text and an escaped
 /// `` `$ `` stay. `None` when the pipeline assigns a variable or names another scope: `$using:`
-/// cannot pass either.
-fn pass_variables(text: &str, row: &Program) -> Option<String> {
+/// cannot pass either. With the names it passed.
+fn pass_variables(text: &str, row: &Program) -> Option<(String, Vec<String>)> {
     let (locals, scopes) = (
         strings(row, FOLLOW_FIX_LOCALS),
         strings(row, FOLLOW_FIX_SCOPES),
     );
     let sets = strings(row, FOLLOW_FIX_SETS);
+    let mut names: Vec<String> = Vec::new();
     let mut out = String::with_capacity(text.len() + 16);
     let mut dq = false;
     let mut i = 0;
@@ -1056,6 +1169,9 @@ fn pass_variables(text: &str, row: &Program) -> Option<String> {
                     if wrap {
                         out.push('(');
                     }
+                    if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                        names.push(name.to_string());
+                    }
                     out.push_str(&rest[..from]);
                     out.push_str("using:");
                     out.push_str(name);
@@ -1072,7 +1188,30 @@ fn pass_variables(text: &str, row: &Program) -> Option<String> {
         out.push(ch);
         i += n;
     }
-    Some(out)
+    Some((out, names))
+}
+
+/// The PowerShell text `text` assigns the variable `name` (`$name = …`, `${name} += …`, `$name++`,
+/// a loop word of `sets` that names it), case ignored.
+fn assigned_in(text: &str, name: &str, sets: &[&str]) -> bool {
+    text.match_indices('$').any(|(k, _)| {
+        let rest = &text[k..];
+        let from = if rest.starts_with("${") { 2 } else { 1 };
+        let Some(after) = rest
+            .get(from..from + name.len())
+            .filter(|w| w.eq_ignore_ascii_case(name))
+            .map(|_| &rest[from + name.len()..])
+        else {
+            return false;
+        };
+        let after = if from == 2 {
+            after.strip_prefix('}').unwrap_or("")
+        } else {
+            after
+        };
+        let whole = !after.starts_with(|c: char| c.is_alphanumeric() || c == '_');
+        whole && assigns(&text[..k], after, sets)
+    })
 }
 
 /// A PowerShell variable between `before` and `after` is assigned there: `$x = …`, `$x += …`,

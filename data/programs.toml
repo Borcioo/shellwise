@@ -312,7 +312,10 @@ loop_role = ["wait"]
 # follow_when       options that make it follow (`tail -f`)
 # follow_sub        the subcommand the options count after (`kubectl logs -f`)
 # follow_fix        the Fix: `<command>` is the follow command as typed, put back in its pipeline;
-#                   `<pipeline>` is the whole pipeline
+#                   `<pipeline>` is the whole pipeline; `<job>` a variable name the command never
+#                   uses. The Fix is the whole command with each follow replaced in place
+#                   (Ruling 148); where that cannot be built, a sentence (`follow_fix_sentence`, or
+#                   one made from `follow_fix`)
 # follow_job        true = a script block it runs is a job: a follow in it is bounded when the
 #                   command also runs a `job_timeout_when` option of a job wait (`Wait-Job -Timeout`)
 # The Get-Content row (PowerShell) carries `follow_when` and `follow_fix`.
@@ -611,13 +614,13 @@ follow_when = ["-Wait"]
 # The job starts where the caller is (Windows PowerShell 5.1 starts it in Documents) and reads the
 # caller's variables through `$using:`, all but these, which the pipeline or the shell sets itself.
 # Its output is text: Windows PowerShell 5.1 shows a received `Select-String` result blank.
-follow_fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; <pipeline> | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+follow_fix = "$<job> = Start-Job { Set-Location -LiteralPath $using:PWD; <pipeline> | Out-String -Stream -Width 4096 }; $null = Wait-Job $<job> -Timeout 60; Receive-Job $<job>; Remove-Job $<job> -Force"
 follow_fix_locals = ["_", "PSItem", "true", "false", "null", "args", "input", "this", "matches", "foreach", "switch", "Error", "LASTEXITCODE", "ExecutionContext", "MyInvocation", "PSCmdlet", "PSBoundParameters", "PWD", "HOME", "PSHOME", "Host", "PID", "PSVersionTable", "IsWindows", "IsLinux", "IsMacOS", "IsCoreCLR"]
 # Scopes the job reads as the caller does, and loop words that set the variable they name.
 follow_fix_scopes = ["env", "using"]
 follow_fix_sets = ["foreach"]
-# A variable the pipeline assigns, or one with another scope, cannot go through `$using:`.
-follow_fix_sentence = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096` (no command is built: the pipeline assigns a variable or names its scope, which `$using:` cannot pass)"
+# The Fix where no command can be built (the rule adds why).
+follow_fix_sentence = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096`"
 
 [[program]]
 name = "set-content"
