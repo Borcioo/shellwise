@@ -70,6 +70,8 @@ fn touch(p: &Path) {
 
 /// A linked worktree of the real repo FX_MAIN, where an agent host puts its own (item 5).
 const LINKED: &str = "main/.claude/worktrees/lw";
+/// A linked worktree of FX_MAIN beside it, not inside it.
+const SIBLING: &str = "sibling";
 /// A folder link to LINKED, outside the repos.
 const LINKED_LINK: &str = "lwlink";
 
@@ -264,6 +266,18 @@ fn fixture() -> Arc<Fixture> {
             &["worktree", "add", "-q", "--detach", linked],
         );
         assert!(fx.at(LINKED).join(".git").is_file());
+        // A linked worktree beside the main tree instead of inside it.
+        git(
+            &fx.at("main"),
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                &format!("../{SIBLING}"),
+            ],
+        );
+        assert!(fx.at(SIBLING).join(".git").is_file());
         dir_link(&fx.at(LINKED_LINK), &fx.at(LINKED));
         touch(&fx.at(&format!("{LOCKED}/f.txt")));
         lock(&fx.at(LOCKED));
@@ -419,6 +433,8 @@ fn cwd(row: &Row) -> Option<PathBuf> {
         Some(fx.at(LINKED))
     } else if row.id.starts_with("mainwt-") {
         Some(fx.at("main"))
+    } else if row.id.starts_with("sibwt-") {
+        Some(fx.at(SIBLING))
     } else if row.id.starts_with("plaingit-") {
         Some(fx.at("plaingit"))
     } else if row.id.starts_with("admincwd-") {

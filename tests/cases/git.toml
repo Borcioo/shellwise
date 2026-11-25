@@ -1088,6 +1088,74 @@ command = "git worktree remove --force FX_MAIN"
 level = "critical"
 rules = ["delete-critical"]
 
+# `sibwt-` rows run in a linked worktree of FX_MAIN beside it (FX_ROOT/sibling), so the main
+# tree neither holds the cwd nor is its repo root; git still refuses it ("is a main working
+# tree"), with or without --force.
+[[row]]
+id = "sibwt-remove-the-main-working-tree-relative-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force ../main"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "sibwt-gb-remove-the-main-working-tree-relative-force"
+os = "windows"
+shell = "gitbash"
+command = "git worktree remove --force ../main"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "sibwt-remove-the-main-working-tree-absolute-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force FX_MAIN"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "sibwt-remove-the-main-working-tree-relative"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove ../main"
+level = "critical"
+rules = ["delete-critical"]
+
+# Ruling 132 holds in this layout: the linked worktree itself, and from the main tree.
+[[row]]
+id = "sibwt-remove-itself-relative-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "sibwt-remove-itself-relative"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "mainwt-remove-a-sibling-worktree-force"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove --force ../sibling"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "mainwt-remove-a-sibling-worktree"
+os = "any"
+shell = "pwsh"
+command = "git worktree remove ../sibling"
+level = "ok"
+rules = []
+
 # A linked worktree that holds a protected path stays critical for that reason.
 [[row]]
 id = "linkedwt-protected-inside-remove-itself-force"

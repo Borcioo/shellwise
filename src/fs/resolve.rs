@@ -1,6 +1,7 @@
 //! Delete-target resolution: which folders a word names, as the shell would resolve it, from
 //! the location `cd` and friends left, the event's `cwd` and the variables the hook can trust.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -635,6 +636,29 @@ fn param_token(t: &str) -> Option<(&str, Option<&str>)> {
     })
 }
 
+/// The value of a `-Name:value` word whose value is not one literal (`-Path:$HOME`,
+/// `-Path: "$HOME"`, `-Path: $env:X\y`): the parts after the colon and its blanks, as the value
+/// word of `-Name value` holds them. `None` for any other word, and for a word with no value
+/// after the colon.
+pub(crate) fn inline_value_word(w: &Word) -> Option<Word> {
+    let Some(WordPart::Literal(lead)) = w.parts.first() else {
+        return None;
+    };
+    let (_, Some(inline)) = param_token(lead)? else {
+        return None;
+    };
+    let mut parts = Vec::with_capacity(w.parts.len());
+    if !inline.is_empty() {
+        parts.push(WordPart::Literal(inline.to_string()));
+    }
+    parts.extend(w.parts[1..].iter().cloned());
+    (!parts.is_empty()).then_some(Word {
+        parts,
+        span: w.span,
+        quote: w.quote,
+    })
+}
+
 /// How PowerShell binds `written` (`-Ty`, `-ItemType:Junction`) for `cmdlet`: ignoring case, a
 /// full name or alias first, then any prefix of a name or alias; when the prefix fits several
 /// parameters and exactly one of them is the cmdlet's own (not a common one), that one.
@@ -712,7 +736,8 @@ enum PwshArg<'a> {
 }
 
 enum PwshValue<'a> {
-    Word(&'a Word),
+    /// The next word, or the dynamic rest of a `-Name:$x` word.
+    Word(Cow<'a, Word>),
     /// The text after `-Name:`.
     Inline(String),
 }
@@ -721,7 +746,18 @@ enum PwshValue<'a> {
 fn pwsh_arg<'a>(cmdlet: &str, args: &'a [Word], i: usize) -> PwshArg<'a> {
     let w = &args[i];
     let Some(t) = literal(w) else {
-        return PwshArg::Opaque;
+        // `-Path:$x`, `-Path: "$x"`: the parameter with the rest of the word as its value.
+        return match (inline_value_word(w), w.parts.first()) {
+            (Some(v), Some(WordPart::Literal(lead))) => match bind(cmdlet, lead) {
+                Bound::One(p) => PwshArg::Param {
+                    name: p.name,
+                    value: Some(PwshValue::Word(Cow::Owned(v))),
+                    next: i + 1,
+                },
+                _ => PwshArg::Opaque,
+            },
+            _ => PwshArg::Opaque,
+        };
     };
     if w.quote == crate::ir::Quote::None && t.len() > 1 && t.starts_with('@') {
         return PwshArg::Opaque;
@@ -747,7 +783,7 @@ fn pwsh_arg<'a>(cmdlet: &str, args: &'a [Word], i: usize) -> PwshArg<'a> {
         _ => match args.get(i + 1) {
             Some(v) => PwshArg::Param {
                 name: p.name,
-                value: Some(PwshValue::Word(v)),
+                value: Some(PwshValue::Word(Cow::Borrowed(v))),
                 next: i + 2,
             },
             None => PwshArg::Unbound,
@@ -995,7 +1031,7 @@ fn new_item_links(args: &[Word]) -> Vec<Option<Word>> {
                     "ItemType" => kind = Some(text(&value).map(|k| k.to_ascii_lowercase())),
                     "Path" => {
                         path = match value {
-                            Some(PwshValue::Word(w)) => Some(w.clone()),
+                            Some(PwshValue::Word(w)) => Some(w.into_owned()),
                             Some(PwshValue::Inline(t)) => Some(Word {
                                 parts: vec![WordPart::Literal(t)],
                                 span: args[i].span,
@@ -1783,7 +1819,7 @@ impl Location {
                 if wild || (searched && cdpath) {
                     Dirs::unknown(UnknownKind::MayBeCritical)
                 } else {
-                    self.dir_from_word(w, env, self.location_reader())
+                    self.dir_from_word(&w, env, self.location_reader())
                 }
             }
             LocArg::Text(t) => {
@@ -1819,7 +1855,7 @@ impl Location {
             return None;
         }
         match bash_location_arg(args, push) {
-            LocArg::Word(w) => literal(w).filter(|t| is_msys_system_path(t)),
+            LocArg::Word(w) => literal(&w).filter(|t| is_msys_system_path(t)),
             _ => None,
         }
     }
@@ -1879,7 +1915,7 @@ impl Location {
 }
 
 enum LocArg<'a> {
-    Word(&'a Word),
+    Word(Cow<'a, Word>),
     /// An inline `-Path:value`.
     Text(String),
     /// An inline `-LiteralPath:value`.
@@ -1907,7 +1943,7 @@ fn bash_location_arg(args: &[Word], push: bool) -> LocArg<'_> {
         [] if !push => LocArg::Home,
         [w] => match literal(w) {
             Some(t) if t == "-" || t.starts_with('-') || t.starts_with('+') => LocArg::Unknown,
-            _ => LocArg::Word(w),
+            _ => LocArg::Word(Cow::Borrowed(w)),
         },
         _ => LocArg::Unknown,
     }
@@ -1940,13 +1976,13 @@ fn pwsh_location_arg<'a>(cmdlet: &str, args: &'a [Word]) -> LocArg<'a> {
                 i += 1;
                 match literal(w).as_deref() {
                     Some("-") | Some("+") => return LocArg::Unknown,
-                    _ => LocArg::Word(w),
+                    _ => LocArg::Word(Cow::Borrowed(w)),
                 }
             }
             // A variable is a positional value: it resolves as a dynamic word.
             PwshArg::Opaque if literal(&args[i]).is_none() => {
                 i += 1;
-                LocArg::Word(&args[i - 1])
+                LocArg::Word(Cow::Borrowed(&args[i - 1]))
             }
             PwshArg::Opaque | PwshArg::Unbound => return LocArg::Unknown,
         };

@@ -189,9 +189,10 @@ pub fn lint(path: &Path, cfg: &Config, deadline: &Deadline) -> Result<Report, Re
 /// Lint a file with the shellwise rules and `external`, which returns more findings for the
 /// text (spans are byte offsets into it). An external finding on a line where a shellwise
 /// finding of the same rule exists is dropped. An external `break` stays `break` only when the
-/// shellwise parser fails on the file too (a `parse-error` finding), else it is `warn`. A panic
-/// in `external` is a `warn`
-/// `analysis-incomplete` finding, and the shellwise findings stay.
+/// shellwise parser fails at the same place (a `parse-error` finding on its line, one at the end
+/// of the file, or, for an external finding at the end of the file, one whose span runs there),
+/// else it is `warn`. A panic in `external` is a `warn` `analysis-incomplete` finding, and the
+/// shellwise findings stay.
 pub fn lint_with(
     path: &Path,
     cfg: &Config,
@@ -242,11 +243,26 @@ pub fn lint_with(
     // Only the shellwise findings are compared: the external linter's own findings of one rule on
     // one line are distinct (one per variable).
     let own_count = located.len();
-    // An external `break` is a parse error the shell refuses only when our parser fails too.
-    let refused = located
+    // An external `break` is a parse error the shell refuses only when our parser fails at the
+    // same place (Ruling 138).
+    let failed: Vec<&Located> = located
         .iter()
-        .any(|l| l.finding.rule == crate::rules::parse_error::PARSE_ERROR);
-    for mut f in extra {
+        .filter(|l| l.finding.rule == crate::rules::parse_error::PARSE_ERROR)
+        .collect();
+    let eof = text.trim_end().len();
+    let refused_at = |f: &Finding| {
+        let line = position(&text, f.span.start).0;
+        failed.iter().any(|p| {
+            p.line == line
+                // Our parser ran into the end of the file: the construct left open may start on
+                // any line.
+                || p.finding.span.start >= eof
+                // ShellCheck's "expected the end" of a construct our parser saw left open.
+                || (f.span.start >= eof && p.finding.span.end >= eof)
+        })
+    };
+    let refused: Vec<bool> = extra.iter().map(refused_at).collect();
+    for (mut f, refused) in extra.into_iter().zip(refused) {
         if f.level == Level::Break && !refused {
             f.level = Level::Warn;
             f.fix = None;

@@ -1770,6 +1770,122 @@ command = "Remove-Item -Path build -Recurse -Force"
 level = "ok"
 rules = []
 
+# The same for a value that is a variable, quoted or not, with or without the blank: the value is
+# what follows the colon, read as in `-Name value`.
+[[row]]
+id = "ps-ri-colon-blank-path-home-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path: $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-colon-glued-path-home-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path:$HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-path-home-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-colon-blank-path-home-var-quoted"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path: "$HOME" -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-path-home-var-quoted"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path "$HOME" -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-colon-blank-path-userprofile"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Path: $env:USERPROFILE -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-path-userprofile"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Path $env:USERPROFILE -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-colon-blank-literalpath-home-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -LiteralPath: $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-ri-literalpath-home-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -LiteralPath $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# Text after the colon, then a variable: the value keeps that text.
+[[row]]
+id = "ps-ri-colon-glued-path-system-then-var"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Path:C:\Windows\$name -Recurse -Force'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "ps-ri-colon-blank-path-system-then-var"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Path: C:\Windows\$name -Recurse -Force'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+[[row]]
+id = "ps-ri-path-system-then-var"
+os = "windows"
+shell = "pwsh"
+command = 'Remove-Item -Path C:\Windows\$name -Recurse -Force'
+level = "danger"
+rules = ["delete-empty-expansion"]
+
+# Allow twins: a variable the hook does not know reads as in `-Path $name`.
+[[row]]
+id = "ps-ri-colon-blank-path-unknown-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path: $name -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-ri-path-unknown-var"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item -Path $name -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
 # The same word for the folder `Set-Location` goes to.
 [[row]]
 id = "ps-sl-colon-blank-path-then-delete"
@@ -1800,6 +1916,30 @@ id = "ps-sl-path-then-delete"
 os = "windows"
 shell = "pwsh"
 command = "Set-Location -Path C:\\Windows; Remove-Item -Recurse -Force System32"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-sl-colon-blank-path-home-var-then-delete-all"
+os = "any"
+shell = "pwsh"
+command = 'Set-Location -Path: $HOME; Remove-Item -Recurse -Force *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-sl-colon-glued-literalpath-home-var-then-delete-all"
+os = "any"
+shell = "pwsh"
+command = 'Set-Location -LiteralPath:$HOME; Remove-Item -Recurse -Force *'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-sl-path-home-var-then-delete-all"
+os = "any"
+shell = "pwsh"
+command = 'Set-Location -Path $HOME; Remove-Item -Recurse -Force *'
 level = "critical"
 rules = ["delete-critical"]
 
