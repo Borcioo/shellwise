@@ -747,7 +747,7 @@ const CALL_SENTENCE: &str = "remove the leading & and start the program by its p
 const CALL_PS1: &str = "run this command in the PowerShell tool: bash cannot run a .ps1 script";
 
 /// Bash words after which a command starts, where a `&` is a call operator.
-const COMMAND_KEYWORDS: [&str; 8] = ["if", "then", "else", "elif", "do", "while", "until", "time"];
+const COMMAND_KEYWORDS: [&str; 7] = ["if", "then", "else", "elif", "do", "while", "until"];
 
 /// PowerShell's constants and its pipeline variable: `$null` is empty in bash, `$true` too.
 const PS_CONSTANTS: [&str; 4] = ["null", "true", "false", "_"];

@@ -18,7 +18,7 @@ The finding takes the place of the parser's `parse-error` warn for that error; a
 
 The Fix is the text with each call operator taken out (a `&` where a command starts: at the
 start, after a line break, `;`, `&&`, `||`, `|`, `(`, a background `&`, or `if`, `then`, `else`,
-`elif`, `do`, `while`, `until`, `time`) and its operand as bash runs it: a quoted path as written,
+`elif`, `do`, `while`, `until`) and its operand as bash runs it: a quoted path as written,
 `$name` in double quotes, a bare path with forward slashes. It is given only when every other
 word means the same in bash as in PowerShell:
 
