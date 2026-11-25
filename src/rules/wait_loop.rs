@@ -412,6 +412,7 @@ impl Walk<'_, '_> {
         let fix = self.fix_line(
             span,
             self.fix(
+                span,
                 &cond_src,
                 stmts,
                 rest,
@@ -501,6 +502,16 @@ impl Walk<'_, '_> {
             .ends_with('!')
         });
         if negated { format!("! {stmts}") } else { stmts }
+    }
+
+    /// A Bash loop's body as written: from its first statement to the loop's closing `done`,
+    /// without the `;` before it. `None` when the loop's text does not end in `done` (a redirect
+    /// after it).
+    fn bash_body(&self, span: Span, rest: &[Stmt]) -> Option<String> {
+        let r = range(rest)?;
+        let t = self.src.get(r.start..span.end)?.trim_end();
+        let t = t.strip_suffix("done")?.trim_end();
+        Some(t.strip_suffix(';').unwrap_or(t).trim_end().to_string())
     }
 
     /// The loop's header: its text before the body (after it for `do … while`), the whole loop
@@ -593,22 +604,36 @@ impl Walk<'_, '_> {
     /// rounds run out, so a command after `&&` does not run: Bash ends the body with `[ "$i" -lt
     /// N ]`, PowerShell throws after the loop. A loop over several lines keeps its lines; a loop
     /// whose text cannot be rebuilt (a here-document) gets a sentence.
-    fn fix(&self, cond: &str, all: &[Stmt], rest: &[Stmt], whole: &str, form: Form) -> Fixed {
+    fn fix(
+        &self,
+        span: Span,
+        cond: &str,
+        all: &[Stmt],
+        rest: &[Stmt],
+        whole: &str,
+        form: Form,
+    ) -> Fixed {
         let Form {
             always,
             until,
             at_end,
         } = form;
         let (shell, os) = (self.shell, self.os);
-        let mut body = self.text_of(rest);
-        // The last statement's `&` is its chain operator, outside its text.
-        if matches!(
-            rest.last(),
-            Some(Stmt::Pipeline(Pipeline {
-                chain: Some(ChainOp::Background),
-                ..
-            }))
-        ) {
+        // A Bash body as written up to its `done`: the spans of an `if`, a group or a subshell
+        // stop before their closing word, and the last statement's `&` is outside its text.
+        let source_body = matches!(shell, Shell::Bash(_))
+            .then(|| self.bash_body(span, rest))
+            .flatten();
+        let mut body = source_body.clone().unwrap_or_else(|| self.text_of(rest));
+        if source_body.is_none()
+            && matches!(
+                rest.last(),
+                Some(Stmt::Pipeline(Pipeline {
+                    chain: Some(ChainOp::Background),
+                    ..
+                }))
+            )
+        {
             body.push_str(" &");
         }
         let n = attempts(all, shell, os);

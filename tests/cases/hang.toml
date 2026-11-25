@@ -1512,6 +1512,73 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "for ($i = 0; $i -lt 120; $i++) { if (-not (-not (Test-Path done.txt))) { break }; Start-Sleep 5 }; if ($i -eq 120) { throw 'the wait timed out' }; Write-Host deployed  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
 
+# A body that ends in a compound command keeps its closing word (`fi`, `}`, `)`).
+[[row]]
+id = "wl-bash-fix-of-a-body-ending-in-an-if"
+os = "any"
+shell = "bash"
+command = "while true; do sleep 5; if grep -q done log; then break; fi; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do sleep 5; if grep -q done log; then break; fi; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-of-a-body-ending-in-a-group"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do sleep 5; { echo waiting; }; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; { echo waiting; }; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-of-a-body-ending-in-a-subshell"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do sleep 5; ( echo waiting ); done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; ( echo waiting ); [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-of-a-multi-line-body-ending-in-an-if"
+os = "any"
+shell = "bash"
+command = "while true\ndo\n  sleep 5\n  if grep -q done log; then\n    break\n  fi\ndone"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 120); do\n  sleep 5\n  if grep -q done log; then\n    break\n  fi\n  [ \"$i\" -lt 120 ]\ndone  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+# A comment after the condition is left out of the Fix: there it would comment out the rest of the
+# one-line loop.
+[[row]]
+id = "wl-bash-fix-drops-a-comment-after-the-condition"
+os = "any"
+shell = "bash"
+command = "until grep -q done log # the build\ndo sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-drops-a-comment-after-the-condition-and-its-semicolon"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; # the build\ndo sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+# A quoted `#` is no comment: the condition keeps it.
+[[row]]
+id = "wl-bash-fix-of-a-condition-holding-a-hash"
+os = "any"
+shell = "bash"
+command = "until grep -q '#done' log; do sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = '''for i in $(seq 1 120); do grep -q '#done' log && break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'''
+
 # A body that ends in a background command takes the round test after its `&`, not after `;`.
 [[row]]
 id = "wl-bash-fix-after-a-background-command"

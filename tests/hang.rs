@@ -53,11 +53,13 @@ fn wait_and_follow_fix_lines_are_whole_and_settle() {
             fix: None,
             ..row.clone()
         };
+        // A Fix that is a command parses; a sentence (rows `…-is-a-sentence`) is no command.
+        let sentence = row.id.ends_with("-is-a-sentence");
         let again: Vec<&str> = case_loader::verdict(&pasted)
             .findings
             .iter()
             .map(|f| f.rule)
-            .filter(|r| LOOP_RULES.contains(r))
+            .filter(|r| LOOP_RULES.contains(r) || (!sentence && *r == "parse-error"))
             .collect();
         if !again.is_empty() {
             wrong.push(format!("{}: the Fix itself gives {again:?}", row.id));
