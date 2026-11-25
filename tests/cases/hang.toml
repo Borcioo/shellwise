@@ -2988,8 +2988,7 @@ fix = "time timeout 60 tail -f log"
 
 # A wrapper the bound was shown to run (`timeout 3 nohup tail -f quiet.log` ends at 3 s, 124) stays
 # inside it; any other wrapper gets the sentence: `command` and `exec` are shell builtins, which
-# timeout cannot run (127), `sudo` was not shown to run, and under `nice` timeout hung in Git Bash
-# (7 of 41 runs never ended).
+# timeout cannot run (127), and `sudo` was not shown to work. Every wrapper of the chain counts.
 [[row]]
 id = "fu-bash-fix-around-nohup"
 os = "any"
@@ -3009,13 +3008,13 @@ rules = ["follow-unbounded"]
 fix = "timeout 60 env X=1 tail -f log"
 
 [[row]]
-id = "fu-bash-fix-under-nice-is-a-sentence"
+id = "fu-bash-fix-around-nice"
 os = "any"
 shell = "bash"
 command = "nice tail -f log"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs under a wrapper the bound cannot be put in front of; put it after the wrapper, right before the program)"
+fix = "timeout 60 nice tail -f log"
 
 [[row]]
 id = "fu-bash-fix-of-watch-around-nohup"
@@ -3108,6 +3107,43 @@ command = "sudo tail -f log"
 level = "warn"
 rules = ["follow-unbounded"]
 fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs under a wrapper the bound cannot be put in front of; put it after the wrapper, right before the program)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-inside-env-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "env X=1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs under a wrapper the bound cannot be put in front of; put it after the wrapper, right before the program)"
+
+# A first wrapper spelled other than its row's name (quoted) is not read as listed.
+[[row]]
+id = "fu-bash-fix-under-a-quoted-wrapper-is-a-sentence"
+os = "any"
+shell = "bash"
+command = '"nohup" tail -f log'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs under a wrapper the bound cannot be put in front of; put it after the wrapper, right before the program)"
+
+[[row]]
+id = "fu-bash-fix-around-nice-inside-nohup"
+os = "any"
+shell = "bash"
+command = "nohup nice tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup nice tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env-inside-nohup"
+os = "any"
+shell = "bash"
+command = "nohup env X=1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup env X=1 tail -f log"
 
 [[row]]
 id = "fu-bash-fix-beside-a-follow-under-exec-is-a-sentence"

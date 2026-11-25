@@ -8,8 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ### Fixed
 
 - `follow-unbounded`: the Bash Fix puts `timeout 60` after the follow's assignments and leading
-  redirects (`LC_ALL=C timeout 60 tail -f log`), and under a wrapper timeout cannot run
-  (`command`, `exec`, `builtin`, `sudo`) or that hung around `nice` gives a sentence instead.
+  redirects (`LC_ALL=C timeout 60 tail -f log`), and under any wrapper other than `env`, `nice`
+  and `nohup` (`command`, `exec`, `builtin`, `sudo`) gives a sentence instead of a command.
 
 ## [0.1.1] - 2026-11-25
 

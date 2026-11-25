@@ -443,10 +443,19 @@ impl Walk<'_, '_> {
         if !template.contains(PIPELINE) {
             // The bound goes right before the command's name, after its assignments and leading
             // redirects; around a wrapper only when the row says the bound runs that wrapper.
-            let inner = programs::strip_wrappers(c, self.shell, self.os);
-            if inner.name.span != c.name.span
-                && !strings(row, FOLLOW_FIX_WRAPPERS).contains(&c.typed.as_str())
-            {
+            let (shell, os) = (self.shell, self.os);
+            let inner = programs::strip_wrappers(c, shell, os);
+            let listed = strings(row, FOLLOW_FIX_WRAPPERS);
+            // Every wrapper of the chain, not only the first, must be listed (`nohup nice tail`).
+            let unlisted = std::iter::once(&c.name)
+                .chain(&c.args)
+                .filter(|w| w.span.start < inner.name.span.start)
+                .filter_map(literal)
+                .any(|n| {
+                    programs::lookup(&n, shell, os).is_some_and(|p| p.is(Kind::Wrapper))
+                        && !listed.contains(&n.as_str())
+                });
+            if unlisted || (inner.name.span != c.name.span && !listed.contains(&c.typed.as_str())) {
                 return Err(UNDER_WRAPPER);
             }
             let at = Span {

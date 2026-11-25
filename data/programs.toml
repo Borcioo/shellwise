@@ -118,7 +118,7 @@ fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
 follow_when = ["-f", "--follow"]
 follow_sub = "logs"
 follow_fix = "timeout 60 <command>"
-follow_fix_wrappers = ["env", "nohup"]
+follow_fix_wrappers = ["env", "nice", "nohup"]
 
 [[program]]
 name = "docker-compose"
@@ -140,7 +140,7 @@ fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
 follow_when = ["-f", "--follow"]
 follow_sub = "logs"
 follow_fix = "timeout 60 <command>"
-follow_fix_wrappers = ["env", "nohup"]
+follow_fix_wrappers = ["env", "nice", "nohup"]
 
 [[program]]
 name = "podman"
@@ -333,8 +333,8 @@ loop_role = ["wait"]
 #                   one made from `follow_fix`)
 # follow_fix_wrappers  the wrappers a `<command>` Fix may start with: ones `timeout` was shown to
 #                   run in Bash (`timeout 3 nohup tail -f quiet.log` ends, 124). Under any other
-#                   wrapper (`command` and `exec` are shell builtins, 127; under `nice` timeout
-#                   hung in Git Bash in 7 of 41 runs) the Fix is a sentence
+#                   wrapper (`command` and `exec` are shell builtins, 127), or under any wrapper
+#                   of the chain not listed here (`nohup sudo tail`), the Fix is a sentence
 # follow_job        true = a script block it runs is a job: a follow in it is bounded when the
 #                   command also runs a `job_timeout_when` option of a job wait (`Wait-Job -Timeout`)
 # The Get-Content row (PowerShell) carries `follow_when` and `follow_fix`.
@@ -344,14 +344,14 @@ name = "tail"
 shells = ["bash"]
 follow_when = ["-f", "-F", "--follow"]
 follow_fix = "timeout 60 <command>"
-follow_fix_wrappers = ["env", "nohup"]
+follow_fix_wrappers = ["env", "nice", "nohup"]
 
 [[program]]
 name = "watch"
 shells = ["bash"]
 follow = true
 follow_fix = "timeout 60 <command>"
-follow_fix_wrappers = ["env", "nohup"]
+follow_fix_wrappers = ["env", "nice", "nohup"]
 
 [[program]]
 name = "start-job"
