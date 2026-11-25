@@ -181,6 +181,34 @@ pub fn position(text: &str, at: usize) -> (usize, usize) {
     (line, column)
 }
 
+/// `position` for many offsets into one text: the line starts are found once.
+struct Lines<'a> {
+    text: &'a str,
+    /// The byte offset each line starts at, the first line's 0 included.
+    starts: Vec<usize>,
+}
+
+impl<'a> Lines<'a> {
+    fn new(text: &'a str) -> Lines<'a> {
+        let starts = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        Lines { text, starts }
+    }
+
+    /// The same answer as `position(text, at)`.
+    fn position(&self, at: usize) -> (usize, usize) {
+        let mut end = at.min(self.text.len());
+        while !self.text.is_char_boundary(end) {
+            end -= 1;
+        }
+        // The lines whose start is at or before `end`: one per `\n` before it, and the first.
+        let line = self.starts.partition_point(|&s| s <= end);
+        let column = self.text[self.starts[line - 1]..end].chars().count() + 1;
+        (line, column)
+    }
+}
+
 /// Lint a file with the shellwise rules only.
 pub fn lint(path: &Path, cfg: &Config, deadline: &Deadline) -> Result<Report, Refusal> {
     lint_with(path, cfg, deadline, &|_, _| Vec::new())
@@ -235,7 +263,8 @@ pub fn lint_with(
         f.level = cfg.level(f.rule, f.level);
         own.insert(0, f);
     }
-    let mut located: Vec<Located> = own.into_iter().map(|f| locate(text, f)).collect();
+    let lines = Lines::new(text);
+    let mut located: Vec<Located> = own.into_iter().map(|f| locate(&lines, f)).collect();
 
     let extra = match extra {
         Ok(found) => found,
@@ -262,7 +291,7 @@ pub fn lint_with(
         .collect();
     let eof = text.trim_end().len();
     let refused_at = |f: &Finding| {
-        let line = position(text, f.span.start).0;
+        let line = lines.position(f.span.start).0;
         failed.iter().any(|p| {
             p.line == line
                 // Our parser ran into the end of the file: the construct left open may start on
@@ -279,7 +308,7 @@ pub fn lint_with(
             f.fix = None;
         }
         f.level = cfg.level(f.rule, f.level);
-        let l = locate(text, f);
+        let l = locate(&lines, f);
         let seen = located[..own_count]
             .iter()
             .any(|o| o.line == l.line && o.finding.rule == l.finding.rule);
@@ -295,11 +324,41 @@ pub fn lint_with(
     })
 }
 
-fn locate(text: &str, finding: Finding) -> Located {
-    let (line, column) = position(text, finding.span.start);
+fn locate(lines: &Lines, finding: Finding) -> Located {
+    let (line, column) = lines.position(finding.span.start);
     Located {
         line,
         column,
         finding,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The line index gives `position`'s answer at every offset: line starts, offsets inside a
+    /// multi-byte character, a CR before a newline, a text without a final newline, past the end.
+    #[test]
+    fn the_line_index_answers_as_position_at_every_offset() {
+        let o = char::from_u32(0xF3).unwrap();
+        let euro = char::from_u32(0x20AC).unwrap();
+        let texts = [
+            String::new(),
+            "\n".to_string(),
+            "\n\n".to_string(),
+            "a".to_string(),
+            format!("ab{o}c\r\n{euro}\n\nx{o}{o}\ny"),
+            format!("{euro}\n"),
+        ];
+        let mut checked = 0;
+        for text in &texts {
+            let lines = Lines::new(text);
+            for at in 0..text.len() + 3 {
+                assert_eq!(lines.position(at), position(text, at), "{text:?} at {at}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 30, "{checked}");
     }
 }
