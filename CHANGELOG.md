@@ -22,6 +22,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   `throw`), so `… && deploy.sh` no longer runs after a timeout.
 - The `wait-loop-unbounded` Fix of a loop over several lines is the loop with its own lines, not
   placeholders; a loop holding a here-document gets a sentence.
+- The `wait-loop-unbounded` Fix keeps a body that starts or ends with a compound command (`if … fi`,
+  `{ … }`, `( … )`, PowerShell `try { } catch { }`) whole, so the Fix parses.
 - The `wait-loop-unbounded` Fix counts `sleep 1m` as a minute (it read 1 s, making a 10-hour loop).
 - The `wait-loop-unbounded` hint names `timeout 600 tail --pid=<pid> -f /dev/null` instead of
   `wait <pid>`, which fails in a tool call's shell.
