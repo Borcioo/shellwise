@@ -3182,6 +3182,16 @@ level = "warn"
 rules = ["follow-unbounded", "follow-unbounded"]
 fix = "put `timeout 60` after the wrappers, right before the program: `exec timeout 60 tail -f b.log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
 
+# Two follow programs share one sentence: the first reason's follow gives it.
+[[row]]
+id = "fu-bash-fix-of-two-programs-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then tail -f log; watch ls; fi"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
 # A bound after the wrappers and prefixes in front of the follow program bounds it, as
 # `timeout 60 tail -f log` does (`nohup timeout 8 tail -f quiet.log` ends at 8 s, 124).
 [[row]]
@@ -3349,6 +3359,35 @@ command = "PATH=/x command tail -f log"
 level = "warn"
 rules = ["follow-unbounded"]
 fix = "put `timeout 60` in front and set the assignments after it: `command timeout 60 env PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# A line continuation stays in a sentence's form too: before the program, and in front of a
+# `PATH` assignment that moves behind the bound.
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-continuation-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo \\\n timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-an-unindented-continuation-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo \\\ntail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo \\\ntimeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-after-a-continued-path-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
 
 # An append keeps the old directories in front: the bound is found as before.
 [[row]]
