@@ -932,6 +932,251 @@ shell = "bash"
 command = 'until grep -q done run.log || (( ++n > 60 )); do sleep 5; done'
 level = "ok"
 rules = []
+
+# --- A clock is a bound only as an operand of a comparison (Ruling 135) ---
+# A clock word in a message, a file name, a pattern or a parameter name (`-Seconds`) is no bound.
+
+[[row]]
+id = "wl-ps-seconds-parameter-is-no-clock"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { if (Test-Path done.txt) { break } else { Start-Sleep -Seconds 5 } }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-clock-word-in-a-pattern-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until grep -q "took 5 seconds" run.log; do sleep 15; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-now-in-a-pattern-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until grep -q "ready now" log; do sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-date-in-a-file-name-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until [ -f "out-$(date +%F).txt" ]; do sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-date-in-a-message-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'while true; do if grep -q done log; then echo "$(date) done"; break; fi; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-get-date-in-a-message-is-no-clock"
+os = "any"
+shell = "pwsh"
+command = 'while ($true) { if (Test-Path done.txt) { Write-Host "done $(Get-Date)"; break }; Start-Sleep 5 }'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Allow twins: the same loops with a clock compared in the guard.
+[[row]]
+id = "wl-ps-stopwatch-compared-in-a-guard-with-an-else"
+os = "any"
+shell = "pwsh"
+command = "$sw = [Diagnostics.Stopwatch]::StartNew(); while ($true) { if ((Test-Path done.txt) -or $sw.Elapsed.TotalSeconds -gt 600) { break } else { Start-Sleep -Seconds 5 } }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-seconds-compared-in-a-guard"
+os = "any"
+shell = "bash"
+command = 'until grep -q "took 5 seconds" run.log; do [ $SECONDS -ge 600 ] && break; sleep 15; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-date-compared-in-a-guard"
+os = "any"
+shell = "bash"
+command = 'end=$(( $(date +%s) + 600 )); until [ -f "out-$(date +%F).txt" ]; do [ "$(date +%s)" -gt "$end" ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-get-date-compared-in-a-guard"
+os = "any"
+shell = "pwsh"
+command = '$deadline = (Get-Date).AddMinutes(10); while ($true) { if ((Test-Path done.txt) -or (Get-Date) -gt $deadline) { Write-Host "done $(Get-Date)"; break }; Start-Sleep 5 }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-stopwatch-milliseconds-in-the-condition"
+os = "any"
+shell = "pwsh"
+command = "$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path done.txt) -and $sw.ElapsedMilliseconds -lt 60000) { Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+# --- A counter reads its own old value; a polled value does not (Ruling 135) ---
+
+[[row]]
+id = "wl-bash-polled-count-is-no-counter"
+os = "any"
+shell = "bash"
+command = "while true; do c=$(ls out | wc -l); [ $c -ge 10 ] && break; sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-polled-status-is-no-counter"
+os = "any"
+shell = "bash"
+command = 'while true; do s=$(curl -s localhost/status); [ "$s" -gt 0 ] && break; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-polled-count-is-no-counter"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { $c = (Get-ChildItem out).Count; if ($c -ge 10) { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# A property named like the variable is not the variable.
+[[row]]
+id = "wl-ps-polled-count-property-is-no-counter"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { $count = (Get-ChildItem out).Count; if ($count -ge 10) { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Allow twins: counters in every spelling the ruling names.
+[[row]]
+id = "wl-bash-counter-let-assignment"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do let n=n+1; [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-let-increment"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do let n++; [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-arith-statement"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do ((n++)); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-in-an-expansion"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do : $((++n)); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-plus-equals"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n+=1; [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-from-the-polled-shape"
+os = "any"
+shell = "bash"
+command = "n=0; while true; do c=$(ls out | wc -l); n=$((n+1)); [ $c -ge 10 ] && break; [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-plus-equals"
+os = "any"
+shell = "pwsh"
+command = "$i = 0; while ($true) { $c = (Get-ChildItem out).Count; $i += 1; if ($c -ge 10 -or $i -gt 100) { break }; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-self-assignment"
+os = "any"
+shell = "pwsh"
+command = "$i = 0; while (-not (Test-Path done.txt)) { $i = $i + 1; if ($i -ge 60) { break }; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+# --- A wait in the condition is a wait ---
+
+[[row]]
+id = "wl-bash-wait-in-the-condition"
+os = "any"
+shell = "bash"
+command = "while sleep 5; do grep -q done log && break; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-wait-in-the-condition-with-a-counter"
+os = "any"
+shell = "bash"
+command = "n=0; while sleep 5; do n=$((n+1)); [ $n -gt 100 ] && break; grep -q done log && break; done"
+level = "ok"
+rules = []
+
+# `read -t` in the condition ends the loop when its time runs out: no wait of the loop's own.
+[[row]]
+id = "wl-bash-read-with-timeout-in-the-condition-is-ok"
+os = "any"
+shell = "bash"
+command = 'while read -t 5 line; do echo "$line"; done'
+level = "ok"
+rules = []
+
+# --- More waits: `[Threading.Thread]::Sleep` ---
+
+[[row]]
+id = "wl-ps-thread-sleep-waits"
+os = "any"
+shell = "pwsh"
+command = "while (-not (Test-Path done.txt)) { [Threading.Thread]::Sleep(5000) }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-system-thread-sleep-waits"
+os = "any"
+shell = "pwsh"
+command = "while (-not (Test-Path done.txt)) { [System.Threading.Thread]::Sleep(500) }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-thread-sleep-with-a-counter"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path done.txt)) { $n++; if ($n -ge 60) { break }; [Threading.Thread]::Sleep(5000) }"
+level = "ok"
+rules = []
 # --- follow-unbounded (warn): a follow command nothing stops ---
 
 [[row]]

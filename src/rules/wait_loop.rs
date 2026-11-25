@@ -9,15 +9,16 @@
 //! is read from. This file holds no program or option name.
 //!
 //! A bound is visible when the loop's condition, or a test guarding a `break`/`exit`/`return` in
-//! its body, reads a clock or compares a variable the loop changes; or when the loop runs under a
-//! wrapper that bounds its wait (`timeout 600 bash -c '…'`). A loop with no wait whose condition
+//! its body, compares a clock or a counter (a variable whose new value reads its old one); or when
+//! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`). A loop with no wait whose condition
 //! can fail (`while read line`) is no wait loop. A loop whose body runs a command the guard cannot
 //! read (a dynamic name, `eval`) is not judged: that command may end it. PowerShell keeps no
 //! `break` in the IR, so its guards are the `if` statements whose text holds an exit word.
 
 use super::{Ctx, Rule};
 use crate::ir::{
-    ChainOp, Elem, LoopHead, Pipeline, Redirect, Script, SimpleCommand, Stmt, Word, WordPart,
+    ChainOp, Elem, LoopHead, MethodCall, Pipeline, Redirect, Script, SimpleCommand, Stmt, Word,
+    WordPart,
 };
 use crate::level::{Finding, Level, Span};
 use crate::parse::bash;
@@ -31,6 +32,8 @@ pub const FOLLOW_UNBOUNDED: &str = "follow-unbounded";
 const ROLE: &str = "loop_role";
 const WAIT_WHEN: &str = "loop_wait_when";
 const WAIT_MS: &str = "loop_wait_ms";
+const WAIT_IN_MS: &str = "loop_wait_in_ms";
+const READS_INPUT: &str = "loop_reads_input";
 const BODY: &str = "loop_body";
 const BOUNDS: &str = "bounds_wait";
 const FOLLOW: &str = "follow";
@@ -295,16 +298,22 @@ impl Walk<'_, '_> {
         let cond_text = self.text_of(cond);
         let always = matches!(head, LoopHead::Counted { open: true })
             || (!until && is_always(&cond_text, &loops.always));
-        let waits = commands(rest).iter().any(|c| waits(c, shell, os));
+        // A wait in a `while` condition (`while sleep 5`) paces the loop as one in its body; a
+        // reader's own timeout (`while read -t 5 line`) ends the loop instead.
+        let cond_waits = !until
+            && commands(cond)
+                .iter()
+                .any(|c| waits(c, shell, os) && !reads_input(c, shell, os));
+        let waits = any_wait(rest, shell, os) || cond_waits;
         if !waits && !always {
             return;
         }
         let whole = self.slice(span);
-        let changed = changed_names(whole);
+        let fold = !matches!(shell, Shell::Bash(_));
+        let counters = counters(whole, fold);
         let mut tests = vec![self.header(span, rest, at_end)];
         tests.extend(self.guards(rest));
-        let fold = !matches!(shell, Shell::Bash(_));
-        if tests.iter().any(|t| bounds(t, &changed, fold)) {
+        if tests.iter().any(|t| bounds(t, &counters, fold)) {
             return;
         }
         // `while ! C`: the Bash lowering keeps no `!`; it stands between the keyword and C.
@@ -533,6 +542,11 @@ fn row(c: &SimpleCommand, shell: Shell, os: Os) -> Option<&'static Program> {
     programs::lookup(&inner.typed, shell, os)
 }
 
+/// The command reads its input (`read`): a `loop_reads_input` row.
+fn reads_input(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    row(c, shell, os).is_some_and(|p| flag(p, READS_INPUT))
+}
+
 /// The command pauses: a `wait` row, with one of its `loop_wait_when` options when it has some.
 fn waits(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
     let Some(p) = row(c, shell, os).filter(|p| strings(p, ROLE).contains(&WAIT)) else {
@@ -682,17 +696,29 @@ fn child_body(c: &SimpleCommand, shell: Shell, os: Os) -> Option<String> {
     None
 }
 
-/// Every simple command in `stmts`, inside compound statements and substitutions too.
-fn commands(stmts: &[Stmt]) -> Vec<&SimpleCommand> {
-    let mut out = Vec::new();
+/// Every simple command and .NET call in some statements, inside compound statements and
+/// substitutions too.
+#[derive(Default)]
+struct Calls<'a> {
+    cmds: Vec<&'a SimpleCommand>,
+    methods: Vec<&'a MethodCall>,
+}
+
+fn calls(stmts: &[Stmt]) -> Calls<'_> {
+    let mut out = Calls::default();
     for st in stmts {
         collect(st, &mut out);
     }
     out
 }
 
-fn collect<'a>(st: &'a Stmt, out: &mut Vec<&'a SimpleCommand>) {
-    let script = |s: &'a Script, out: &mut Vec<&'a SimpleCommand>| {
+/// Every simple command in `stmts`, inside compound statements and substitutions too.
+fn commands(stmts: &[Stmt]) -> Vec<&SimpleCommand> {
+    calls(stmts).cmds
+}
+
+fn collect<'a>(st: &'a Stmt, out: &mut Calls<'a>) {
+    let script = |s: &'a Script, out: &mut Calls<'a>| {
         for st in &s.stmts {
             collect(st, out);
         }
@@ -702,7 +728,7 @@ fn collect<'a>(st: &'a Stmt, out: &mut Vec<&'a SimpleCommand>) {
             for elem in &p.elems {
                 match elem {
                     Elem::Cmd(c) => {
-                        out.push(c);
+                        out.cmds.push(c);
                         for w in std::iter::once(&c.name).chain(&c.args) {
                             word_commands(w, out);
                         }
@@ -710,7 +736,10 @@ fn collect<'a>(st: &'a Stmt, out: &mut Vec<&'a SimpleCommand>) {
                             word_commands(w, out);
                         }
                     }
-                    Elem::Method(m) => m.args.iter().for_each(|w| word_commands(w, out)),
+                    Elem::Method(m) => {
+                        out.methods.push(m);
+                        m.args.iter().for_each(|w| word_commands(w, out));
+                    }
                     Elem::Expr(w) => word_commands(w, out),
                 }
             }
@@ -720,7 +749,7 @@ fn collect<'a>(st: &'a Stmt, out: &mut Vec<&'a SimpleCommand>) {
     }
 }
 
-fn word_commands<'a>(w: &'a Word, out: &mut Vec<&'a SimpleCommand>) {
+fn word_commands<'a>(w: &'a Word, out: &mut Calls<'a>) {
     for part in &w.parts {
         if let WordPart::Subst(s) | WordPart::Block(s) = part {
             for st in &s.stmts {
@@ -728,6 +757,26 @@ fn word_commands<'a>(w: &'a Word, out: &mut Vec<&'a SimpleCommand>) {
             }
         }
     }
+}
+
+/// The row of a static .NET call (`[Threading.Thread]::Sleep`), named `[type]::method`.
+fn method_row(m: &MethodCall, shell: Shell, os: Os) -> Option<&'static Program> {
+    if m.type_name.is_empty() {
+        return None;
+    }
+    programs::lookup(&format!("[{}]::{}", m.type_name, m.method), shell, os)
+}
+
+/// The .NET call pauses: a `wait` row.
+fn method_waits(m: &MethodCall, shell: Shell, os: Os) -> bool {
+    method_row(m, shell, os).is_some_and(|p| strings(p, ROLE).contains(&WAIT))
+}
+
+/// Something in `stmts` pauses.
+fn any_wait(stmts: &[Stmt], shell: Shell, os: Os) -> bool {
+    let c = calls(stmts);
+    c.cmds.iter().any(|c| waits(c, shell, os))
+        || c.methods.iter().any(|m| method_waits(m, shell, os))
 }
 
 /// The span from the first to the last of `stmts`, `None` when they hold no span.
@@ -824,69 +873,240 @@ fn is_always(cond: &str, always: &[String]) -> bool {
     always.iter().any(|a| a.eq_ignore_ascii_case(c))
 }
 
-/// The names the loop's text changes: `n++`, `++n`, `n+=1`, `n-=1`, `n=…` (not `n==`), `$n = …`.
-fn changed_names(text: &str) -> Vec<String> {
+fn same(a: &str, b: &str, fold: bool) -> bool {
+    if fold {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
+fn is_ident(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// The identifiers of `text` that name a variable: not a property or a static member (`.Count`,
+/// `::Now`), not an option (`-s` after a blank).
+fn variables(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let b = text.as_bytes();
-    let mut out = Vec::new();
     let mut i = 0;
-    while i < b.len() {
-        let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-        if !(b[i].is_ascii_alphabetic() || b[i] == b'_') || (i > 0 && ident(b[i - 1])) {
-            i += 1;
+    std::iter::from_fn(move || {
+        while i < b.len() {
+            if !(b[i].is_ascii_alphabetic() || b[i] == b'_') || (i > 0 && is_ident(b[i - 1])) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < b.len() && is_ident(b[i]) {
+                i += 1;
+            }
+            let before = &text[..start];
+            let member = before.ends_with('.') || before.ends_with("::");
+            let option = before
+                .strip_suffix('-')
+                .is_some_and(|b| b.is_empty() || b.ends_with([' ', '\t', '-']) || b.ends_with('('));
+            if !member && !option {
+                return Some((start, &text[start..i]));
+            }
+        }
+        None
+    })
+}
+
+/// The right side of an assignment that starts at `t`: up to the end of its statement (a Bash
+/// assignment word also ends at a blank).
+fn assigned_value(t: &str, fold: bool) -> &str {
+    let t = t.trim_start_matches([' ', '\t']);
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    for (k, ch) in t.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
             continue;
         }
-        let start = i;
-        while i < b.len() && ident(b[i]) {
-            i += 1;
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => return &t[..k],
+            ')' | ']' | '}' => depth -= 1,
+            ';' | '\n' | '|' | '&' if depth == 0 => return &t[..k],
+            ' ' | '\t' if depth == 0 && !fold => return &t[..k],
+            _ => {}
         }
-        let name = &text[start..i];
+    }
+    t
+}
+
+/// The counters of a loop's text: variables whose new value reads their old one (`n=$((n+1))`,
+/// `((n++))`, `let n++`, `let n=n+1`, `n+=1`, `$i++`, `$i += 1`, `$i = $i + 1`). A variable
+/// assigned from a command or an expression that does not read it (`c=$(ls out | wc -l)`) holds a
+/// polled value and is no counter (Ruling 135).
+fn counters(text: &str, fold: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (start, name) in variables(text) {
         let before = &text[..start];
-        let pre = before.ends_with("++") || before.ends_with("--");
-        let after = text[i..].trim_start_matches([' ', '\t']);
-        let op = ["++", "--", "+=", "-=", "*="]
+        let after = &text[start + name.len()..];
+        // `--` before a name is a decrement only inside an expression (`((--n))`), never a long
+        // option (`--count`).
+        let pre = before.ends_with("++")
+            || before
+                .strip_suffix("--")
+                .is_some_and(|b| !b.is_empty() && !b.ends_with([' ', '\t']));
+        let post = after.starts_with("++") || after.starts_with("--");
+        let spaced = after.trim_start_matches([' ', '\t']);
+        let compound = ["+=", "-=", "*=", "/="]
             .iter()
-            .any(|o| after.starts_with(o))
-            || (after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=~"));
-        if (pre || op) && !out.iter().any(|n: &String| n.eq_ignore_ascii_case(name)) {
+            .any(|o| spaced.starts_with(o));
+        let assigned = spaced.starts_with('=')
+            && !spaced.starts_with("==")
+            && !spaced.starts_with("=~")
+            && variables(assigned_value(&spaced[1..], fold)).any(|(_, v)| same(v, name, fold));
+        if (pre || post || compound || assigned) && !out.iter().any(|n| same(n, name, fold)) {
             out.push(name.to_string());
         }
     }
     out
 }
 
-/// A test that bounds the loop: it reads a clock, or compares a name the loop changes.
-fn bounds(test: &str, changed: &[String], fold: bool) -> bool {
-    let loops = programs::loops();
-    if words(test).any(|w| loops.clocks.iter().any(|c| c.eq_ignore_ascii_case(w))) {
-        return true;
-    }
-    let arith = test.find("((");
-    let compares = loops.compares.iter().any(|op| {
-        let symbol = !op.starts_with('-');
-        test.split_whitespace().any(|t| {
-            if fold {
-                t.eq_ignore_ascii_case(op)
-            } else {
-                t == op
+/// The words of `text` split on blanks outside quotes; a quoted part stays in its word.
+fn tokens(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quote: Option<char> = None;
+    for (k, ch) in text.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
             }
-        }) || (symbol && arith.is_some_and(|at| test[at..].contains(op.as_str())))
-    });
-    compares
-        && words(test).any(|w| {
-            let w = w.trim_start_matches('$');
-            changed.iter().any(|n| {
-                if fold {
-                    n.eq_ignore_ascii_case(w)
-                } else {
-                    n == w
-                }
-            })
+            continue;
+        }
+        if ch.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push(&text[s..k]);
+            }
+            continue;
+        }
+        if start.is_none() {
+            start = Some(k);
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        }
+    }
+    if let Some(s) = start {
+        out.push(&text[s..]);
+    }
+    out
+}
+
+fn balance(parts: &[&str]) -> isize {
+    parts
+        .iter()
+        .flat_map(|p| p.chars())
+        .map(|c| match c {
+            '(' => 1,
+            ')' => -1,
+            _ => 0,
         })
+        .sum()
+}
+
+/// The operands of the comparisons in `test`: the words next to an operator written as a word
+/// (`$n -lt 60`, `(Get-Date) -gt $end`, `$(( $(date +%s) - t )) -gt 60`, parentheses kept
+/// whole), and the whole of a `(( … ))` that holds a symbolic operator (`((n++>=60))`).
+fn operands(test: &str, compares: &[String], fold: bool) -> Vec<String> {
+    let toks = tokens(test);
+    let mut out = Vec::new();
+    for (k, t) in toks.iter().enumerate() {
+        if !compares.iter().any(|op| same(t, op, fold)) {
+            continue;
+        }
+        let mut first = k;
+        while first > 0 {
+            first -= 1;
+            // Going left, a `)` opens a group and its `(` closes it.
+            if balance(&toks[first..k]) >= 0 {
+                break;
+            }
+        }
+        let mut last = k;
+        while last + 1 < toks.len() {
+            last += 1;
+            if balance(&toks[k + 1..=last]) <= 0 {
+                break;
+            }
+        }
+        if first < k {
+            out.push(toks[first..k].join(" "));
+        }
+        if last > k {
+            out.push(toks[k + 1..=last].join(" "));
+        }
+    }
+    let symbols: Vec<&String> = compares.iter().filter(|op| !op.starts_with('-')).collect();
+    let mut rest = test;
+    while let Some(at) = rest.find("((") {
+        let region = &rest[at..];
+        let mut depth = 0usize;
+        let mut end = region.len();
+        for (k, ch) in region.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let inner = &region[..end];
+        if symbols.iter().any(|op| inner.contains(op.as_str())) {
+            out.push(inner.to_string());
+        }
+        rest = &region[end.max(2)..];
+    }
+    out
+}
+
+/// `text` with the contents of its single-quoted strings removed: a literal is never a clock or a
+/// counter.
+fn without_literals(text: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for ch in text.chars() {
+        if ch == '\'' {
+            inside = !inside;
+        } else if !inside {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// A test that bounds the loop (Ruling 135): one side of a comparison in it is a clock or a
+/// counter.
+fn bounds(test: &str, counters: &[String], fold: bool) -> bool {
+    let loops = programs::loops();
+    operands(test, &loops.compares, fold).iter().any(|operand| {
+        let operand = without_literals(operand);
+        let clock = operand
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+            .filter(|w| !w.is_empty() && !w.starts_with('-'))
+            .any(|w| loops.clocks.iter().any(|c| same(c, w, fold)));
+        clock || variables(&operand).any(|(_, v)| counters.iter().any(|n| same(n, v, fold)))
+    })
 }
 
 /// How many rounds the Fix line's loop runs: the budget over the first wait's seconds.
 fn attempts(rest: &[Stmt], shell: Shell, os: Os) -> u64 {
-    let secs = commands(rest)
+    let all = calls(rest);
+    let command_secs = all
+        .cmds
         .into_iter()
         .filter(|c| waits(c, shell, os))
         .find_map(|c| {
@@ -900,7 +1120,19 @@ fn attempts(rest: &[Stmt], shell: Shell, os: Os) -> u64 {
             args.iter()
                 .find_map(|a| a.trim_end_matches('s').parse::<f64>().ok())
                 .map(|v| if in_ms { v / 1000.0 } else { v })
+        });
+    let method_secs = || {
+        all.methods.into_iter().find_map(|m| {
+            let p = method_row(m, shell, os).filter(|p| strings(p, ROLE).contains(&WAIT))?;
+            let v = m
+                .args
+                .iter()
+                .find_map(|w| literal(w)?.parse::<f64>().ok())?;
+            Some(if flag(p, WAIT_IN_MS) { v / 1000.0 } else { v })
         })
+    };
+    let secs = command_secs
+        .or_else(method_secs)
         .filter(|s| *s > 0.0)
         .unwrap_or(1.0);
     (FIX_BUDGET_SECS / secs).ceil().max(1.0) as u64

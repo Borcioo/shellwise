@@ -223,6 +223,7 @@ hang_level = "break"
 fix = 'feed read its input on the same line: <command> <<< "<value>"'
 loop_role = ["wait"]
 loop_wait_when = ["-t"]
+loop_reads_input = true
 
 [[program]]
 name = "claude"
@@ -236,14 +237,25 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 # --- Wait loops (wait-loop-unbounded, read by src/rules/wait_loop.rs; the loop words are in [loops]) ---
 # loop_role       what the command is to a loop: "wait" (it pauses, so the loop polls)
 # loop_wait_when  for "wait": only with one of these options (`read -t`)
+# loop_reads_input true = it reads its input (`read`): in a loop's condition it ends the loop when
+#                 the input ends, and its own `-t` wait ends the loop instead of pacing it
 # loop_wait_ms    for "wait": with one of these options its number is milliseconds
+# loop_wait_in_ms for "wait": its number is always milliseconds (`[Threading.Thread]::Sleep(500)`)
 # loop_body       on a shell row: the option whose next word is a script the rule reads too
 #                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
+# A .NET method is a row named `[type]::method` as written, lowercase.
 
 [[program]]
 name = "sleep"
 shells = ["bash"]
 loop_role = ["wait"]
+
+[[program]]
+name = "[threading.thread]::sleep"
+shells = ["pwsh"]
+aliases = { pwsh_windows = ["[system.threading.thread]::sleep"], pwsh_posix = ["[system.threading.thread]::sleep"] }
+loop_role = ["wait"]
+loop_wait_in_ms = true
 
 [[program]]
 name = "start-sleep"
@@ -766,9 +778,10 @@ opt_out = ["MSYS_NO_PATHCONV", "MSYS2_ARG_CONV_EXCL"]
 exits = ["break", "exit", "return", "throw"]
 # A whole loop condition that is always true (Bash `true`, `:`; PowerShell `$true`, `1`).
 always = ["true", ":", "$true", "1"]
-# Words that read the time: a test holding one is a deadline (`$SECONDS`, `date +%s`,
-# `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`).
-clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopwatch", "Elapsed"]
+# Words that read the time: a comparison with one in an operand is a deadline (`$SECONDS`,
+# `date +%s`, `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`). Anywhere else (a message,
+# a file name, a parameter such as `-Seconds`) a clock word is no bound.
+clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopwatch", "Elapsed", "ElapsedMilliseconds", "ElapsedTicks"]
 # Operators that compare numbers: a test with one on a variable the loop changes is a counter
 # (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
 compares = ["-lt", "-le", "-gt", "-ge", "<", "<=", ">", ">="]

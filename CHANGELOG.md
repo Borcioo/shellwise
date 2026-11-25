@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- `wait-loop-unbounded` now catches a loop whose only "deadline" is a clock word in a message, a
+  file name, a pattern or a parameter (`grep -q "took 5 seconds"`, `Start-Sleep -Seconds 5`): a
+  clock bounds a loop only when a comparison reads it.
+- `wait-loop-unbounded` now catches a loop that compares a polled value (`c=$(ls out | wc -l);
+  [ $c -ge 10 ] && break`): only a variable that counts from its own old value is a counter.
+- `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
+  `[Threading.Thread]::Sleep` in PowerShell.
+
 ## [0.1.0] - 2026-11-20
 
 The first release. An early version: expect rough edges and tell us about wrong verdicts.
