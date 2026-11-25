@@ -90,8 +90,14 @@ $n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.tx
   +%s); [ $now -gt $end ] && break`) is a polled value, and the loop is a finding.
 - PowerShell keeps no `break` in the parsed form: a guard is an `if` whose text holds an exit word.
   A `break` with no `if` around it is not seen.
-- A `while read` over a FIFO that never closes runs on: the rule reads any `read` condition
-  without `-t` as ending with its input.
+- A `while read` over a FIFO that never closes runs on: the rule reads any `while read` condition
+  without `-t` as ending with its input (`until read` and `while ! read` wait as any poll does).
+- `while read -t 5 line; do …; sleep 1; done` is a finding, though `read -t` ends it after 5 s
+  without input.
+- A subshell's `exit` or `break` (`[ $n -gt 9 ] && ( echo timeout; exit 1 )`) is no bound: it
+  leaves the subshell only.
+- A Bash body that runs `continue` gets a sentence, not a command: `continue` would skip the round
+  test.
 - Bash `for ((;;))` written without blanks is a parse error for the Bash parser (warn
   `parse-error`); `for (( ; ; ))` is read.
 - Only the outermost wrapper counts as a bound, as for `will-hang`.

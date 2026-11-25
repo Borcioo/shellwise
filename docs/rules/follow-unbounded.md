@@ -62,3 +62,6 @@ $j = Start-Job { Get-Content run.log -Wait }; $null = Wait-Job $j -Timeout 60; R
   it waits for.
 - In Windows PowerShell 5.1 a job starts in the Documents folder: a relative path in the Fix reads
   from there.
+- A job does not see the caller's variables: in the Fix of `Get-Content log -Wait | Select-String
+  $pat`, write `$using:pat`.
+- `tail -f log --pid=<pid>` ends with that process but still warns.

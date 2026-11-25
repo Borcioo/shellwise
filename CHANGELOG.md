@@ -30,6 +30,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - The `follow-unbounded` Fix keeps the later pipeline stages, and the PowerShell Fix is
   time-bounded (a job with `Wait-Job -Timeout 60`) instead of `| Select-Object -First 20`, which
   did not end on a quiet log.
+- `wait-loop-unbounded` now catches `until read …` and `while ! read …` polls, and no longer reads
+  a subshell's `( …; exit 1 )` as the loop's end.
+- `wait-loop-unbounded` reads a counter in backticks (``n=`expr $n + 1` ``) and `((--n))`.
 - `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
   `[Threading.Thread]::Sleep` in PowerShell.
 

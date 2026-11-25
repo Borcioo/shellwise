@@ -247,7 +247,14 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 # loop_wait_units for "wait": the seconds of each unit suffix its number may carry (`sleep 1m`)
 # loop_body       on a shell row: the option whose next word is a script the rule reads too
 #                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
+# loop_skips_round true = it ends the round early (`continue`): a Bash Fix cannot end the round
+#                 with its round test, so it is a sentence
 # A .NET method is a row named `[type]::method` as written, lowercase.
+
+[[program]]
+name = "continue"
+shells = ["bash"]
+loop_skips_round = true
 
 [[program]]
 name = "sleep"

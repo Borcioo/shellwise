@@ -642,7 +642,28 @@ command = 'while IFS= read -r line || [ -n "$line" ]; do echo "$line"; sleep 1; 
 level = "ok"
 rules = []
 
-# Deny twins: a `read` in the body is no reader condition, and `read -t` is no plain reader.
+# `until read` and `while ! read` loop while the read fails (a file that is not there yet): they
+# wait, as any polling loop does.
+[[row]]
+id = "wl-bash-until-read-is-a-wait-loop"
+os = "any"
+shell = "bash"
+command = "until read -r pid < server.pid 2>/dev/null; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 600); do read -r pid < server.pid 2>/dev/null && break; sleep 1; [ "$i" -lt 600 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-while-not-read-is-a-wait-loop"
+os = "any"
+shell = "bash"
+command = "while ! read -r line < ready.fifo; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Deny twins: a `read` in the body is no reader condition. The `read -t` row is a known false
+# deny kept at break for a ruling: Ruling 134 names only a `read` without `-t`, though `while read
+# -t 5` also ends by its own timeout.
 [[row]]
 id = "wl-bash-read-in-the-body-with-sleep"
 os = "any"
@@ -693,6 +714,15 @@ shell = "bash"
 command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -le 100 ] || { echo timeout; exit 1; }; sleep 5; done"
 level = "ok"
 rules = []
+
+# A subshell's `exit` leaves the subshell, not the loop.
+[[row]]
+id = "wl-bash-subshell-exit-is-no-guard"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -gt 100 ] && ( echo timeout; exit 1 ); sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
 
 # Deny twins: the block's test is no counter, or the counter test is not joined to the block.
 [[row]]
@@ -1230,6 +1260,23 @@ command = "while ($true) { $count = (Get-ChildItem out).Count; if ($count -ge 10
 level = "break"
 rules = ["wait-loop-unbounded"]
 
+# A long option (`--count`) is no decrement, and a comparison inside a quoted pattern is none.
+[[row]]
+id = "wl-bash-long-option-is-no-decrement"
+os = "any"
+shell = "bash"
+command = "while true; do count=$(grep --count x log); [ $count -ge 3 ] && break; sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-comparison-in-a-quoted-pattern-is-none"
+os = "any"
+shell = "bash"
+command = 'n=0; until grep -q "n -gt 5" log; do n=$((n+1)); sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
 # Allow twins: counters in every spelling the ruling names.
 [[row]]
 id = "wl-bash-counter-let-assignment"
@@ -1260,6 +1307,22 @@ id = "wl-bash-counter-in-an-expansion"
 os = "any"
 shell = "bash"
 command = "n=0; until grep -q done log; do : $((++n)); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-pre-decrement"
+os = "any"
+shell = "bash"
+command = "n=100; until grep -q done log; do ((--n)); [ $n -le 0 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-in-backticks"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=`expr $n + 1`; [ $n -gt 100 ] && break; sleep 5; done"
 level = "ok"
 rules = []
 
@@ -1310,6 +1373,15 @@ id = "wl-bash-wait-in-the-condition-with-a-counter"
 os = "any"
 shell = "bash"
 command = "n=0; while sleep 5; do n=$((n+1)); [ $n -gt 100 ] && break; grep -q done log && break; done"
+level = "ok"
+rules = []
+
+# `until sleep 5` ends at once: a wait in an `until` condition paces nothing.
+[[row]]
+id = "wl-bash-wait-in-an-until-condition-is-no-wait"
+os = "any"
+shell = "bash"
+command = "until sleep 5; do grep -q x log; done"
 level = "ok"
 rules = []
 
@@ -1372,6 +1444,35 @@ command = "until [ -f a ] && [ -f b ]; do sleep 5; done"
 level = "break"
 rules = ["wait-loop-unbounded"]
 fix = 'for i in $(seq 1 120); do [ -f a ] && [ -f b ] && break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+# A subshell or a brace group around the condition stays, its `!` too.
+[[row]]
+id = "wl-bash-fix-keeps-a-negated-subshell-condition"
+os = "any"
+shell = "bash"
+command = "while ! ( grep -q a log && grep -q b log ); do sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do ! ( grep -q a log && grep -q b log ) || break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+[[row]]
+id = "wl-bash-fix-keeps-a-brace-group-condition"
+os = "any"
+shell = "bash"
+command = "until { grep -q a log; grep -q b log; }; do sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do { grep -q a log; grep -q b log; } && break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
+# `continue` would skip the round test: no command is built, a sentence is.
+[[row]]
+id = "wl-bash-fix-of-a-body-with-continue-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do [ -f skip ] && continue; sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "rewrite the loop as a loop of at most 120 rounds that runs its condition first and breaks on it, and that fails when the rounds run out (no command is built: the body's `continue` would skip the round test); when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
 
 # A condition of several commands is grouped: only its last one decides.
 [[row]]

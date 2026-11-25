@@ -35,6 +35,7 @@ const WAIT_MS: &str = "loop_wait_ms";
 const WAIT_IN_MS: &str = "loop_wait_in_ms";
 const WAIT_UNITS: &str = "loop_wait_units";
 const READS_INPUT: &str = "loop_reads_input";
+const SKIPS_ROUND: &str = "loop_skips_round";
 const BODY: &str = "loop_body";
 const BOUNDS: &str = "bounds_wait";
 const FOLLOW: &str = "follow";
@@ -73,7 +74,8 @@ impl Rule for WaitLoopRule {
             out,
             outer: None,
             mode: Mode::Loops,
-            job_timeout: false,
+            root: ctx.script,
+            job_timeout: Some(false),
         }
         .script(ctx.script, false);
     }
@@ -91,10 +93,6 @@ impl Rule for FollowRule {
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
-        let (shell, os) = (ctx.input.shell, ctx.input.os);
-        let job_timeout = commands(&ctx.script.stmts)
-            .iter()
-            .any(|c| waits_on_job_with_timeout(c, shell, os));
         Walk {
             src: ctx.input.command,
             shell: ctx.input.shell,
@@ -103,7 +101,8 @@ impl Rule for FollowRule {
             out,
             outer: None,
             mode: Mode::Follow,
-            job_timeout,
+            root: ctx.script,
+            job_timeout: None,
         }
         .script(ctx.script, false);
     }
@@ -143,12 +142,27 @@ struct Walk<'a, 'b> {
     out: &'b mut Vec<Finding>,
     /// The span of the command whose child-shell body this is: a finding points at it.
     outer: Option<Span>,
+    /// The whole script the check reads.
+    root: &'a Script,
     /// The command waits for a job with a timeout (`Wait-Job $j -Timeout 60`): a follow inside a
-    /// job bounds that way (Ruling 137).
-    job_timeout: bool,
+    /// job bounds that way (Ruling 137). Read from `root` once a job is met.
+    job_timeout: Option<bool>,
 }
 
 impl Walk<'_, '_> {
+    /// Whether the command waits for a job with a timeout.
+    fn job_bound(&mut self) -> bool {
+        if let Some(b) = self.job_timeout {
+            return b;
+        }
+        let (shell, os) = (self.shell, self.os);
+        let b = commands(&self.root.stmts)
+            .iter()
+            .any(|c| waits_on_job_with_timeout(c, shell, os));
+        self.job_timeout = Some(b);
+        b
+    }
+
     /// `bounded`: a wrapper around this script bounds its wait.
     fn script(&mut self, s: &Script, bounded: bool) {
         for st in &s.stmts {
@@ -199,8 +213,8 @@ impl Walk<'_, '_> {
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
         let bounded = bounded
             || (self.mode == Mode::Follow
-                && self.job_timeout
-                && named_row(c, shell, os).is_some_and(|p| flag(p, FOLLOW_JOB)));
+                && named_row(c, shell, os).is_some_and(|p| flag(p, FOLLOW_JOB))
+                && self.job_bound());
         for w in std::iter::once(&c.name).chain(&c.args) {
             self.word(w, bounded);
         }
@@ -239,7 +253,8 @@ impl Walk<'_, '_> {
             out: self.out,
             outer: Some(self.outer.unwrap_or(at)),
             mode: self.mode,
-            job_timeout: self.job_timeout,
+            root: self.root,
+            job_timeout: Some(false),
         }
         .script(&script, bounded);
     }
@@ -329,11 +344,22 @@ impl Walk<'_, '_> {
         if commands(stmts).iter().any(|c| unreadable(c, shell, os)) {
             return;
         }
+        let bash = matches!(shell, Shell::Bash(_));
+        // The condition as written: in Bash, the header's text between the keyword and `do`, its
+        // `!`, parentheses and braces kept.
+        let cond_src = if bash {
+            self.bash_condition(span, cond, rest)
+        } else {
+            self.text_of(cond)
+        };
+        let negated = bash && cond_src.starts_with('!');
         // A reader condition (`while read -r line`) ends with its input: a sleep in the body only
-        // paces it (Ruling 134).
-        if commands(cond)
-            .iter()
-            .any(|c| reads_input(c, shell, os) && !waits(c, shell, os))
+        // paces it (Ruling 134). `until read` and `while ! read` loop while the read fails.
+        if !until
+            && !negated
+            && commands(cond)
+                .iter()
+                .any(|c| reads_input(c, shell, os) && !waits(c, shell, os))
         {
             return;
         }
@@ -359,22 +385,10 @@ impl Walk<'_, '_> {
         if tests.iter().any(|t| bounds(t, &counters, fold)) {
             return;
         }
-        // The Fix runs the condition as written (Ruling 136). `while ! C`: the Bash lowering
-        // keeps no `!`; it stands between the keyword and C. A list of commands is grouped, so
+        // The Fix runs the condition as written (Ruling 136). A list of commands is grouped, so
         // `&& break` reads its last command's status as the loop did.
-        let mut cond_src = cond_text;
-        if matches!(shell, Shell::Bash(_)) {
-            let negated = range(cond).is_some_and(|r| {
-                self.slice(Span {
-                    start: span.start,
-                    end: r.start,
-                })
-                .trim_end()
-                .ends_with('!')
-            });
-            if negated {
-                cond_src = format!("! {cond_src}");
-            }
+        let mut cond_src = cond_src;
+        if bash {
             let list = cond.iter().rev().skip(1).any(|s| {
                 !matches!(
                     s,
@@ -454,6 +468,34 @@ impl Walk<'_, '_> {
         }
     }
 
+    /// A Bash loop's condition as written: the header between its keyword and `do`, so a `!`, a
+    /// subshell or a brace group around it stays (the lowering keeps none of them). When the
+    /// header may hold a comment, or does not hold the condition's statements, their text with
+    /// the `!` before them.
+    fn bash_condition(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> String {
+        let stmts = self.text_of(cond);
+        let header = self.header(span, rest, false);
+        let c = header
+            .trim_start()
+            .split_once(char::is_whitespace)
+            .map_or("", |(_, c)| c)
+            .trim_end();
+        let c = c.strip_suffix("do").unwrap_or(c).trim_end();
+        let c = c.strip_suffix(';').unwrap_or(c).trim();
+        if !stmts.is_empty() && !c.contains('#') && c.contains(stmts.as_str()) {
+            return c.to_string();
+        }
+        let negated = range(cond).is_some_and(|r| {
+            self.slice(Span {
+                start: span.start,
+                end: r.start,
+            })
+            .trim_end()
+            .ends_with('!')
+        });
+        if negated { format!("! {stmts}") } else { stmts }
+    }
+
     /// The loop's header: its text before the body (after it for `do … while`), the whole loop
     /// when the body is empty.
     fn header(&self, span: Span, rest: &[Stmt], at_end: bool) -> String {
@@ -507,6 +549,17 @@ impl Walk<'_, '_> {
                     out.push(self.text_of(&stmts[first..=i]));
                 }
                 Stmt::Block(b) => {
+                    // A subshell's `exit` or `break` leaves the subshell, not the loop (the
+                    // lowering gives `( … )` and `{ … }` the same node: the source tells them
+                    // apart).
+                    let subshell = range(&b.stmts).is_some_and(|r| {
+                        self.src
+                            .get(..r.start)
+                            .is_some_and(|t| t.trim_end().ends_with('('))
+                    });
+                    if subshell {
+                        continue;
+                    }
                     // `[ $n -gt 9 ] && { echo timeout; exit 1; }`: the chain before a block that
                     // exits guards that exit.
                     let block_exits = b
@@ -565,14 +618,24 @@ impl Walk<'_, '_> {
                     .iter()
                     .any(|r| matches!(r, Redirect::Heredoc { .. }))
             });
-            if heredoc {
+            // `continue` would skip the round test at the end of the body, and the fixed loop
+            // would end 0 after its rounds.
+            let skips = commands(rest)
+                .iter()
+                .any(|c| row(c, shell, os).is_some_and(|p| flag(p, SKIPS_ROUND)));
+            if heredoc || skips {
                 let test = if always {
                     ""
                 } else {
                     " that runs its condition first and breaks on it, and"
                 };
+                let why = if heredoc {
+                    "the loop holds a here-document"
+                } else {
+                    "the body's `continue` would skip the round test"
+                };
                 return Fixed::Sentence(format!(
-                    "rewrite the loop as a loop of at most {n} rounds{test} that fails when the rounds run out (no command is built: the loop holds a here-document)"
+                    "rewrite the loop as a loop of at most {n} rounds{test} that fails when the rounds run out (no command is built: {why})"
                 ));
             }
             if !always {
@@ -1031,9 +1094,13 @@ fn variables(text: &str) -> impl Iterator<Item = (usize, &str)> {
             }
             let before = &text[..start];
             let member = before.ends_with('.') || before.ends_with("::");
-            let option = before
-                .strip_suffix('-')
-                .is_some_and(|b| b.is_empty() || b.ends_with([' ', '\t', '-']) || b.ends_with('('));
+            // `-s`, `(-not`, `--count` are options; `((--n))` is a decrement.
+            let option = match before.strip_suffix("--") {
+                Some(b) => b.is_empty() || b.ends_with([' ', '\t']),
+                None => before
+                    .strip_suffix('-')
+                    .is_some_and(|b| b.is_empty() || b.ends_with([' ', '\t', '('])),
+            };
             if !member && !option {
                 return Some((start, &text[start..i]));
             }
@@ -1056,7 +1123,7 @@ fn assigned_value(t: &str, fold: bool) -> &str {
             continue;
         }
         match ch {
-            '\'' | '"' => quote = Some(ch),
+            '\'' | '"' | '`' => quote = Some(ch),
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' if depth == 0 => return &t[..k],
             ')' | ']' | '}' => depth -= 1,
@@ -1077,12 +1144,8 @@ fn counters(text: &str, fold: bool) -> Vec<String> {
     for (start, name) in variables(text) {
         let before = &text[..start];
         let after = &text[start + name.len()..];
-        // `--` before a name is a decrement only inside an expression (`((--n))`), never a long
-        // option (`--count`).
-        let pre = before.ends_with("++")
-            || before
-                .strip_suffix("--")
-                .is_some_and(|b| !b.is_empty() && !b.ends_with([' ', '\t']));
+        // A long option (`--count`) is no variable: `variables` leaves it out.
+        let pre = before.ends_with("++") || before.ends_with("--");
         let post = after.starts_with("++") || after.starts_with("--");
         let spaced = after.trim_start_matches([' ', '\t']);
         let compound = ["+=", "-=", "*=", "/="]
@@ -1225,7 +1288,8 @@ fn bounds(test: &str, counters: &[String], fold: bool) -> bool {
         let operand = without_literals(operand);
         let clock = operand
             .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
-            .filter(|w| !w.is_empty() && !w.starts_with('-'))
+            // A parameter keeps its `-` (`-Seconds`): it never equals a clock word.
+            .filter(|w| !w.is_empty())
             .any(|w| loops.clocks.iter().any(|c| same(c, w, fold)));
         clock || variables(&operand).any(|(_, v)| counters.iter().any(|n| same(n, v, fold)))
     })
