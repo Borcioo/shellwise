@@ -1464,14 +1464,156 @@ fn without_literals(text: &str) -> String {
 fn bounds(test: &str, counters: &[String], fold: bool) -> bool {
     let loops = programs::loops();
     operands(test, &loops.compares, fold).iter().any(|operand| {
+        let clock = Clocks {
+            words: &loops.clocks,
+            fold,
+        }
+        .read(operand, true, false);
         let operand = without_literals(operand);
-        let clock = operand
-            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
-            // A parameter keeps its `-` (`-Seconds`): it never equals a clock word.
-            .filter(|w| !w.is_empty())
-            .any(|w| loops.clocks.iter().any(|c| same(c, w, fold)));
         clock || variables(&operand).any(|(_, v)| counters.iter().any(|n| same(n, v, fold)))
     })
+}
+
+/// Where a compared operand reads the time (Ruling 140). Outside quotes any clock word counts
+/// (`$SECONDS`, `(Get-Date)`, `$sw.Elapsed`); inside double quotes and inside a command
+/// substitution only an expansion that is a clock (`"$SECONDS"`, `"${SECONDS}"`, `$((SECONDS -
+/// t))`) or a substitution whose command is one (`$(date +%s)`, `$(Get-Date)`): a clock word
+/// there is text (`"Already up to date."`, `$(grep -c date log)`). A single-quoted text never is.
+struct Clocks<'a> {
+    words: &'a [String],
+    fold: bool,
+}
+
+impl Clocks<'_> {
+    fn is(&self, w: &str) -> bool {
+        self.words.iter().any(|c| same(c, w, self.fold))
+    }
+
+    /// `bare`: a clock word itself counts (outside quotes, in arithmetic); `dq`: inside double
+    /// quotes, where a single quote is a plain character.
+    fn read(&self, text: &str, bare: bool, dq: bool) -> bool {
+        let b = text.as_bytes();
+        let escape = if self.fold { b'`' } else { b'\\' };
+        let mut plain = String::new();
+        let mut i = 0;
+        while i < b.len() {
+            let rest = &text[i..];
+            if b[i] == escape {
+                i += 1 + rest[1..].chars().next().map_or(0, char::len_utf8);
+                plain.push(' ');
+                continue;
+            }
+            if b[i] == b'\'' && !dq {
+                i += 1 + rest[1..].find('\'').map_or(rest.len() - 1, |k| k + 1);
+                plain.push(' ');
+                continue;
+            }
+            if b[i] == b'"' {
+                let end = closing_quote(text, i, escape);
+                if self.read(&text[i + 1..end], false, true) {
+                    return true;
+                }
+                i = (end + 1).min(b.len());
+                plain.push(' ');
+                continue;
+            }
+            if rest.starts_with("$((") {
+                let end = closing_paren(text, i + 1);
+                if self.read(
+                    text.get(i + 3..end.saturating_sub(1)).unwrap_or(""),
+                    true,
+                    false,
+                ) {
+                    return true;
+                }
+                i = (end + 1).min(b.len());
+                plain.push(' ');
+                continue;
+            }
+            let backtick = b[i] == b'`' && !self.fold;
+            if rest.starts_with("$(") || backtick {
+                let (from, end) = if backtick {
+                    (i + 1, rest[1..].find('`').map_or(b.len(), |k| i + 1 + k))
+                } else {
+                    (i + 2, closing_paren(text, i + 1))
+                };
+                let inner = text.get(from..end).unwrap_or("");
+                let command = inner.trim_start().split([' ', '\t', ';', '|']).next();
+                if command.is_some_and(|c| words(c).any(|w| self.is(w))) {
+                    return true;
+                }
+                if self.read(inner, false, false) {
+                    return true;
+                }
+                i = (end + 1).min(b.len());
+                plain.push(' ');
+                continue;
+            }
+            if b[i] == b'$' {
+                let braced = rest.starts_with("${");
+                let name = rest[if braced { 2 } else { 1 }..]
+                    .trim_start_matches(['#', '!'])
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("");
+                if !name.is_empty() && self.is(name) {
+                    return true;
+                }
+            }
+            let ch = rest.chars().next().map_or(1, char::len_utf8);
+            plain.push_str(&rest[..ch]);
+            i += ch;
+        }
+        // A parameter keeps its `-` (`-Seconds`): it never equals a clock word.
+        bare && plain
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+            .filter(|w| !w.is_empty())
+            .any(|w| self.is(w))
+    }
+}
+
+/// Where the `"` that closes the one at `open` stands (the text's end when none does): escapes
+/// and the `$( )` inside it aside.
+fn closing_quote(text: &str, open: usize, escape: u8) -> usize {
+    let b = text.as_bytes();
+    let mut i = open + 1;
+    while i < b.len() {
+        match b[i] {
+            c if c == escape => i += 2,
+            b'"' => return i,
+            b'$' if b.get(i + 1) == Some(&b'(') => i = closing_paren(text, i + 1) + 1,
+            _ => i += 1,
+        }
+    }
+    b.len()
+}
+
+/// Where the `)` that closes the `(` at `open` stands (the text's end when none does), quoted
+/// parentheses aside.
+fn closing_paren(text: &str, open: usize) -> usize {
+    let b = text.as_bytes();
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    for (i, &c) in b.iter().enumerate().skip(open) {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+    }
+    b.len()
 }
 
 /// How many rounds the Fix line's loop runs: the budget over the first wait's seconds.

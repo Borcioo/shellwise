@@ -1225,6 +1225,105 @@ command = "$sw = [Diagnostics.Stopwatch]::StartNew(); while (-not (Test-Path don
 level = "ok"
 rules = []
 
+# Ruling 140: inside double quotes and inside `$(…)` only an expansion or a command that is a
+# clock counts; a clock word there is text.
+[[row]]
+id = "wl-bash-date-in-a-quoted-message-operand-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until [ "$(git pull 2>&1)" == "Already up to date." ]; do sleep 30; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-seconds-in-a-quoted-operand-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until [ "$(cat out)" == "took 5 SECONDS" ]; do sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-date-at-the-end-of-a-quoted-operand-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'while [ "$(cat state)" != "done at date" ]; do sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-elapsed-in-a-quoted-operand-is-no-clock"
+os = "any"
+shell = "pwsh"
+command = 'while ((Get-Content state) -ne "Elapsed") { Start-Sleep 5 }'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-date-as-an-argument-in-a-substitution-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until [ $(grep -c date log) -ge 3 ]; do sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Allow twins: a clock expansion or a clock command inside the quotes or the substitution.
+[[row]]
+id = "wl-bash-seconds-expansion-in-quotes-is-a-clock"
+os = "any"
+shell = "bash"
+command = 'until grep -q done log; do [ "$SECONDS" -ge 600 ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-braced-seconds-expansion-in-quotes-is-a-clock"
+os = "any"
+shell = "bash"
+command = 'until grep -q done log; do [ "${SECONDS}" -ge 600 ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-date-command-unquoted-is-a-clock"
+os = "any"
+shell = "bash"
+command = 'end=$(( $(date +%s) + 600 )); until grep -q done log; do [ $(date +%s) -gt $end ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-date-command-in-backticks-in-quotes-is-a-clock"
+os = "any"
+shell = "bash"
+command = 'end=$(( $(date +%s) + 600 )); until grep -q done log; do [ "`date +%s`" -gt "$end" ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-seconds-in-arithmetic-in-quotes-is-a-clock"
+os = "any"
+shell = "bash"
+command = 'start=$SECONDS; until grep -q done log; do [ "$((SECONDS - start))" -ge 600 ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-get-date-subexpression-is-a-clock"
+os = "any"
+shell = "pwsh"
+command = '$deadline = (Get-Date).AddMinutes(10); while ($true) { if ((Test-Path done.txt) -or $(Get-Date) -gt $deadline) { break }; Start-Sleep 5 }'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-stopwatch-in-a-quoted-subexpression-is-a-clock"
+os = "any"
+shell = "pwsh"
+command = '$sw = [Diagnostics.Stopwatch]::StartNew(); while ($true) { if ((Test-Path done.txt) -or "$($sw.ElapsedMilliseconds)" -gt 60000) { break }; Start-Sleep 5 }'
+level = "ok"
+rules = []
+
 # --- A counter reads its own old value; a polled value does not (Ruling 135) ---
 
 [[row]]
