@@ -12,7 +12,7 @@ quiet log, `tail -f quiet.log | grep -m1 done` runs on.
 
 | Shape | Level | Why | Fix |
 |---|---|---|---|
-| A follow command with no time bound, whatever stages come after it | `warn` | It never ends by itself, and a stage that waits for a line ends it only if the line comes. | Bash: the pipeline with `timeout 60` before the follow command (`timeout 60 tail -f log \| grep -m1 ready`); PowerShell: the whole pipeline in a job that `Wait-Job -Timeout 60` waits for, started in the caller's folder, with the caller's variables read through `$using:` (`$j = Start-Job { Set-Location -LiteralPath $using:PWD; <pipeline> }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force`) |
+| A follow command with no time bound, whatever stages come after it | `warn` | It never ends by itself, and a stage that waits for a line ends it only if the line comes. | Bash: the pipeline with `timeout 60` before the follow command (`timeout 60 tail -f log \| grep -m1 ready`); PowerShell: the whole pipeline in a job that `Wait-Job -Timeout 60` waits for, started in the caller's folder, with the caller's variables read through `$using:` and its output as text (`$j = Start-Job { Set-Location -LiteralPath $using:PWD; <pipeline> \| Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force`) |
 | Under `timeout <n>` (also through `bash -c '…'`), or in PowerShell inside `Start-Job { … }` when the command also runs `Wait-Job -Timeout` | `ok` | The wrapper or the job wait ends it. | |
 | The same program without the follow option (`tail -n 20 log`, `kubectl logs pod`, `kubectl apply -f x`) | `ok` | It reads and ends. | |
 
@@ -22,7 +22,9 @@ left behind; it ends with the job's output so far and exit status 0. A job sees 
 caller's variables and in Windows PowerShell 5.1 starts in Documents, so the Fix starts it in the
 caller's folder and writes each variable the pipeline reads as `$using:<name>` (`$pat` becomes
 `$using:pat`, `$p.ToLower()` becomes `($using:p).ToLower()`; `$_`, `$true`, `$env:` and
-single-quoted text stay). A pipeline that assigns a
+single-quoted text stay). The job ends its pipeline with `| Out-String -Stream -Width 4096`:
+Windows PowerShell 5.1 shows a `Select-String` result received from a job blank, and the width
+keeps a long line whole. A pipeline that assigns a
 variable (`ForEach-Object { $n++ }`) or names a scope (`$script:x`) gets a sentence instead:
 `$using:` cannot pass it.
 
@@ -42,7 +44,7 @@ Get-Content run.log -Wait -Tail 10
 Get-Content run.log -Wait | Select-Object -First 5
 ```
 
-`warn`: `Fix: $j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content run.log -Wait -Tail 10 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force`
+`warn`: `Fix: $j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content run.log -Wait -Tail 10 | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force`
 
 ## Allow
 
