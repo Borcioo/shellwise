@@ -151,24 +151,64 @@ impl Rule for DeleteRule {
         let command = ctx.input.command;
         // A call of an alias the command defined before it is also read as what it runs.
         let aliases = resolve::DefinedAliases::of(ctx.script, command, shell, os);
-        let deletes_call = |run: &SimpleCommand| {
-            matches!(read_call(run, false, shell, os),
-                Read::Call(call, prog) if in_family(&call, prog, shell, os))
+        // Code the guard does not read, its text also read with each alias it calls written as
+        // the alias's value (Ruling 153): the texts the raw scan reads, and whether an alias in
+        // it has more values than the guard follows.
+        let unread_texts = |c: &SimpleCommand| {
+            let (more, capped) = aliases.texts(c, command);
+            let own = command.get(c.span.start..c.span.end).unwrap_or_default();
+            (
+                std::iter::once(own.to_string())
+                    .chain(more)
+                    .collect::<Vec<_>>(),
+                capped,
+            )
         };
-        // Cheap first pass: no file system, no location, unless some command may delete.
+        // A raw-scan hit on a table row or a .NET `Delete()` call; a region the scan cannot read
+        // (an encoded or too-deep body) is no destructive match (Ruling 106(a)).
+        let scan_hits = |texts: &[String]| texts.iter().any(|t| scan::destructive_row(t).is_some());
+        let unread_hit = |c: &SimpleCommand| {
+            let (texts, capped) = unread_texts(c);
+            capped || scan_hits(&texts)
+        };
+        // Cheap first pass: no file system, no location, unless some command may delete. A call
+        // that may run any alias (`AliasRun::Unread`) is judged without the location.
+        let mut runs_unread = false;
         if !any_node(ctx.script, &mut |n| match n {
             Node::Cmd { cmd, .. } => {
                 (match read_call(cmd, false, shell, os) {
-                    Read::Unread => unread_hits(cmd, command),
+                    Read::Unread => unread_hit(cmd),
                     Read::Call(call, prog) => in_family(&call, prog, shell, os),
                     Read::Plain => false,
                 }) || aliases.runs(cmd).iter().any(|r| match r {
-                    AliasRun::Read(run) => deletes_call(run),
-                    AliasRun::Unread => true,
+                    AliasRun::Read(run) => match read_call(run, false, shell, os) {
+                        Read::Call(call, prog) => in_family(&call, prog, shell, os),
+                        Read::Unread => unread_hit(cmd),
+                        Read::Plain => false,
+                    },
+                    AliasRun::Unread => {
+                        runs_unread = true;
+                        false
+                    }
                 })
             }
             Node::Method(m) => method_row(m).is_some(),
         }) {
+            if runs_unread {
+                // `unread_alias` reads no variable: the scene's environment is not marked.
+                let mut scene = Scene::unmarked(ctx);
+                any_node(ctx.script, &mut |n| {
+                    if let Node::Cmd { cmd, piped } = n
+                        && aliases
+                            .runs(cmd)
+                            .iter()
+                            .any(|r| matches!(r, AliasRun::Unread))
+                    {
+                        out.extend(scene.unread_alias(cmd, piped));
+                    }
+                    false
+                });
+            }
             return;
         }
         let mut scene = Scene::new(ctx);
@@ -177,8 +217,20 @@ impl Rule for DeleteRule {
         walk_script(ctx.script, &mut loc, &env, &mut |node, loc| {
             let found = match node {
                 Node::Cmd { cmd, piped } => {
+                    // The raw scan of `cmd`'s texts; past the cap, the call may run anything.
+                    let opaque = |scene: &mut Scene<'_>| {
+                        let (texts, capped) = unread_texts(cmd);
+                        let mut found = None;
+                        for t in texts.iter().filter(|t| scan_hits(std::slice::from_ref(t))) {
+                            found = max_finding(found, Some(scene.opaque_in(cmd, t)));
+                        }
+                        if capped {
+                            found = max_finding(found, scene.unread_alias(cmd, piped));
+                        }
+                        found
+                    };
                     let mut found = match read_call(cmd, piped, shell, os) {
-                        Read::Unread if unread_hits(cmd, command) => Some(scene.opaque(cmd)),
+                        Read::Unread => opaque(&mut scene),
                         Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
                             scene.judge_call(&call, prog, loc)
                         }
@@ -190,9 +242,10 @@ impl Rule for DeleteRule {
                                 Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
                                     scene.judge_call(&call, prog, loc)
                                 }
+                                Read::Unread => opaque(&mut scene),
                                 _ => None,
                             },
-                            AliasRun::Unread => scene.unread_alias(cmd),
+                            AliasRun::Unread => scene.unread_alias(cmd, piped),
                         };
                         found = max_finding(found, more);
                     }
@@ -309,15 +362,6 @@ pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) ->
         }),
         prog,
     )
-}
-
-/// The text of `c` names a destructive command: a raw-scan hit on a table row or a .NET
-/// `Delete()` call in its own span. A region the scan cannot read (an encoded or too-deep body)
-/// is no destructive match (Ruling 106(a)).
-fn unread_hits(c: &SimpleCommand, command: &str) -> bool {
-    command
-        .get(c.span.start..c.span.end)
-        .is_some_and(|t| scan::destructive_row(t).is_some())
 }
 
 /// The words a destructive hit acts on: those after its command's name, up to the end of that
@@ -687,9 +731,18 @@ impl<'a> Scene<'a> {
         let input = ctx.input;
         let multi = resolve_assigned(&mut env, ctx.script, input.command, input.shell, input.os);
         Scene {
-            ctx,
             env,
             multi,
+            ..Scene::unmarked(ctx)
+        }
+    }
+
+    /// A scene whose environment is the hook's own, no assignment of the command read.
+    fn unmarked(ctx: &'a Ctx<'a>) -> Scene<'a> {
+        Scene {
+            ctx,
+            env: ctx.input.env.clone(),
+            multi: Vec::new(),
             // Read before any marking: a command that assigns `HOME` does not move the home
             // folder critical paths are compared with.
             home: ctx.input.env.home().map(PathBuf::from),
@@ -1305,10 +1358,11 @@ impl<'a> Scene<'a> {
 
     /// The finding for code the guard does not read whose text names a destructive command:
     /// danger when its words hold a literal protected location (Ruling 122 (b)), else warn.
-    fn opaque(&mut self, c: &SimpleCommand) -> Finding {
+    /// `text` is the text of `c`, or that text with an alias it calls written as its value.
+    fn opaque_in(&mut self, c: &SimpleCommand, text: &str) -> Finding {
         let command = self.ctx.input.command;
-        let text = command.get(c.span.start..c.span.end).unwrap_or_default();
-        let shown: String = text.chars().take(80).collect();
+        let own = command.get(c.span.start..c.span.end).unwrap_or_default();
+        let shown: String = own.chars().take(80).collect();
         // Only the words of the destructive commands themselves: a `cd` to the repo root
         // elsewhere in the body names no target.
         let words: Vec<String> = scan::hits(scan::table(), text)
@@ -1343,20 +1397,47 @@ impl<'a> Scene<'a> {
         }
     }
 
-    /// A call of an alias whose value the guard cannot read (`Set-Alias zz $x; zz C:\Windows`):
-    /// it may be a delete, so a raw word of the call that spells a protected location warns.
-    fn unread_alias(&mut self, c: &SimpleCommand) -> Option<Finding> {
+    /// A call that may run any command through an alias: one whose value the guard cannot read
+    /// (`Set-Alias zz $x; zz C:\Windows`), one read more ways than the guard follows, any call
+    /// past the bound (Ruling 153). It may be a delete, so it warns on a target that spells a
+    /// protected location (a raw word, or the value of a `-Name:value` word), on a target the
+    /// guard cannot read (a word that is not one literal) and on one the pipeline feeds it.
+    fn unread_alias(&mut self, c: &SimpleCommand, piped: bool) -> Option<Finding> {
         let text = self
             .ctx
             .input
             .command
             .get(c.span.start..c.span.end)
             .unwrap_or_default();
-        let words: Vec<String> = raw_words(text).skip(1).map(str::to_string).collect();
-        let (p, reason) = words.iter().find_map(|w| self.protected_word(w))?;
         let shown: String = text.chars().take(80).collect();
-        let why =
-            format!("it runs an alias whose value the guard cannot read, on `{p}`, the {reason}");
+        let lead = "it may run a command through an alias the guard cannot read";
+        let words: Vec<String> = raw_words(text)
+            .skip(1)
+            .flat_map(|w| {
+                // `-Path:C:\Windows` names its value too.
+                let value = w
+                    .strip_prefix('-')
+                    .and_then(|r| r.split_once(':'))
+                    .map(|(_, v)| v.to_string());
+                std::iter::once(w.to_string()).chain(value)
+            })
+            .collect();
+        if let Some((p, reason)) = words.iter().find_map(|w| self.protected_word(w)) {
+            let why = format!("{lead}, on `{p}`, the {reason}");
+            return Some(self.dynamic(c.span, &shown, &why));
+        }
+        let why = if piped {
+            format!("{lead}, on what the pipeline feeds it")
+        } else {
+            let w = c.args.iter().find(|w| literal(w).is_none())?;
+            let t = self
+                .ctx
+                .input
+                .command
+                .get(w.span.start..w.span.end)
+                .unwrap_or_default();
+            format!("{lead}, on `{t}`, a target the guard cannot read")
+        };
         Some(self.dynamic(c.span, &shown, &why))
     }
 

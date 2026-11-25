@@ -44,15 +44,31 @@ rm -rf build
 
 ## Limits
 
-- A PowerShell alias the same command defines (`Set-Alias`, `New-Alias`, `sal`, `nal`,
-  `$alias:zz = …`) before its call reads as each cmdlet its definitions name, so
-  `Set-Alias zz Remove-Item; zz C:\Windows -Recurse` is critical. Every earlier definition
-  counts, also one in a `& { }` block or one a later definition replaced: the stricter reading.
-  A definition after the call is not read. A call of an alias whose value the guard cannot read
-  (`Set-Alias zz $x`) is `dynamic-target` when a word of it spells a protected folder as an
-  absolute path, `~` or `$HOME`; a relative one (`zz .` from the repo root) is not judged.
+- A PowerShell alias the same command defines before its call reads as each cmdlet its
+  definitions name, so `Set-Alias zz Remove-Item; zz C:\Windows -Recurse` is critical. The
+  definitions read: `Set-Alias`, `New-Alias`, `sal`, `nal` with their parameters bound as
+  PowerShell binds them (positional, named, `-Name:zz`, abbreviated, in any order, with
+  `-Scope`, `-Option`, `-Force`, `-PassThru`), `$alias:zz = …`, `Set-Item`, `New-Item` and
+  `Set-Content` on an `Alias:` path (`New-Item -Path Alias:\ -Name zz`), `Copy-Item` and
+  `Rename-Item` of an `Alias:` item, an alias of an alias, and a definer reached through an
+  alias (`Set-Alias sa Set-Alias; sa zz Remove-Item`).
+- Stricter than PowerShell: every earlier definition counts, also one in a `& { }` block, in a
+  function body, in a `Start-Job` block, or one a later definition replaced, though PowerShell
+  does not keep any of those for the call. A definition after the call is not read.
+- A call inside code the guard does not read (`& { zz … }`, `. { zz … }`,
+  `Invoke-Expression "zz …"`) is scanned with the alias written as each of its values, so it
+  gets the `opaque-destructive` finding its direct twin gets; so does an alias to a command the
+  guard does not read (`Set-Alias zz Invoke-Expression`, `pwsh`, `cmd`).
+- A call that may run any command through an alias is `dynamic-target` when it names a
+  protected folder (also as `-Path:C:\Windows`), names a target the guard cannot read (`$t`) or
+  takes its target from the pipeline; a relative literal one (`zz .` from the repo root) is not
+  judged. Such a call is one of an alias whose value the guard cannot read (`Set-Alias zz $x`),
+  one read more than 64 ways (a chain of 65 links, 65 definitions of one name), and, past 96
+  alias definitions or 32 calls of a defined name in one command, every command after the first
+  definition: the guard then resolves no alias.
 - A call of an alias the command defines counts as a possible move of the location, so a
-  relative delete after it (`zz build; zz src`) is `delete-unknown-location`.
+  relative delete after it (`zz build; zz src`) is `delete-unknown-location`; past the bound
+  every command does. A definition alone does not.
 - A Bash alias is not read: bash expands none on the line that defines it, and a non-interactive
   bash none without `shopt -s expand_aliases`. A function that passes its arguments on
   (`zz() { rm -rf "$@"; }`, `function zz { Remove-Item @args }`) is `dynamic-target`, not

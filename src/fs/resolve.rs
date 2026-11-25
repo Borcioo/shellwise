@@ -1097,6 +1097,15 @@ fn new_item_links(args: &[Word]) -> Vec<Option<Word>> {
     if unbound {
         return vec![None];
     }
+    // An item on `Alias:` (`New-Item -Path Alias:\ -Name zz -Value …`): that drive holds no link
+    // (Ruling 152 reads it as an alias definition).
+    let on_alias = path
+        .as_ref()
+        .and_then(literal)
+        .is_some_and(|p| alias_item(&p).is_some());
+    if on_alias {
+        return Vec::new();
+    }
     match &kind {
         // A second `-ItemType` from a splat would be a binding error.
         Some(Some(k)) if is_folder_or_file_type(k) => Vec::new(),
@@ -1324,7 +1333,9 @@ impl Location {
     /// no file system is no file only when every part of the command is in a small harmless set
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
-        let aliases = script_aliases(script, is_pwsh(self.shell));
+        // Past the bound (Ruling 154) the table is not resolved: a call of a name the command
+        // defines in its own words is an unknown move, as below it.
+        let aliases = bounded_aliases(script, is_pwsh(self.shell));
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
@@ -2438,7 +2449,7 @@ fn defined_names(s: &Script, aliases: &[Alias], shell: Shell) -> Vec<String> {
     visit_script(s, aliases, &mut |n| match n {
         Node::Func(name) => out.push(name.to_ascii_lowercase()),
         Node::Cmd(c) if is_pwsh(shell) => {
-            out.extend(defined_by(c, shell));
+            out.extend(defined_by(c, shell, true));
             if runs_script(c, shell) {
                 out.push("*".to_string());
             }
@@ -2501,6 +2512,24 @@ fn script_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
         }
         table = next;
     }
+}
+
+/// `script_aliases`, unless the pwsh reading of `s` passes the alias bound (`direct_aliases`,
+/// Ruling 154): then each name `s` defines in its own words, with a value the hook cannot read
+/// (the coarse reading of a call of it), without resolving the table.
+fn bounded_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
+    let (direct, unbounded) = if pwsh {
+        direct_aliases(s)
+    } else {
+        (Vec::new(), false)
+    };
+    if !unbounded {
+        return script_aliases(s, pwsh);
+    }
+    let mut out: Vec<Alias> = direct.into_iter().map(|(_, (n, _))| (n, None)).collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The aliases command `c` defines, whatever the dialect: a definition the shell does not run
@@ -2728,6 +2757,11 @@ const ALIAS_RUNS: usize = 64;
 /// A value the hook cannot read, and a call read more than `ALIAS_RUNS` ways, give the
 /// commands `unwrap` reads as `Unread` in this shell and as a program (`unread_runs`).
 fn alias_runs(c: &SimpleCommand, aliases: &[Alias]) -> Vec<SimpleCommand> {
+    alias_runs_capped(c, aliases).0
+}
+
+/// `alias_runs`, and whether it stopped at `ALIAS_RUNS`.
+fn alias_runs_capped(c: &SimpleCommand, aliases: &[Alias]) -> (Vec<SimpleCommand>, bool) {
     let mut out: Vec<SimpleCommand> = Vec::new();
     let mut work: Vec<(SimpleCommand, Vec<&str>)> = vec![(c.clone(), Vec::new())];
     while let Some((cur, seen)) = work.pop() {
@@ -2738,7 +2772,7 @@ fn alias_runs(c: &SimpleCommand, aliases: &[Alias]) -> Vec<SimpleCommand> {
             let name = name.as_str();
             if out.len() >= ALIAS_RUNS {
                 out.extend(unread_runs(c, 0, name));
-                return out;
+                return (out, true);
             }
             // An alias of any name and any value: a program, as Ruling 40 reads other unread
             // code in this shell as a fact on the target.
@@ -2774,7 +2808,7 @@ fn alias_runs(c: &SimpleCommand, aliases: &[Alias]) -> Vec<SimpleCommand> {
             work.push((next, seen));
         }
     }
-    out
+    (out, false)
 }
 
 /// `c` with its looked-up word `p` (0 the name, `i` the `i`th argument) an alias value the hook
@@ -2883,8 +2917,46 @@ fn looked_up_alias<'t>(
 /// (`*`), which any item writer with an unread path adds.
 pub(crate) struct DefinedAliases {
     defs: Vec<(usize, Alias)>,
+    /// Past the bound (`direct_aliases`), the byte where the first definition ends: every
+    /// command after it may run any alias, and none is resolved.
+    unbounded_from: Option<usize>,
     shell: Shell,
     os: Os,
+}
+
+/// The most alias definitions one command may spell, and calls of a name they define, before the
+/// delete guard and the location walk stop resolving its aliases (Ruling 154). Past either a
+/// call reads as an alias the hook cannot read, the stricter reading.
+const MAX_ALIAS_DEFS: usize = 96;
+const MAX_ALIAS_CALLS: usize = 32;
+
+/// The aliases `s` defines in its own commands (`alias_defs`, no call read as an alias's value;
+/// a name the hook cannot read left out), each with the byte its definition ends at, and whether
+/// they or the calls of the names they define pass the bound. A definition made through an alias
+/// of a definer (`Set-Alias sa Set-Alias; sa zz …`) is a call of a defined name.
+fn direct_aliases(s: &Script) -> (Vec<(usize, Alias)>, bool) {
+    let mut defs: Vec<(usize, Alias)> = Vec::new();
+    visit_script(s, &[], &mut |n| {
+        if let Node::Cmd(c) = n {
+            let named = alias_defs(c, true).into_iter().filter(|(n, _)| n != "*");
+            defs.extend(named.map(|a| (c.span.end, a)));
+        }
+    });
+    if defs.len() > MAX_ALIAS_DEFS {
+        return (defs, true);
+    }
+    let mut table: Vec<Alias> = defs.iter().map(|(_, a)| a.clone()).collect();
+    table.sort();
+    table.dedup();
+    let mut calls = 0;
+    visit_script(s, &[], &mut |n| {
+        if let Node::Cmd(c) = n
+            && looked_up_alias(c, &table, &[]).is_some()
+        {
+            calls += 1;
+        }
+    });
+    (defs, calls > MAX_ALIAS_CALLS)
 }
 
 /// A command a call runs through an alias defined before it.
@@ -2920,26 +2992,41 @@ impl DefinedAliases {
     /// `command` is the text `s` was parsed from: one that holds no `alias_words` defines none.
     pub(crate) fn of(s: &Script, command: &str, shell: Shell, os: Os) -> DefinedAliases {
         let mut defs: Vec<(usize, Alias)> = Vec::new();
+        let mut unbounded_from = None;
         let spells_one = || {
             let lower = command.to_ascii_lowercase();
             alias_words().iter().any(|w| lower.contains(w.as_str()))
         };
         if is_pwsh(shell) && spells_one() {
-            let table = script_aliases(s, true);
-            if table.iter().any(|(n, _)| n != "*") {
-                visit_script(s, &table, &mut |n| {
-                    if let Node::Cmd(c) = n {
-                        let named = alias_defs(c, true).into_iter().filter(|(n, _)| n != "*");
-                        defs.extend(named.map(|a| (c.span.end, a)));
-                    }
-                });
+            let (direct, unbounded) = direct_aliases(s);
+            if unbounded {
+                unbounded_from = direct.iter().map(|(at, _)| *at).min();
+            } else {
+                let table = script_aliases(s, true);
+                if table.iter().any(|(n, _)| n != "*") {
+                    visit_script(s, &table, &mut |n| {
+                        if let Node::Cmd(c) = n {
+                            let named = alias_defs(c, true).into_iter().filter(|(n, _)| n != "*");
+                            defs.extend(named.map(|a| (c.span.end, a)));
+                        }
+                    });
+                }
             }
         }
-        DefinedAliases { defs, shell, os }
+        DefinedAliases {
+            defs,
+            unbounded_from,
+            shell,
+            os,
+        }
     }
 
-    /// The commands `c` runs through the aliases defined before it (`alias_runs`).
+    /// The commands `c` runs through the aliases defined before it (`alias_runs`); `Unread` for
+    /// a call read more ways than `ALIAS_RUNS`, and for every command past the bound.
     pub(crate) fn runs(&self, c: &SimpleCommand) -> Vec<AliasRun> {
+        if self.unbounded_from.is_some_and(|at| at <= c.span.start) {
+            return vec![AliasRun::Unread];
+        }
         let (mut read, mut unread): (Vec<Alias>, Vec<Alias>) = self
             .defs
             .iter()
@@ -2953,7 +3040,8 @@ impl DefinedAliases {
             t.sort();
             t.dedup();
         }
-        let runs: Vec<SimpleCommand> = alias_runs(c, &read)
+        let (runs, capped) = alias_runs_capped(c, &read);
+        let runs: Vec<SimpleCommand> = runs
             .into_iter()
             .map(|mut run| {
                 if run.typed != c.typed {
@@ -2967,10 +3055,102 @@ impl DefinedAliases {
                 .chain(runs.iter())
                 .any(|r| looked_up_alias(r, &unread, &[]).is_some());
         let mut out: Vec<AliasRun> = runs.into_iter().map(AliasRun::Read).collect();
-        if calls_unread {
+        if calls_unread || capped {
             out.push(AliasRun::Unread);
         }
         out
+    }
+
+    /// The text of `c` (in `command`) with each word that names an alias defined before it
+    /// written as one of its values, down each chain, for the raw scan of code the guard does
+    /// not read (`Invoke-Expression "zz …"`, `& { zz … }`): text `k` takes each word's `k`th
+    /// value (its last when it has fewer). True when a word has more values than `ALIAS_RUNS`:
+    /// the text may run any command.
+    pub(crate) fn texts(&self, c: &SimpleCommand, command: &str) -> (Vec<String>, bool) {
+        let Some(text) = command.get(c.span.start..c.span.end) else {
+            return (Vec::new(), false);
+        };
+        if self.defs.is_empty() {
+            return (Vec::new(), false);
+        }
+        let word_char = |ch: char| ch.is_alphanumeric() || "-_.:\\/".contains(ch);
+        let mut words: Vec<(usize, usize, Vec<String>)> = Vec::new();
+        let mut capped = false;
+        let mut i = 0;
+        while i < text.len() {
+            let len: usize = text[i..]
+                .chars()
+                .take_while(|ch| word_char(*ch))
+                .map(char::len_utf8)
+                .sum();
+            if len == 0 {
+                i += text[i..].chars().next().map_or(1, char::len_utf8);
+                continue;
+            }
+            let (values, over) = self.values_of(&text[i..i + len], c.span.start + i);
+            capped |= over;
+            if !values.is_empty() {
+                words.push((i, i + len, values));
+            }
+            i += len;
+        }
+        let n = words.iter().map(|(_, _, v)| v.len()).max().unwrap_or(0);
+        let texts = (0..n)
+            .map(|k| {
+                let mut out = String::new();
+                let mut at = 0;
+                for (start, end, values) in &words {
+                    out.push_str(&text[at..*start]);
+                    out.push_str(&values[k.min(values.len() - 1)]);
+                    at = *end;
+                }
+                out.push_str(&text[at..]);
+                out
+            })
+            .collect();
+        (texts, capped)
+    }
+
+    /// The values the alias `word` (as written) has at byte `at`, each alias it names written
+    /// out in turn; true past `ALIAS_RUNS` steps. A value the hook cannot read gives none.
+    fn values_of(&self, word: &str, at: usize) -> (Vec<String>, bool) {
+        let before = |n: &str| -> Vec<&Option<Vec<String>>> {
+            self.defs
+                .iter()
+                .filter(|(end, (name, _))| *end <= at && name == n)
+                .map(|(_, (_, v))| v)
+                .collect()
+        };
+        let mut out: Vec<String> = Vec::new();
+        let mut work: Vec<(String, Vec<String>, Vec<String>)> =
+            vec![(word.to_ascii_lowercase(), Vec::new(), Vec::new())];
+        let mut steps = 0;
+        while let Some((name, seen, rest)) = work.pop() {
+            for v in before(&name).into_iter().flatten() {
+                steps += 1;
+                if steps > ALIAS_RUNS {
+                    return (out, true);
+                }
+                let Some((first, more)) = v.split_first() else {
+                    continue;
+                };
+                let head = first.to_ascii_lowercase();
+                let tail: Vec<String> = more.iter().chain(rest.iter()).cloned().collect();
+                if head != name && !seen.contains(&head) && !before(&head).is_empty() {
+                    let mut seen = seen.clone();
+                    seen.push(name.clone());
+                    work.push((head, seen, tail));
+                } else {
+                    let words: Vec<&str> = std::iter::once(first.as_str())
+                        .chain(tail.iter().map(String::as_str))
+                        .collect();
+                    out.push(words.join(" "));
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        (out, false)
     }
 }
 
@@ -3101,7 +3281,7 @@ fn all_read(s: &Script, shell: Shell) -> bool {
     // A pwsh alias definition puts its name in `defined`, so a call of it is not read as written.
     visit_script(s, &[], &mut |n| match n {
         Node::Func(name) => defined.push(name.to_ascii_lowercase()),
-        Node::Cmd(c) => defined.extend(defined_by(c, shell)),
+        Node::Cmd(c) => defined.extend(defined_by(c, shell, false)),
         _ => {}
     });
     // `global:f` defines `f` (Ruling 49).
@@ -3163,12 +3343,15 @@ fn read_as_written(c: &SimpleCommand, defined: &[String], shell: Shell) -> bool 
 /// `Function:` or `Alias:` by `Set-Item`/`New-Item`, an assignment to `$function:x` or
 /// `$alias:x`. `*` when the names cannot be read, for a command that imports definitions, and
 /// for any other command given a `Function:`/`Alias:` path, except a reader or a delete.
-fn defined_by(c: &SimpleCommand, shell: Shell) -> Vec<String> {
-    let mut out: Vec<String> = c
-        .assigns
-        .iter()
-        .filter_map(|(n, _)| command_item(n))
-        .collect();
+/// `by_name` (the location walk, Ruling 152): every alias by the name `alias_defs` binds, its
+/// parameters read as PowerShell binds them (`*` only for a name it cannot read).
+fn defined_by(c: &SimpleCommand, shell: Shell, by_name: bool) -> Vec<String> {
+    // An item on `Function:`, and on `Alias:` unless `alias_defs` reads the aliases.
+    let item = |t: &str| command_item(t).filter(|_| !by_name || alias_item(t).is_none());
+    let mut out: Vec<String> = c.assigns.iter().filter_map(|(n, _)| item(n)).collect();
+    if by_name {
+        out.extend(alias_defs(c, true).into_iter().map(|(n, _)| n));
+    }
     let Run::Cmd {
         name, raw, args, ..
     } = unwrap(c)
@@ -3176,8 +3359,10 @@ fn defined_by(c: &SimpleCommand, shell: Shell) -> Vec<String> {
         return out;
     };
     let any = || "*".to_string();
+    let drives: &[&str] = &["function:", "alias:"];
     match name.as_str() {
-        "set-alias" | "sal" | "new-alias" | "nal" => {
+        // `alias_defs` read the name when `by_name`.
+        "set-alias" | "sal" | "new-alias" | "nal" if !by_name => {
             // `[-Name] <name> [-Value] <value>` only; any other form may name anything.
             let words: Vec<Option<String>> = args.iter().map(literal).collect();
             let named = words
@@ -3196,7 +3381,7 @@ fn defined_by(c: &SimpleCommand, shell: Shell) -> Vec<String> {
         "set-item" | "si" | "new-item" | "ni" => {
             for w in args {
                 match literal(w) {
-                    Some(t) => out.extend(command_item(&t)),
+                    Some(t) => out.extend(item(&t)),
                     None => out.push(any()),
                 }
             }
@@ -3204,10 +3389,12 @@ fn defined_by(c: &SimpleCommand, shell: Shell) -> Vec<String> {
         "import-module" | "ipmo" | "import-alias" | "ipal" | "new-module" | "nmo"
         | "import-pssession" | "ipsn" => out.push(any()),
         // I8: `Set-Content Function:x`, `Copy-Item Function:a Function:b`, in any spelling the
-        // word's literal parts hold; D2: a reader or a delete defines nothing.
+        // word's literal parts hold; D2: a reader or a delete defines nothing. An `Alias:` write
+        // `alias_defs` reads when `by_name`.
         _ => {
             let cmd = table(shell).alias(&raw).unwrap_or(name.as_str());
-            if writes_item(cmd, args, &["function:", "alias:"]) {
+            let drives = if by_name { &drives[..1] } else { drives };
+            if writes_item(cmd, args, drives) {
                 out.push(any());
             }
         }
@@ -3499,7 +3686,7 @@ pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
 /// assignments `assigned::resolve_assigned` reads itself).
 pub fn mark_assigned_except(env: &mut EnvView, script: &Script, command: &str, skip: &[Span]) {
     // The dialect is not known here: read the script as pwsh too.
-    visit_script(script, &script_aliases(script, true), &mut |n| match n {
+    visit_script(script, &bounded_aliases(script, true), &mut |n| match n {
         Node::Cmd(c) if skip.contains(&c.span) => {}
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {

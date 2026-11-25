@@ -5821,3 +5821,437 @@ shell = "bash"
 command = 'zz() { rm -rf "$@"; }; zz /'
 level = "warn"
 rules = ["dynamic-target"]
+
+# A definition read by its real name (Ruling 152): a named, reversed, coloned or abbreviated
+# parameter, a switch, `New-Item -Path Alias:\ -Name` define only that alias, so a relative delete
+# after the definition is judged from the folder the command starts in, as its direct twin.
+[[row]]
+id = "ps-alias-rel-twin-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-named-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Name zz -Value Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-reversed-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Value Remove-Item -Name zz; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-coloned-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Name:zz -Value:Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-abbreviated-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -N zz -Va Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-scope-switch-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item -Scope Global; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-passthru-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item -PassThru | Out-Null; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-new-alias-force-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'New-Alias zz Remove-Item -Force; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-sal-named-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'sal -Name zz -Value Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-nal-coloned-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'nal -Name:zz -Value:Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-new-item-root-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'New-Item -Path Alias:\ -Name zz -Value Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# `Alias:` holds no link, but an unquoted list that also names a folder may make one there.
+[[row]]
+id = "ps-alias-new-item-junction-list-with-an-alias-path"
+os = "windows"
+shell = "pwsh"
+command = "New-Item -ItemType Junction -Path Alias:\\a,box2 -Target ..\\outside; Remove-Item -Recurse -Force box2"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-alias-rel-copy-item-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Copy-Item Alias:\del Alias:\zz; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# A named definition of a location alias defines that name: its call is an unknown move, as
+# `ps-alias-location-then-relative-delete` (twin: critical, the location alias is not followed).
+[[row]]
+id = "ps-alias-named-location-then-relative-delete"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias -Name zz -Value Set-Location; zz C:\; Remove-Item Windows -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-alias-rel-powershell5-named-dotgit"
+os = "windows"
+shell = "powershell5"
+command = 'Set-Alias -Name zz -Value Remove-Item; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-twin-dot"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item . -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-named-dot"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Name zz -Value Remove-Item; zz . -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-twin-dotdot"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item .. -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-rel-named-dotdot"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Name zz -Value Remove-Item; zz .. -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# Twin: `ps-alias-project-folder-twin`.
+[[row]]
+id = "ps-alias-rel-named-project-folder"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Name zz -Value Remove-Item; zz build -Recurse -Force'
+level = "ok"
+rules = []
+
+# Twin: `ps-alias-outside-twin`.
+[[row]]
+id = "ps-alias-rel-named-outside"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias -Name zz -Value Remove-Item; zz FX_OUTSIDE\data -Recurse -Force'
+level = "warn"
+rules = ["delete-outside-project"]
+
+# A named definition of an unrelated alias leaves a real-name delete after it as its twin.
+[[row]]
+id = "ps-alias-rel-named-unrelated-then-real-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias -Name ll -Value Get-ChildItem; Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# A resolved run the guard cannot read gets the finding of its direct twin (Ruling 153).
+[[row]]
+id = "ps-alias-to-iex-twin"
+os = "windows"
+shell = "pwsh"
+command = "Invoke-Expression 'Remove-Item C:\\Windows -Recurse -Force'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-to-iex"
+os = "windows"
+shell = "pwsh"
+command = "Set-Alias zz Invoke-Expression; zz 'Remove-Item C:\\Windows -Recurse -Force'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-to-pwsh-command-twin"
+os = "windows"
+shell = "pwsh"
+command = "pwsh -NoProfile -Command 'Remove-Item C:\\Windows -Recurse -Force'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-to-pwsh-command"
+os = "windows"
+shell = "pwsh"
+command = "Set-Alias zz pwsh; zz -NoProfile -Command 'Remove-Item C:\\Windows -Recurse -Force'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-to-cmd-rd-twin"
+os = "windows"
+shell = "pwsh"
+command = 'cmd /c rd /s /q C:\Windows'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-to-cmd-rd"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz cmd; zz /c rd /s /q C:\Windows'
+level = "danger"
+rules = ["opaque-destructive"]
+
+# The cap (Ruling 153): a call read more ways than the guard follows is never ok. The driver
+# (`tests/delete.rs`, `generated`) writes `GEN_CHAIN_<n>` as n links `Set-Alias a000 a001; …`
+# whose last names Remove-Item, and `GEN_REDEFINE_<n>` as n definitions of `zz`, the last one
+# Remove-Item. Twin: `ps-alias-twin-windows`.
+[[row]]
+id = "ps-alias-chain-64-links-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_CHAIN_64; a000 C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-chain-65-links-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_CHAIN_65; a000 C:\Windows -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-alias-64-definitions-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_REDEFINE_64; zz C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-65-definitions-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_REDEFINE_65; zz C:\Windows -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+# An alias whose value the guard cannot read, on a target the call's words do not spell
+# literally: a parameter value, the pipeline, a variable (A3). Twin: `ps-alias-unread-value-twin`.
+[[row]]
+id = "ps-alias-unread-value-path-colon-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz $x; zz -Path:C:\Windows -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-alias-unread-value-piped-windows"
+os = "windows"
+shell = "pwsh"
+command = "Set-Alias zz $x; 'C:\\Windows' | zz -Recurse -Force"
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-alias-unread-value-variable-target"
+os = "windows"
+shell = "pwsh"
+command = "$t = 'C:\\Windows'; Set-Alias zz $x; zz $t -Recurse -Force"
+level = "warn"
+rules = ["dynamic-target"]
+
+# A call inside code the guard does not read: the raw scan reads the alias as its value (A4).
+[[row]]
+id = "ps-alias-in-call-block-home-twin"
+os = "any"
+shell = "pwsh"
+command = '& { Remove-Item $HOME -Recurse -Force }'
+level = "danger"
+rules = ["opaque-destructive", "dynamic-target"]
+
+[[row]]
+id = "ps-alias-in-call-block-home"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; & { zz $HOME -Recurse -Force }'
+level = "danger"
+rules = ["opaque-destructive", "dynamic-target"]
+
+[[row]]
+id = "ps-alias-in-dot-block-home-twin"
+os = "any"
+shell = "pwsh"
+command = '. { Remove-Item $HOME -Recurse -Force }'
+level = "danger"
+rules = ["opaque-destructive", "dynamic-target"]
+
+[[row]]
+id = "ps-alias-in-dot-block-home"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; . { zz $HOME -Recurse -Force }'
+level = "danger"
+rules = ["opaque-destructive", "dynamic-target"]
+
+[[row]]
+id = "ps-alias-in-iex-string-twin"
+os = "windows"
+shell = "pwsh"
+command = 'Invoke-Expression "Remove-Item C:\Windows -Recurse -Force"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-in-iex-string"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; Invoke-Expression "zz C:\Windows -Recurse -Force"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-in-iex-string-redefined"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Get-ChildItem; Set-Alias zz Remove-Item; Invoke-Expression "zz C:\Windows -Recurse -Force"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "ps-alias-in-iex-string-through-a-chain"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; Set-Alias yy zz; Invoke-Expression "yy C:\Windows -Recurse -Force"'
+level = "danger"
+rules = ["opaque-destructive"]
+
+# An alias with more values than the guard follows, in code it does not read: never ok.
+[[row]]
+id = "ps-alias-in-iex-string-65-definitions-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_REDEFINE_65; Invoke-Expression "zz C:\Windows -Recurse -Force"'
+level = "warn"
+rules = ["dynamic-target"]
+
+# The bound (Ruling 154): past MAX defined names or calls of them in one command the guard does
+# not resolve aliases; a call on a protected folder is then `dynamic-target`, never ok.
+# `GEN_DISTINCT_<n>` is n one-link aliases `Set-Alias a000 Remove-Item; …`; `GEN_CALLS_<n>` is n
+# calls `zz FX_REPO\build\x000 -Recurse -Force; …`; `GEN_DEFINER_CALLS_<n>` is n definitions
+# `sa b000 Get-ChildItem; …` through the alias `sa`.
+[[row]]
+id = "ps-alias-at-the-definition-bound-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_DISTINCT_96; a000 C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-past-the-definition-bound-windows"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_DISTINCT_97; a000 C:\Windows -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-alias-at-the-call-bound-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; GEN_CALLS_31; zz C:\Windows -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-past-the-call-bound-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; GEN_CALLS_32; zz C:\Windows -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
+
+# Past the bound a real-name delete still reads as its twin (`ps-alias-rel-twin-dotgit`,
+# `ps-alias-home-twin`).
+[[row]]
+id = "ps-alias-past-the-definition-bound-then-real-dotgit"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_DISTINCT_97; Get-Date; Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-past-the-definition-bound-then-real-home"
+os = "windows"
+shell = "pwsh"
+command = 'GEN_DISTINCT_97; Remove-Item $HOME -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# Past the bound through an alias of the definer: only the calls count sees the definitions.
+[[row]]
+id = "ps-alias-past-the-call-bound-through-a-definer-alias-windows"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias sa Set-Alias; GEN_DEFINER_CALLS_40; sa zz Remove-Item; zz C:\Windows -Recurse -Force'
+level = "warn"
+rules = ["dynamic-target"]
