@@ -50,8 +50,9 @@ const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
 const FOLLOW_FIX_WRAPPERS: &str = "follow_fix_wrappers";
 const FOLLOW_FIX_LOOKUP: &str = "follow_fix_lookup";
 const FOLLOW_FIX_LOOKUP_VARS: &str = "follow_fix_lookup_vars";
-/// The `extra` key of a wrapper row that runs only shell builtins.
+/// The `extra` keys of a wrapper row that runs only shell builtins, and of one that is a builtin.
 const BUILTINS_ONLY: &str = "builtins_only";
+const SHELL_BUILTIN: &str = "shell_builtin";
 const LOOP_JOIN: &str = "loop_join";
 const INTEGER_WHEN: &str = "loop_integer_when";
 /// The `loop_join` values.
@@ -486,7 +487,14 @@ impl Walk<'_, '_> {
             let under =
                 unlisted || (inner.name.span != c.name.span && !listed.contains(&c.typed.as_str()));
             let chain = programs::wrapper_chain(c, shell, os);
-            let builtins_only = chain.iter().find(|(w, _)| flag(w, BUILTINS_ONLY));
+            // A wrapper that runs only builtins fails in front of what is none (`builtin tail`,
+            // `builtin nohup tail`); in front of a builtin wrapper it runs (`builtin command tail`).
+            let builtins_only = (0..chain.len()).find(|&k| {
+                flag(chain[k].0, BUILTINS_ONLY)
+                    && chain
+                        .get(k + 1)
+                        .is_none_or(|(next, _)| !flag(next, SHELL_BUILTIN))
+            });
             // An assignment in front (`PATH=/x tail`) applies to the bound too; an append
             // (`PATH+=:/x`) keeps the old value first. The parser also holds one after a wrapper
             // (`env PATH=/x tail`) as an assignment. Its word spans the whole `NAME=value`.
@@ -509,8 +517,15 @@ impl Walk<'_, '_> {
                 return Ok((at, template.replace(COMMAND, self.slice(at).trim())));
             }
             // The sentence names this follow's bounded form: the bound right before the program,
-            // after the wrappers (without one that runs only builtins); an assignment that sets
-            // the lookup moves behind the bound (`follow_fix_lookup`).
+            // after the wrappers (without the one that fails); an assignment that sets the lookup
+            // moves behind the bound (`follow_fix_lookup`).
+            let word = |span: Span| {
+                self.slice(Span {
+                    start: self.code_from(span.start),
+                    end: span.end,
+                })
+                .trim()
+            };
             let program = self
                 .slice(Span {
                     start: self.code_from(inner.name.span.start),
@@ -518,19 +533,30 @@ impl Walk<'_, '_> {
                 })
                 .trim();
             let mut wrappers = String::new();
-            for (k, (w, span)) in chain.iter().enumerate() {
+            for (k, (_, span)) in chain.iter().enumerate() {
                 let next = chain
                     .get(k + 1)
                     .map_or(inner.name.span.start, |(_, s)| s.start);
-                if !flag(w, BUILTINS_ONLY) {
+                if builtins_only != Some(k) {
                     wrappers.push_str(self.slice(Span {
                         start: self.code_from(span.start),
                         end: self.code_from(next),
                     }));
                 }
             }
+            // The text in front of the name: its assignments and leading redirects. The Bash
+            // lowering gives a command with a redirect the span of its name only (`2>&1 sudo
+            // tail`); the earliest of that span and its redirects' spans starts at the command's
+            // first word, assignments included (rows `fu-bash-fix-…-redirect-…`).
+            let front_start = c
+                .redirects
+                .iter()
+                .map(|r| match r {
+                    Redirect::File { span, .. } | Redirect::Heredoc { span, .. } => span.start,
+                })
+                .fold(c.span.start, usize::min);
             let front = self.slice(Span {
-                start: command_extent(c).start,
+                start: front_start,
                 end: at.start,
             });
             let form = match row.extra.get(FOLLOW_FIX_LOOKUP).and_then(|v| v.as_str()) {
@@ -542,18 +568,13 @@ impl Walk<'_, '_> {
             };
             let bound = template.replace(COMMAND, "");
             let bound = bound.trim();
-            let (why, head) = if let Some((_, span)) = builtins_only {
-                let word = self
-                    .slice(Span {
-                        start: self.code_from(span.start),
-                        end: span.end,
-                    })
-                    .trim();
-                let name = &inner.typed;
+            let (why, head) = if let Some(k) = builtins_only {
+                let wrapper = word(chain[k].1);
+                let name = chain.get(k + 1).map_or(inner.typed.as_str(), |(_, s)| word(*s));
                 (
                     UNDER_BUILTINS_ONLY,
                     format!(
-                        "Bash has no `{name}` builtin, so `{word} {name}` fails and follows nothing: drop `{word}` and bound the program: `{form}`"
+                        "Bash has no `{name}` builtin, so `{wrapper} {name}` fails and follows nothing: drop `{wrapper}` and bound the program: `{form}`"
                     ),
                 )
             } else if sets_lookup {

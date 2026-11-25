@@ -74,6 +74,7 @@ shells = ["bash"]
 kind = ["wrapper"]
 flag_options = ["-p"]
 no_run_options = ["-v", "-V"]
+shell_builtin = true
 
 [[program]]
 name = "nohup"
@@ -87,15 +88,18 @@ shells = ["bash"]
 kind = ["wrapper"]
 value_options = ["-a"]
 flag_options = ["-c", "-l"]
+shell_builtin = true
 
 # `builtin shell-builtin [arguments]` (bash's `help builtin`). `builtins_only`: it runs only a shell
-# builtin, so a program after it fails (`builtin tail -f log`: "not a shell builtin", 1); read by
+# builtin, so a program after it fails (`builtin tail -f log`: "not a shell builtin", 1), while a
+# `shell_builtin` wrapper after it runs (`builtin command tail -f log` follows); both read by
 # follow-unbounded's sentence.
 [[program]]
 name = "builtin"
 shells = ["bash"]
 kind = ["wrapper"]
 builtins_only = true
+shell_builtin = true
 
 # --- Programs that turn `\\` into `\` themselves (bash-backslash-collapse) ---
 
@@ -340,13 +344,14 @@ loop_role = ["wait"]
 #                   `<pipeline>` is the whole pipeline; `<job>` a variable name the command never
 #                   uses. The Fix is the whole command with each follow replaced in place
 #                   (Ruling 148); where that cannot be built, a sentence (`follow_fix_sentence`, or
-#                   one made from `follow_fix`); its last backquoted text is a form to write
+#                   one made from `follow_fix`); a Bash row's sentence ends in a form to write
 # follow_fix_wrappers  the wrappers a `<command>` Fix may start with: ones `timeout` was shown to
 #                   run in Bash (`timeout 3 nohup tail -f quiet.log` ends, 124). Under any other
 #                   wrapper (`command` and `exec` are shell builtins, 127), or under any wrapper
 #                   of the chain not listed here (`nohup sudo tail`), the Fix is a sentence that
 #                   names the follow with the bound after its wrappers (`sudo timeout 60 tail -f
-#                   log`); a `builtins_only` wrapper is left out of that form
+#                   log`); a `builtins_only` wrapper in front of what is no `shell_builtin` fails,
+#                   and is left out of that form
 # follow_fix_lookup_vars  assignments that, in front of the follow, would also set where the
 #                   bound is looked up (`PATH=/x timeout 60 tail`: 127): the Fix is a sentence
 #                   whose form is `follow_fix_lookup`, `<command>` the assignments and the program
