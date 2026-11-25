@@ -17,7 +17,14 @@ quiet log, `tail -f quiet.log | grep -m1 done` runs on.
 | The same program without the follow option (`tail -n 20 log`, `kubectl logs pod`, `kubectl apply -f x`) | `ok` | It reads and ends. | |
 
 The Fix is the whole command: every later stage of the pipeline and every other statement stay,
-in order, and each follow in it is bounded (60 s each). The PowerShell job takes a statement of its
+in order, and each follow in it is bounded (60 s each). In Bash, `timeout 60` goes right before
+the follow command's name: its assignments and leading redirects stay in front
+(`LC_ALL=C timeout 60 tail -f log`, `2>&1 timeout 60 tail -f log`), since `timeout` would run an
+assignment as a program. Around the wrappers `env` and `nohup` the bound goes first
+(`timeout 60 nohup tail -f log`); under any other wrapper (`command` and `exec` are shell
+builtins `timeout` cannot run, `sudo` was not shown to run, and `timeout` around `nice` sometimes
+never ended in Git Bash) the Fix is a sentence: put the bound after the wrapper, right before the
+program. The PowerShell job takes a statement of its
 own, and its variable is a name the command does not use. Where a follow cannot be replaced in
 place (in a child shell, an `if`, a function, a loop, a block, an assignment, a substitution, or a
 PowerShell pipeline joined to more by `&&` or `||`), the Fix is a sentence and no command, for
@@ -77,3 +84,6 @@ $j = Start-Job { Get-Content run.log -Wait }; $null = Wait-Job $j -Timeout 60; R
 - A variable a `-PipelineVariable` or `-OutVariable` sets is read as the caller's: its `$name`
   becomes `$using:name` in the Fix.
 - `tail -f log --pid=<pid>` ends with that process but still warns.
+- A bound after a wrapper (`command timeout 60 tail -f log`, `nohup timeout 60 tail -f log`) is
+  not seen: it still warns.
+- `builtin tail -f log` warns, though bash refuses it (`tail` is no builtin) and follows nothing.

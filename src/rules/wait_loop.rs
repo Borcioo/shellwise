@@ -47,6 +47,7 @@ const FOLLOW_FIX_LOCALS: &str = "follow_fix_locals";
 const FOLLOW_FIX_SCOPES: &str = "follow_fix_scopes";
 const FOLLOW_FIX_SETS: &str = "follow_fix_sets";
 const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
+const FOLLOW_FIX_WRAPPERS: &str = "follow_fix_wrappers";
 const LOOP_JOIN: &str = "loop_join";
 const INTEGER_WHEN: &str = "loop_integer_when";
 /// The `loop_join` values.
@@ -64,6 +65,7 @@ const IN_STATEMENT: &str = "the follow pipeline is part of a longer statement";
 const SETS_VARIABLE: &str =
     "the pipeline assigns a variable or names its scope, which `$using:` cannot pass";
 const SET_LATER: &str = "a variable it reads is assigned only after it";
+const UNDER_WRAPPER: &str = "the follow runs under a wrapper the bound cannot be put in front of; put it after the wrapper, right before the program";
 /// The `loop_role` of a command that pauses.
 const WAIT: &str = "wait";
 
@@ -439,7 +441,18 @@ impl Walk<'_, '_> {
             return Err(NESTED);
         };
         if !template.contains(PIPELINE) {
-            let at = command_extent(c);
+            // The bound goes right before the command's name, after its assignments and leading
+            // redirects; around a wrapper only when the row says the bound runs that wrapper.
+            let inner = programs::strip_wrappers(c, self.shell, self.os);
+            if inner.name.span != c.name.span
+                && !strings(row, FOLLOW_FIX_WRAPPERS).contains(&c.typed.as_str())
+            {
+                return Err(UNDER_WRAPPER);
+            }
+            let at = Span {
+                start: c.name.span.start,
+                ..command_extent(c)
+            };
             return Ok((at, template.replace(COMMAND, self.slice(at).trim())));
         }
         let (before, after) = (
