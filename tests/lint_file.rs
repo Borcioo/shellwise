@@ -1021,6 +1021,89 @@ fn a_sh_file_bash_refuses_is_a_break_with_shellchecks_message() {
     }
 }
 
+/// `bash -n <path>`'s exit code (Git Bash on Windows).
+#[cfg(feature = "oracle")]
+fn bash_syntax(p: &Path) -> Option<i32> {
+    #[cfg(windows)]
+    let bash = r"C:\Program Files\Git\bin\bash.exe";
+    #[cfg(not(windows))]
+    let bash = "/bin/bash";
+    std::process::Command::new(bash)
+        .arg("-n")
+        .arg(p)
+        .output()
+        .expect("bash runs")
+        .status
+        .code()
+}
+
+/// Ruling 138: a ShellCheck SC1xxx break stays break only where the shellwise parser fails at the
+/// same place. `arith_for_test.sh` holds an unspaced `for ((;;))` the shellwise parser fails on
+/// (line 2) and an `[[$x == y]]` ShellCheck reports (line 3): Bash parses both, so the file passes
+/// with SC1035 at warn, as in its one-line twin `sc1035.sh`.
+#[test]
+fn a_shellcheck_error_on_another_line_than_a_shellwise_parse_error_stays_warn() {
+    let path = fixture("arith_for_test.sh");
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
+    let found = places(&path, &r);
+    assert!(
+        found.contains(&"3:4: warn SC1035".to_string()),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains(": break "), "{}", r.stdout);
+    #[cfg(feature = "oracle")]
+    assert_eq!(bash_syntax(&path), Some(0));
+}
+
+/// Ruling 138: a real refusal (an unclosed quote on line 3, which Bash refuses) breaks, and the
+/// SC1035 on line 2 that Bash parses stays warn.
+#[test]
+fn a_refusal_breaks_and_a_shellcheck_error_on_another_line_stays_warn() {
+    let path = fixture("test_then_quote.sh");
+    let r = common::run(&["lint", &path.to_string_lossy()], None, &[]);
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    let found = places(&path, &r);
+    assert!(
+        found.contains(&"3:6: break parse-error".to_string()),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        found.contains(&"2:4: warn SC1035".to_string()),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|p| p.starts_with("2:") && p.contains(": break ")),
+        "{}",
+        r.stdout
+    );
+    #[cfg(feature = "oracle")]
+    assert_eq!(bash_syntax(&path), Some(2));
+}
+
+/// Ruling 138: on the line of a shellwise parse error ShellCheck's SC1xxx stays break, and an
+/// unclosed quote's "expected end of string" at the end of the file is that same construct.
+#[test]
+fn a_shellcheck_error_at_the_place_of_an_unclosed_quote_stays_break() {
+    let (path, r) = lint_cli("sc_quote", "quote.sh", "#!/bin/bash\necho \"hi\n");
+    assert_eq!(r.code, 1, "{} {}", r.stdout, r.stderr);
+    let found = places(&path, &r);
+    for want in [
+        "2:6: break parse-error",
+        "2:6: break SC1073",
+        "3:1: break SC1072",
+    ] {
+        assert!(found.contains(&want.to_string()), "{want}: {}", r.stdout);
+    }
+    #[cfg(feature = "oracle")]
+    assert_eq!(bash_syntax(&path), Some(2));
+}
+
 /// SC2164 (`cd` without `|| exit`) is left out by default; real ShellCheck reports it on this text.
 #[test]
 fn sc2164_is_left_out_of_a_linted_file() {
