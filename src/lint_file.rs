@@ -192,7 +192,8 @@ pub fn lint(path: &Path, cfg: &Config, deadline: &Deadline) -> Result<Report, Re
 /// shellwise parser fails at the same place (a `parse-error` finding on its line, one at the end
 /// of the file, or, for an external finding at the end of the file, one whose span runs there),
 /// else it is `warn`. A panic in `external` is a `warn` `analysis-incomplete` finding, and the
-/// shellwise findings stay.
+/// shellwise findings stay. `external` runs on the calling thread while `analyse` runs on another,
+/// both under the same deadline.
 pub fn lint_with(
     path: &Path,
     cfg: &Config,
@@ -215,7 +216,14 @@ pub fn lint_with(
         origin: Origin::File,
         problem: None,
     };
-    let mut own = analyse(&input, cfg, deadline).findings;
+    let text = &text;
+    let (mut own, extra) = std::thread::scope(|s| {
+        let ours = s.spawn(|| analyse(&input, cfg, deadline).findings);
+        let extra = panic::catch_unwind(AssertUnwindSafe(|| external(text, shell)));
+        // `analyse` catches its own panics; one past it fails the lint as it did on this thread.
+        let own = ours.join().unwrap_or_else(|e| panic::resume_unwind(e));
+        (own, extra)
+    });
     if crlf {
         let mut f = Finding {
             rule: BASH_CRLF,
@@ -227,9 +235,9 @@ pub fn lint_with(
         f.level = cfg.level(f.rule, f.level);
         own.insert(0, f);
     }
-    let mut located: Vec<Located> = own.into_iter().map(|f| locate(&text, f)).collect();
+    let mut located: Vec<Located> = own.into_iter().map(|f| locate(text, f)).collect();
 
-    let extra = match panic::catch_unwind(AssertUnwindSafe(|| external(&text, shell))) {
+    let extra = match extra {
         Ok(found) => found,
         Err(_) => vec![Finding {
             rule: ANALYSIS_INCOMPLETE,
@@ -254,7 +262,7 @@ pub fn lint_with(
         .collect();
     let eof = text.trim_end().len();
     let refused_at = |f: &Finding| {
-        let line = position(&text, f.span.start).0;
+        let line = position(text, f.span.start).0;
         failed.iter().any(|p| {
             p.line == line
                 // Our parser ran into the end of the file: the construct left open may start on
@@ -271,7 +279,7 @@ pub fn lint_with(
             f.fix = None;
         }
         f.level = cfg.level(f.rule, f.level);
-        let l = locate(&text, f);
+        let l = locate(text, f);
         let seen = located[..own_count]
             .iter()
             .any(|o| o.line == l.line && o.finding.rule == l.finding.rule);
