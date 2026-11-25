@@ -294,6 +294,14 @@ impl Walk<'_, '_> {
         if commands(stmts).iter().any(|c| unreadable(c, shell, os)) {
             return;
         }
+        // A reader condition (`while read -r line`) ends with its input: a sleep in the body only
+        // paces it (Ruling 134).
+        if commands(cond)
+            .iter()
+            .any(|c| reads_input(c, shell, os) && !waits(c, shell, os))
+        {
+            return;
+        }
         let loops = programs::loops();
         let cond_text = self.text_of(cond);
         let always = matches!(head, LoopHead::Counted { open: true })
@@ -439,7 +447,22 @@ impl Walk<'_, '_> {
                     }
                     out.push(self.text_of(&stmts[first..=i]));
                 }
-                Stmt::Block(b) => out.extend(self.guards(&b.stmts)),
+                Stmt::Block(b) => {
+                    // `[ $n -gt 9 ] && { echo timeout; exit 1; }`: the chain before a block that
+                    // exits guards that exit.
+                    let block_exits = b
+                        .stmts
+                        .iter()
+                        .any(|s| matches!(s, Stmt::Pipeline(p) if pipeline_exits(p, exits, fold)));
+                    if block_exits && script_joins(i, stmts) {
+                        let mut first = i;
+                        while script_joins(first, stmts) {
+                            first -= 1;
+                        }
+                        out.push(self.text_of(&stmts[first..=i]));
+                    }
+                    out.extend(self.guards(&b.stmts));
+                }
                 _ => {}
             }
         }

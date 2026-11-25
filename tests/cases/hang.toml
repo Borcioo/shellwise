@@ -616,13 +616,165 @@ command = "sh -lc 'while true; do sleep 5; done'"
 level = "break"
 rules = ["wait-loop-unbounded"]
 
-# The body has a wait and the condition reads input: the brief names the no-wait form as the one
-# that ends with its input, so this one is a finding (pinned for a ruling).
+# Ruling 134: a loop whose condition is a `read` without `-t` ends with its input; a sleep in its
+# body only paces it.
 [[row]]
 id = "wl-bash-while-read-with-sleep"
 os = "any"
 shell = "bash"
 command = "while read -r host; do sleep 1; done < hosts.txt"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-piped-while-read-with-sleep"
+os = "any"
+shell = "bash"
+command = 'cat file.txt | while read line; do echo "$line"; sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-while-ifs-read-with-sleep"
+os = "any"
+shell = "bash"
+command = 'while IFS= read -r line || [ -n "$line" ]; do echo "$line"; sleep 1; done < file.txt'
+level = "ok"
+rules = []
+
+# Deny twins: a `read` in the body is no reader condition, and `read -t` is no plain reader.
+[[row]]
+id = "wl-bash-read-in-the-body-with-sleep"
+os = "any"
+shell = "bash"
+command = 'while [ -n "$x" ]; do read -r x; sleep 1; done < list.txt'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-read-with-timeout-condition-and-sleep"
+os = "any"
+shell = "bash"
+command = 'while read -t 5 line; do echo "$line"; sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# A follow feeding the reader is follow-unbounded's business (Ruling 134).
+[[row]]
+id = "wl-bash-follow-into-while-read-with-sleep"
+os = "any"
+shell = "bash"
+command = 'tail -f app.log | while read line; do echo "$line"; sleep 1; done'
+level = "warn"
+rules = ["follow-unbounded"]
+
+# --- A1: a counter test joined to a `{ …; exit|break; }` block ---
+
+[[row]]
+id = "wl-bash-counter-guard-exits-in-a-block"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -gt 1100 ] && { echo timeout; exit 1; }; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-guard-breaks-in-a-block"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -gt 100 ] && { echo timeout; break; }; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-guard-or-block"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -le 100 ] || { echo timeout; exit 1; }; sleep 5; done"
+level = "ok"
+rules = []
+
+# Deny twins: the block's test is no counter, or the counter test is not joined to the block.
+[[row]]
+id = "wl-bash-block-guard-on-a-log-line"
+os = "any"
+shell = "bash"
+command = "until grep -q done log; do grep -q failed log && { echo failed; exit 1; }; sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-counter-test-not-joined-to-the-block"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -gt 100 ]; grep -q failed log && { echo failed; exit 1; }; sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# --- A2: equality is a comparison too ---
+
+[[row]]
+id = "wl-bash-counter-eq-guard"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); [ $n -eq 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-arith-equal-guard"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((n+1)); (( n == 100 )) && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-ne-condition"
+os = "any"
+shell = "bash"
+command = "n=0; while [ $n -ne 100 ]; do n=$((n+1)); grep -q done log && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-arith-not-equal-condition"
+os = "any"
+shell = "bash"
+command = "n=0; while ((n!=100)); do n=$((n+1)); sleep 1; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-eq-guard"
+os = "any"
+shell = "pwsh"
+command = "$i = 0; while (-not (Test-Path done.txt)) { $i += 1; if ($i -eq 60) { break }; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+# Deny twins: equality on a polled value, and an equality test that guards no exit.
+[[row]]
+id = "wl-bash-polled-eq-guard"
+os = "any"
+shell = "bash"
+command = 'while true; do s=$(cat status); [ "$s" -eq 1 ] && break; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-polled-eq-guard"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { $s = (Get-Content status); if ($s -eq 'ready') { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-counter-eq-guards-no-exit"
+os = "any"
+shell = "bash"
+command = "n=0; while true; do n=$((n+1)); [ $n -eq 100 ] && echo hundred; sleep 5; done"
 level = "break"
 rules = ["wait-loop-unbounded"]
 

@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   clock bounds a loop only when a comparison reads it.
 - `wait-loop-unbounded` now catches a loop that compares a polled value (`c=$(ls out | wc -l);
   [ $c -ge 10 ] && break`): only a variable that counts from its own old value is a counter.
+- `wait-loop-unbounded` no longer blocks a counted loop whose counter test exits through a block
+  (`[ $n -gt 100 ] && { echo timeout; exit 1; }`) or compares with `-eq`, `-ne`, `==` or `!=`.
+- `wait-loop-unbounded` no longer blocks a `while read` loop that sleeps between lines: it ends
+  with its input.
 - `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
   `[Threading.Thread]::Sleep` in PowerShell.
 
