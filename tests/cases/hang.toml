@@ -1587,6 +1587,24 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "for i in $(seq 1 120); do\n  # undo it; do: check\n  sleep 5\n  grep -q done log && break\n  [ \"$i\" -lt 120 ]\ndone  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
 
+[[row]]
+id = "wl-bash-fix-of-a-body-with-a-comment-starting-with-do"
+os = "any"
+shell = "bash"
+command = "while true; do\n  # do the check\n  sleep 5\n  grep -q done log && break\ndone"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 120); do\n  # do the check\n  sleep 5\n  grep -q done log && break\n  [ \"$i\" -lt 120 ]\ndone  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+[[row]]
+id = "wl-bash-fix-of-a-condition-with-a-comment-holding-do"
+os = "any"
+shell = "bash"
+command = "until grep -q done log # do it later\ndo sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for i in $(seq 1 120); do grep -q done log && break; sleep 5; [ "$i" -lt 120 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
 # The body's braces: those after the condition, a script block in the condition and a quoted
 # brace aside.
 [[row]]

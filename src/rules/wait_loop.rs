@@ -482,7 +482,7 @@ impl Walk<'_, '_> {
     /// the `!` before them.
     fn bash_condition(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> String {
         let stmts = self.text_of(cond);
-        let header = match self.bash_do(span, rest) {
+        let header = match self.bash_do(span, cond, rest) {
             Some(d) => self.slice(Span {
                 start: span.start,
                 end: d,
@@ -510,27 +510,28 @@ impl Walk<'_, '_> {
         if negated { format!("! {stmts}") } else { stmts }
     }
 
-    /// Where a Bash loop's `do` stands: the last `do` word before the body's first statement
-    /// (whose span may start inside a `{` or `(` the body opens with).
-    fn bash_do(&self, span: Span, rest: &[Stmt]) -> Option<usize> {
-        let r = range(rest)?;
-        let head = self.src.get(span.start..r.start)?;
-        head.match_indices("do")
-            .filter(|&(i, _)| {
-                let before = head[..i].chars().next_back();
-                let after = head[i + 2..].chars().next();
-                before.is_none_or(|b| b.is_whitespace() || matches!(b, ';' | ')' | '}'))
-                    && after.is_none_or(char::is_whitespace)
-            })
-            .last()
-            .map(|(i, _)| span.start + i)
+    /// Where a Bash loop's `do` stands: the first `do` after the condition's statements, comments
+    /// aside. Between the two stand only the condition's closing words, a `;` and comments (the
+    /// body's first statement may start inside a `{` or `(`, and a comment may hold `do`).
+    fn bash_do(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> Option<usize> {
+        let from = range(cond).map_or(span.start, |r| r.end);
+        let text = self.src.get(from..range(rest)?.start)?;
+        let mut at = 0;
+        for line in text.split_inclusive('\n') {
+            let code = line.find('#').map_or(line, |h| &line[..h]);
+            if let Some(i) = code.find("do") {
+                return Some(from + at + i);
+            }
+            at += line.len();
+        }
+        None
     }
 
     /// A Bash loop's body as written: from after its `do` to the loop's closing `done`, without
     /// the `;` before it. `None` when the loop's text does not end in `done` (a redirect after
     /// it).
-    fn bash_body(&self, span: Span, rest: &[Stmt]) -> Option<String> {
-        let start = self.bash_do(span, rest)? + 2;
+    fn bash_body(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> Option<String> {
+        let start = self.bash_do(span, cond, rest)? + 2;
         let t = self.src.get(start..span.end)?.trim();
         let t = t.strip_suffix("done")?.trim_end();
         Some(t.strip_suffix(';').unwrap_or(t).trim_end().to_string())
@@ -657,16 +658,15 @@ impl Walk<'_, '_> {
         // The body as written: the spans of a Bash `if`, group or subshell stop before their
         // closing word, the last statement's `&` is outside its text, and a group or a `try`
         // starts at its first inner statement.
-        let source_body = if matches!(shell, Shell::Bash(_)) {
-            self.bash_body(span, rest)
+        let cond_stmts = if at_end {
+            &all[rest.len()..]
         } else {
-            let n = all.len() - rest.len();
-            let cond = if at_end {
-                &all[rest.len()..]
-            } else {
-                &all[..n]
-            };
-            self.pwsh_body(span, cond, at_end)
+            &all[..all.len() - rest.len()]
+        };
+        let source_body = if matches!(shell, Shell::Bash(_)) {
+            self.bash_body(span, cond_stmts, rest)
+        } else {
+            self.pwsh_body(span, cond_stmts, at_end)
         };
         let mut body = source_body.clone().unwrap_or_else(|| self.text_of(rest));
         if source_body.is_none()
