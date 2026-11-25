@@ -2262,6 +2262,57 @@ command = "$I = 5; while (-not (Test-Path ok)) { Write-Host $I; Start-Sleep 5 }"
 level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "$I = 5; for ($attempt = 0; $attempt -lt 120; $attempt++) { if (-not (-not (Test-Path ok))) { break }; Write-Host $I; Start-Sleep 5 }; if ($attempt -eq 120) { throw 'the wait timed out' }  # when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
+
+# Under `declare -i`/`typeset -i` a bare `n=n+1` is arithmetic: `n` counts.
+[[row]]
+id = "wl-bash-declare-i-bare-increment-is-a-counter"
+os = "any"
+shell = "bash"
+command = "declare -i n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-typeset-i-bare-increment-is-a-counter"
+os = "any"
+shell = "bash"
+command = "typeset -i n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-declare-i-in-a-cluster-is-a-counter"
+os = "any"
+shell = "bash"
+command = "declare -ix n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
+level = "ok"
+rules = []
+
+# Controls: without the integer attribute, or with it on another name, `n=n+1` sets the text
+# `n+1`.
+[[row]]
+id = "wl-bash-bare-increment-without-declare-i-is-no-counter"
+os = "any"
+shell = "bash"
+command = "n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-declare-i-of-another-name-is-no-counter"
+os = "any"
+shell = "bash"
+command = "declare -i m=0; n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-declare-without-i-is-no-counter"
+os = "any"
+shell = "bash"
+command = "declare -x n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
 # --- follow-unbounded (warn): a follow command nothing stops ---
 
 [[row]]

@@ -48,6 +48,7 @@ const FOLLOW_FIX_SCOPES: &str = "follow_fix_scopes";
 const FOLLOW_FIX_SETS: &str = "follow_fix_sets";
 const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
 const LOOP_JOIN: &str = "loop_join";
+const INTEGER_WHEN: &str = "loop_integer_when";
 /// The `loop_join` values.
 const JOIN_AND: &str = "and";
 const JOIN_OR: &str = "or";
@@ -89,6 +90,7 @@ impl Rule for WaitLoopRule {
             depth: 0,
             out,
             sites: &mut Vec::new(),
+            ints: integers(&ctx.script.stmts, shell, ctx.input.os),
             outer: None,
             mode: Mode::Loops,
             root: ctx.script,
@@ -120,6 +122,7 @@ impl Rule for FollowRule {
             depth: 0,
             out,
             sites: &mut sites,
+            ints: Vec::new(),
             outer: None,
             mode: Mode::Follow,
             root: ctx.script,
@@ -217,6 +220,8 @@ struct Walk<'a, 'b> {
     out: &'b mut Vec<Finding>,
     /// The follow findings, whose Fix is built once the whole command is read.
     sites: &'b mut Vec<Site>,
+    /// The Bash names the script declares integers (`declare -i n`).
+    ints: Vec<String>,
     /// The span of the command whose child-shell body this is: a finding points at it.
     outer: Option<Span>,
     /// The whole script the check reads.
@@ -339,6 +344,7 @@ impl Walk<'_, '_> {
             depth: self.depth + 1,
             out: self.out,
             sites: self.sites,
+            ints: integers(&script.stmts, Shell::Bash(profile), self.os),
             outer: Some(self.outer.unwrap_or(at)),
             mode: self.mode,
             root: self.root,
@@ -531,7 +537,7 @@ impl Walk<'_, '_> {
         }
         let whole = self.slice(span);
         let fold = !matches!(shell, Shell::Bash(_));
-        let counters = counters(whole, fold);
+        let counters = counters(whole, fold, &self.ints);
         let header = match head {
             LoopHead::Test { .. } if !cond.is_empty() => {
                 let from = if at_end { stmts.len() - cond.len() } else { 0 };
@@ -1642,6 +1648,27 @@ fn in_let(text: &str, at: usize) -> bool {
         == Some("let")
 }
 
+/// The Bash names `stmts` declare integers: the plain words (`n`, `n=0`) of a command whose row
+/// lists one of its options in `loop_integer_when` (`declare -i n=0`, `typeset -ix n`).
+fn integers(stmts: &[Stmt], shell: Shell, os: Os) -> Vec<String> {
+    if !matches!(shell, Shell::Bash(_)) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for c in commands(stmts) {
+        let Some(p) = row(c, shell, os) else { continue };
+        let when = strings(p, INTEGER_WHEN);
+        let args: Vec<String> = c.args.iter().filter_map(literal).collect();
+        if when.is_empty() || !has_opt(&args, &when, false) {
+            continue;
+        }
+        for a in args.iter().filter(|a| !a.starts_with('-')) {
+            out.push(a.split_once('=').map_or(a.as_str(), |(n, _)| n).to_string());
+        }
+    }
+    out
+}
+
 /// The text before a name refers to it as a variable: `$n`, `${n}`, PowerShell `$script:n`.
 fn refers(before: &str, fold: bool) -> bool {
     if before.ends_with('$') || before.ends_with("${") {
@@ -1658,8 +1685,9 @@ fn refers(before: &str, fold: bool) -> bool {
 /// variable assigned from a command or an expression that does not read it (`c=$(ls out | wc
 /// -l)`) holds a polled value and is no counter (Ruling 135). The read is a reference to the
 /// variable (`$n`, `${n}`, a bare name in Bash arithmetic or `let`), never its name as a word of
-/// the polled command (`state=$(cat state)`, Ruling 139).
-fn counters(text: &str, fold: bool) -> Vec<String> {
+/// the polled command (`state=$(cat state)`, Ruling 139). On a Bash name of `ints` (`declare -i
+/// n`) an assignment is arithmetic too (`n=n+1`).
+fn counters(text: &str, fold: bool, ints: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let arith = if fold { Vec::new() } else { arithmetic(text) };
     let inside = |at: usize| arith.iter().any(|&(s, e)| s < at && at < e);
@@ -1685,7 +1713,7 @@ fn counters(text: &str, fold: bool) -> Vec<String> {
                 let base = value.as_ptr() as usize - text.as_ptr() as usize;
                 // In `let n=n+1` the whole value is arithmetic (in `: $((n=n+1))` it lies inside
                 // the `$(( ))` too).
-                let bare = !fold && in_let(text, start);
+                let bare = !fold && (in_let(text, start) || ints.iter().any(|n| n == name));
                 variables(value).any(|(at, v)| {
                     same(v, name, fold)
                         && (bare || refers(&value[..at], fold) || (!fold && inside(base + at)))

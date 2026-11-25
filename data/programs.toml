@@ -251,7 +251,19 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 #                 with its round test, so it is a sentence
 # loop_join       a PowerShell operator that joins two tests of a loop's condition: "and" or "or"
 #                 (Ruling 141 reads which side a bound must be on)
+# loop_integer_when on a Bash declaring builtin: with one of these options the names it declares
+#                 are integers, so a bare `n=n+1` on one is arithmetic and `n` a counter
 # A .NET method is a row named `[type]::method` as written, lowercase.
+
+[[program]]
+name = "declare"
+shells = ["bash"]
+loop_integer_when = ["-i"]
+
+[[program]]
+name = "typeset"
+shells = ["bash"]
+loop_integer_when = ["-i"]
 
 [[program]]
 name = "continue"

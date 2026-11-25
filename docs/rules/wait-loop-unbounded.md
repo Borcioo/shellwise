@@ -92,8 +92,9 @@ $n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.tx
 - A clock counts only where the comparison reads it: a time read into a variable first (`now=$(date
   +%s); [ $now -gt $end ] && break`) is a polled value, and the loop is a finding.
 - A counter counts when its new value refers to the variable (`$n`, `${n}`, a bare `n` in `$(( ))`,
-  `(( ))`, `$[ ]` or `let`; PowerShell `$n` in any case, `$script:n`): `state=$(cat state)` names
-  `state` only as a file and polls.
+  `(( ))`, `$[ ]` or `let`, or a bare `n` assigned after `declare -i n` or `typeset -i n`;
+  PowerShell `$n` in any case, `$script:n`): `state=$(cat state)` names `state` only as a file and
+  polls.
 - A test command or a group in the condition is read as one test: in `until [[ -f ok && $n -ge 9
   ]]`, `until [ -f ok -a $n -ge 9 ]` or `while ! ( A || bound )` a compared counter bounds the loop,
   whichever way the inner operators join it.
