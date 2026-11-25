@@ -776,9 +776,10 @@ impl Walk<'_, '_> {
                 .iter()
                 .any(|c| row(c, shell, os).is_some_and(|p| flag(p, SKIPS_ROUND)));
             // The fixed loop's failure must reach where the command goes on (Ruling 142): a later
-            // stage of a pipeline decides its status, and a loop around it goes on.
+            // stage of a pipeline decides its status, and a loop around it goes on. The loop's
+            // redirects (`done 2>&1 | tee log`) stand between it and the pipe.
             let piped = self.src.get(span.end..).is_some_and(|t| {
-                let t = t.trim_start_matches([' ', '\t']);
+                let t = past_redirects(t);
                 t.starts_with('|') && !t.starts_with("||")
             });
             let why = if heredoc {
@@ -970,6 +971,27 @@ fn waits_on_job_with_timeout(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
         let args: Vec<String> = c.args.iter().filter_map(literal).collect();
         !when.is_empty() && has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
     })
+}
+
+/// The Bash text `t` after the redirects at its start (`2>&1`, `> out.txt`, `&>/dev/null`), blanks
+/// aside.
+fn past_redirects(t: &str) -> &str {
+    const OPS: [&str; 8] = ["&>>", "&>", ">>", ">&", "<&", ">|", ">", "<"];
+    let mut t = t.trim_start_matches([' ', '\t']);
+    loop {
+        let rest = t.trim_start_matches(|c: char| c.is_ascii_digit());
+        let Some(op) = OPS.iter().find(|o| rest.starts_with(**o)) else {
+            return t;
+        };
+        let rest = rest[op.len()..].trim_start_matches([' ', '\t']);
+        let word = rest
+            .find([' ', '\t', '|', ';', '&', '\n'])
+            .unwrap_or(rest.len());
+        if word == 0 {
+            return t;
+        }
+        t = rest[word..].trim_start_matches([' ', '\t']);
+    }
 }
 
 /// A PowerShell pipeline with each of the caller's variables read through `$using:`, as a job
