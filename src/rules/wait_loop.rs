@@ -1102,9 +1102,26 @@ fn past_redirects(t: &str) -> &str {
             return t;
         };
         let rest = rest[op.len()..].trim_start_matches([' ', '\t']);
+        // The target word ends at a blank or an operator outside quotes (`>"my out.txt"`).
+        let mut quote: Option<char> = None;
+        let mut escaped = false;
         let word = rest
-            .find([' ', '\t', '|', ';', '&', '\n'])
-            .unwrap_or(rest.len());
+            .char_indices()
+            .find(|&(_, c)| {
+                if escaped {
+                    escaped = false;
+                    return false;
+                }
+                match (quote, c) {
+                    (Some('"'), '\\') | (None, '\\') => escaped = true,
+                    (Some(q), c) if c == q => quote = None,
+                    (Some(_), _) => {}
+                    (None, '\'' | '"') => quote = Some(c),
+                    (None, c) => return [' ', '\t', '|', ';', '&', '\n'].contains(&c),
+                }
+                false
+            })
+            .map_or(rest.len(), |(k, _)| k);
         if word == 0 {
             return t;
         }
