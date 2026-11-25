@@ -2581,6 +2581,71 @@ command = '''$t = 'src'; clv -Name:t; Remove-Item $t -Recurse -Force'''
 level = "warn"
 rules = ["dynamic-target"]
 
+# Through the call operator the alias is read as typed (`& sv`): each alias of the table counts.
+[[row]]
+id = "ps-colon-call-sv-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & sv -Name t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-sv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & sv -Name:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-nv-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & nv -Name t -Value 'C:\Windows' -Force; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-nv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & nv -Name:t -Value 'C:\Windows' -Force; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-rv-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & rv -Name t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-rv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & rv -Name:t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-clv-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & clv -Name t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-call-clv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; & clv -Name:t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
 # `$HOME` itself, written through a coloned path or name, is dynamic as in the twins.
 [[row]]
 id = "ps-colon-set-variable-home-twin"
