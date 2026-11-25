@@ -26,16 +26,19 @@ word means the same in bash as in PowerShell:
 - a single-quoted string, or a double-quoted string whose only `$` starts a `$name` or
   `${name}`, with no backtick and no backslash before `"`, `$`, `` ` ``, `\` or a line break;
   both of printable ASCII;
-- a whole-word `$name` or `${name}`, written in double quotes as PowerShell passes it whole;
+- a whole-word `$name` or `${name}`, as written;
 - bash operators and comments.
+
+In Git Bash a word it rewrites as a POSIX path (`/tmp/x`, `--out=/usr/x`) and any `\\` in the
+text are left out too: Git Bash would pass the program something else.
 
 Anything else gets the sentence (`remove the leading & and start the program by its path, or run
 this command in the PowerShell tool`): a backtick, `$null`, `$true`, `$false`, `$(`, `@name`,
 `-Name:value`, a cmdlet name (`Out-Null`), an unquoted backslash (`C:\data\x`), `$env:X` (any
-case, anywhere), a property (`$x.Name`), a doubled quote (`'it''s'`), a heredoc, a PowerShell
-assignment (`$t = 'x'`), a script block or an expression as the operand, more than 8 call
-operators, a text over 16 KiB, the analysis deadline, or a result bash does not parse. A `.ps1`
-operand is sent to the PowerShell tool. The text is read once and the result parsed once. In
+case) outside single quotes and comments, a property (`$x.Name`), a doubled quote (`'it''s'`),
+a heredoc, a PowerShell assignment (`$t = 'x'`), a script block or an expression as the
+operand, more than 8 call operators, a text over 16 KiB, the analysis deadline, or a result bash
+does not parse. A `.ps1` operand is sent to the PowerShell tool. The text is read once and the result parsed once. In
 `shellwise lint` the Fix holds only the corrected lines. Both Bash profiles (Git Bash and POSIX
 bash).
 

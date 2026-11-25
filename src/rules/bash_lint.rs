@@ -891,6 +891,11 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
     if command.len() > MAX_FIX_BYTES || has_ps_assignment(command) {
         return Call::Sentence;
     }
+    // Git Bash collapses `\\` before bash reads the text, in any quotes.
+    let git_bash = profile == BashProfile::GitBash;
+    if git_bash && command.contains(PAIR) {
+        return Call::Sentence;
+    }
     let b = command.as_bytes();
     let mut out = String::with_capacity(command.len());
     let (mut i, mut at_start, mut calls) = (0, true, 0);
@@ -939,7 +944,7 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
                     Operand::None => return Call::Sentence,
                 };
                 let same = if raw.starts_with(['"', '\'']) {
-                    same_word(&operand, 0).is_some_and(|(end, _)| end == operand.len())
+                    same_word(&operand, 0, false).is_some_and(|(end, _)| end == operand.len())
                 } else {
                     !is_cmdlet(&operand)
                 };
@@ -966,7 +971,7 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
                 }
             }
             _ => {
-                let Some((end, word)) = same_word(command, i) else {
+                let Some((end, word)) = same_word(command, i, git_bash) else {
                     return Call::Sentence;
                 };
                 at_start = at_start && COMMAND_KEYWORDS.contains(&word.as_str());
@@ -990,9 +995,9 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
 /// bash and PowerShell: plain characters (letters, digits, `/._+=:%-`), a single-quoted string,
 /// a double-quoted string whose `$` starts a `$name`/`${name}` and whose backslashes bash keeps,
 /// both of printable ASCII and not doubled (`'it''s'` is one quote in PowerShell), or a whole word
-/// `$name`/`${name}`, which is quoted as PowerShell passes it whole. Not a `-Name:value`
-/// parameter nor a cmdlet name.
-fn same_word(text: &str, i: usize) -> Option<(usize, String)> {
+/// `$name`/`${name}`. Not a `-Name:value` parameter nor a cmdlet name, and in Git Bash
+/// (`git_bash`) not a word it rewrites as a POSIX path (`/tmp/x`, `--out=/usr/x`).
+fn same_word(text: &str, i: usize, git_bash: bool) -> Option<(usize, String)> {
     let b = text.as_bytes();
     let ends = |j: usize| {
         b.get(j)
@@ -1000,7 +1005,7 @@ fn same_word(text: &str, i: usize) -> Option<(usize, String)> {
     };
     if b[i] == b'$' {
         let end = variable(text, i)?;
-        return ends(end).then(|| (end, format!("\"{}\"", &text[i..end])));
+        return ends(end).then(|| (end, text[i..end].to_string()));
     }
     let printable = |c: u8| c == b'\t' || (b' '..=b'~').contains(&c);
     let mut j = i;
@@ -1061,7 +1066,7 @@ fn same_word(text: &str, i: usize) -> Option<(usize, String)> {
         }
     }
     // A quoted word keeps its quotes here, so only a bare cmdlet name matches.
-    if is_cmdlet(word) {
+    if is_cmdlet(word) || (git_bash && converted(&word.replace(['"', '\''], ""))) {
         return None;
     }
     Some((j, word.to_string()))
@@ -1228,7 +1233,7 @@ mod tests {
         }
     }
 
-    /// The Fix parses the text once per call operator; past the deadline it gives the sentence.
+    /// Past the analysis deadline the Fix gives the sentence.
     #[test]
     fn the_call_operator_fix_stops_at_the_deadline() {
         let command = "& \"C:/t/a.exe\" x";
@@ -1239,7 +1244,23 @@ mod tests {
         assert_eq!(fix(&gone), Call::Sentence);
     }
 
-    /// The Fix's parses read at most `MAX_FIX_BYTES` together: a text past it gets the sentence.
+    /// Git Bash collapses `\\` in any quotes before bash reads the text, so there the Fix would
+    /// pass one backslash; POSIX bash keeps both in single quotes.
+    #[test]
+    fn the_call_operator_fix_refuses_a_backslash_pair_in_git_bash() {
+        let open = Deadline::new(std::time::Instant::now(), 8000);
+        let command = "& \"C:/t/a.exe\" '\\\\server\\share'";
+        assert_eq!(
+            bash_way(command, BashProfile::GitBash, &open),
+            Call::Sentence
+        );
+        assert_eq!(
+            bash_way(command, BashProfile::Posix, &open),
+            Call::Command("\"C:/t/a.exe\" '\\\\server\\share'".to_string())
+        );
+    }
+
+    /// The Fix rebuilds a text of at most `MAX_FIX_BYTES`: a longer one gets the sentence.
     #[test]
     fn the_call_operator_fix_stops_at_its_byte_budget() {
         let open = Deadline::new(std::time::Instant::now(), 8000);

@@ -1388,13 +1388,41 @@ rules = ["bash-ps-call-operator"]
 fix_exact = '"C:/t/a.exe" x # note'
 
 [[row]]
-id = "call-op-variable-argument-is-quoted"
+id = "call-op-variable-argument-stays"
 os = "any"
 shell = "gitbash"
 command = '& "C:/t/a.exe" $out'
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix_exact = '"C:/t/a.exe" "$out"'
+fix_exact = '"C:/t/a.exe" $out'
+
+# Git Bash rewrites `/tmp/x` into a path under its install folder for a Windows program, and
+# collapses `\\` in any quotes: the Fix would pass something else. POSIX bash does neither.
+[[row]]
+id = "call-op-posix-path-argument-in-git-bash-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" --out=/tmp/x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-posix-path-argument-in-posix-bash-stays"
+os = "any"
+shell = "bash"
+command = '& "C:/t/a.exe" --out=/tmp/x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" --out=/tmp/x'
+
+[[row]]
+id = "call-op-double-backslash-in-git-bash-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '''& "C:/t/a.exe" '\\server\share\f.txt' '''
+level = "break"
+rules = ["bash-backslash-collapse", "bash-ps-call-operator"]
 
 [[row]]
 id = "call-op-after-a-background-job"
