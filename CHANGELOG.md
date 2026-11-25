@@ -37,6 +37,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - `wait-loop-unbounded` reads a counter in backticks (``n=`expr $n + 1` ``) and `((--n))`.
 - `wait-loop-unbounded` now catches a wait in a `while` condition (`while sleep 5; do …`) and
   `[Threading.Thread]::Sleep` in PowerShell.
+- `wait-loop-unbounded` no longer takes a polled value for a counter because the polled command
+  names it (`state=$(cat state)`, `count=$(grep -c x count.log)`), and reads PowerShell `++$k` as
+  a counter.
+- `wait-loop-unbounded` no longer takes a clock word inside a quoted string or a `$( )` for a
+  deadline (`[ "$(git pull)" == "Already up to date." ]`); `"$SECONDS"` and `$(date +%s)` still are.
+- `wait-loop-unbounded` now catches a condition whose bound does not end the loop by itself
+  (`until grep -q ok log && [ $n -ge 1 ]`, `while A || bound`).
+- The `wait-loop-unbounded` Fix of a Bash loop piped into a later stage or nested in another loop
+  is a sentence: the fixed loop's failure would not stop the command there. Its counter no longer
+  reuses a variable of the command (`i`, PowerShell `$I`).
+- The PowerShell `follow-unbounded` Fix starts its job in the caller's folder (Windows PowerShell
+  5.1 started it in Documents) and passes the caller's variables with `$using:`.
 - `lint` keeps a ShellCheck SC1xxx finding at break only where the shellwise parser fails at the
   same place (its line, or the end of the file for an unterminated construct); a file Bash parses
   no longer fails because of an unrelated parse gap elsewhere in it.

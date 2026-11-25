@@ -14,8 +14,8 @@ A loop is judged when its body waits (`sleep`, `Start-Sleep`, `Wait-Process`, `W
 |---|---|---|---|
 | Bash `while`/`until` and PowerShell `while`/`do … while`/`do … until`/`for (;;)` that waits or is always true, with no bound | `break` | Its end depends only on something outside the loop, which may never come. | A counted loop that runs the condition as written first and fails when its rounds run out: `until C; do B; done` becomes `for i in $(seq 1 <N>); do C && break; B; [ "$i" -lt <N> ]; done` (`C \|\| break` for `while C`); in PowerShell `while (C) { B }` becomes `for ($i = 0; $i -lt <N>; $i++) { if (-not (C)) { break }; B }; if ($i -eq <N>) { throw 'the wait timed out' }` (`if (C)` for `until`). The rule fills in the loop's own condition and body, and an N that makes about ten minutes of the loop's own sleep (`sleep 1m` counts as 60 s). |
 | A `for` over a list or a range (`for i in $(seq 1 60)`, `foreach ($k in 1..10)`, `1..60 \| ForEach-Object`), a counted `for ((i=0; i<60; i++))` or `for ($i = 0; $i -lt 60; $i++)` | `ok` | It ends with its items or its counter. | |
-| The condition, or the test that guards a `break`, `exit`, `return` or `throw` in the body (also through `&& { echo timeout; exit 1; }` or `\|\| { …; break; }`), compares (`-lt`, `-le`, `-gt`, `-ge`, `-eq`, `-ne`, `<`, `>`, `==`, `!=` in `(( ))`) a clock (`$SECONDS`, `date +%s`, `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`, `ElapsedMilliseconds`) or a counter: a variable whose new value reads its old one (`n=$((n+1))`, `((n++))`, `let n++`, `n+=1`, `$i++`, `$i += 1`, `$i = $i + 1`) | `ok` | A deadline or a counter ends it. | |
-| A clock word that is no operand of a comparison (`grep -q "took 5 seconds"`, `"out-$(date +%F).txt"`, `echo "$(date) done"`, `Start-Sleep -Seconds 5`), or a comparison on a polled value (`c=$(ls out \| wc -l); [ $c -ge 10 ] && break`, `$c = (Get-ChildItem out).Count`) | `break` | A message or a file name reads no time, and a polled value may never reach its mark. | as above |
+| The condition, or the test that guards a `break`, `exit`, `return` or `throw` in the body (also through `&& { echo timeout; exit 1; }` or `\|\| { …; break; }`), compares (`-lt`, `-le`, `-gt`, `-ge`, `-eq`, `-ne`, `<`, `>`, `==`, `!=` in `(( ))`) a clock (`$SECONDS`, `date +%s`, `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`, `ElapsedMilliseconds`) or a counter: a variable whose new value reads its old one (`n=$((n+1))`, `((n++))`, `let n++`, `n+=1`, `$i++`, `++$k`, `$i += 1`, `$i = $i + 1`). In the loop's own condition the bound must end the loop by itself: `until A \|\| bound`, `while A && bound` | `ok` | A deadline or a counter ends it. | |
+| A clock word that is no operand of a comparison (`grep -q "took 5 seconds"`, `"out-$(date +%F).txt"`, `echo "$(date) done"`, `Start-Sleep -Seconds 5`) or that is text inside double quotes or a `$( )` (`[ "$(git pull)" == "Already up to date." ]`, `$(grep -c date log)`); a comparison on a polled value (`c=$(ls out \| wc -l); [ $c -ge 10 ] && break`, `state=$(cat state)`, `$c = (Get-ChildItem c).Count`); a bound joined so that the loop still waits for the rest (`until A && bound`, `while A \|\| bound`) | `break` | A message or a file name reads no time, a polled value may never reach its mark, and that bound alone does not end the loop. | as above |
 | The loop runs under `timeout <n>`, also through `bash -c '…'` or `sh -lc '…'` in the same text | `ok` | `timeout` ends it. | |
 | No wait in the body and a condition that is not always true (`while grep -q x f; do sed -i 1d f; done`) | `ok` | It ends by its condition; it is no wait loop. | |
 | A condition that is a `read` without `-t` (`while read -r h; do sleep 1; done < hosts.txt`, `cat f \| while IFS= read -r l; do …; done`), a sleep in the body or not | `ok` | It ends with its input; a sleep only paces it. A follow that feeds it (`tail -f log \| while read l`) is `follow-unbounded`. | |
@@ -26,8 +26,11 @@ alone, over as many lines as the loop had), and it ends with one sentence as a t
 it still runs as pasted. The condition keeps its text, a leading `!` and every `&&`/`||` included;
 a condition of several commands is grouped (`{ a; b; } && break`). When the rounds run out the
 fixed loop fails (Bash: exit status 1; PowerShell: `throw`), so a command after it with `&&`
-(Bash) or `;` (PowerShell) does not run. A loop whose body holds a here-document gets a sentence
-instead of a command. The trailing sentence: when what you wait for is a process, wait on the
+(Bash) or `;` (PowerShell) does not run. The loop counter is a name the command uses nowhere else
+(`i`, else `attempt`, `attempt2`, …; in PowerShell compared in any case). A Bash loop whose body
+holds a here-document, that is piped into a later stage (`… done | tee out.txt`: that stage's
+status is the pipeline's) or that sits inside another loop (which would go on after a timeout)
+gets a sentence instead of a command. The trailing sentence: when what you wait for is a process, wait on the
 process (`timeout 600 tail --pid=<pid> -f /dev/null`, `Wait-Process -Id <pid> -Timeout <seconds>`)
 rather than on a line in its log; a tool call's shell never has that process as its child, so
 `wait <pid>` fails there.
@@ -88,6 +91,14 @@ $n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.tx
   script keeps is not seen, and the loop is a finding.
 - A clock counts only where the comparison reads it: a time read into a variable first (`now=$(date
   +%s); [ $now -gt $end ] && break`) is a polled value, and the loop is a finding.
+- A counter counts when its new value refers to the variable (`$n`, `${n}`, a bare `n` in `$(( ))`,
+  `(( ))`, `$[ ]` or `let`; PowerShell `$n` in any case, `$script:n`): `state=$(cat state)` names
+  `state` only as a file and polls.
+- A test command or a group in the condition is read as one test: in `until [[ -f ok && $n -ge 9
+  ]]`, `until [ -f ok -a $n -ge 9 ]` or `while ! ( A || bound )` a compared counter bounds the loop,
+  whichever way the inner operators join it.
+- A loop piped on from inside a group or a function (`{ until …; done; } | tee log`) still gets a
+  command: the later stage's status hides its failure.
 - PowerShell keeps no `break` in the parsed form: a guard is an `if` whose text holds an exit word.
   A `break` with no `if` around it is not seen.
 - A `while read` over a FIFO that never closes runs on: the rule reads any `while read` condition
