@@ -34,7 +34,7 @@ use serde::de::DeserializeOwned;
 
 use super::{Ctx, Rule};
 use crate::fs::assigned::{Assigned, resolve_assigned};
-use crate::fs::resolve::{self, DeleteBy, Location, SwitchState, Target, UnknownKind};
+use crate::fs::resolve::{self, AliasRun, DeleteBy, Location, SwitchState, Target, UnknownKind};
 use crate::fs::walk::{self, WalkResult, is_within};
 use crate::fs::{TimedOut, bounded};
 use crate::ir::{
@@ -149,13 +149,24 @@ impl Rule for DeleteRule {
         let shell = ctx.input.shell;
         let os = ctx.input.os;
         let command = ctx.input.command;
+        // A call of an alias the command defined before it is also read as what it runs.
+        let aliases = resolve::DefinedAliases::of(ctx.script, shell, os);
+        let deletes_call = |run: &SimpleCommand| {
+            matches!(read_call(run, false, shell, os),
+                Read::Call(call, prog) if in_family(&call, prog, shell, os))
+        };
         // Cheap first pass: no file system, no location, unless some command may delete.
         if !any_node(ctx.script, &mut |n| match n {
-            Node::Cmd { cmd, .. } => match read_call(cmd, false, shell, os) {
-                Read::Unread => unread_hits(cmd, command),
-                Read::Call(call, prog) => in_family(&call, prog, shell, os),
-                Read::Plain => false,
-            },
+            Node::Cmd { cmd, .. } => {
+                (match read_call(cmd, false, shell, os) {
+                    Read::Unread => unread_hits(cmd, command),
+                    Read::Call(call, prog) => in_family(&call, prog, shell, os),
+                    Read::Plain => false,
+                }) || aliases.runs(cmd).iter().any(|r| match r {
+                    AliasRun::Read(run) => deletes_call(run),
+                    AliasRun::Unread => true,
+                })
+            }
             Node::Method(m) => method_row(m).is_some(),
         }) {
             return;
@@ -165,13 +176,28 @@ impl Rule for DeleteRule {
         let mut loc = scene.location();
         walk_script(ctx.script, &mut loc, &env, &mut |node, loc| {
             let found = match node {
-                Node::Cmd { cmd, piped } => match read_call(cmd, piped, shell, os) {
-                    Read::Unread if unread_hits(cmd, command) => Some(scene.opaque(cmd)),
-                    Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
-                        scene.judge_call(&call, prog, loc)
+                Node::Cmd { cmd, piped } => {
+                    let mut found = match read_call(cmd, piped, shell, os) {
+                        Read::Unread if unread_hits(cmd, command) => Some(scene.opaque(cmd)),
+                        Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
+                            scene.judge_call(&call, prog, loc)
+                        }
+                        _ => None,
+                    };
+                    for run in aliases.runs(cmd) {
+                        let more = match &run {
+                            AliasRun::Read(r) => match read_call(r, piped, shell, os) {
+                                Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
+                                    scene.judge_call(&call, prog, loc)
+                                }
+                                _ => None,
+                            },
+                            AliasRun::Unread => scene.unread_alias(cmd),
+                        };
+                        found = max_finding(found, more);
                     }
-                    _ => None,
-                },
+                    found
+                }
                 Node::Method(m) => scene.judge_method(m, loc),
             };
             out.extend(found);
@@ -1315,6 +1341,23 @@ impl<'a> Scene<'a> {
                 c.span,
             ),
         }
+    }
+
+    /// A call of an alias whose value the guard cannot read (`Set-Alias zz $x; zz C:\Windows`):
+    /// it may be a delete, so a raw word of the call that spells a protected location warns.
+    fn unread_alias(&mut self, c: &SimpleCommand) -> Option<Finding> {
+        let text = self
+            .ctx
+            .input
+            .command
+            .get(c.span.start..c.span.end)
+            .unwrap_or_default();
+        let words: Vec<String> = raw_words(text).skip(1).map(str::to_string).collect();
+        let (p, reason) = words.iter().find_map(|w| self.protected_word(w))?;
+        let shown: String = text.chars().take(80).collect();
+        let why =
+            format!("it runs an alias whose value the guard cannot read, on `{p}`, the {reason}");
+        Some(self.dynamic(c.span, &shown, &why))
     }
 
     /// A raw word that spells a protected location literally: an absolute path, `~` or `$HOME`

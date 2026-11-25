@@ -41,3 +41,18 @@ Remove-Item -Recurse -Force .   # from the repo root
 ```bash
 rm -rf build
 ```
+
+## Limits
+
+- A PowerShell alias the same command defines (`Set-Alias`, `New-Alias`, `sal`, `nal`,
+  `$alias:zz = …`) before its call reads as each cmdlet its definitions name, so
+  `Set-Alias zz Remove-Item; zz C:\Windows -Recurse` is critical. Every earlier definition
+  counts, also one in a `& { }` block or one a later definition replaced: the stricter reading.
+  A definition after the call is not read. A call of an alias whose value the guard cannot read
+  (`Set-Alias zz $x`) is `dynamic-target` when it names a protected folder.
+- A Bash alias is not read: bash expands none on the line that defines it, and a non-interactive
+  bash none without `shopt -s expand_aliases`. A function that passes its arguments on
+  (`zz() { rm -rf "$@"; }`, `function zz { Remove-Item @args }`) is `dynamic-target`, not
+  judged by the folder it is called with.
+- An alias to a location cmdlet (`Set-Alias zz Set-Location`) is not followed: a relative delete
+  after its call is `delete-unknown-location`.

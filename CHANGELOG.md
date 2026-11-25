@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- A PowerShell delete through an alias the same command defines before it
+  (`Set-Alias zz Remove-Item; zz C:\Windows -Recurse`) is judged as the cmdlet the alias names;
+  an alias whose value the guard cannot read warns `dynamic-target` on a protected folder.
+
 ## [0.1.1] - 2026-11-25
 
 ### Added

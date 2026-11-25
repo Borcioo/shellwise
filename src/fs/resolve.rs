@@ -2875,6 +2875,79 @@ fn looked_up_alias<'t>(
     }
 }
 
+/// The pwsh aliases a command defines, for the delete guard, each with the byte where its
+/// definition ends: a call after that byte reads as each command its definitions name, wherever
+/// the definition stands (an `if`, a `& { }` block, an earlier value of a redefined name: the
+/// stricter reading). Bash aliases are left out: bash expands none on the line that defines it,
+/// and a non-interactive bash none at all. So is a definition whose name the hook cannot read
+/// (`*`), which any item writer with an unread path adds.
+pub(crate) struct DefinedAliases {
+    defs: Vec<(usize, Alias)>,
+    shell: Shell,
+    os: Os,
+}
+
+/// A command a call runs through an alias defined before it.
+pub(crate) enum AliasRun {
+    /// The call with the alias replaced by its value, its name read as the parser reads it.
+    Read(SimpleCommand),
+    /// The call runs an alias whose value the hook cannot read (`Set-Alias zz $x`).
+    Unread,
+}
+
+impl DefinedAliases {
+    pub(crate) fn of(s: &Script, shell: Shell, os: Os) -> DefinedAliases {
+        let mut defs: Vec<(usize, Alias)> = Vec::new();
+        if is_pwsh(shell) {
+            let table = script_aliases(s, true);
+            if table.iter().any(|(n, _)| n != "*") {
+                visit_script(s, &table, &mut |n| {
+                    if let Node::Cmd(c) = n {
+                        let named = alias_defs(c, true).into_iter().filter(|(n, _)| n != "*");
+                        defs.extend(named.map(|a| (c.span.end, a)));
+                    }
+                });
+            }
+        }
+        DefinedAliases { defs, shell, os }
+    }
+
+    /// The commands `c` runs through the aliases defined before it (`alias_runs`).
+    pub(crate) fn runs(&self, c: &SimpleCommand) -> Vec<AliasRun> {
+        let (mut read, mut unread): (Vec<Alias>, Vec<Alias>) = self
+            .defs
+            .iter()
+            .filter(|(at, _)| *at <= c.span.start)
+            .map(|(_, a)| a.clone())
+            .partition(|(_, v)| v.is_some());
+        if read.is_empty() && unread.is_empty() {
+            return Vec::new();
+        }
+        for t in [&mut read, &mut unread] {
+            t.sort();
+            t.dedup();
+        }
+        let runs: Vec<SimpleCommand> = alias_runs(c, &read)
+            .into_iter()
+            .map(|mut run| {
+                if run.typed != c.typed {
+                    run.canonical = crate::parse::pwsh::canonical(&run.typed, self.shell, self.os);
+                }
+                run
+            })
+            .collect();
+        let calls_unread = !unread.is_empty()
+            && std::iter::once(c)
+                .chain(runs.iter())
+                .any(|r| looked_up_alias(r, &unread, &[]).is_some());
+        let mut out: Vec<AliasRun> = runs.into_iter().map(AliasRun::Read).collect();
+        if calls_unread {
+            out.push(AliasRun::Unread);
+        }
+        out
+    }
+}
+
 fn elem_nests_location_change(e: &Elem, shell: Shell, defined: &[String]) -> bool {
     // A Bash substitution or child-shell body runs in a subshell: a `cd` there cannot move this
     // shell (Ruling 122). PowerShell runs `$( )` and `( )` in the session itself.
