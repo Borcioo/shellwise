@@ -21,7 +21,8 @@ timeout on a quiet log in pwsh 7.7 and Windows PowerShell 5.1, with a relative p
 left behind; it ends with the job's output so far and exit status 0. A job sees none of the
 caller's variables and in Windows PowerShell 5.1 starts in Documents, so the Fix starts it in the
 caller's folder and writes each variable the pipeline reads as `$using:<name>` (`$pat` becomes
-`$using:pat`; `$_`, `$true`, `$env:` and single-quoted text stay). A pipeline that assigns a
+`$using:pat`, `$p.ToLower()` becomes `($using:p).ToLower()`; `$_`, `$true`, `$env:` and
+single-quoted text stay). A pipeline that assigns a
 variable (`ForEach-Object { $n++ }`) or names a scope (`$script:x`) gets a sentence instead:
 `$using:` cannot pass it.
 
