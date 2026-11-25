@@ -245,12 +245,23 @@ pub fn lint_with(
         problem: None,
     };
     let text = &text;
+    let run_external = || panic::catch_unwind(AssertUnwindSafe(|| external(text, shell)));
     let (mut own, extra) = std::thread::scope(|s| {
-        let ours = s.spawn(|| analyse(&input, cfg, deadline).findings);
-        let extra = panic::catch_unwind(AssertUnwindSafe(|| external(text, shell)));
-        // `analyse` catches its own panics; one past it fails the lint as it did on this thread.
-        let own = ours.join().unwrap_or_else(|e| panic::resume_unwind(e));
-        (own, extra)
+        let ours = if crate::testhook_is("lint-spawn-fail") {
+            Err(std::io::Error::other("testhook: lint-spawn-fail"))
+        } else {
+            std::thread::Builder::new().spawn_scoped(s, || analyse(&input, cfg, deadline).findings)
+        };
+        match ours {
+            Ok(ours) => {
+                let extra = run_external();
+                // `analyse` catches its own panics; one past it fails the lint as it would here.
+                let own = ours.join().unwrap_or_else(|e| panic::resume_unwind(e));
+                (own, extra)
+            }
+            // No thread for the analysis: both run here, one after the other.
+            Err(_) => (analyse(&input, cfg, deadline).findings, run_external()),
+        }
     });
     if crlf {
         let mut f = Finding {
