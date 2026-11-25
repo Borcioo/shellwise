@@ -6007,6 +6007,121 @@ command = 'Set-Alias -Name ll -Value Get-ChildItem; Remove-Item .git -Recurse -F
 level = "critical"
 rules = ["delete-critical"]
 
+# A call of an alias whose every value is a command the tables know that does not move
+# (Ruling 156) leaves the location known; a location cmdlet or a value the tables do not know
+# among its values keeps the call an unknown move.
+[[row]]
+id = "ps-alias-call-then-alias-dotgit-twin"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item build; Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-call-then-alias-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; zz build; zz .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-call-then-alias-project-folder-twin"
+os = "any"
+shell = "pwsh"
+command = 'Remove-Item build; Remove-Item src'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-alias-call-then-alias-project-folder"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; zz build; zz src'
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-alias-in-foreach-project-folder-twin"
+os = "any"
+shell = "pwsh"
+command = "foreach ($d in @('build')) { Remove-Item $d -Recurse -Force }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-alias-in-foreach-project-folder"
+os = "any"
+shell = "pwsh"
+command = "Set-Alias zz Remove-Item; foreach ($d in @('build')) { zz $d -Recurse -Force }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "ps-alias-to-get-childitem-then-real-dotgit-twin"
+os = "any"
+shell = "pwsh"
+command = 'Get-ChildItem; Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-alias-to-get-childitem-then-real-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias ll Get-ChildItem; ll; Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# Redefined to a location cmdlet between the calls (twin: `Remove-Item build; Set-Location
+# src; Remove-Item .git -Recurse -Force`, the location alias is not followed). Every value of a
+# name counts at every call, so the delete through `zz src` is an unknown location too.
+[[row]]
+id = "ps-alias-redefined-to-a-location-cmdlet-between-calls"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; zz build; Set-Alias zz Set-Location; zz src; Remove-Item .git -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location", "delete-unknown-location"]
+
+# One of two values is a command the tables do not know (twin `ps-alias-call-then-alias-dotgit-twin`).
+[[row]]
+id = "ps-alias-one-value-unknown-then-real-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Remove-Item; Set-Alias zz x; zz build; Remove-Item .git -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# An alias whose value the guard cannot read keeps the location unknown after its call.
+[[row]]
+id = "ps-alias-unread-value-then-real-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz $v; zz build; Remove-Item .git -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+# An alias that shadows a shipped location name with a cmdlet that stays: `cd src` does not
+# move, so `.git` is the repo's own.
+[[row]]
+id = "ps-alias-shadowing-a-location-name-then-real-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias cd Get-Date; cd src; Remove-Item .git -Recurse -Force'
+level = "critical"
+rules = ["delete-critical"]
+
+# An alias whose name the guard cannot read may be any call's name: the location stays unknown.
+[[row]]
+id = "ps-alias-unread-name-then-real-dotgit"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias $n Get-ChildItem; Get-ChildItem; Remove-Item .git -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
 # A resolved run the guard cannot read gets the finding of its direct twin (Ruling 153).
 [[row]]
 id = "ps-alias-to-iex-twin"

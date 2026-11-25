@@ -2455,7 +2455,53 @@ fn defined_names(s: &Script, aliases: &[Alias], shell: Shell) -> Vec<String> {
         Node::Cmd(c) => out.extend(bash_defined(c)),
         _ => {}
     });
+    // pwsh: every alias of the table (`alias_defs` of every node `visit_script` reads), but one
+    // whose every value leaves the location where it is (Ruling 156).
+    if is_pwsh(shell) {
+        out.extend(
+            aliases
+                .iter()
+                .map(|(n, _)| n)
+                .filter(|n| !alias_stays(n, aliases, shell))
+                .cloned(),
+        );
+    }
     out.iter().map(|n| strip_scope(n).to_string()).collect()
+}
+
+/// Ruling 156: a call of the alias `name` (one the hook read, not `*`, and not a name the shell
+/// ships, whose call Ruling 49 keeps an unknown move) leaves the location where it is: every
+/// value the table gives it is a command the shell ships that is no location command
+/// (`is_location_command` of the value as a command). A value the hook cannot read, one the
+/// tables do not know (`x`, an alias or function of the script) or a location cmdlet keeps the
+/// call an unknown move.
+fn alias_stays(name: &str, aliases: &[Alias], shell: Shell) -> bool {
+    let t = table(shell);
+    let shipped = |n: &str| t.alias(n).is_some() || t.runs_blocks(n).is_some();
+    let word = |text: &str| Word {
+        parts: vec![WordPart::Literal(text.to_string())],
+        span: Span::default(),
+        quote: crate::ir::Quote::None,
+    };
+    name != "*"
+        && !shipped(name)
+        && aliases.iter().filter(|(n, _)| n == name).all(|(_, v)| {
+            let Some((first, rest)) = v.as_ref().and_then(|v| v.split_first()) else {
+                return false;
+            };
+            let call = SimpleCommand {
+                name: word(first),
+                typed: first.clone(),
+                canonical: None,
+                args: rest.iter().map(|r| word(r)).collect(),
+                redirects: Vec::new(),
+                assigns: Vec::new(),
+                span: Span::default(),
+                in_loop: false,
+                opaque: false,
+            };
+            shipped(&first.to_ascii_lowercase()) && !is_location_command(&call, shell, &[])
+        })
 }
 
 /// `name` (lowercased) without a leading pwsh scope (`global:f` defines `f`).
@@ -3328,10 +3374,8 @@ fn read_as_written(c: &SimpleCommand, defined: &[String], shell: Shell) -> bool 
 fn defined_by(c: &SimpleCommand, shell: Shell, by_name: bool) -> Vec<String> {
     // An item on `Function:`, and on `Alias:` unless `alias_defs` reads the aliases.
     let item = |t: &str| command_item(t).filter(|_| !by_name || alias_item(t).is_none());
+    // `by_name`: `defined_names` adds the aliases from the table `alias_defs` reads.
     let mut out: Vec<String> = c.assigns.iter().filter_map(|(n, _)| item(n)).collect();
-    if by_name {
-        out.extend(alias_defs(c, true).into_iter().map(|(n, _)| n));
-    }
     let Run::Cmd {
         name, raw, args, ..
     } = unwrap(c)

@@ -67,9 +67,13 @@ rm -rf build
   one read more than 64 ways (a chain of 65 links, 65 definitions of one name), and, past 96
   alias definitions or 32 calls of a defined name in one command, every command after the first
   definition: the guard then resolves no alias.
-- A call of an alias the command defines counts as a possible move of the location, whatever
-  the alias names, so a relative delete after it (`zz build; zz src`) is
-  `delete-unknown-location`. A definition alone does not move it.
+- A call of an alias the command defines keeps the location known only when every value the
+  alias can have there is a cmdlet the guard knows that does not change the location: after
+  `Set-Alias zz Remove-Item`, `zz build; zz .git -Recurse -Force` is critical and
+  `zz build; zz src` is ok, as their direct twins are. A call of an alias with any other value
+  (one the guard does not know, such as `x`, one it cannot read, or a location cmdlet) counts as
+  a possible move, so a relative delete after it is `delete-unknown-location`. A definition alone
+  does not move it.
 - A Bash alias is not read: bash expands none on the line that defines it, and a non-interactive
   bash none without `shopt -s expand_aliases`. A function that passes its arguments on
   (`zz() { rm -rf "$@"; }`, `function zz { Remove-Item @args }`) is `dynamic-target`, not
