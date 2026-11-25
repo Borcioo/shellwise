@@ -508,8 +508,10 @@ fn cmdlet_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
         } else if pwsh_matches(&facts.target_options, lead) {
             match (inline, whole) {
                 (Some(v), Some(_)) if !v.is_empty() => p.words.push(word_of(&v, w)),
-                // `-Path:$x`: the value is the dynamic rest of the word.
-                (Some(v), None) if !v.is_empty() || w.parts.len() > 1 => p.words.push(w.clone()),
+                // `-Path:$x`, `-Path: "$x"`: the value is the dynamic rest of the word.
+                (Some(v), None) if !v.is_empty() || w.parts.len() > 1 => p
+                    .words
+                    .push(resolve::inline_value_word(w).unwrap_or_else(|| w.clone())),
                 _ => {
                     if let Some(v) = args.get(i) {
                         p.words.push(v.clone());
