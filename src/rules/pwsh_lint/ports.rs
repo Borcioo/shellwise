@@ -12,10 +12,10 @@ use super::{
     Ctx, ENV_SCOPE, Rule, Site, Walk, command_tagged, elem_span, finding, has_folder, is_native,
     is_pwsh, lint, literal, plain_var, program, replaced, table_name, text, upstream, walk,
 };
-use crate::Os;
-use crate::ir::{Elem, Quote, SimpleCommand, Stmt, WordPart};
+use crate::ir::{Elem, Quote, Redirect, SimpleCommand, Stmt, WordPart};
 use crate::level::{Finding, Level, Span};
 use crate::rules::Scope;
+use crate::{Origin, Os, Shell, parse};
 
 // ---------------------------------------------------------------------------------------------
 // gate-truncated-pipeline
@@ -26,7 +26,8 @@ pub const GATE_TRUNCATED_PIPELINE: &str = "gate-truncated-pipeline";
 /// A gate, test run or tee'd log piped into a truncator (`Select-Object -First`, `head`): the
 /// truncator stops the producer once it has its lines, so the exit code reads as success and the
 /// log is cut off. A producer is a gate when its name matches `cfg.gate_commands` or a script
-/// host runs a script that does; behind a `Tee-Object` any producer counts.
+/// host runs a script that does; behind a `Tee-Object` (Bash: `tee`) any producer counts. Every
+/// shell: the Bash tools carry the same tags in `data/programs.toml`.
 pub struct GateTruncatedPipeline;
 
 impl Rule for GateTruncatedPipeline {
@@ -35,9 +36,7 @@ impl Rule for GateTruncatedPipeline {
     }
 
     fn check(&self, ctx: &Ctx, out: &mut Vec<Finding>) {
-        if !is_pwsh(ctx) {
-            return;
-        }
+        let pwsh = is_pwsh(ctx);
         let src = ctx.input.command;
         let w = walk(ctx.script);
         for site in &w.sites {
@@ -47,29 +46,139 @@ impl Rule for GateTruncatedPipeline {
             let Some(blamed) = gate_upstream(ctx, site) else {
                 continue;
             };
-            let first = &site.pipe.elems[0];
-            let producer_end = elem_span(&site.pipe.elems[site.index - 1]).end;
-            let producer = text(
-                src,
-                Span {
-                    start: elem_span(first).start,
-                    end: producer_end,
-                },
-            )
-            .trim();
+            // Bash: `tail` reads the whole stream, and `pipefail` in a subshell keeps the
+            // producer's exit code without changing the caller's shell options.
+            let (whole, fix) = if pwsh {
+                let first = &site.pipe.elems[0];
+                let producer_end = elem_span(&site.pipe.elems[site.index - 1]).end;
+                let producer = text(
+                    src,
+                    Span {
+                        start: elem_span(first).start,
+                        end: producer_end,
+                    },
+                )
+                .trim();
+                (
+                    "Select-Object -Last N",
+                    format!("$out = {producer} 2>&1; $out | Select-Object -Last 20"),
+                )
+            } else {
+                (
+                    "tail -n N",
+                    bash_gate_fix(ctx, site).unwrap_or_else(|| {
+                        format!(
+                            "replace `{}` with `tail -n 20` and run the pipeline as `(set -o pipefail; … | tail -n 20)`, which reads the whole stream and keeps the producer's exit code",
+                            site.cmd.typed
+                        )
+                    }),
+                )
+            };
             out.push(finding(
                 GATE_TRUNCATED_PIPELINE,
                 Level::Warn,
                 site.cmd.span,
                 format!(
-                    "`{blamed}` is piped into `{}`, which stops the producer as soon as it has its lines: the exit code then reads as success and the log is cut off; `Select-Object -Last N` reads the whole stream and is fine",
+                    "`{blamed}` is piped into `{}`, which stops the producer as soon as it has its lines: the exit code then reads as success and the log is cut off; `{whole}` reads the whole stream and is fine",
                     site.cmd.typed
                 ),
-                format!("$out = {producer} 2>&1; $out | Select-Object -Last 20"),
+                fix,
             ));
             return;
         }
     }
+}
+
+/// Where a Bash stage's text lies, read from its words, since the parser's command span may end at
+/// the name when a redirect follows: from its first assignment or its name to its last word
+/// (`end`), and to its last argument (`words_end`).
+struct Extent {
+    start: usize,
+    words_end: usize,
+    end: usize,
+}
+
+/// `None` for a heredoc: the words after its operator start a byte early. A redirect whose target
+/// has no span of its own (the `2>&1` the parser adds for `|&`) is not text of the stage; one
+/// before the name is left before the Fix's `(`, which bash refuses, so the Fix's parse rejects
+/// it.
+fn stage_extent(c: &SimpleCommand) -> Option<Extent> {
+    let name = c.name.span;
+    let start = c
+        .assigns
+        .iter()
+        .map(|(_, v)| v.span.start)
+        .fold(name.start, usize::min);
+    let words_end = c.args.iter().map(|a| a.span.end).fold(name.end, usize::max);
+    let mut end = words_end;
+    for r in &c.redirects {
+        let Redirect::File { target, span, .. } = r else {
+            return None;
+        };
+        if target.span == *span {
+            continue;
+        }
+        end = end.max(target.span.end);
+    }
+    Some(Extent {
+        start,
+        words_end,
+        end,
+    })
+}
+
+/// The Bash Fix: the command with only the pipeline changed, so a list, `time` or a trailing `&`
+/// around it stays (in a script file, the lines the pipeline stands on). Every stage keeps its
+/// text; the cut's name and arguments become `tail -n 20`, its redirects stay. `None`, for the
+/// sentence, unless the pipeline is a statement of the top level (in a compound or a substitution
+/// a word may carry its outer word's span), every stage is placed and the result parses.
+fn bash_gate_fix(ctx: &Ctx, site: &Site) -> Option<String> {
+    let src = ctx.input.command;
+    let Shell::Bash(profile) = ctx.input.shell else {
+        return None;
+    };
+    let top = ctx
+        .script
+        .stmts
+        .iter()
+        .any(|s| matches!(s, Stmt::Pipeline(p) if std::ptr::eq(p, site.pipe)));
+    if !top {
+        return None;
+    }
+    let mut stages = Vec::with_capacity(site.pipe.elems.len());
+    for e in &site.pipe.elems {
+        let Elem::Cmd(c) = e else {
+            return None;
+        };
+        stages.push(stage_extent(c)?);
+    }
+    let cut = stages.get(site.index)?;
+    let redirect_inside = site.cmd.redirects.iter().any(|r| {
+        matches!(r, Redirect::File { target, span, .. }
+            if target.span != *span && target.span.start < cut.words_end)
+    });
+    if redirect_inside {
+        return None;
+    }
+    let (start, end) = (stages.first()?.start, stages.last()?.end);
+    let (from, to) = if ctx.input.origin == Origin::File {
+        (
+            src[..start].rfind('\n').map_or(0, |i| i + 1),
+            src[end..].find('\n').map_or(src.len(), |i| end + i),
+        )
+    } else {
+        (0, src.len())
+    };
+    let fix = format!(
+        "{}(set -o pipefail; {}tail -n 20{}){}",
+        &src[from..start],
+        &src[start..cut.start],
+        &src[cut.words_end..end],
+        &src[end..to]
+    );
+    let whole = format!("{}{fix}{}", &src[..from], &src[to..]);
+    parse::bash::parse(&whole, profile).ok()?;
+    Some(fix.trim_end().to_string())
 }
 
 /// `Select-Object -First` (a row tagged `truncator` whose `lint.truncate_params` names the
@@ -80,7 +189,7 @@ fn truncates(ctx: &Ctx, c: &SimpleCommand, w: &Walk) -> bool {
     };
     let params = lint(p, "truncate_params");
     if params.is_empty() {
-        return true;
+        return !negative_count(c, &lint(p, "count_options"));
     }
     let Some(t) = Facts::for_shell(ctx.input.shell) else {
         return false;
@@ -92,6 +201,37 @@ fn truncates(ctx: &Ctx, c: &SimpleCommand, w: &Walk) -> bool {
         return false;
     };
     params.iter().any(|p| named(&args, p).is_some())
+}
+
+/// A count option (`lint.count_options`) given a negative value, `-n -5`, `-n-5` or `--lines=-5`:
+/// `head` then prints all but the last N and reads the whole stream.
+fn negative_count(c: &SimpleCommand, options: &[&str]) -> bool {
+    let values: Vec<Option<String>> = c.args.iter().map(literal).collect();
+    let negative = |v: &str| v.len() > 1 && v.starts_with('-');
+    for (k, v) in values.iter().enumerate() {
+        let Some(v) = v.as_deref() else { continue };
+        for o in options {
+            if v == *o {
+                if values
+                    .get(k + 1)
+                    .and_then(|n| n.as_deref())
+                    .is_some_and(negative)
+                {
+                    return true;
+                }
+            } else if let Some(rest) = v.strip_prefix(o) {
+                let value = if o.starts_with("--") {
+                    rest.strip_prefix('=')
+                } else {
+                    Some(rest)
+                };
+                if value.is_some_and(negative) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// The producer to blame, nearest first: behind a tee, the command feeding it; a gate itself.
@@ -1229,6 +1369,37 @@ mod tests {
         assert_eq!(stale_var("\"say `$x\"", &bound, t), None);
         assert_eq!(stale_var("($t + 'x')", &bound, t).as_deref(), Some("t"));
         assert_eq!(stale_var("$script:report", &bound, t), None);
+    }
+
+    /// In a script file the Bash Fix is the line the pipeline stands on, with what the line holds
+    /// around it, not the whole file.
+    #[test]
+    fn a_bash_gate_fix_in_a_file_is_its_line() {
+        let text = "cd sub\ncd x && npm test 2>&1 | tee r.log | head -n 5\necho done\n";
+        let input = crate::AnalyseInput {
+            bytes: text.as_bytes(),
+            shell: Shell::Bash(crate::BashProfile::GitBash),
+            os: Os::Windows,
+            cwd: None,
+            env: crate::ir::EnvView::new(),
+            origin: Origin::File,
+            problem: None,
+        };
+        let cfg = crate::config::Config::default();
+        let deadline = crate::Deadline::new(std::time::Instant::now(), 8000);
+        let v = crate::analyse(&input, &cfg, &deadline);
+        let fixes: Vec<(&str, Option<&str>)> = v
+            .findings
+            .iter()
+            .map(|f| (f.rule, f.fix.as_deref()))
+            .collect();
+        assert_eq!(
+            fixes,
+            [(
+                GATE_TRUNCATED_PIPELINE,
+                Some("cd x && (set -o pipefail; npm test 2>&1 | tee r.log | tail -n 20)")
+            )]
+        );
     }
 
     #[test]

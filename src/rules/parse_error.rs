@@ -3,7 +3,9 @@
 //! `bash_ran_before` finds); any other kind is `warn`. `parse-error-destructive`: any other kind
 //! when the raw text names a command of the destructive table is `danger`, under its own id so
 //! that a level configured for `parse-error` does not lower it; so is a raw destructive match in
-//! the commands Bash runs before a deny kind when the parser cannot read them.
+//! the commands Bash runs before a deny kind when the parser cannot read them. A Bash error at a
+//! PowerShell call operator (`& "x.exe"`) is `bash-ps-call-operator`'s, not a `parse-error`; a
+//! `parse-error-destructive` on it stays.
 
 use super::{Ctx, Rule};
 use crate::ir::{ChainOp, Elem, Script, Stmt};
@@ -59,7 +61,10 @@ impl Rule for ParseErrorRule {
         if is_deny_kind(&e.kind, command, ctx.input.shell) {
             let (message, fix) = deny_text(e, command, ctx.input.shell, &at);
             out.push(finding(PARSE_ERROR, Level::Break, e, command, message, fix));
-        } else if let Some((e, false)) = other_kind(ctx) {
+        } else if let Some((e, false)) = other_kind(ctx)
+            // `bash-ps-call-operator` reports this error and says how to fix it.
+            && super::bash_lint::call_operator(ctx).is_none()
+        {
             out.push(finding(
                 PARSE_ERROR,
                 Level::Warn,
@@ -365,7 +370,7 @@ fn finding(
 }
 
 /// `column <n>` on the first line, `line <l>, column <n>` after it; both count characters from 1.
-fn position(text: &str, at: usize) -> String {
+pub(crate) fn position(text: &str, at: usize) -> String {
     let before = text.get(..at.min(text.len())).unwrap_or(text);
     let line = before.matches('\n').count() + 1;
     let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;

@@ -244,10 +244,13 @@ pub fn lint_with(
     // one line are distinct (one per variable).
     let own_count = located.len();
     // An external `break` is a parse error the shell refuses only when our parser fails at the
-    // same place (Ruling 138).
+    // same place (Ruling 138). A call operator is such a failure, reported under its own id.
     let failed: Vec<&Located> = located
         .iter()
-        .filter(|l| l.finding.rule == crate::rules::parse_error::PARSE_ERROR)
+        .filter(|l| {
+            l.finding.rule == crate::rules::parse_error::PARSE_ERROR
+                || l.finding.rule == crate::rules::bash_lint::PS_CALL_OPERATOR
+        })
         .collect();
     let eof = text.trim_end().len();
     let refused_at = |f: &Finding| {
