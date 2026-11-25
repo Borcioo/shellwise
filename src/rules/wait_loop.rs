@@ -44,7 +44,13 @@ const FOLLOW_SUB: &str = "follow_sub";
 const FOLLOW_FIX: &str = "follow_fix";
 const FOLLOW_JOB: &str = "follow_job";
 const FOLLOW_FIX_LOCALS: &str = "follow_fix_locals";
+const FOLLOW_FIX_SCOPES: &str = "follow_fix_scopes";
+const FOLLOW_FIX_SETS: &str = "follow_fix_sets";
 const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
+const LOOP_JOIN: &str = "loop_join";
+/// The `loop_join` values.
+const JOIN_AND: &str = "and";
+const JOIN_OR: &str = "or";
 const JOB_TIMEOUT_WHEN: &str = "job_timeout_when";
 /// The placeholders of a `follow_fix`.
 const COMMAND: &str = "<command>";
@@ -332,7 +338,7 @@ impl Walk<'_, '_> {
             let pipeline = self.slice(whole).trim();
             // A job sees none of the caller's variables: they go in through `$using:` (Ruling 143).
             let pipeline = if row.extra.contains_key(FOLLOW_FIX_LOCALS) {
-                match pass_variables(pipeline, &strings(row, FOLLOW_FIX_LOCALS)) {
+                match pass_variables(pipeline, row) {
                     Some(p) => p,
                     None => {
                         let s = row.extra.get(FOLLOW_FIX_SENTENCE).and_then(|v| v.as_str());
@@ -617,7 +623,7 @@ impl Walk<'_, '_> {
         let stmts = &body.stmts[from..from + n];
         let fold = !matches!(self.shell, Shell::Bash(_));
         let terms: Vec<(Option<ChainOp>, String)> = if fold {
-            pwsh_terms(&self.text_of(stmts))
+            pwsh_terms(&self.text_of(stmts), self.shell, self.os)
         } else {
             (0..n)
                 .map(|j| {
@@ -968,10 +974,16 @@ fn waits_on_job_with_timeout(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
 
 /// A PowerShell pipeline with each of the caller's variables read through `$using:`, as a job
 /// needs (Ruling 143): `$pat` becomes `$using:pat`, `${pat}` `${using:pat}`. The variables the
-/// pipeline or the shell sets (`locals`: `$_`, `$true`), `$env:`, single-quoted text and an
-/// escaped `` `$ `` stay. `None` when the pipeline assigns a variable or names a scope: `$using:`
+/// pipeline or the shell sets (the row's `follow_fix_locals`: `$_`, `$true`), the scopes the job
+/// reads as the caller does (`follow_fix_scopes`: `$env:`), single-quoted text and an escaped
+/// `` `$ `` stay. `None` when the pipeline assigns a variable or names another scope: `$using:`
 /// cannot pass either.
-fn pass_variables(text: &str, locals: &[&str]) -> Option<String> {
+fn pass_variables(text: &str, row: &Program) -> Option<String> {
+    let (locals, scopes) = (
+        strings(row, FOLLOW_FIX_LOCALS),
+        strings(row, FOLLOW_FIX_SCOPES),
+    );
+    let sets = strings(row, FOLLOW_FIX_SETS);
     let mut out = String::with_capacity(text.len() + 16);
     let mut dq = false;
     let mut i = 0;
@@ -1000,8 +1012,7 @@ fn pass_variables(text: &str, locals: &[&str]) -> Option<String> {
                     .unwrap_or("");
                 let after = &rest[from + name.len()..];
                 let scoped = after.starts_with(':') && !after.starts_with("::");
-                let kept =
-                    |s: &str| s.eq_ignore_ascii_case("env") || s.eq_ignore_ascii_case("using");
+                let kept = |s: &str| scopes.iter().any(|k| k.eq_ignore_ascii_case(s));
                 if !name.is_empty() && scoped && !kept(name) {
                     return None;
                 }
@@ -1009,7 +1020,7 @@ fn pass_variables(text: &str, locals: &[&str]) -> Option<String> {
                     && !scoped
                     && !locals.iter().any(|l| l.eq_ignore_ascii_case(name))
                 {
-                    if assigns(&out, after) {
+                    if assigns(&out, after, &sets) {
                         return None;
                     }
                     out.push_str(&rest[..from]);
@@ -1028,8 +1039,8 @@ fn pass_variables(text: &str, locals: &[&str]) -> Option<String> {
 }
 
 /// A PowerShell variable between `before` and `after` is assigned there: `$x = …`, `$x += …`,
-/// `$x++`, `++$x`, `foreach ($x in …)`.
-fn assigns(before: &str, after: &str) -> bool {
+/// `$x++`, `++$x`, or a loop word of `sets` names it (`foreach ($x in …)`).
+fn assigns(before: &str, after: &str, sets: &[&str]) -> bool {
     let a = after.trim_start_matches([' ', '\t']);
     let set = (a.starts_with('=') && !a.starts_with("=="))
         || ["+=", "-=", "*=", "/=", "%=", "??="]
@@ -1042,10 +1053,12 @@ fn assigns(before: &str, after: &str) -> bool {
         || b.ends_with("--");
     let each = b.strip_suffix('(').is_some_and(|b| {
         let b = b.trim_end_matches([' ', '\t']);
-        b.len()
-            .checked_sub(7)
-            .and_then(|k| b.get(k..))
-            .is_some_and(|w| w.eq_ignore_ascii_case("foreach"))
+        sets.iter().any(|s| {
+            b.len()
+                .checked_sub(s.len())
+                .and_then(|k| b.get(k..))
+                .is_some_and(|w| w.eq_ignore_ascii_case(s))
+        })
     });
     set || step || each
 }
@@ -1477,9 +1490,9 @@ fn counters(text: &str, fold: bool) -> Vec<String> {
     out
 }
 
-/// A PowerShell condition split into its tests at the `-and` and `-or` outside brackets and
-/// quotes, each with the operator before it.
-fn pwsh_terms(text: &str) -> Vec<(Option<ChainOp>, String)> {
+/// A PowerShell condition split into its tests at the operators outside brackets and quotes that
+/// join two tests (a `loop_join` row: `-and`, `-or`), each with the operator before it.
+fn pwsh_terms(text: &str, shell: Shell, os: Os) -> Vec<(Option<ChainOp>, String)> {
     let b = text.as_bytes();
     let mut out = Vec::new();
     let (mut depth, mut quote, mut from, mut op) = (0usize, None, 0, None);
@@ -1499,12 +1512,16 @@ fn pwsh_terms(text: &str) -> Vec<(Option<ChainOp>, String)> {
             b')' | b']' | b'}' => depth = depth.saturating_sub(1),
             b' ' | b'\t' if depth == 0 => {
                 let word = text[i + 1..].split([' ', '\t', '(']).next().unwrap_or("");
-                let next = if word.eq_ignore_ascii_case("-and") {
-                    Some(ChainOp::And)
-                } else if word.eq_ignore_ascii_case("-or") {
-                    Some(ChainOp::Or)
-                } else {
-                    None
+                let join = word
+                    .starts_with('-')
+                    .then(|| programs::lookup(word, shell, os))
+                    .flatten()
+                    .and_then(|p| p.extra.get(LOOP_JOIN))
+                    .and_then(|v| v.as_str());
+                let next = match join {
+                    Some(JOIN_AND) => Some(ChainOp::And),
+                    Some(JOIN_OR) => Some(ChainOp::Or),
+                    _ => None,
                 };
                 if next.is_some() {
                     out.push((op, text[from..i].to_string()));

@@ -249,12 +249,24 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 #                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
 # loop_skips_round true = it ends the round early (`continue`): a Bash Fix cannot end the round
 #                 with its round test, so it is a sentence
+# loop_join       a PowerShell operator that joins two tests of a loop's condition: "and" or "or"
+#                 (Ruling 141 reads which side a bound must be on)
 # A .NET method is a row named `[type]::method` as written, lowercase.
 
 [[program]]
 name = "continue"
 shells = ["bash"]
 loop_skips_round = true
+
+[[program]]
+name = "-and"
+shells = ["pwsh"]
+loop_join = "and"
+
+[[program]]
+name = "-or"
+shells = ["pwsh"]
+loop_join = "or"
 
 [[program]]
 name = "sleep"
@@ -600,7 +612,10 @@ follow_when = ["-Wait"]
 # caller's variables through `$using:`, all but these, which the pipeline or the shell sets itself.
 follow_fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; <pipeline> }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 follow_fix_locals = ["_", "PSItem", "true", "false", "null", "args", "input", "this", "matches", "foreach", "switch", "Error", "LASTEXITCODE", "ExecutionContext", "MyInvocation", "PSCmdlet", "PSBoundParameters", "PWD", "HOME", "PSHOME", "Host", "PID", "PSVersionTable", "IsWindows", "IsLinux", "IsMacOS", "IsCoreCLR"]
-# A variable the pipeline assigns, or one with a scope, cannot go through `$using:`.
+# Scopes the job reads as the caller does, and loop words that set the variable they name.
+follow_fix_scopes = ["env", "using"]
+follow_fix_sets = ["foreach"]
+# A variable the pipeline assigns, or one with another scope, cannot go through `$using:`.
 follow_fix_sentence = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`) and given each variable it reads as `$using:<name>` (no command is built: the pipeline assigns a variable or names its scope, which `$using:` cannot pass)"
 
 [[program]]
