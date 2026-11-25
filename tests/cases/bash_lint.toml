@@ -1586,6 +1586,16 @@ level = "break"
 rules = ["bash-ps-call-operator"]
 fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
 
+# Bash reads `\\` in double quotes as one backslash; PowerShell keeps both (a UNC path).
+[[row]]
+id = "call-op-double-backslash-in-a-string-gets-a-sentence"
+os = "any"
+shell = "bash"
+command = '& "C:/t/a.exe" "\\server\share"'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
 [[row]]
 id = "call-op-doubled-quote-gets-a-sentence"
 os = "any"
