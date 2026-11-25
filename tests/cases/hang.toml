@@ -1727,6 +1727,14 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
+id = "wl-ps-while-a-or-bound-in-capitals-is-unbounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok) -OR $n -lt 60) { $n++; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
 id = "wl-ps-while-a-and-bound-is-bounded"
 os = "any"
 shell = "pwsh"
