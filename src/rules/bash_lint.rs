@@ -741,7 +741,7 @@ pub const PS_CALL_OPERATOR_LEVEL: Level = Level::Break;
 const MAX_CALLS: usize = 8;
 
 /// The longest text the Fix rebuilds and parses again; a longer one gets the sentence.
-const MAX_FIX_BYTES: usize = 16 * 1024;
+const MAX_FIX_BYTES: usize = 4 * 1024;
 
 const CALL_SENTENCE: &str = "remove the leading & and start the program by its path, or run this command in the PowerShell tool";
 const CALL_PS1: &str = "run this command in the PowerShell tool: bash cannot run a .ps1 script";
@@ -1257,6 +1257,29 @@ mod tests {
         assert_eq!(
             bash_way(command, BashProfile::Posix, &open),
             Call::Command("\"C:/t/a.exe\" '\\\\server\\share'".to_string())
+        );
+    }
+
+    /// Ruling 150: the Fix is built for a text of at most 4 KiB; one byte more gets the sentence.
+    #[test]
+    fn the_call_operator_fix_is_built_up_to_4_kib() {
+        let open = Deadline::new(std::time::Instant::now(), 8000);
+        let of_len = |n: usize| {
+            let mut s = String::from("& \"C:/t/a.exe\" x\n");
+            while s.len() + 7 <= n {
+                s.push_str("echo a\n");
+            }
+            s.push_str(&"#".repeat(n - s.len()));
+            assert_eq!(s.len(), n);
+            s
+        };
+        assert!(matches!(
+            bash_way(&of_len(4096), BashProfile::GitBash, &open),
+            Call::Command(_)
+        ));
+        assert_eq!(
+            bash_way(&of_len(4097), BashProfile::GitBash, &open),
+            Call::Sentence
         );
     }
 

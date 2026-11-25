@@ -37,7 +37,7 @@ this command in the PowerShell tool`): a backtick, `$null`, `$true`, `$false`, `
 `-Name:value`, a cmdlet name (`Out-Null`), an unquoted backslash (`C:\data\x`), `$env:X` (any
 case) outside single quotes and comments, a property (`$x.Name`), a doubled quote (`'it''s'`),
 a heredoc, a PowerShell assignment (`$t = 'x'`), a script block or an expression as the
-operand, more than 8 call operators, a text over 16 KiB, the analysis deadline, or a result bash
+operand, more than 8 call operators, a text over 4 KiB, the analysis deadline, or a result bash
 does not parse. A `.ps1` operand is sent to the PowerShell tool. The text is read once and the result parsed once. In
 `shellwise lint` the Fix holds only the corrected lines. Both Bash profiles (Git Bash and POSIX
 bash).
