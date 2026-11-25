@@ -2363,6 +2363,282 @@ command = 'Rename-Item variable:a -N:$n; Remove-Item $HOME -Recurse -Force'
 level = "warn"
 rules = ["dynamic-target"]
 
+# A coloned path or name (`-Path:variable:t`, `-Name:t`) writes the variable it names, as its
+# uncoloned twin does: pwsh 7 and 5.1 overwrite `$t`, so the delete after it is dynamic.
+[[row]]
+id = "ps-colon-set-item-path-variable-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path variable:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-path-variable"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path:variable:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-path-blank-variable"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path: variable:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-path-quoted-variable-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path 'variable:t' -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-path-quoted-variable"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path:'variable:t' -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-path-from-a-variable-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; $p = 'variable:t'; Set-Item -Path $p -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-path-from-a-variable"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; $p = 'variable:t'; Set-Item -Path:$p -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-literalpath-variable-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -LiteralPath variable:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-literalpath-variable"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -LiteralPath:variable:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-value-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path variable:t -Value C:\Windows; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-value"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path:variable:t -Value:C:\Windows; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-value-parent-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path variable:t -Value '..\..'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-value-parent"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path:variable:t -Value:'..\..'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-value-tilde-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path variable:t -Value '~'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-value-tilde"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Item -Path:variable:t -Value:'~'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-new-item-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; New-Item -Path variable: -Name t -Value 'C:\Windows' -Force; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-new-item-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; New-Item -Path:variable: -Name:t -Value 'C:\Windows' -Force; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-variable-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Variable -Name t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-variable-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Set-Variable -Name:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-sv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; sv -Name:t -Value 'C:\Windows'; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-new-variable-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; New-Variable -Name:t -Value 'C:\Windows' -Force; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-nv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; nv -Name:t -Value 'C:\Windows' -Force; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-remove-variable-name-twin"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Remove-Variable -Name t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-remove-variable-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Remove-Variable -Name:t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-rv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; rv -Name:t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-clear-variable-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; Clear-Variable -Name:t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-clv-name"
+os = "any"
+shell = "pwsh"
+command = '''$t = 'src'; clv -Name:t; Remove-Item $t -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+# `$HOME` itself, written through a coloned path or name, is dynamic as in the twins.
+[[row]]
+id = "ps-colon-set-variable-home-twin"
+os = "any"
+shell = "pwsh"
+command = '''Set-Variable -Name HOME -Value x -Force; Remove-Item $HOME -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-variable-home"
+os = "any"
+shell = "pwsh"
+command = '''Set-Variable -Name:HOME -Value x -Force; Remove-Item $HOME -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-home-twin"
+os = "any"
+shell = "pwsh"
+command = '''Set-Item -Path variable:HOME -Value x -Force; Remove-Item $HOME -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+[[row]]
+id = "ps-colon-set-item-home"
+os = "any"
+shell = "pwsh"
+command = '''Set-Item -Path:variable:HOME -Value x -Force; Remove-Item $HOME -Recurse -Force'''
+level = "warn"
+rules = ["dynamic-target"]
+
+# Controls: a coloned write of another variable leaves a home delete critical, `$HOME` and `~`.
+[[row]]
+id = "ps-colon-set-item-other-variable-home-delete"
+os = "any"
+shell = "pwsh"
+command = '''Set-Item -Path:variable:t -Value:x; Remove-Item $HOME -Recurse -Force'''
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-colon-set-item-other-variable-tilde-delete"
+os = "any"
+shell = "pwsh"
+command = '''Set-Item -Path:variable:t -Value x; Remove-Item ~ -Recurse -Force'''
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "ps-colon-set-variable-other-name-home-delete"
+os = "any"
+shell = "pwsh"
+command = '''Set-Variable -Name:t -Value:x; Remove-Item $HOME -Recurse -Force'''
+level = "critical"
+rules = ["delete-critical"]
+
 [[row]]
 id = "ps-ri-switch-system-twin"
 os = "windows"

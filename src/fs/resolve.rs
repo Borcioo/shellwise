@@ -3289,6 +3289,18 @@ const LOOP_NAMES: [&str; 7] = [
     "PWD",
 ];
 
+/// The PowerShell cmdlets that set or remove the variable they name.
+const PS_VARIABLE_CMDLETS: [&str; 8] = [
+    "set-variable",
+    "sv",
+    "new-variable",
+    "nv",
+    "remove-variable",
+    "rv",
+    "clear-variable",
+    "clv",
+];
+
 /// Commands that write a PowerShell drive path (`env:X`, `variable:X`) they are given.
 const PS_ITEM_WRITERS: [&str; 30] = [
     "set-item",
@@ -3474,10 +3486,18 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
         return;
     }
     let args: Vec<Option<String>> = c.args.iter().map(literal).collect();
+    // A PowerShell variable cmdlet names its variable after a colon too (`-Name:t`).
+    let colon_names = PS_VARIABLE_CMDLETS.contains(&name.as_str());
     let mark_names = |env: &mut EnvView, with_eq_only: bool| {
         for a in &args {
             match a {
-                Some(t) if t.starts_with('-') => {}
+                Some(t) if t.starts_with('-') => {
+                    if let Some((_, Some(v))) = param_token(t).filter(|_| colon_names)
+                        && !v.is_empty()
+                    {
+                        env.mark_dynamic(v);
+                    }
+                }
                 Some(t) => match t.split_once('=') {
                     Some((n, _)) => env.mark_dynamic(n),
                     None if !with_eq_only => env.mark_dynamic(t),
@@ -3489,8 +3509,8 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     };
     match name.as_str() {
         "export" | "declare" | "typeset" | "local" | "readonly" | "unset" | "read" | "mapfile"
-        | "readarray" | "getopts" | "printf" | "let" | "set-variable" | "sv" | "new-variable"
-        | "nv" | "remove-variable" | "rv" | "clear-variable" | "clv" => mark_names(env, false),
+        | "readarray" | "getopts" | "printf" | "let" => mark_names(env, false),
+        _ if colon_names => mark_names(env, false),
         _ => {}
     }
     if command_name(c) == "env" {
@@ -3512,12 +3532,19 @@ fn mark_command(env: &mut EnvView, c: &SimpleCommand) {
     let writer = PS_ITEM_WRITERS.contains(&name.as_str());
     for (w, a) in c.args.iter().zip(&args) {
         match a {
-            Some(t) => mark_drive_path(env, t),
+            // `-Path:variable:t` names the path after its colon, as `-Path variable:t` does.
+            Some(t) => match param_token(t) {
+                Some((_, Some(v))) => mark_drive_path(env, v),
+                _ => mark_drive_path(env, t),
+            },
             // A switch with its colon value (`-Confirm:$false`) names no drive path.
             None if writer && writer_switch_word(w) => {}
             // A word that resolves now (`$env:TEMP\x`, `~`) names that text; any other word
-            // may name any drive path.
-            None if writer => match w.static_value(env) {
+            // may name any drive path. A coloned word (`-Path:$p`) names its value.
+            None if writer => match inline_value_word(w)
+                .unwrap_or_else(|| w.clone())
+                .static_value(env)
+            {
                 Some(t) => mark_drive_path(env, &t),
                 None => env.mark_all_dynamic(),
             },
