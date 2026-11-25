@@ -1135,6 +1135,14 @@ fn pass_variables(text: &str, row: &Program) -> Option<(String, Vec<String>)> {
                 i += m;
                 continue;
             }
+            // A single-quoted here-string ends at a line that starts with `'@`: an apostrophe
+            // inside it is text.
+            '@' if !dq && rest.starts_with("@'") => {
+                let m = rest.find("\n'@").map_or(rest.len(), |k| k + 3);
+                out.push_str(&rest[..m]);
+                i += m;
+                continue;
+            }
             '\'' if !dq => {
                 let m = rest[1..].find('\'').map_or(rest.len(), |k| k + 2);
                 out.push_str(&rest[..m]);

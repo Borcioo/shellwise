@@ -2847,6 +2847,26 @@ command = 'Get-Content log.txt -Wait | Where-Object { $_.Length -gt "$((1) + $p.
 level = "warn"
 rules = ["follow-unbounded"]
 fix = '$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_.Length -gt "$((1) + ($using:p).Length)" } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force'
+
+# A single-quoted here-string is literal to its closing `'@`, an apostrophe inside included; a
+# variable after it is passed.
+[[row]]
+id = "fu-ps-fix-keeps-a-single-quoted-here-string"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $_ -match (@'\nit's $pat\n'@ + $tag) }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match (@'\nit's $pat\n'@ + $using:tag) } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+[[row]]
+id = "fu-ps-fix-passes-a-variable-after-an-at-apostrophe-in-a-string"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Select-String \"to @'x' $pat\""
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Select-String \"to @'x' $using:pat\" | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 # The Fix carries the command's own text, a redirect included.
 [[row]]
 id = "bash-read-fix-keeps-a-redirect"
