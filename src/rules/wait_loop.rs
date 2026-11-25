@@ -619,18 +619,10 @@ impl Walk<'_, '_> {
         let terms: Vec<(Option<ChainOp>, String)> = if fold {
             pwsh_terms(&self.text_of(stmts))
         } else {
-            let op = |j: usize| {
-                body.join(from + j).or(match &stmts[j - 1] {
-                    Stmt::Pipeline(p) => p.chain,
-                    _ => None,
-                })
-            };
             (0..n)
                 .map(|j| {
-                    (
-                        if j > 0 { op(j) } else { None },
-                        self.text_of(&stmts[j..=j]),
-                    )
+                    let op = if j > 0 { body.join(from + j) } else { None };
+                    (op, self.text_of(&stmts[j..=j]))
                 })
                 .collect()
         };
@@ -1470,8 +1462,9 @@ fn counters(text: &str, fold: bool) -> Vec<String> {
             spaced.starts_with('=') && !spaced.starts_with("==") && !spaced.starts_with("=~") && {
                 let value = assigned_value(&spaced[1..], fold);
                 let base = value.as_ptr() as usize - text.as_ptr() as usize;
-                // In `let n=n+1` and `: $((n=n+1))` the whole value is arithmetic.
-                let bare = !fold && (inside(start) || in_let(text, start));
+                // In `let n=n+1` the whole value is arithmetic (in `: $((n=n+1))` it lies inside
+                // the `$(( ))` too).
+                let bare = !fold && in_let(text, start);
                 variables(value).any(|(at, v)| {
                     same(v, name, fold)
                         && (bare || refers(&value[..at], fold) || (!fold && inside(base + at)))
