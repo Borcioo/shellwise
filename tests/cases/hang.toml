@@ -3359,6 +3359,288 @@ command = "nohup timeout 60 watch ls"
 level = "ok"
 rules = []
 
+# Ruling 155: a duration of 0 in any spelling, `inf` or `infinity` is no limit to GNU timeout, so
+# it bounds no follow; the Fix puts the bound's duration in its place. Options before the
+# duration are skipped to find it. A duration the guard cannot read stays a bound.
+[[row]]
+id = "fu-bash-timeout-0-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-00-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 00 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0s-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0s tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0m-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0m tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-0-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-inf-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-infinity-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout infinity tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-nohup-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "nohup timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0s-after-env-is-no-bound"
+os = "any"
+shell = "bash"
+command = "env X=1 timeout 0s tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "env X=1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-00-after-sudo-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 00 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "sudo timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-k-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 5 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -k 5 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-s-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -s KILL 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -s KILL 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-signal-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --signal=KILL 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --signal=KILL 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-kill-after-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --kill-after=5 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --kill-after=5 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-foreground-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --foreground 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --foreground 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-preserve-status-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --preserve-status 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --preserve-status 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-v-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -v 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -v 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-of-watch-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 watch ls"
+
+[[row]]
+id = "fu-bash-timeout-0-of-kubectl-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-timeout-inf-of-docker-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf docker logs -f app"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 docker logs -f app"
+
+[[row]]
+id = "fu-bash-timeout-0-beside-a-bounded-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 5 tail -f a.log; timeout 0 tail -f b.log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 5 tail -f a.log; timeout 60 tail -f b.log"
+
+[[row]]
+id = "fu-bash-timeout-0-around-a-child-shell-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
+
+# Controls: a positive duration, a kill-after of 0 before one, and a duration the guard cannot read.
+[[row]]
+id = "fu-bash-timeout-1-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-0-5-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.5 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-1d-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1d tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-60-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-kill-after-0-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 0 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-variable-is-a-bound"
+os = "any"
+shell = "bash"
+command = 'timeout "$T" tail -f log'
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-arithmetic-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout $((60*5)) tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-1-after-nohup-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 1 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-child-shell-60-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-with-no-duration-keeps-its-verdict"
+os = "any"
+shell = "bash"
+command = "timeout tail -f log"
+level = "ok"
+rules = []
+
 # Controls: a bound elsewhere bounds nothing, and a `timeout` that is an argument is no wrapper.
 [[row]]
 id = "fu-bash-bound-in-another-statement-is-no-bound"

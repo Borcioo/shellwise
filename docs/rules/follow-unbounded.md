@@ -6,7 +6,11 @@ command stops it, so the call runs until the host's timeout. It is a warn, not a
 meant to run in the background. The rule checks command lines and script files alike; the
 `will-hang` rule does not cover these commands.
 
-Only a time bound ends a follow. A later stage that waits for a line or a count (`| grep -m1`,
+Only a time bound ends a follow, and only a duration that sets a limit: GNU timeout reads `0` in
+any spelling (`00`, `0s`, `0.0`), `inf` and `infinity` as no limit, so `timeout 0 tail -f log`
+warns, and its Fix puts 60 in place of the duration (`timeout 60 tail -f log`). Options before the
+duration are skipped (`timeout -k 5 0 tail -f log` warns, `timeout -k 0 60 tail -f log` is
+bounded), and a duration the rule cannot read (`timeout "$T" …`) counts as a bound. A later stage that waits for a line or a count (`| grep -m1`,
 `| grep -q`, `| head`, `| sed q`, `| Select-Object -First`) ends it only if that line comes: on a
 quiet log, `tail -f quiet.log | grep -m1 done` runs on.
 

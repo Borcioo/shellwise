@@ -43,6 +43,9 @@ value_options = ["-s", "--signal", "-k", "--kill-after"]
 flag_options = ["--preserve-status", "--foreground", "-v", "--verbose"]
 operands = 1
 bounds_wait = true
+# The duration's unit suffixes: `0` with or without one (`0s`, `00`, `0.0`), `inf` and `infinity`
+# set no limit, so that timeout bounds no follow (Ruling 155).
+duration_suffixes = ["s", "m", "h", "d"]
 
 [[program]]
 name = "nice"
@@ -128,6 +131,7 @@ follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
 follow_fix_lookup_vars = ["PATH"]
 follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_duration = "60"
 follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 docker logs -f app`"
 
 [[program]]
@@ -153,6 +157,7 @@ follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
 follow_fix_lookup_vars = ["PATH"]
 follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_duration = "60"
 follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 kubectl logs -f pod`"
 
 [[program]]
@@ -356,6 +361,8 @@ loop_role = ["wait"]
 #                   bound is looked up (`PATH=/x timeout 60 tail`: 127): the Fix is a sentence
 #                   whose form is `follow_fix_lookup`, `<command>` the assignments and the program
 #                   (`timeout 60 env PATH=/x tail -f log`)
+# follow_fix_duration  the bound's duration: a `timeout` with no limit in front of the follow
+#                   (`timeout 0 tail -f log`) gets it in place of its own (`timeout 60 tail -f log`)
 # follow_job        true = a script block it runs is a job: a follow in it is bounded when the
 #                   command also runs a `job_timeout_when` option of a job wait (`Wait-Job -Timeout`)
 # The Get-Content row (PowerShell) carries `follow_when` and `follow_fix`.
@@ -368,6 +375,7 @@ follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
 follow_fix_lookup_vars = ["PATH"]
 follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_duration = "60"
 follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log`"
 
 [[program]]
@@ -378,6 +386,7 @@ follow_fix = "timeout 60 <command>"
 follow_fix_wrappers = ["env", "nice", "nohup"]
 follow_fix_lookup_vars = ["PATH"]
 follow_fix_lookup = "timeout 60 env <command>"
+follow_fix_duration = "60"
 follow_fix_sentence = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 watch ls`"
 
 [[program]]

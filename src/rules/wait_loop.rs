@@ -38,6 +38,7 @@ const READS_INPUT: &str = "loop_reads_input";
 const SKIPS_ROUND: &str = "loop_skips_round";
 const BODY: &str = "loop_body";
 const BOUNDS: &str = "bounds_wait";
+const DURATION_SUFFIXES: &str = "duration_suffixes";
 const FOLLOW: &str = "follow";
 const FOLLOW_WHEN: &str = "follow_when";
 const FOLLOW_SUB: &str = "follow_sub";
@@ -50,6 +51,7 @@ const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
 const FOLLOW_FIX_WRAPPERS: &str = "follow_fix_wrappers";
 const FOLLOW_FIX_LOOKUP: &str = "follow_fix_lookup";
 const FOLLOW_FIX_LOOKUP_VARS: &str = "follow_fix_lookup_vars";
+const FOLLOW_FIX_DURATION: &str = "follow_fix_duration";
 /// The `extra` keys of a wrapper row that runs only shell builtins, and of one that is a builtin.
 const BUILTINS_ONLY: &str = "builtins_only";
 const SHELL_BUILTIN: &str = "shell_builtin";
@@ -322,9 +324,15 @@ impl Walk<'_, '_> {
 
     fn command(&mut self, c: &SimpleCommand, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
-        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs.
-        let bounded =
-            bounded || programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS));
+        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs;
+        // for a follow, only with a duration that sets a limit (`timeout 0 bash -c 'tail -f x'`
+        // does not, Ruling 155).
+        let bounded = bounded
+            || (programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS))
+                && (self.mode != Mode::Follow
+                    || programs::wrapper_chain(c, shell, os)
+                        .first()
+                        .is_none_or(limits)));
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
         // A script block first: the table is read only for a command that passes one.
         let bounded = bounded
@@ -405,10 +413,7 @@ impl Walk<'_, '_> {
             };
             // `timeout 60 tail -f log`, `nohup timeout 60 tail -f log`: a wrapper of this very
             // command, at any place in its chain, bounds it.
-            if programs::wrapper_chain(c, shell, os)
-                .iter()
-                .any(|(w, _)| flag(w, BOUNDS))
-            {
+            if programs::wrapper_chain(c, shell, os).iter().any(limits) {
                 continue;
             }
             let span = self.outer.unwrap_or(c.span);
@@ -473,6 +478,15 @@ impl Walk<'_, '_> {
             // The bound goes right before the command's name, after its assignments and leading
             // redirects; around a wrapper only when the row says the bound runs that wrapper.
             let (shell, os) = (self.shell, self.os);
+            let chain = programs::wrapper_chain(c, shell, os);
+            // A bound with no limit (`timeout 0 tail`, Ruling 155): the bound's duration goes in
+            // its place, so the bound is not doubled.
+            if let (Some(word), Some(duration)) = (
+                chain.iter().find_map(no_limit),
+                row.extra.get(FOLLOW_FIX_DURATION).and_then(|v| v.as_str()),
+            ) {
+                return Ok((word.span, duration.to_string()));
+            }
             let inner = programs::strip_wrappers(c, shell, os);
             let listed = strings(row, FOLLOW_FIX_WRAPPERS);
             // Every wrapper of the chain, not only the first, must be listed (`nohup nice tail`).
@@ -486,14 +500,13 @@ impl Walk<'_, '_> {
                 });
             let under =
                 unlisted || (inner.name.span != c.name.span && !listed.contains(&c.typed.as_str()));
-            let chain = programs::wrapper_chain(c, shell, os);
             // A wrapper that runs only builtins fails in front of what is none (`builtin tail`,
             // `builtin nohup tail`); in front of a builtin wrapper it runs (`builtin command tail`).
             let builtins_only = (0..chain.len()).find(|&k| {
-                flag(chain[k].0, BUILTINS_ONLY)
+                flag(chain[k].row, BUILTINS_ONLY)
                     && chain
                         .get(k + 1)
-                        .is_none_or(|(next, _)| !flag(next, SHELL_BUILTIN))
+                        .is_none_or(|next| !flag(next.row, SHELL_BUILTIN))
             });
             // An assignment in front (`PATH=/x tail`) applies to the bound too; an append
             // (`PATH+=:/x`) keeps the old value first. The parser also holds one after a wrapper
@@ -533,13 +546,13 @@ impl Walk<'_, '_> {
                 })
                 .trim();
             let mut wrappers = String::new();
-            for (k, (_, span)) in chain.iter().enumerate() {
+            for (k, w) in chain.iter().enumerate() {
                 let next = chain
                     .get(k + 1)
-                    .map_or(inner.name.span.start, |(_, s)| s.start);
+                    .map_or(inner.name.span.start, |n| n.name.start);
                 if builtins_only != Some(k) {
                     wrappers.push_str(self.slice(Span {
-                        start: self.code_from(span.start),
+                        start: self.code_from(w.name.start),
                         end: self.code_from(next),
                     }));
                 }
@@ -569,10 +582,10 @@ impl Walk<'_, '_> {
             let bound = template.replace(COMMAND, "");
             let bound = bound.trim();
             let (why, head) = if let Some(k) = builtins_only {
-                let wrapper = word(chain[k].1);
+                let wrapper = word(chain[k].name);
                 let name = chain
                     .get(k + 1)
-                    .map_or(inner.typed.as_str(), |(_, s)| word(*s));
+                    .map_or(inner.typed.as_str(), |n| word(n.name));
                 (
                     UNDER_BUILTINS_ONLY,
                     format!(
@@ -1158,6 +1171,29 @@ impl Walk<'_, '_> {
             Fixed::Command(format!("{head} {{{inner}}}; {tail}"))
         }
     }
+}
+
+/// The duration word of a wrapper that bounds the wait when it sets no limit (Ruling 155): GNU
+/// timeout reads `0` in any spelling (`00`, `0s`, `0.0`), `inf` and `infinity` as none. A
+/// duration the guard cannot read, or that is no number, is taken as a limit.
+fn no_limit(w: &programs::Wrapped) -> Option<&Word> {
+    if !flag(w.row, BOUNDS) {
+        return None;
+    }
+    let word = w.operands.first()?;
+    let text = literal(word)?;
+    let suffixes = strings(w.row, DURATION_SUFFIXES);
+    let number = suffixes
+        .iter()
+        .find_map(|s| text.strip_suffix(s))
+        .unwrap_or(&text);
+    let value: f64 = number.parse().ok()?;
+    (value == 0.0 || value.is_infinite()).then_some(word)
+}
+
+/// The wrapper bounds the wait: a `bounds_wait` row with a duration that sets a limit.
+fn limits(w: &programs::Wrapped) -> bool {
+    flag(w.row, BOUNDS) && no_limit(w).is_none()
 }
 
 fn flag(p: &Program, key: &str) -> bool {
