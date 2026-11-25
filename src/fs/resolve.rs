@@ -2458,11 +2458,16 @@ fn defined_names(s: &Script, aliases: &[Alias], shell: Shell) -> Vec<String> {
     // pwsh: every alias of the table (`alias_defs` of every node `visit_script` reads), but one
     // whose every value leaves the location where it is (Ruling 156).
     if is_pwsh(shell) {
+        let names: Vec<String> = out
+            .iter()
+            .chain(aliases.iter().map(|(n, _)| n))
+            .map(|n| strip_scope(n).to_string())
+            .collect();
         out.extend(
             aliases
                 .iter()
                 .map(|(n, _)| n)
-                .filter(|n| !alias_stays(n, aliases, shell))
+                .filter(|n| !alias_stays(n, aliases, shell, &names))
                 .cloned(),
         );
     }
@@ -2474,8 +2479,9 @@ fn defined_names(s: &Script, aliases: &[Alias], shell: Shell) -> Vec<String> {
 /// value the table gives it is a command the shell ships that is no location command
 /// (`is_location_command` of the value as a command). A value the hook cannot read, one the
 /// tables do not know (`x`, an alias or function of the script) or a location cmdlet keeps the
-/// call an unknown move.
-fn alias_stays(name: &str, aliases: &[Alias], shell: Shell) -> bool {
+/// call an unknown move, and so does a value that runs a function or alias the script defines
+/// (`defined`, lowercased: every alias of the table and `defined_by`'s names; Ruling 157).
+fn alias_stays(name: &str, aliases: &[Alias], shell: Shell, defined: &[String]) -> bool {
     let t = table(shell);
     let shipped = |n: &str| t.alias(n).is_some() || t.runs_blocks(n).is_some();
     let word = |text: &str| Word {
@@ -2500,7 +2506,7 @@ fn alias_stays(name: &str, aliases: &[Alias], shell: Shell) -> bool {
                 in_loop: false,
                 opaque: false,
             };
-            shipped(&first.to_ascii_lowercase()) && !is_location_command(&call, shell, &[])
+            shipped(&first.to_ascii_lowercase()) && !is_location_command(&call, shell, defined)
         })
 }
 
