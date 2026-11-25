@@ -211,8 +211,12 @@ impl Walk<'_, '_> {
         let bounded =
             bounded || programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS));
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
+        // A script block first: the table is read only for a command that passes one.
         let bounded = bounded
             || (self.mode == Mode::Follow
+                && c.args
+                    .iter()
+                    .any(|w| w.parts.iter().any(|p| matches!(p, WordPart::Block(_))))
                 && named_row(c, shell, os).is_some_and(|p| flag(p, FOLLOW_JOB))
                 && self.job_bound());
         for w in std::iter::once(&c.name).chain(&c.args) {
@@ -273,14 +277,17 @@ impl Walk<'_, '_> {
             })
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
+        if bounded {
+            return;
+        }
         for c in cmds {
-            let bounds_it = programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS));
-            if bounded || bounds_it {
-                continue;
-            }
             let Some(row) = follows(c, shell, os) else {
                 continue;
             };
+            // `timeout 60 tail -f log`: the wrapper of this very command bounds it.
+            if programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS)) {
+                continue;
+            }
             let span = self.outer.unwrap_or(c.span);
             self.out.push(Finding {
                 rule: FOLLOW_UNBOUNDED,
