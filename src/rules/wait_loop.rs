@@ -43,6 +43,8 @@ const FOLLOW_WHEN: &str = "follow_when";
 const FOLLOW_SUB: &str = "follow_sub";
 const FOLLOW_FIX: &str = "follow_fix";
 const FOLLOW_JOB: &str = "follow_job";
+const FOLLOW_FIX_LOCALS: &str = "follow_fix_locals";
+const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
 const JOB_TIMEOUT_WHEN: &str = "job_timeout_when";
 /// The placeholders of a `follow_fix`.
 const COMMAND: &str = "<command>";
@@ -327,7 +329,20 @@ impl Walk<'_, '_> {
             ""
         };
         let text = if template.contains(PIPELINE) {
-            template.replace(PIPELINE, self.slice(whole).trim())
+            let pipeline = self.slice(whole).trim();
+            // A job sees none of the caller's variables: they go in through `$using:` (Ruling 143).
+            let pipeline = if row.extra.contains_key(FOLLOW_FIX_LOCALS) {
+                match pass_variables(pipeline, &strings(row, FOLLOW_FIX_LOCALS)) {
+                    Some(p) => p,
+                    None => {
+                        let s = row.extra.get(FOLLOW_FIX_SENTENCE).and_then(|v| v.as_str());
+                        return s.map(str::to_string);
+                    }
+                }
+            } else {
+                pipeline.to_string()
+            };
+            template.replace(PIPELINE, &pipeline)
         } else {
             let before = self.src.get(whole.start..at.start)?;
             let after = self.src.get(at.end..whole.end)?;
@@ -959,6 +974,90 @@ fn waits_on_job_with_timeout(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
         let args: Vec<String> = c.args.iter().filter_map(literal).collect();
         !when.is_empty() && has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
     })
+}
+
+/// A PowerShell pipeline with each of the caller's variables read through `$using:`, as a job
+/// needs (Ruling 143): `$pat` becomes `$using:pat`, `${pat}` `${using:pat}`. The variables the
+/// pipeline or the shell sets (`locals`: `$_`, `$true`), `$env:`, single-quoted text and an
+/// escaped `` `$ `` stay. `None` when the pipeline assigns a variable or names a scope: `$using:`
+/// cannot pass either.
+fn pass_variables(text: &str, locals: &[&str]) -> Option<String> {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut dq = false;
+    let mut i = 0;
+    while let Some(ch) = text[i..].chars().next() {
+        let rest = &text[i..];
+        let n = ch.len_utf8();
+        match ch {
+            '`' => {
+                let m = n + rest[n..].chars().next().map_or(0, char::len_utf8);
+                out.push_str(&rest[..m]);
+                i += m;
+                continue;
+            }
+            '\'' if !dq => {
+                let m = rest[1..].find('\'').map_or(rest.len(), |k| k + 2);
+                out.push_str(&rest[..m]);
+                i += m;
+                continue;
+            }
+            '"' => dq = !dq,
+            '$' => {
+                let from = if rest.starts_with("${") { 2 } else { 1 };
+                let name = rest[from..]
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("");
+                let after = &rest[from + name.len()..];
+                let scoped = after.starts_with(':') && !after.starts_with("::");
+                let kept =
+                    |s: &str| s.eq_ignore_ascii_case("env") || s.eq_ignore_ascii_case("using");
+                if !name.is_empty() && scoped && !kept(name) {
+                    return None;
+                }
+                if !name.is_empty()
+                    && !scoped
+                    && !locals.iter().any(|l| l.eq_ignore_ascii_case(name))
+                {
+                    if assigns(&out, after) {
+                        return None;
+                    }
+                    out.push_str(&rest[..from]);
+                    out.push_str("using:");
+                    out.push_str(name);
+                    i += from + name.len();
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push(ch);
+        i += n;
+    }
+    Some(out)
+}
+
+/// A PowerShell variable between `before` and `after` is assigned there: `$x = …`, `$x += …`,
+/// `$x++`, `++$x`, `foreach ($x in …)`.
+fn assigns(before: &str, after: &str) -> bool {
+    let a = after.trim_start_matches([' ', '\t']);
+    let set = (a.starts_with('=') && !a.starts_with("=="))
+        || ["+=", "-=", "*=", "/=", "%=", "??="]
+            .iter()
+            .any(|o| a.starts_with(o));
+    let b = before.trim_end_matches([' ', '\t']);
+    let step = after.starts_with("++")
+        || after.starts_with("--")
+        || b.ends_with("++")
+        || b.ends_with("--");
+    let each = b.strip_suffix('(').is_some_and(|b| {
+        let b = b.trim_end_matches([' ', '\t']);
+        b.len()
+            .checked_sub(7)
+            .and_then(|k| b.get(k..))
+            .is_some_and(|w| w.eq_ignore_ascii_case("foreach"))
+    });
+    set || step || each
 }
 
 /// The extent of a command's text: its name, words and redirect targets (the Bash lowering gives

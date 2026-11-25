@@ -2183,11 +2183,12 @@ shell = "pwsh"
 command = "Get-Content run.log -Wait -Tail 10"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "$j = Start-Job { Get-Content run.log -Wait -Tail 10 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content run.log -Wait -Tail 10 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 
 # The PowerShell Fix runs the whole pipeline in a job bounded by `Wait-Job -Timeout`: a later
 # stage stays (shown to end after 60 s on a quiet log in pwsh 7.7, relative path read, no process
-# left).
+# left). Ruling 143: the job starts in the caller's folder (Windows PowerShell 5.1 starts it in
+# Documents) and reads the caller's variables through `$using:`.
 [[row]]
 id = "fu-ps-get-content-wait-into-select-string"
 os = "any"
@@ -2195,7 +2196,46 @@ shell = "pwsh"
 command = "Get-Content log.txt -Wait | Select-String ready"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "$j = Start-Job { Get-Content log.txt -Wait | Select-String ready }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Select-String ready }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+[[row]]
+id = "fu-ps5-get-content-wait-fix-starts-in-the-callers-folder"
+os = "windows"
+shell = "powershell5"
+command = "Get-Content log.txt -Wait | Select-String ready"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Select-String ready }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+[[row]]
+id = "fu-ps-fix-passes-the-callers-variable"
+os = "any"
+shell = "pwsh"
+command = "$pat = 'ready'; Get-Content log.txt -Wait | Where-Object { $_ -match $pat }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match $using:pat } }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# Every spelling of a caller's variable is passed; `$_`, `$PSItem`, `$true`, `$env:`, a
+# single-quoted `$` and an escaped one stay.
+[[row]]
+id = "fu-ps-fix-passes-variables-in-each-spelling"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Where-Object { $PSItem -match \"$pat-${Tag}\" -and $_ -notmatch '$skip' -and $true -and $_ -ne \"`$x\" -and $_ -ne $env:SKIP }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $PSItem -match \"$using:pat-${using:Tag}\" -and $_ -notmatch '$skip' -and $true -and $_ -ne \"`$x\" -and $_ -ne $env:SKIP } }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# A variable the pipeline assigns cannot go through `$using:`: a sentence, no command.
+[[row]]
+id = "fu-ps-fix-of-a-pipeline-that-assigns-a-variable-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = 'Get-Content log.txt -Wait | ForEach-Object { $n++; "$n $_" }'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`) and given each variable it reads as `$using:<name>` (no command is built: the pipeline assigns a variable or names its scope, which `$using:` cannot pass)"
 
 # A job is a time bound only with `Wait-Job -Timeout` (Ruling 137).
 [[row]]
@@ -2349,7 +2389,7 @@ shell = "pwsh"
 command = "Get-Content run.log -Wait | Select-Object -First 5"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "$j = Start-Job { Get-Content run.log -Wait | Select-Object -First 5 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content run.log -Wait | Select-Object -First 5 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 
 [[row]]
 id = "fu-ps-get-content-plain"
