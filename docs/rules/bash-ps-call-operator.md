@@ -29,6 +29,14 @@ word means the same in bash as in PowerShell:
 - a whole-word `$name` or `${name}`, as written;
 - bash operators and comments.
 
+In the call's own command (its words up to the next `;`, `|`, `&&`, `&` or line break), each
+`$name` or `${name}` of an argument is written in double quotes, inside a larger word too:
+PowerShell passes `$files`, `${dir}/f`, `pre$x` or `--o=$y` as one argument (for `files='a b'`),
+where bash would split it, so `& "x.exe" ${dir}/f` gives `Fix: "x.exe" "${dir}"/f`. The `$name`
+must end the word or stand before `/`, `-`, `+`, `%` or another `$`; before `.` it is a property,
+before `:` a scope, and PowerShell passes `$d=x` as two arguments: those get the sentence. The
+program (`& $tool` gives `"$tool"`), a redirect target and every other statement stay as written.
+
 In Git Bash a word it rewrites as a POSIX path (`/tmp/x`, `--out=/usr/x`) and any `\\` in the
 text are left out too: Git Bash would pass the program something else.
 

@@ -1388,13 +1388,71 @@ rules = ["bash-ps-call-operator"]
 fix_exact = '"C:/t/a.exe" x # note'
 
 [[row]]
-id = "call-op-variable-argument-stays"
+id = "call-op-variable-argument-is-quoted"
 os = "any"
 shell = "gitbash"
-command = '& "C:/t/a.exe" $out'
+command = '& "C:/t/a.exe" $files'
 level = "break"
 rules = ["bash-ps-call-operator"]
-fix_exact = '"C:/t/a.exe" $out'
+fix_exact = '"C:/t/a.exe" "$files"'
+
+# Ruling 151: in the call's own command a `$name` argument is quoted, as PowerShell passes it as
+# one argument and bash would split it; inside a larger word too (`${dir}/f`: pwsh 7.7 passes one
+# argument `a b/f` for dir='a b'), but not before `.` (a property), `:` (a scope) or `=` (pwsh
+# passes two arguments). The program, redirect targets and other statements stay as written.
+[[row]]
+id = "call-op-variable-program-and-arguments"
+os = "any"
+shell = "gitbash"
+command = '& $tool $a $b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"$tool" "$a" "$b"'
+
+[[row]]
+id = "call-op-variable-inside-a-word-is-quoted"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" ${dir}/f pre$x --o=$y $a-$b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" "${dir}"/f pre"$x" --o="$y" "$a"-"$b"'
+
+[[row]]
+id = "call-op-variable-before-an-equals-sign-gets-a-sentence"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" $d=x'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "remove the leading & and start the program by its path, or run this command in the PowerShell tool"
+
+[[row]]
+id = "call-op-variable-in-a-later-statement-stays"
+os = "any"
+shell = "gitbash"
+command = "& \"C:/t/a.exe\" $f\nfor f in $files; do echo $f; done"
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = "\"C:/t/a.exe\" \"$f\"\nfor f in $files; do echo $f; done"
+
+[[row]]
+id = "call-op-variable-after-a-pipe-stays"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" $a | grep $b'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" "$a" | grep $b'
+
+[[row]]
+id = "call-op-variable-redirect-target-stays"
+os = "any"
+shell = "gitbash"
+command = '& "C:/t/a.exe" x > $out'
+level = "break"
+rules = ["bash-ps-call-operator"]
+fix_exact = '"C:/t/a.exe" x > $out'
 
 # Git Bash rewrites `/tmp/x` into a path under its install folder for a Windows program, and
 # collapses `\\` in any quotes: the Fix would pass something else. POSIX bash does neither.

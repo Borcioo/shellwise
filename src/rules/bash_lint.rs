@@ -899,6 +899,9 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
     let b = command.as_bytes();
     let mut out = String::with_capacity(command.len());
     let (mut i, mut at_start, mut calls) = (0, true, 0);
+    // Inside the words of a call's own command, and right after a redirect operator, whose target
+    // is no argument.
+    let (mut in_call, mut after_redirect) = (false, false);
     while i < b.len() {
         let next = b.get(i + 1).copied();
         match b[i] {
@@ -944,7 +947,8 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
                     Operand::None => return Call::Sentence,
                 };
                 let same = if raw.starts_with(['"', '\'']) {
-                    same_word(&operand, 0, false).is_some_and(|(end, _)| end == operand.len())
+                    same_word(&operand, 0, false, false)
+                        .is_some_and(|(end, _)| end == operand.len())
                 } else {
                     !is_cmdlet(&operand)
                 };
@@ -954,6 +958,8 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
                 out.push_str(&operand);
                 i = start + raw.len();
                 at_start = false;
+                in_call = true;
+                after_redirect = false;
                 continue;
             }
             // A background job.
@@ -969,16 +975,23 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
                     out.push('&');
                     i += 1;
                 }
+                after_redirect = true;
             }
             _ => {
-                let Some((end, word)) = same_word(command, i, git_bash) else {
+                let quote_vars = in_call && !after_redirect;
+                let Some((end, word)) = same_word(command, i, git_bash, quote_vars) else {
                     return Call::Sentence;
                 };
                 at_start = at_start && COMMAND_KEYWORDS.contains(&word.as_str());
+                after_redirect = false;
                 out.push_str(&word);
                 i = end;
                 continue;
             }
+        }
+        // An operator that starts a command ends the call's own.
+        if at_start {
+            in_call = false;
         }
         i += 1;
     }
@@ -997,20 +1010,38 @@ fn bash_way(command: &str, profile: BashProfile, deadline: &Deadline) -> Call {
 /// both of printable ASCII and not doubled (`'it''s'` is one quote in PowerShell), or a whole word
 /// `$name`/`${name}`. Not a `-Name:value` parameter nor a cmdlet name, and in Git Bash
 /// (`git_bash`) not a word it rewrites as a POSIX path (`/tmp/x`, `--out=/usr/x`).
-fn same_word(text: &str, i: usize, git_bash: bool) -> Option<(usize, String)> {
+///
+/// An argument of the call's own command (`quote_vars`) may hold a `$name` anywhere, written in
+/// double quotes: PowerShell passes `$d`, `$d/f` or `pre$d` as one argument where bash splits it
+/// (pwsh 7.7). It must end the word or stand before `/`, `-`, `+`, `%` or another `$`: before `.`
+/// it is a property, before `:` a scope, and `$d=x` is two arguments in PowerShell.
+fn same_word(text: &str, i: usize, git_bash: bool, quote_vars: bool) -> Option<(usize, String)> {
     let b = text.as_bytes();
     let ends = |j: usize| {
         b.get(j)
             .is_none_or(|c| c.is_ascii_whitespace() || b"|&;()<>".contains(c))
     };
-    if b[i] == b'$' {
+    if b[i] == b'$' && !quote_vars {
         let end = variable(text, i)?;
         return ends(end).then(|| (end, text[i..end].to_string()));
     }
     let printable = |c: u8| c == b'\t' || (b' '..=b'~').contains(&c);
     let mut j = i;
+    let mut out = String::new();
     while !ends(j) {
+        let from = j;
         match b[j] {
+            b'$' if quote_vars => {
+                let end = variable(text, j)?;
+                if !(ends(end) || b"/-+%$".contains(&b[end])) {
+                    return None;
+                }
+                out.push('"');
+                out.push_str(&text[j..end]);
+                out.push('"');
+                j = end;
+                continue;
+            }
             b'\'' => {
                 let close = j + 1 + text[j + 1..].find('\'')?;
                 if !text.as_bytes()[j + 1..close].iter().all(|&c| printable(c)) {
@@ -1050,6 +1081,7 @@ fn same_word(text: &str, i: usize, git_bash: bool) -> Option<(usize, String)> {
             c if c.is_ascii_alphanumeric() || b"/._+=:%-".contains(&c) => j += 1,
             _ => return None,
         }
+        out.push_str(&text[from..j]);
     }
     // Another blank (`\r`) ends the word before it starts.
     if j == i {
@@ -1069,7 +1101,7 @@ fn same_word(text: &str, i: usize, git_bash: bool) -> Option<(usize, String)> {
     if is_cmdlet(word) || (git_bash && converted(&word.replace(['"', '\''], ""))) {
         return None;
     }
-    Some((j, word.to_string()))
+    Some((j, out))
 }
 
 /// The end of the `$name` or `${name}` at `i`, a bash variable name that is no PowerShell
