@@ -6122,6 +6122,49 @@ command = 'Set-Alias $n Get-ChildItem; Get-ChildItem; Remove-Item .git -Recurse 
 level = "warn"
 rules = ["delete-unknown-location"]
 
+# A value that is a shipped cmdlet name the command itself redefines (an alias or a function of
+# that name, compared as PowerShell compares names) runs the definition: the location is unknown
+# after the call wherever the definition sits (Ruling 157).
+[[row]]
+id = "ps-alias-to-a-redefined-listing-name-then-system-delete"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias Get-ChildItem Set-Location; Set-Alias zz Get-ChildItem; zz C:\Windows; Remove-Item System32 -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-alias-to-a-listing-name-redefined-later-then-system-delete"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias zz Get-ChildItem; Set-Alias Get-ChildItem Set-Location; zz C:\Windows; Remove-Item System32 -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-alias-to-a-listing-name-redefined-in-other-case-then-system-delete"
+os = "windows"
+shell = "pwsh"
+command = 'Set-Alias GET-CHILDITEM Set-Location; Set-Alias zz get-childitem; zz C:\Windows; Remove-Item System32 -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-alias-to-a-function-shadowing-a-listing-name-then-system-delete"
+os = "windows"
+shell = "pwsh"
+command = 'function Get-ChildItem { Set-Location C:\Windows }; Set-Alias zz Get-ChildItem; zz; Remove-Item System32 -Recurse -Force'
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "ps-alias-to-get-childitem-then-project-folder"
+os = "any"
+shell = "pwsh"
+command = 'Set-Alias zz Get-ChildItem; zz; Remove-Item build -Recurse -Force'
+level = "ok"
+rules = []
+
 # A resolved run the guard cannot read gets the finding of its direct twin (Ruling 153).
 [[row]]
 id = "ps-alias-to-iex-twin"
