@@ -82,6 +82,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Write the combined checksum file
+        shell: bash
+        run: cd dist && sha256sum shellwise-*.zip shellwise-*.tar.gz > SHA256SUMS
       - name: Create the release
         shell: bash
         env:
