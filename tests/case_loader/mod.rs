@@ -3,6 +3,7 @@
 //! Each `[[row]]` holds `id`, `os` (`"windows"`, `"posix"` or `"any"`), `shell` (`"pwsh"`,
 //! `"powershell5"`, `"bash"` or `"gitbash"`), `command`, the expected `level`, the expected rule
 //! ids in order (`rules`), and optionally `fix` (a text the first finding's Fix line holds),
+//! `fix_exact` (the whole text of the first finding's Fix line, after `Fix: `),
 //! `oracle` (`"refuses"` or `"accepts"`: what the real shell's parser does with the text) and
 //! `config` (the text of an integration config file the row runs under, loaded by `Config::load`).
 //! A row for another OS is skipped and counted; loading fails when no row runs.
@@ -27,6 +28,7 @@ pub struct Row {
     pub level: String,
     pub rules: Vec<String>,
     pub fix: Option<String>,
+    pub fix_exact: Option<String>,
     pub oracle: Option<String>,
     pub config: Option<String>,
 }
@@ -125,6 +127,12 @@ pub fn mismatch(row: &Row) -> Option<String> {
             .is_some_and(|l| l.starts_with("Fix: ") && l.contains(want.as_str()))
         {
             wrong.push(format!("fix line {line:?} (want one holding {want:?})"));
+        }
+    }
+    if let Some(want) = &row.fix_exact {
+        let line = v.findings.first().and_then(|f| f.fix_line());
+        if line.as_deref() != Some(format!("Fix: {want}").as_str()) {
+            wrong.push(format!("fix line {line:?} (want exactly \"Fix: {want}\")"));
         }
     }
     (!wrong.is_empty()).then(|| format!("{}: {}", row.id, wrong.join("; ")))

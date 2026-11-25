@@ -34,7 +34,7 @@ use serde::de::DeserializeOwned;
 
 use super::{Ctx, Rule};
 use crate::fs::assigned::{Assigned, resolve_assigned};
-use crate::fs::resolve::{self, DeleteBy, Location, Target, UnknownKind};
+use crate::fs::resolve::{self, DeleteBy, Location, SwitchState, Target, UnknownKind};
 use crate::fs::walk::{self, WalkResult, is_within};
 use crate::fs::{TimedOut, bounded};
 use crate::ir::{
@@ -499,17 +499,22 @@ fn cmdlet_targets(args: &[Word], facts: &DeleteFacts, prog: &Program) -> Picked 
             .split_once(':')
             .map(|(_, v)| v.trim_start_matches([' ', '\t']).to_string());
         let whole = literal(w);
+        // `-Recurse:$false` turns the switch off; a value that may be either reads the stricter
+        // way: recursive or forced, and no dry run.
+        let state = resolve::switch_state(w);
         if pwsh_matches(&facts.dry_run, lead) {
-            p.dry_run = true;
+            p.dry_run = state == SwitchState::On;
         } else if pwsh_matches(&facts.recursive, lead) {
-            p.recursive = true;
+            p.recursive = state != SwitchState::Off;
         } else if pwsh_matches(&facts.forced, lead) {
-            p.forced = true;
+            p.forced = state != SwitchState::Off;
         } else if pwsh_matches(&facts.target_options, lead) {
             match (inline, whole) {
                 (Some(v), Some(_)) if !v.is_empty() => p.words.push(word_of(&v, w)),
-                // `-Path:$x`: the value is the dynamic rest of the word.
-                (Some(v), None) if !v.is_empty() || w.parts.len() > 1 => p.words.push(w.clone()),
+                // `-Path:$x`, `-Path: "$x"`: the value is the dynamic rest of the word.
+                (Some(v), None) if !v.is_empty() || w.parts.len() > 1 => p
+                    .words
+                    .push(resolve::inline_value_word(w).unwrap_or_else(|| w.clone())),
                 _ => {
                     if let Some(v) = args.get(i) {
                         p.words.push(v.clone());

@@ -644,7 +644,8 @@ fn the_rule_map_names_every_baseline_guard_id() {
     let path = format!("{}/tools/corpus/rule_map.toml", env!("CARGO_MANIFEST_DIR"));
     let table: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let map = table["map"].as_table().unwrap();
-    // The 15 installed rules and the 6 of the full set that baseline.md and known.jsonl name.
+    // The 15 installed rules, the 6 of the full set that baseline.md and known.jsonl name, and
+    // bash-ps-call-operator, a full-set rule the corpus files do not name.
     let ids = [
         "bash-backslash-collapse",
         "bash-too-long",
@@ -667,6 +668,7 @@ fn the_rule_map_names_every_baseline_guard_id() {
         "bash-vendor-bin-shebang",
         "bash-versioned-php",
         "ps-unix-command",
+        "bash-ps-call-operator",
     ];
     let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
     keys.sort_unstable();
@@ -675,6 +677,10 @@ fn the_rule_map_names_every_baseline_guard_id() {
     assert_eq!(keys, want);
     assert_eq!(map["bash-unterminated-quote"].as_str(), Some("parse-error"));
     assert_eq!(map["bash-too-long"].as_str(), Some("too-long"));
+    assert_eq!(
+        map["bash-ps-call-operator"].as_str(),
+        Some("bash-ps-call-operator")
+    );
     assert_eq!(
         map["bash-powershell-syntax"].as_str(),
         Some("bash-ps-cmdlet")

@@ -117,6 +117,7 @@ kind = ["native-msys"]
 fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
 follow_when = ["-f", "--follow"]
 follow_sub = "logs"
+follow_fix = "timeout 60 <command>"
 
 [[program]]
 name = "docker-compose"
@@ -137,6 +138,7 @@ kind = ["native-msys"]
 fix = "prefix MSYS_NO_PATHCONV=1, or write the leading slash as //"
 follow_when = ["-f", "--follow"]
 follow_sub = "logs"
+follow_fix = "timeout 60 <command>"
 
 [[program]]
 name = "podman"
@@ -223,6 +225,7 @@ hang_level = "break"
 fix = 'feed read its input on the same line: <command> <<< "<value>"'
 loop_role = ["wait"]
 loop_wait_when = ["-t"]
+loop_reads_input = true
 
 [[program]]
 name = "claude"
@@ -236,14 +239,59 @@ lint = { tags = ["claude-cli"], config_env = ["CLAUDE_CONFIG_DIR"], harmless = [
 # --- Wait loops (wait-loop-unbounded, read by src/rules/wait_loop.rs; the loop words are in [loops]) ---
 # loop_role       what the command is to a loop: "wait" (it pauses, so the loop polls)
 # loop_wait_when  for "wait": only with one of these options (`read -t`)
+# loop_reads_input true = it reads its input (`read`): a loop whose condition runs it without its
+#                 `loop_wait_when` option ends with its input and is no wait loop (Ruling 134); with
+#                 it (`read -t`) its own wait ends the loop instead of pacing it
 # loop_wait_ms    for "wait": with one of these options its number is milliseconds
+# loop_wait_in_ms for "wait": its number is always milliseconds (`[Threading.Thread]::Sleep(500)`)
+# loop_wait_units for "wait": the seconds of each unit suffix its number may carry (`sleep 1m`)
 # loop_body       on a shell row: the option whose next word is a script the rule reads too
 #                 (`bash -c '…'`), alone or in a cluster of short options (`-lc`)
+# loop_skips_round true = it ends the round early (`continue`): a Bash Fix cannot end the round
+#                 with its round test, so it is a sentence
+# loop_join       a PowerShell operator that joins two tests of a loop's condition: "and" or "or"
+#                 (Ruling 141 reads which side a bound must be on)
+# loop_integer_when on a Bash declaring builtin: with one of these options the names it declares
+#                 are integers, so a bare `n=n+1` on one is arithmetic and `n` a counter
+# A .NET method is a row named `[type]::method` as written, lowercase.
+
+[[program]]
+name = "declare"
+shells = ["bash"]
+loop_integer_when = ["-i"]
+
+[[program]]
+name = "typeset"
+shells = ["bash"]
+loop_integer_when = ["-i"]
+
+[[program]]
+name = "continue"
+shells = ["bash"]
+loop_skips_round = true
+
+[[program]]
+name = "-and"
+shells = ["pwsh"]
+loop_join = "and"
+
+[[program]]
+name = "-or"
+shells = ["pwsh"]
+loop_join = "or"
 
 [[program]]
 name = "sleep"
 shells = ["bash"]
 loop_role = ["wait"]
+loop_wait_units = { s = 1, m = 60, h = 3600, d = 86400 }
+
+[[program]]
+name = "[threading.thread]::sleep"
+shells = ["pwsh"]
+aliases = { pwsh_windows = ["[system.threading.thread]::sleep"], pwsh_posix = ["[system.threading.thread]::sleep"] }
+loop_role = ["wait"]
+loop_wait_in_ms = true
 
 [[program]]
 name = "start-sleep"
@@ -261,6 +309,7 @@ loop_role = ["wait"]
 name = "wait-job"
 shells = ["pwsh"]
 loop_role = ["wait"]
+job_timeout_when = ["-Timeout"]
 
 [[program]]
 name = "wait-event"
@@ -268,32 +317,37 @@ shells = ["pwsh"]
 loop_role = ["wait"]
 
 # --- Follow commands (follow-unbounded, read by src/rules/wait_loop.rs) ---
+# Only a time bound ends a follow (Ruling 137): `timeout`, or a job a `Wait-Job -Timeout` waits
+# for. A later stage that waits for a line or a count (`| grep -m1`, `| head`, `| Select-Object
+# -First`) ends it only if the line comes.
 # follow            true = the command always follows its input (`watch`)
 # follow_when       options that make it follow (`tail -f`)
 # follow_sub        the subcommand the options count after (`kubectl logs -f`)
-# ends_follow       true = as a later pipeline stage it ends the pipeline (`head`)
-# ends_follow_when  options with which it ends the pipeline (`grep -m1`, `Select-Object -First`)
-# The Get-Content and Select-Object rows (PowerShell) carry `follow_when` and `ends_follow_when`.
+# follow_fix        the Fix: `<command>` is the follow command as typed, put back in its pipeline;
+#                   `<pipeline>` is the whole pipeline; `<job>` a variable name the command never
+#                   uses. The Fix is the whole command with each follow replaced in place
+#                   (Ruling 148); where that cannot be built, a sentence (`follow_fix_sentence`, or
+#                   one made from `follow_fix`)
+# follow_job        true = a script block it runs is a job: a follow in it is bounded when the
+#                   command also runs a `job_timeout_when` option of a job wait (`Wait-Job -Timeout`)
+# The Get-Content row (PowerShell) carries `follow_when` and `follow_fix`.
 
 [[program]]
 name = "tail"
 shells = ["bash"]
 follow_when = ["-f", "-F", "--follow"]
+follow_fix = "timeout 60 <command>"
 
 [[program]]
 name = "watch"
 shells = ["bash"]
 follow = true
+follow_fix = "timeout 60 <command>"
 
 [[program]]
-name = "head"
-shells = ["bash"]
-ends_follow = true
-
-[[program]]
-name = "grep"
-shells = ["bash"]
-ends_follow_when = ["-m", "--max-count", "-q", "--quiet"]
+name = "start-job"
+shells = ["pwsh"]
+follow_job = true
 
 # --- The delete family (Task 32: [program.delete], read by src/rules/delete.rs) ---
 
@@ -563,13 +617,35 @@ lint = { variable_params = ["sessionvariable"] }
 name = "select-object"
 shells = ["pwsh"]
 lint = { tags = ["truncator"], truncate_params = ["first"], flag_hints = ["-n#=-First "] }
-ends_follow_when = ["-First", "-Index"]
+
+# gate-truncated-pipeline in Bash: its tee and its truncator (`head` stops after its count, as the
+# PowerShell `head` row does, unless a `count_options` value is negative: `head -n -5` prints all
+# but the last 5 and reads the whole stream; `tail` and `sed -n 'Np'` read the whole stream).
+[[program]]
+name = "tee"
+shells = ["bash"]
+lint = { tags = ["tee-cmdlet"] }
+
+[[program]]
+name = "head"
+shells = ["bash"]
+lint = { tags = ["truncator"], count_options = ["-n", "-c", "--lines", "--bytes"] }
 
 [[program]]
 name = "get-content"
 shells = ["pwsh"]
 lint = { flag_hints = ["-n#=-TotalCount "] }
 follow_when = ["-Wait"]
+# The job starts where the caller is (Windows PowerShell 5.1 starts it in Documents) and reads the
+# caller's variables through `$using:`, all but these, which the pipeline or the shell sets itself.
+# Its output is text: Windows PowerShell 5.1 shows a received `Select-String` result blank.
+follow_fix = "$<job> = Start-Job { Set-Location -LiteralPath $using:PWD; <pipeline> | Out-String -Stream -Width 4096 }; $null = Wait-Job $<job> -Timeout 60; Receive-Job $<job>; Remove-Job $<job> -Force"
+follow_fix_locals = ["_", "PSItem", "true", "false", "null", "args", "input", "this", "matches", "foreach", "switch", "Error", "LASTEXITCODE", "ExecutionContext", "MyInvocation", "PSCmdlet", "PSBoundParameters", "PWD", "HOME", "PSHOME", "Host", "PID", "PSVersionTable", "IsWindows", "IsLinux", "IsMacOS", "IsCoreCLR"]
+# Scopes the job reads as the caller does, and loop words that set the variable they name.
+follow_fix_scopes = ["env", "using"]
+follow_fix_sets = ["foreach"]
+# The Fix where no command can be built (the rule adds why).
+follow_fix_sentence = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`), given each variable it reads as `$using:<name>` and ended with `| Out-String -Stream -Width 4096`"
 
 [[program]]
 name = "set-content"
@@ -766,12 +842,14 @@ opt_out = ["MSYS_NO_PATHCONV", "MSYS2_ARG_CONV_EXCL"]
 exits = ["break", "exit", "return", "throw"]
 # A whole loop condition that is always true (Bash `true`, `:`; PowerShell `$true`, `1`).
 always = ["true", ":", "$true", "1"]
-# Words that read the time: a test holding one is a deadline (`$SECONDS`, `date +%s`,
-# `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`).
-clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopwatch", "Elapsed"]
+# Words that read the time: a comparison with one in an operand is a deadline (`$SECONDS`,
+# `date +%s`, `Get-Date`, `[DateTime]::Now`, a `Stopwatch`'s `Elapsed`). Anywhere else (a message,
+# a file name, a parameter such as `-Seconds`) a clock word is no bound.
+clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopwatch", "Elapsed", "ElapsedMilliseconds", "ElapsedTicks"]
 # Operators that compare numbers: a test with one on a variable the loop changes is a counter
 # (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
-compares = ["-lt", "-le", "-gt", "-ge", "<", "<=", ">", ">="]
+compares = ["-lt", "-le", "-gt", "-ge", "-eq", "-ne", "<", "<=", ">", ">=", "==", "!="]
 # The sentence after the Fix line.
-hint_bash = "when you wait for a process, wait on the process (wait <pid>) rather than on a line in its log"
+# A tool call's shell never has the process as its child, so `wait <pid>` fails (127).
+hint_bash = "when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
 hint_pwsh = "when you wait for a process, wait on the process (Wait-Process -Id <pid> -Timeout <seconds>) rather than on a line in its log"
