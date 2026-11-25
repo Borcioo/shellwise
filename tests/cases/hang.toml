@@ -1309,6 +1309,14 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "wl-bash-date-in-a-single-quoted-operand-is-no-clock"
+os = "any"
+shell = "bash"
+command = "while [ \"$(cat state)\" != 'done at date' ]; do sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
 id = "wl-bash-escaped-seconds-in-quotes-is-no-clock"
 os = "any"
 shell = "bash"
