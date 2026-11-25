@@ -625,19 +625,17 @@ impl Walk<'_, '_> {
                     _ => None,
                 })
             };
-            // A list's last and-or chain decides: it starts after the last `;`.
-            let first = (1..n)
-                .rev()
-                .find(|&j| !matches!(op(j), Some(ChainOp::And | ChainOp::Or)))
-                .unwrap_or(0);
-            (first..n)
+            (0..n)
                 .map(|j| {
-                    let op = if j > first { op(j) } else { None };
-                    (op, self.text_of(&stmts[j..=j]))
+                    (
+                        if j > 0 { op(j) } else { None },
+                        self.text_of(&stmts[j..=j]),
+                    )
                 })
                 .collect()
         };
-        // Whether a bound can make the tests so far true, and whether it can make them false.
+        // Whether a bound can make the tests so far true, and whether it can make them false. A
+        // `;` starts again: a list's last and-or chain decides.
         let mut can = (false, false);
         for (k, (op, t)) in terms.iter().enumerate() {
             let b = bounds(t, counters, fold);
@@ -1431,16 +1429,12 @@ fn in_let(text: &str, at: usize) -> bool {
         == Some("let")
 }
 
-/// The text before a name refers to it as a variable: `$n`, `${n}`, Bash `${#n}`, PowerShell
-/// `$script:n`.
+/// The text before a name refers to it as a variable: `$n`, `${n}`, PowerShell `$script:n`.
 fn refers(before: &str, fold: bool) -> bool {
     if before.ends_with('$') || before.ends_with("${") {
         return true;
     }
-    if !fold {
-        return before.ends_with("${#") || before.ends_with("${!");
-    }
-    before.strip_suffix(':').is_some_and(|b| {
+    fold && before.strip_suffix(':').is_some_and(|b| {
         let scope = b.trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
         scope.len() < b.len() && (scope.ends_with('$') || scope.ends_with("${"))
     })
