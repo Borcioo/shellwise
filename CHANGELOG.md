@@ -5,8 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-25
+
 ### Added
 
+- A combined `SHA256SUMS` file among the release assets, next to the per-archive `.sha256` files.
 - `examples/integration-config.toml`: a config for a host that replaces a stricter guard: it
   raises the rules that only warn by default to break or danger and enables the `git_no_verify`
   policy.
