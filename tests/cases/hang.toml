@@ -1309,6 +1309,22 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "wl-bash-escaped-seconds-in-quotes-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until grep -q done log; do [ "\$SECONDS" -ge 600 ] && break; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-date-quoted-inside-a-quoted-substitution-is-no-clock"
+os = "any"
+shell = "bash"
+command = 'until [ "$(grep -c "date" log)" -ge 3 ]; do sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
 id = "wl-ps-get-date-subexpression-is-a-clock"
 os = "any"
 shell = "pwsh"
@@ -1568,6 +1584,22 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "wl-bash-counter-braced-in-a-substitution"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$(expr ${n} + 1); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-in-old-arithmetic"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$[n+1]; [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
 id = "wl-bash-counter-in-an-expr-substitution"
 os = "any"
 shell = "bash"
@@ -1659,6 +1691,24 @@ shell = "bash"
 command = "n=0; until grep -q a log || [ $n -ge 60 ] && grep -q b log; do n=$((n+1)); sleep 5; done"
 level = "break"
 rules = ["wait-loop-unbounded"]
+
+# Only the condition's last list decides.
+[[row]]
+id = "wl-bash-until-bound-then-a-is-unbounded"
+os = "any"
+shell = "bash"
+command = "n=0; until [ $n -ge 1 ]; grep -q ok log; do n=$((n+1)); sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# A group is one test: `-not (A -or bound)` ends when the bound is reached.
+[[row]]
+id = "wl-ps-while-not-a-group-with-a-bound-is-bounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not ((Test-Path ok) -or $n -ge 60)) { $n++; Start-Sleep 5 }"
+level = "ok"
+rules = []
 
 [[row]]
 id = "wl-ps-while-a-or-bound-is-unbounded"
@@ -2095,7 +2145,26 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 fix = "rewrite the loop as a loop of at most 600 rounds that runs its condition first and breaks on it, and that fails when the rounds run out, and end the loop around it with a failure then (no command is built: the loop around it would go on after a timeout); when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
 
-# The control twins: the last stage of a pipeline decides its status, and `||` is no pipe.
+[[row]]
+id = "wl-bash-fix-of-a-child-shell-loop-inside-a-loop-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "for f in a b; do bash -c 'until [ -f ok ]; do sleep 1; done'; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "rewrite the loop as a loop of at most 600 rounds that runs its condition first and breaks on it, and that fails when the rounds run out, and end the loop around it with a failure then (no command is built: the loop around it would go on after a timeout); when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+# The control twins: the last stage of a pipeline decides its status, `||` is no pipe, and a loop
+# after another loop is inside none.
+[[row]]
+id = "wl-bash-fix-of-a-loop-after-another-loop"
+os = "any"
+shell = "bash"
+command = "for f in a; do :; done; until [ -f ok ]; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = 'for f in a; do :; done; for i in $(seq 1 600); do [ -f ok ] && break; sleep 1; [ "$i" -lt 600 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log'
+
 [[row]]
 id = "wl-bash-fix-of-a-loop-as-the-last-stage-of-a-pipeline"
 os = "any"
@@ -2227,7 +2296,44 @@ level = "warn"
 rules = ["follow-unbounded"]
 fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $PSItem -match \"$using:pat-${using:Tag}\" -and $_ -notmatch '$skip' -and $true -and $_ -ne \"`$x\" -and $_ -ne $env:SKIP } }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
 
-# A variable the pipeline assigns cannot go through `$using:`: a sentence, no command.
+[[row]]
+id = "fu-ps-fix-passes-a-variable-after-an-apostrophe"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Select-String \"can't $pat\""
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Select-String \"can't $using:pat\" }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force"
+
+# A variable the pipeline assigns cannot go through `$using:`, nor one with a scope: a sentence,
+# no command.
+[[row]]
+id = "fu-ps-fix-of-a-pipeline-that-sets-a-variable-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | ForEach-Object { $line = $_; $line }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`) and given each variable it reads as `$using:<name>` (no command is built: the pipeline assigns a variable or names its scope, which `$using:` cannot pass)"
+
+[[row]]
+id = "fu-ps-fix-of-a-pipeline-with-a-foreach-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | ForEach-Object { foreach ($w in $_ -split ' ') { $w } }"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`) and given each variable it reads as `$using:<name>` (no command is built: the pipeline assigns a variable or names its scope, which `$using:` cannot pass)"
+
+[[row]]
+id = "fu-ps-fix-of-a-pipeline-with-a-scoped-variable-is-a-sentence"
+os = "any"
+shell = "pwsh"
+command = "Get-Content log.txt -Wait | Select-String $script:pat"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "run the pipeline in a job that `Wait-Job -Timeout 60` waits for, started in this folder (`Set-Location -LiteralPath $using:PWD`) and given each variable it reads as `$using:<name>` (no command is built: the pipeline assigns a variable or names its scope, which `$using:` cannot pass)"
+
 [[row]]
 id = "fu-ps-fix-of-a-pipeline-that-assigns-a-variable-is-a-sentence"
 os = "any"
