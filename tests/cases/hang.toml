@@ -2798,7 +2798,7 @@ shell = "bash"
 command = "if [ -f log ]; then tail -f log; fi"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-function-is-a-sentence"
@@ -2807,7 +2807,7 @@ shell = "bash"
 command = "f() { tail -f log; }; f"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-loop-is-a-sentence"
@@ -2816,7 +2816,7 @@ shell = "bash"
 command = "for f in a b; do tail -f run.log; done"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-substitution-is-a-sentence"
@@ -2825,7 +2825,7 @@ shell = "bash"
 command = "x=$(tail -f log | grep -m1 ready)"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-child-shell-is-a-sentence"
@@ -2834,7 +2834,7 @@ shell = "bash"
 command = "bash -c 'tail -f run.log | grep -m1 done'"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs in a child shell)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
 
 # A follow that feeds a loop (`tail -f log | while read`, Ruling 134) is replaced in place: the
 # loop ends with the follow's input.
@@ -2854,7 +2854,7 @@ shell = "bash"
 command = "( tail -f app.log )"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 # One follow that cannot be rewritten makes the other's Fix a sentence too: a pasted command
 # would still follow without end.
@@ -2865,7 +2865,924 @@ shell = "bash"
 command = "tail -f a.log; for f in a b; do tail -f b.log; done"
 level = "warn"
 rules = ["follow-unbounded", "follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+# The bound goes right before the command's name: an assignment or a redirect before it stays in
+# front (`timeout 60 LC_ALL=C tail` fails, 127: timeout runs `LC_ALL=C` as a program).
+[[row]]
+id = "fu-bash-fix-of-a-plain-follow"
+os = "any"
+shell = "bash"
+command = "tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C tail -f log | grep ready"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 tail -f log | grep ready"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-of-a-substitution"
+os = "any"
+shell = "bash"
+command = "FOO=$(date) tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "FOO=$(date) timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-two-assignments"
+os = "any"
+shell = "bash"
+command = "A=1 B=2 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A=1 B=2 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-with-a-blank"
+os = "any"
+shell = "bash"
+command = "A='x y' tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A='x y' timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-in-a-later-stage"
+os = "any"
+shell = "bash"
+command = "echo x | LC_ALL=C tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "echo x | LC_ALL=C timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-cd"
+os = "any"
+shell = "bash"
+command = "cd x && tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "cd x && timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-cd-and-an-assignment"
+os = "any"
+shell = "bash"
+command = "cd x && LC_ALL=C tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "cd x && LC_ALL=C timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-a-leading-redirect"
+os = "any"
+shell = "bash"
+command = "2>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "2>&1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-and-a-redirect"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C 2>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C 2>&1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-of-watch-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 watch ls"
+
+[[row]]
+id = "fu-bash-fix-of-kubectl-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-fix-after-time"
+os = "any"
+shell = "bash"
+command = "time tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "time timeout 60 tail -f log"
+
+# A wrapper the bound was shown to run (`timeout 3 nohup tail -f quiet.log` ends at 3 s, 124) stays
+# inside it; any other wrapper gets the sentence: `command` and `exec` are shell builtins, which
+# timeout cannot run (127), and `sudo` was not shown to work. Every wrapper of the chain counts.
+[[row]]
+id = "fu-bash-fix-around-nohup"
+os = "any"
+shell = "bash"
+command = "nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env"
+os = "any"
+shell = "bash"
+command = "env X=1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 env X=1 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-nice"
+os = "any"
+shell = "bash"
+command = "nice tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nice tail -f log"
+
+[[row]]
+id = "fu-bash-fix-of-watch-around-nohup"
+os = "any"
+shell = "bash"
+command = "nohup watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup watch ls"
+
+[[row]]
+id = "fu-bash-fix-of-kubectl-around-nohup"
+os = "any"
+shell = "bash"
+command = "nohup kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-fix-of-docker-around-env"
+os = "any"
+shell = "bash"
+command = "env X=1 docker logs -f app"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 env X=1 docker logs -f app"
+
+[[row]]
+id = "fu-bash-fix-around-nohup-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 nohup tail -f log"
+
+[[row]]
+id = "fu-bash-fix-under-exec-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "exec tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `exec timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-exec-with-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "exec 3>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `exec 3>&1 timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-command-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `command timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-command-p-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "command -p tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `command -p timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-command-after-an-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `LC_ALL=C command timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# `builtin tail` runs no follow at all (bash: "builtin: tail: not a shell builtin", 1); the
+# finding stays, and the sentence says so and names the bounded program without `builtin`.
+[[row]]
+id = "fu-bash-fix-under-builtin-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "builtin tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Bash has no `tail` builtin, so `builtin tail` fails and follows nothing: drop `builtin` and bound the program: `timeout 60 tail -f log` (no command is built: the follow runs under a wrapper that runs only shell builtins)"
+
+[[row]]
+id = "fu-bash-fix-under-builtin-inside-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C nohup builtin tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Bash has no `tail` builtin, so `builtin tail` fails and follows nothing: drop `builtin` and bound the program: `LC_ALL=C nohup timeout 60 tail -f log` (no command is built: the follow runs under a wrapper that runs only shell builtins)"
+
+# `builtin` fails only in front of what is no shell builtin: `builtin command tail -f quiet.log`
+# follows (124 under `timeout 8`), `builtin nohup tail` fails as `builtin tail` does.
+[[row]]
+id = "fu-bash-fix-under-builtin-and-command-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "builtin command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `builtin command timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-builtin-of-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "builtin nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Bash has no `nohup` builtin, so `builtin nohup` fails and follows nothing: drop `builtin` and bound the program: `nohup timeout 60 tail -f log` (no command is built: the follow runs under a wrapper that runs only shell builtins)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-inside-env-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "env X=1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `env X=1 sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# The chain case of `follow_fix_wrappers`: a listed wrapper in front of an unlisted one.
+[[row]]
+id = "fu-bash-fix-under-sudo-inside-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "nohup sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `nohup sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# A leading redirect stays in front of the form, with the assignments around it.
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "2>&1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `2>&1 sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-redirect-and-an-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "2>&1 A=1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `2>&1 A=1 sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-an-assignment-and-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "A=1 >o.txt sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `A=1 >o.txt sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-and-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x 2>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/x 2>&1 tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# A first wrapper spelled other than its row's name (quoted) is not read as listed.
+[[row]]
+id = "fu-bash-fix-under-a-quoted-wrapper-is-a-sentence"
+os = "any"
+shell = "bash"
+command = '"nohup" tail -f log'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = 'put `timeout 60` after the wrappers, right before the program: `"nohup" timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)'
+
+[[row]]
+id = "fu-bash-fix-around-nice-inside-nohup"
+os = "any"
+shell = "bash"
+command = "nohup nice tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup nice tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env-inside-nohup"
+os = "any"
+shell = "bash"
+command = "nohup env X=1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup env X=1 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-beside-a-follow-under-exec-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C tail -f a.log; exec tail -f b.log"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `exec timeout 60 tail -f b.log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# Each Bash follow row's own sentence names its program.
+[[row]]
+id = "fu-bash-fix-of-watch-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then watch ls; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 watch ls` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-of-kubectl-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then kubectl logs -f pod; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 kubectl logs -f pod` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-of-docker-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then docker logs -f app; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 docker logs -f app` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+# Two follow programs share one sentence: the first reason's follow gives it.
+[[row]]
+id = "fu-bash-fix-of-two-programs-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then tail -f log; watch ls; fi"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+# A bound after the wrappers and prefixes in front of the follow program bounds it, as
+# `timeout 60 tail -f log` does (`nohup timeout 8 tail -f quiet.log` ends at 8 s, 124).
+[[row]]
+id = "fu-bash-bound-after-command"
+os = "any"
+shell = "bash"
+command = "command timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-exec"
+os = "any"
+shell = "bash"
+command = "exec timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-sudo"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-sudo-with-a-user"
+os = "any"
+shell = "bash"
+command = "sudo -u x timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nohup"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-env"
+os = "any"
+shell = "bash"
+command = "env X=1 timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nice"
+os = "any"
+shell = "bash"
+command = "nice -n 5 timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-an-assignment-and-command"
+os = "any"
+shell = "bash"
+command = "A=1 command timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nohup-and-sudo"
+os = "any"
+shell = "bash"
+command = "nohup sudo timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nohup-of-watch"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 watch ls"
+level = "ok"
+rules = []
+
+# Ruling 155: a duration of 0 in any spelling, `inf` or `infinity` is no limit to GNU timeout, so
+# it bounds no follow; the Fix puts the bound's duration in its place. Options before the
+# duration are skipped to find it. A duration the guard cannot read stays a bound.
+[[row]]
+id = "fu-bash-timeout-0-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-00-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 00 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0s-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0s tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0m-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0m tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-0-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-inf-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-infinity-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout infinity tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-nohup-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "nohup timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0s-after-env-is-no-bound"
+os = "any"
+shell = "bash"
+command = "env X=1 timeout 0s tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "env X=1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-00-after-sudo-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 00 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "sudo timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-k-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 5 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -k 5 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-s-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -s KILL 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -s KILL 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-signal-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --signal=KILL 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --signal=KILL 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-kill-after-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --kill-after=5 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --kill-after=5 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-foreground-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --foreground 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --foreground 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-preserve-status-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --preserve-status 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --preserve-status 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-v-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -v 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -v 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-of-watch-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 watch ls"
+
+[[row]]
+id = "fu-bash-timeout-0-of-kubectl-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-timeout-inf-of-docker-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf docker logs -f app"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 docker logs -f app"
+
+[[row]]
+id = "fu-bash-timeout-0-beside-a-bounded-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 5 tail -f a.log; timeout 0 tail -f b.log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 5 tail -f a.log; timeout 60 tail -f b.log"
+
+[[row]]
+id = "fu-bash-timeout-0-around-a-child-shell-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
+
+# Controls: a positive duration, a kill-after of 0 before one, and a duration the guard cannot read.
+[[row]]
+id = "fu-bash-timeout-1-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-0-5-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.5 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-1d-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1d tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-60-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-kill-after-0-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 0 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-variable-is-a-bound"
+os = "any"
+shell = "bash"
+command = 'timeout "$T" tail -f log'
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-arithmetic-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout $((60*5)) tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-1-after-nohup-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 1 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-child-shell-60-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-with-no-duration-keeps-its-verdict"
+os = "any"
+shell = "bash"
+command = "timeout tail -f log"
+level = "ok"
+rules = []
+
+# Controls: a bound elsewhere bounds nothing, and a `timeout` that is an argument is no wrapper.
+[[row]]
+id = "fu-bash-bound-in-another-statement-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup tail -f log; timeout 60 true"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup tail -f log; timeout 60 true"
+
+[[row]]
+id = "fu-bash-bound-word-after-the-program-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup tail -f timeout"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup tail -f timeout"
+
+[[row]]
+id = "fu-bash-bound-after-nice-with-a-value-control"
+os = "any"
+shell = "bash"
+command = "nice -n 5 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nice -n 5 tail -f log"
+
+# A line continuation before the program name stays: the bound goes on the program's own line.
+[[row]]
+id = "fu-bash-fix-after-a-continued-assignment"
+os = "any"
+shell = "bash"
+command = "A=1 \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A=1 \\\n timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-two-continued-assignments"
+os = "any"
+shell = "bash"
+command = "A=1 \\\n  B=2 \\\n tail -f log | grep x"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A=1 \\\n  B=2 \\\n timeout 60 tail -f log | grep x"
+
+[[row]]
+id = "fu-bash-fix-around-a-continued-wrapper"
+os = "any"
+shell = "bash"
+command = "nohup \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup \\\n tail -f log"
+
+# An assignment to `PATH` in front of the follow sets where the bound is looked up too
+# (`PATH=/tmp/si timeout 60 tail -f log`: "timeout: command not found", 127): the sentence sets it
+# after the bound. Another assignment, or `PATH` set by `env` after the bound, keeps the command.
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/tmp/si tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/tmp/si tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-around-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "A=1 PATH=/x nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `nohup timeout 60 env A=1 PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-under-command-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `command timeout 60 env PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# A line continuation stays in a sentence's form too: before the program, and in front of a
+# `PATH` assignment that moves behind the bound.
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-continuation-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo \\\n timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-an-unindented-continuation-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo \\\ntail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo \\\ntimeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-after-a-continued-path-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# An append keeps the old directories in front: the bound is found as before.
+[[row]]
+id = "fu-bash-fix-after-a-path-append-control"
+os = "any"
+shell = "bash"
+command = "PATH+=:/x tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "PATH+=:/x timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-another-assignment-control"
+os = "any"
+shell = "bash"
+command = "MYPATH=/x tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "MYPATH=/x timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env-setting-path-control"
+os = "any"
+shell = "bash"
+command = "env PATH=/x tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 env PATH=/x tail -f log"
 
 [[row]]
 id = "fu-ps-fix-in-an-if-is-a-sentence"
