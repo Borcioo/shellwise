@@ -570,7 +570,9 @@ impl Walk<'_, '_> {
             let bound = bound.trim();
             let (why, head) = if let Some(k) = builtins_only {
                 let wrapper = word(chain[k].1);
-                let name = chain.get(k + 1).map_or(inner.typed.as_str(), |(_, s)| word(*s));
+                let name = chain
+                    .get(k + 1)
+                    .map_or(inner.typed.as_str(), |(_, s)| word(*s));
                 (
                     UNDER_BUILTINS_ONLY,
                     format!(
