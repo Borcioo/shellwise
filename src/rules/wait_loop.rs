@@ -1211,26 +1211,96 @@ fn assigned_value(t: &str, fold: bool) -> &str {
     t
 }
 
+/// Where Bash reads a bare name as a variable: the text inside `(( ))` (also `$(( ))`) and `$[ ]`,
+/// as byte ranges of `text`.
+fn arithmetic(text: &str) -> Vec<(usize, usize)> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    for i in 0..b.len().saturating_sub(1) {
+        let (open, close) = match (b[i], b[i + 1]) {
+            (b'(', b'(') => (b'(', b')'),
+            (b'$', b'[') => (b'[', b']'),
+            _ => continue,
+        };
+        let from = if open == b'(' { i } else { i + 1 };
+        let mut depth = 0usize;
+        let end = b[from..].iter().position(|&c| {
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                depth = depth.saturating_sub(1);
+                return depth == 0;
+            }
+            false
+        });
+        out.push((i, end.map_or(b.len(), |k| from + k)));
+    }
+    out
+}
+
+/// The Bash statement that holds `at` is a `let` command: its words are arithmetic.
+fn in_let(text: &str, at: usize) -> bool {
+    let from = text[..at]
+        .rfind([';', '\n', '|', '&', '(', '{', '`'])
+        .map_or(0, |k| k + 1);
+    text[from..at]
+        .split_whitespace()
+        .find(|w| !["do", "then", "else", "!"].contains(w))
+        == Some("let")
+}
+
+/// The text before a name refers to it as a variable: `$n`, `${n}`, Bash `${#n}`, PowerShell
+/// `$script:n`.
+fn refers(before: &str, fold: bool) -> bool {
+    if before.ends_with('$') || before.ends_with("${") {
+        return true;
+    }
+    if !fold {
+        return before.ends_with("${#") || before.ends_with("${!");
+    }
+    before.strip_suffix(':').is_some_and(|b| {
+        let scope = b.trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        scope.len() < b.len() && (scope.ends_with('$') || scope.ends_with("${"))
+    })
+}
+
 /// The counters of a loop's text: variables whose new value reads their old one (`n=$((n+1))`,
-/// `((n++))`, `let n++`, `let n=n+1`, `n+=1`, `$i++`, `$i += 1`, `$i = $i + 1`). A variable
-/// assigned from a command or an expression that does not read it (`c=$(ls out | wc -l)`) holds a
-/// polled value and is no counter (Ruling 135).
+/// `((n++))`, `let n++`, `let n=n+1`, `n+=1`, `$i++`, `++$k`, `$i += 1`, `$i = $i + 1`). A
+/// variable assigned from a command or an expression that does not read it (`c=$(ls out | wc
+/// -l)`) holds a polled value and is no counter (Ruling 135). The read is a reference to the
+/// variable (`$n`, `${n}`, a bare name in Bash arithmetic or `let`), never its name as a word of
+/// the polled command (`state=$(cat state)`, Ruling 139).
 fn counters(text: &str, fold: bool) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    let arith = if fold { Vec::new() } else { arithmetic(text) };
+    let inside = |at: usize| arith.iter().any(|&(s, e)| s < at && at < e);
     for (start, name) in variables(text) {
         let before = &text[..start];
         let after = &text[start + name.len()..];
-        // A long option (`--count`) is no variable: `variables` leaves it out.
-        let pre = before.ends_with("++") || before.ends_with("--");
+        // A long option (`--count`) is no variable: `variables` leaves it out. PowerShell writes
+        // the operator before the `$` (`++$k`).
+        let op = if fold {
+            before.strip_suffix('$').unwrap_or(before)
+        } else {
+            before
+        };
+        let pre = op.ends_with("++") || op.ends_with("--");
         let post = after.starts_with("++") || after.starts_with("--");
         let spaced = after.trim_start_matches([' ', '\t']);
         let compound = ["+=", "-=", "*=", "/="]
             .iter()
             .any(|o| spaced.starts_with(o));
-        let assigned = spaced.starts_with('=')
-            && !spaced.starts_with("==")
-            && !spaced.starts_with("=~")
-            && variables(assigned_value(&spaced[1..], fold)).any(|(_, v)| same(v, name, fold));
+        let assigned =
+            spaced.starts_with('=') && !spaced.starts_with("==") && !spaced.starts_with("=~") && {
+                let value = assigned_value(&spaced[1..], fold);
+                let base = value.as_ptr() as usize - text.as_ptr() as usize;
+                // In `let n=n+1` and `: $((n=n+1))` the whole value is arithmetic.
+                let bare = !fold && (inside(start) || in_let(text, start));
+                variables(value).any(|(at, v)| {
+                    same(v, name, fold)
+                        && (bare || refers(&value[..at], fold) || (!fold && inside(base + at)))
+                })
+            };
         if (pre || post || compound || assigned) && !out.iter().any(|n| same(n, name, fold)) {
             out.push(name.to_string());
         }

@@ -1358,6 +1358,164 @@ command = "$i = 0; while (-not (Test-Path done.txt)) { $i = $i + 1; if ($i -ge 6
 level = "ok"
 rules = []
 
+# Ruling 139: a self-read is a reference to the variable (`$n`, `${n}`, a bare name in arithmetic
+# or `let`; PowerShell `$n` in any case, `++$n`), not its name as a command word, an argument, a
+# path or a URL part of the polled command.
+[[row]]
+id = "wl-bash-polled-value-read-from-a-file-of-its-name"
+os = "any"
+shell = "bash"
+command = 'while [ "$state" != done ]; do state=$(cat state); sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-polled-value-read-from-a-file-named-like-it"
+os = "any"
+shell = "bash"
+command = 'while [ "$status" != ok ]; do status=$(cat status.txt); sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-polled-value-named-in-its-url"
+os = "any"
+shell = "bash"
+command = 'until [ "$status" == ready ]; do status=$(curl -s http://x/status); sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-polled-value-named-as-an-argument"
+os = "any"
+shell = "bash"
+command = "while [ \"$health\" != healthy ]; do health=$(docker inspect --format '{{.State.Health.Status}}' health); sleep 5; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-polled-value-named-in-its-url-and-property"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { $status = (Invoke-RestMethod http://x/status).status; if ($status -eq 'ok') { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# The control: the polled command does not name the variable.
+[[row]]
+id = "wl-bash-polled-value-not-named-in-its-command"
+os = "any"
+shell = "bash"
+command = 'while [ "$status" != ready ]; do status=$(curl -s x/health); sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# R2: the same in a guard of the body.
+[[row]]
+id = "wl-bash-polled-count-named-as-an-argument-in-a-guard"
+os = "any"
+shell = "bash"
+command = 'while true; do pods=$(kubectl get pods -o name | wc -l); [ "$pods" -ge 3 ] && break; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-polled-count-from-a-file-named-like-it-in-a-guard"
+os = "any"
+shell = "bash"
+command = 'while true; do count=$(grep -c ERROR count.log); [ "$count" -ge 1 ] && break; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-polled-value-from-a-file-of-its-name-in-a-guard"
+os = "any"
+shell = "bash"
+command = 'while true; do n=$(cat n); [ "$n" -ge 3 ] && break; sleep 5; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-polled-count-of-a-folder-of-its-name-in-a-guard"
+os = "any"
+shell = "pwsh"
+command = "while ($true) { $c = (Get-ChildItem c).Count; if ($c -ge 10) { break }; Start-Sleep 5 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# Allow twins: counters that read themselves in each spelling Ruling 139 names.
+[[row]]
+id = "wl-bash-counter-next-to-a-polled-value-of-its-name"
+os = "any"
+shell = "bash"
+command = 'n=0; until [ "$state" == done ]; do state=$(cat state); n=$((n+1)); [ $n -ge 60 ] && break; sleep 5; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-dollar-in-arithmetic"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$(($n+1)); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-braced-in-arithmetic"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$((${n}+1)); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-in-an-expr-substitution"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do n=$(expr $n + 1); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-counter-assigned-inside-arithmetic"
+os = "any"
+shell = "bash"
+command = "n=0; until grep -q done log; do : $((n=n+1)); [ $n -gt 100 ] && break; sleep 5; done"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-pre-increment"
+os = "any"
+shell = "pwsh"
+command = "[int]$k = 0; while ($k -lt 10) { Start-Sleep 1; ++$k }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-pre-decrement"
+os = "any"
+shell = "pwsh"
+command = "$k = 10; while ($k -gt 0) { Start-Sleep 1; --$k }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-in-another-case"
+os = "any"
+shell = "pwsh"
+command = "$N = 0; while (-not (Test-Path done.txt)) { $n = $N + 1; if ($n -ge 60) { break }; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-counter-with-a-scope"
+os = "any"
+shell = "pwsh"
+command = "$script:i = 0; while (-not (Test-Path done.txt)) { $script:i = $script:i + 1; if ($script:i -ge 60) { break }; Start-Sleep 5 }"
+level = "ok"
+rules = []
+
 # --- A wait in the condition is a wait ---
 
 [[row]]
