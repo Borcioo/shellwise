@@ -87,12 +87,14 @@ pub fn parse(src: &str, profile: BashProfile) -> Result<Script, ParseError> {
                 panic!("testhook: panic in the bash parser");
             }
             // The first pass finds the tainted names; only when there are some does a second pass
-            // lower the script again, marking each arithmetic context that reads one.
+            // lower the script again, marking each arithmetic context that reads one. Both lower
+            // the one parse of the command's text.
             let first = Lower::new(profile, owned.len(), None);
-            let script = first.text(&owned, Origin::Exact(0), 0)?;
+            let read = first.read(&owned, Origin::Exact(0), 0)?;
+            let script = first.lower(&read, 0)?;
             match first.taint() {
                 None => Ok(script),
-                taint => Lower::new(profile, owned.len(), taint).text(&owned, Origin::Exact(0), 0),
+                taint => Lower::new(profile, owned.len(), taint).lower(&read, 0),
             }
         });
     match worker {
@@ -189,6 +191,13 @@ struct Text<'a> {
     src: &'a str,
     origin: Origin,
     char_bytes: Vec<usize>,
+}
+
+/// A text as brush reads it, before lowering.
+struct Read<'a> {
+    t: Text<'a>,
+    tokens: Vec<Token>,
+    program: ast::Program,
 }
 
 impl Text<'_> {
@@ -636,6 +645,13 @@ impl Lower {
 
     /// Parse and lower one text (the command, or the inside of a substitution).
     fn text(&self, src: &str, origin: Origin, depth: usize) -> Result<Script, ParseError> {
+        let read = self.read(src, origin, depth)?;
+        self.lower(&read, depth)
+    }
+
+    /// Tokenize and parse one text; nested text (`depth` past 0) is charged to the budget first.
+    /// What it gives depends on the text alone, so both passes lower one reading of the command.
+    fn read<'a>(&self, src: &'a str, origin: Origin, depth: usize) -> Result<Read<'a>, ParseError> {
         let t = Text {
             src,
             origin,
@@ -661,6 +677,12 @@ impl Lower {
             };
             error(span, &format!("bash: {e}"), ParseKind::Syntax)
         })?;
+        Ok(Read { t, tokens, program })
+    }
+
+    /// Lower a text `read` parsed.
+    fn lower(&self, read: &Read, depth: usize) -> Result<Script, ParseError> {
+        let Read { t, tokens, program } = read;
         let cx = Cx {
             in_loop: false,
             depth,
@@ -668,7 +690,7 @@ impl Lower {
         let mut out = Acc::default();
         let outer = self.tainted_read.replace(false);
         for list in &program.complete_commands {
-            self.list(&t, list, cx, &mut out)?;
+            self.list(t, list, cx, &mut out)?;
         }
         // A tainted read outside any command (`case ${a[x]} in`, a compound's redirect target).
         if self.tainted_read.replace(outer) {
@@ -682,7 +704,7 @@ impl Lower {
                 ChainOp::Seq,
             );
         }
-        Ok(out.finish(comments(&t, &tokens)))
+        Ok(out.finish(comments(t, tokens)))
     }
 
     fn list(
