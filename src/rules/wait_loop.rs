@@ -1120,11 +1120,14 @@ fn pass_variables(text: &str, row: &Program) -> Option<(String, Vec<String>)> {
     let sets = strings(row, FOLLOW_FIX_SETS);
     let mut names: Vec<String> = Vec::new();
     let mut out = String::with_capacity(text.len() + 16);
-    let mut dq = false;
+    // Where the text stands: inside `"…"` (`None`), or in the code of a `"$( … )"` with this many
+    // `(` open (`Some`), which is code again; empty outside any string.
+    let mut quotes: Vec<Option<usize>> = Vec::new();
     let mut i = 0;
     while let Some(ch) = text[i..].chars().next() {
         let rest = &text[i..];
         let n = ch.len_utf8();
+        let dq = quotes.last() == Some(&None);
         match ch {
             '`' => {
                 let m = n + rest[n..].chars().next().map_or(0, char::len_utf8);
@@ -1138,7 +1141,28 @@ fn pass_variables(text: &str, row: &Program) -> Option<(String, Vec<String>)> {
                 i += m;
                 continue;
             }
-            '"' => dq = !dq,
+            '"' if dq => {
+                quotes.pop();
+            }
+            '"' => quotes.push(None),
+            '$' if dq && rest.starts_with("$(") => {
+                quotes.push(Some(0));
+                out.push_str("$(");
+                i += 2;
+                continue;
+            }
+            '(' => {
+                if let Some(Some(d)) = quotes.last_mut() {
+                    *d += 1;
+                }
+            }
+            ')' => match quotes.last_mut() {
+                Some(Some(0)) => {
+                    quotes.pop();
+                }
+                Some(Some(d)) => *d -= 1,
+                _ => {}
+            },
             '$' => {
                 let from = if rest.starts_with("${") { 2 } else { 1 };
                 let name = rest[from..]

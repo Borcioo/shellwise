@@ -2828,6 +2828,25 @@ command = "Set-Location logs\nGet-Content x.log -Wait | Select-String ready\nWri
 level = "warn"
 rules = ["follow-unbounded"]
 fix = "Set-Location logs\n$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content x.log -Wait | Select-String ready | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force\nWrite-Output done"
+
+# Inside `"$( )"` the text is code again: a member read there is wrapped as outside a string.
+[[row]]
+id = "fu-ps-fix-passes-a-variable-in-a-string-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Get-Content log.txt -Wait | Where-Object { $_ -match "$($pat.ToLower()) $x.y" }'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = '$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_ -match "$(($using:pat).ToLower()) $using:x.y" } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force'
+
+[[row]]
+id = "fu-ps-fix-passes-a-variable-after-a-group-in-a-string-subexpression"
+os = "any"
+shell = "pwsh"
+command = 'Get-Content log.txt -Wait | Where-Object { $_.Length -gt "$((1) + $p.Length)" }'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = '$j = Start-Job { Set-Location -LiteralPath $using:PWD; Get-Content log.txt -Wait | Where-Object { $_.Length -gt "$((1) + ($using:p).Length)" } | Out-String -Stream -Width 4096 }; $null = Wait-Job $j -Timeout 60; Receive-Job $j; Remove-Job $j -Force'
 # The Fix carries the command's own text, a redirect included.
 [[row]]
 id = "bash-read-fix-keeps-a-redirect"
