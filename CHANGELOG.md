@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Added
 
+- `examples/integration-config.toml`: a config for a host that replaces a stricter guard: it
+  raises the rules that only warn by default to break or danger and enables the `git_no_verify`
+  policy.
 - `bash-ps-call-operator` (break): a Bash command that starts with the PowerShell call operator
   (`& "C:/path/tool.exe" args`, also after `;` as `;&`), which bash refuses as a syntax error. The
   Fix runs the program by its path (`"C:/path/tool.exe" args`) when the rest of the command means
