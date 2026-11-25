@@ -1746,8 +1746,12 @@ fn pwsh_terms(text: &str, shell: Shell, os: Os) -> Vec<(Option<ChainOp>, String)
             b'\'' | b'"' => quote = Some(c),
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth = depth.saturating_sub(1),
-            b' ' | b'\t' if depth == 0 => {
-                let word = text[i + 1..].split([' ', '\t', '(']).next().unwrap_or("");
+            // A join word stands between blanks, a line break among them.
+            b' ' | b'\t' | b'\n' if depth == 0 => {
+                let word = text[i + 1..]
+                    .split([' ', '\t', '\n', '\r', '('])
+                    .next()
+                    .unwrap_or("");
                 let join = word
                     .starts_with('-')
                     .then(|| programs::lookup(word, shell, os))

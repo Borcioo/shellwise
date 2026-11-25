@@ -2313,6 +2313,39 @@ shell = "bash"
 command = "declare -x n=0; until [ -f ok ] || [ $n -ge 30 ]; do n=n+1; sleep 2; done"
 level = "break"
 rules = ["wait-loop-unbounded"]
+
+# A PowerShell join word next to a line break still splits the condition (Ruling 141).
+[[row]]
+id = "wl-ps-or-before-a-line-break-joins-tests"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok) -or\n $n -lt 30) { $n++; Start-Sleep 1 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-or-before-a-crlf-joins-tests"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok) -or\r\n $n -lt 30) { $n++; Start-Sleep 1 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-or-after-a-line-break-joins-tests"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok)\n-or $n -lt 30) { $n++; Start-Sleep 1 }"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-ps-and-before-a-line-break-is-bounded"
+os = "any"
+shell = "pwsh"
+command = "$n = 0; while (-not (Test-Path ok) -and\n $n -lt 30) { $n++; Start-Sleep 1 }"
+level = "ok"
+rules = []
 # --- follow-unbounded (warn): a follow command nothing stops ---
 
 [[row]]
