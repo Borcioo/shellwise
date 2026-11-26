@@ -1347,6 +1347,123 @@ command = "timeout 600 timeout 0 tail -f log"
 level = "ok"
 rules = []
 
+# A follow in a child shell reads the bound of the command that starts the shell the same way.
+
+[[row]]
+id = "fu-bash-sudo-timeout-60-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-nohup-timeout-60-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-env-timeout-60-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "env A=1 timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-0-timeout-600-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 600 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-sudo-timeout-0-around-a-child-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-timeout-0-timeout-0-around-a-child-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-sudo-timeout-60-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-nohup-timeout-60-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-env-timeout-60-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "env A=1 timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-timeout-0-timeout-600-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 600 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-sudo-timeout-0-around-a-child-follow-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-timeout-0-timeout-0-around-a-child-follow-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+# A `timeout` that runs no command bounds nothing: the substitution in its words runs in the
+# calling shell.
+
+[[row]]
+id = "wl-bash-loop-in-the-words-of-a-timeout-that-runs-nothing-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-words-of-a-timeout-that-runs-nothing-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
 [[row]]
 id = "wl-bash-counter-guard"
 os = "any"

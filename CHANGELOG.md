@@ -46,9 +46,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   read (`timeout "$T"`, `timeout "${T:-0}"`) still counts as a limit.
 - `wait-loop-unbounded`: a `timeout` with a limit behind another wrapper now bounds the wait loop
   it runs, as it already bounded a follow: `sudo timeout 60 bash -c '<loop>'`, `env A=1 timeout 60
-  …`, `nice timeout 60 …`, `nohup timeout 600 …` and `timeout 0 timeout 600 …` no longer block. A
-  chain whose every `timeout` sets no limit (`sudo timeout 0 …`, `timeout 0 timeout 0 …`) still
-  blocks.
+  …`, `nice timeout 60 …`, `nohup timeout 600 …` and `timeout 0 timeout 600 …` no longer block,
+  and a follow in that child shell (`sudo timeout 60 bash -c 'tail -f log'`) no longer warns
+  `follow-unbounded`. A chain whose every `timeout` sets no limit (`sudo timeout 0 …`,
+  `timeout 0 timeout 0 …`) still blocks, and so does a loop in the words of a `timeout` that runs
+  no command (`timeout "$(while true; do sleep 1; done)"`).
 - A command that does not parse, or whose analysis cannot finish, and pipes static delete text
   into a shell behind a wrapper (`sudo -u root printf 'rm -rf x' | bash`, `timeout 5 printf …`)
   now reads `danger` (`parse-error-destructive`, `analysis-incomplete`), as it already did without
