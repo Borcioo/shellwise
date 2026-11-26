@@ -1,7 +1,8 @@
 //! The install scripts against a fake release in a local folder: `install.ps1` under PowerShell 7
-//! and Windows PowerShell 5.1 on Windows, `install.sh` under `sh` elsewhere. Every run sets
-//! `SHELLWISE_NO_PATH=1` and a temp `SHELLWISE_INSTALL_DIR`, so no test touches this machine's PATH
-//! or the real install folder, and nothing reaches the network.
+//! and Windows PowerShell 5.1 on Windows, `install.sh` under `sh` elsewhere. Every run sets a temp
+//! `SHELLWISE_INSTALL_DIR` and either `SHELLWISE_NO_PATH=1` or, for the PATH tests, a scratch
+//! `SHELLWISE_PATH_REGKEY` under `HKCU\Software`, so no test touches this machine's PATH or the
+//! real install folder, and nothing reaches the network.
 
 mod common;
 
@@ -238,6 +239,7 @@ impl Fixture {
             .env_remove("SHELLWISE_VERSION")
             .env_remove("SHELLWISE_MODE")
             .env_remove("SHELLWISE_TARGET")
+            .env_remove("SHELLWISE_PATH_REGKEY")
             .env("SHELLWISE_BASE_URL", &self.release.base)
             .env("SHELLWISE_INSTALL_DIR", &self.dir)
             .env("SHELLWISE_NO_PATH", "1")
@@ -245,6 +247,19 @@ impl Fixture {
         for (k, v) in env {
             cmd.env(k, v);
         }
+        // The other guard: a run that may change a PATH changes only a scratch key.
+        let value = |name: &str| {
+            cmd.get_envs()
+                .find(|(k, _)| *k == name)
+                .and_then(|(_, v)| v)
+                .map(|v| v.to_string_lossy().into_owned())
+        };
+        let no_path = value("SHELLWISE_NO_PATH").as_deref() == Some("1");
+        let scratch = value("SHELLWISE_PATH_REGKEY").is_some_and(|k| k.starts_with(SCRATCH_PREFIX));
+        assert!(
+            no_path || scratch,
+            "a run sets SHELLWISE_NO_PATH=1 or a scratch SHELLWISE_PATH_REGKEY"
+        );
     }
 
     fn run(&self, i: Interp, env: &[(&str, &str)]) -> Out {
@@ -653,5 +668,264 @@ fn a_refusal_through_iex_keeps_the_session() {
             out.context()
         );
         f.assert_holds(&old, &out, i.name);
+    }
+}
+
+/// Every `SHELLWISE_PATH_REGKEY` a test passes starts with this; `HKCU\Environment` never does.
+const SCRATCH_PREFIX: &str = r"Software\shellwise-test-";
+/// The seed `Path` value: one entry with an unexpanded variable, one plain.
+const SEED: &str = r"%USERPROFILE%\bin;C:\tools";
+
+/// Seeds, reads and deletes one scratch key under HKCU, named by `SW_KEY`; refuses any other key.
+const REG_HELPER: &str = r#"$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$cu = [Microsoft.Win32.Registry]::CurrentUser
+$name = [string]$env:SW_KEY
+if (-not $name.StartsWith('Software\shellwise-test-')) { throw "not a scratch key: $name" }
+switch ($env:SW_OP) {
+    'seed' {
+        $k = $cu.CreateSubKey($name)
+        try {
+            if ($env:SW_SEED_SET -eq '1') {
+                $k.SetValue('Path', [string]$env:SW_SEED, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+            }
+        } finally { $k.Close() }
+    }
+    'read' {
+        $k = $cu.OpenSubKey($name)
+        if (-not $k) { throw "no key $name" }
+        try {
+            $names = @($k.GetValueNames() | Sort-Object)
+            $out = ($names -join ',') + "`n"
+            if ($names -contains 'Path') {
+                $raw = [string]$k.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $out += $k.GetValueKind('Path').ToString() + "`n" + $raw
+            }
+            $w = New-Object IO.StreamWriter([Console]::OpenStandardOutput(), (New-Object Text.UTF8Encoding($false)))
+            $w.Write($out)
+            $w.Flush()
+        } finally { $k.Close() }
+    }
+    'delete' { $cu.DeleteSubKeyTree($name, $false) }
+    default { throw "unknown SW_OP $($env:SW_OP)" }
+}
+"#;
+
+/// What a scratch key holds: its value names, and the `Path` value's kind and unexpanded text.
+#[derive(Debug, PartialEq)]
+struct KeyState {
+    names: String,
+    path: Option<(String, String)>,
+}
+
+/// A scratch key `HKCU\Software\shellwise-test-<pid>-<n>`, deleted on drop, also when a test fails.
+struct ScratchKey {
+    program: &'static str,
+    subkey: String,
+    work: PathBuf,
+}
+
+impl ScratchKey {
+    /// A new key with `Path` set to `seed` as an ExpandString value, or with no `Path` value.
+    fn new(i: Interp, seed: Option<&str>) -> Self {
+        static NEXT: Mutex<u32> = Mutex::new(0);
+        let n = {
+            let mut next = NEXT.lock().unwrap();
+            *next += 1;
+            *next
+        };
+        let work = temp_folder("regkey");
+        std::fs::write(work.join("reg.ps1"), REG_HELPER).unwrap();
+        let key = ScratchKey {
+            program: i.program,
+            subkey: format!("{SCRATCH_PREFIX}{}-{n}", std::process::id()),
+            work,
+        };
+        let set = if seed.is_some() { "1" } else { "0" };
+        key.helper(
+            "seed",
+            &[("SW_SEED", seed.unwrap_or("")), ("SW_SEED_SET", set)],
+        );
+        key
+    }
+
+    fn command(&self, op: &str, env: &[(&str, &str)]) -> Command {
+        let mut cmd = Command::new(self.program);
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(self.work.join("reg.ps1"))
+        .env("SW_OP", op)
+        .env("SW_KEY", &self.subkey)
+        .env("POWERSHELL_TELEMETRY_OPTOUT", "1")
+        .stdin(Stdio::null());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd
+    }
+
+    fn helper(&self, op: &str, env: &[(&str, &str)]) -> String {
+        let out = self
+            .command(op, env)
+            .output()
+            .expect("run the registry helper");
+        assert!(
+            out.status.success(),
+            "registry helper {op} on {}: {}",
+            self.subkey,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).expect("UTF-8")
+    }
+
+    fn read(&self) -> KeyState {
+        let text = self.helper("read", &[]);
+        let mut parts = text.splitn(3, '\n');
+        let names = parts.next().unwrap_or_default().to_string();
+        let path = match (parts.next(), parts.next()) {
+            (Some(kind), Some(raw)) => Some((kind.to_string(), raw.to_string())),
+            _ => None,
+        };
+        KeyState { names, path }
+    }
+
+    fn env(&self, no_path: &'static str) -> [(&'static str, &str); 2] {
+        [
+            ("SHELLWISE_NO_PATH", no_path),
+            ("SHELLWISE_PATH_REGKEY", self.subkey.as_str()),
+        ]
+    }
+}
+
+impl Drop for ScratchKey {
+    fn drop(&mut self) {
+        let _ = self.command("delete", &[]).output();
+        let _ = std::fs::remove_dir_all(&self.work);
+    }
+}
+
+/// The interpreters a PATH test runs under: none, with a SKIP line, off Windows.
+fn path_interps(test: &str) -> Vec<Interp> {
+    if !cfg!(windows) {
+        shown(&format!(
+            "SKIP {test}: the user PATH is a registry value on Windows only"
+        ));
+        return Vec::new();
+    }
+    let text = std::fs::read_to_string(script()).expect("read install.ps1");
+    assert!(
+        text.contains("SHELLWISE_PATH_REGKEY"),
+        "the script reads the scratch key setting; without it a run would change the real PATH"
+    );
+    interps(test)
+}
+
+fn same_folder(entry: &str, dir: &Path) -> bool {
+    match (std::fs::canonicalize(entry), std::fs::canonicalize(dir)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+#[test]
+fn the_folder_is_added_to_the_path_once() {
+    for i in path_interps("the_folder_is_added_to_the_path_once") {
+        let f = Fixture::new("path");
+        publish_latest(&f);
+        let key = ScratchKey::new(i, Some(SEED));
+        let out = f.run(i, &key.env("0"));
+        assert_success(&out);
+        let first = key.read();
+        let (kind, raw) = first.path.clone().expect("a Path value");
+        assert_eq!(kind, "ExpandString", "{}\n{}", i.name, out.context());
+        let entries: Vec<&str> = raw.split(';').collect();
+        assert_eq!(
+            entries[..entries.len().min(2)],
+            [r"%USERPROFILE%\bin", r"C:\tools"],
+            "{}: the seed stays unexpanded, first: {raw:?}",
+            i.name
+        );
+        assert_eq!(entries.len(), 3, "{}: {raw:?}", i.name);
+        assert!(
+            same_folder(entries[2], &f.dir),
+            "{}: {raw:?} ends with {:?}",
+            i.name,
+            f.dir
+        );
+        let out = f.run(i, &key.env("0"));
+        assert_success(&out);
+        assert_eq!(key.read(), first, "{}: a second run adds nothing", i.name);
+    }
+}
+
+#[test]
+fn an_empty_or_missing_path_gets_just_the_folder() {
+    for i in path_interps("an_empty_or_missing_path_gets_just_the_folder") {
+        for seed in [Some(""), None] {
+            let f = Fixture::new("pathempty");
+            publish_latest(&f);
+            let key = ScratchKey::new(i, seed);
+            let out = f.run(i, &key.env("0"));
+            assert_success(&out);
+            let state = key.read();
+            assert_eq!(state.names, "Path", "{} {seed:?}", i.name);
+            let (kind, raw) = state.path.expect("a Path value");
+            assert_eq!(kind, "ExpandString", "{} {seed:?}", i.name);
+            assert!(
+                same_folder(&raw, &f.dir),
+                "{} {seed:?}: {raw:?} is {:?}",
+                i.name,
+                f.dir
+            );
+        }
+    }
+}
+
+#[test]
+fn no_path_leaves_the_key_untouched() {
+    for i in path_interps("no_path_leaves_the_key_untouched") {
+        let f = Fixture::new("nopath");
+        publish_latest(&f);
+        let key = ScratchKey::new(i, Some(SEED));
+        let before = key.read();
+        assert_eq!(
+            before.path,
+            Some(("ExpandString".to_string(), SEED.to_string()))
+        );
+        let out = f.run(i, &key.env("1"));
+        assert_success(&out);
+        assert_eq!(key.read(), before, "{}", i.name);
+    }
+}
+
+#[cfg(windows)]
+fn session_path_row(i: Interp) {
+    let f = Fixture::new("sessionpath");
+    publish_latest(&f);
+    let key = ScratchKey::new(i, Some(SEED));
+    let after = "'inpath:' + @(([string]$env:Path) -split ';' | Where-Object { $_ -eq $env:SHELLWISE_INSTALL_DIR }).Count";
+    let out = run_through_iex(&f, i, &key.env("0"), after);
+    assert_eq!(out.code, 0, "{}: {}", i.name, out.context());
+    assert!(
+        out.stdout.contains("inpath:1"),
+        "{}: the folder is on the session's PATH once\n{}",
+        i.name,
+        out.context()
+    );
+}
+
+#[cfg(not(windows))]
+fn session_path_row(_: Interp) {}
+
+/// Under `irm | iex` the session that ran the script finds the binary without a new terminal.
+#[test]
+fn the_folder_reaches_the_session_path() {
+    for i in path_interps("the_folder_reaches_the_session_path") {
+        session_path_row(i);
     }
 }

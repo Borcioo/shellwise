@@ -11,6 +11,8 @@
 #   SHELLWISE_BASE_URL     the release URL, or a local folder with the same layout
 #   SHELLWISE_MODE         install (default), or check: print the latest version and install nothing
 #   SHELLWISE_NO_PATH      1 leaves the user PATH alone
+#   SHELLWISE_PATH_REGKEY  tests only: the HKCU subkey whose Path value is changed instead of
+#                          Environment; no change is broadcast then
 #   SHELLWISE_TARGET       overrides the detected target (tests and troubleshooting)
 #
 # The whole body runs in a script block so StrictMode and the error preference stay out of the
@@ -215,7 +217,13 @@
         Write-Host "Installed shellwise $version at $dest"
 
         if ($env:SHELLWISE_NO_PATH -ne '1') {
-            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+            $subkey = $env:SHELLWISE_PATH_REGKEY
+            $broadcast = -not $subkey
+            if (-not $subkey) {
+                $subkey = 'Environment'
+            }
+            $added = $false
+            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($subkey)
             try {
                 $userPath = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
                 $present = $false
@@ -229,10 +237,34 @@
                         $userPath += ';'
                     }
                     $key.SetValue('Path', "$userPath$dir", [Microsoft.Win32.RegistryValueKind]::ExpandString)
-                    Write-Host "Added $dir to your user PATH; open a new terminal to use it there."
+                    $added = $true
                 }
             } finally {
                 $key.Close()
+            }
+            if ($added -and $broadcast) {
+                # Programs started from Explorer read the new PATH only after Windows broadcasts
+                # the change. A user-scope SetEnvironmentVariable broadcasts it; it writes only
+                # its own throwaway value, so the Path value keeps its kind and its %VAR% entries.
+                try {
+                    [Environment]::SetEnvironmentVariable('SHELLWISE_ENV_REFRESH', '1', 'User')
+                } finally {
+                    # [NullString]: PowerShell 7 passes $null as '', which leaves the value behind.
+                    [Environment]::SetEnvironmentVariable('SHELLWISE_ENV_REFRESH', [NullString]::Value, 'User')
+                }
+            }
+            if ($added) {
+                Write-Host "Added $dir to your user PATH; open a new terminal to use it there."
+            }
+            $inSession = $false
+            $sessionPath = [string]$env:Path
+            foreach ($entry in ($sessionPath -split ';')) {
+                if ($entry -and [Environment]::ExpandEnvironmentVariables($entry).TrimEnd('\') -ieq $dir) {
+                    $inSession = $true
+                }
+            }
+            if (-not $inSession) {
+                $env:Path = ($sessionPath.TrimEnd(';') + ";$dir").TrimStart(';')
             }
         }
         Write-Host 'Next: shellwise agent-setup'
