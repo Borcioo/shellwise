@@ -13,7 +13,8 @@ landing page, published through the same GitHub Pages route.
   reference, exit codes and JSON output, limits and the changelog.
 - The rule reference, the changelog and the agent setup text are rendered from the repository's
   own files at build time, so the site cannot drift from them.
-- The landing page keeps its URL, its content and its look, and shares a header with the docs.
+- The landing page keeps its URL, its content and its look. Its header carries the same name,
+  colours and type as the docs header (Starlight's own, which adds search); each links to the other.
 - A pull request that breaks the site build fails CI.
 
 ## Non-goals
@@ -48,7 +49,7 @@ matter more than a bespoke layout.
 | Node and package manager | Node 24 (`site/.nvmrc`), npm, `package-lock.json` committed |
 | Where it lives | `site/` becomes the Astro project. The landing page is rewritten as `site/src/pages/index.astro` (the owner's choice): the same sections, text and styles, split into a layout, a shared header and one stylesheet with the colour and type tokens the docs theme also reads |
 | URLs | Landing: `https://borcioo.github.io/shellwise/` (unchanged). Docs: `/shellwise/docs/…` (`site: https://borcioo.github.io`, `base: /shellwise`) |
-| Landing page changes | A header with the name and links to Docs and GitHub; a "Read the docs" button in the hero; the install section shows the one-line installers and links to the install page; the footer's Rules and Changelog links point at the docs; fonts come from the self-hosted packages instead of Google Fonts. Everything else is carried over as is |
+| Landing page changes | A header with the name and links to Docs and GitHub; the hero's buttons are Install, Read the docs and View on GitHub (no release version is written on the page, so a release edits nothing here); the install section shows the one-line installers, the Claude Code plugin commands and `agent-setup`, and links to the install page (the manual hook entry moves to the docs, with its timeout setting); the footer's Rules and Changelog links point at the docs; fonts come from the self-hosted packages instead of Google Fonts. Everything else is carried over as is |
 | Rule pages | A `rules` content collection with Astro's `glob()` loader on `../docs/rules/*.md`; one route `docs/rules/[id]` renders each in the Starlight layout, the title from the file name (ids keep their case: `rg-follow-L`). The sidebar group and the rule index page are built from the same directory listing |
 | Changelog, agent setup text | Rendered the same way from `CHANGELOG.md` and `docs/agent-setup.md` |
 | Hand-written pages | Markdown under `site/src/content/docs/docs/`, text reused from the README and the plugin README |

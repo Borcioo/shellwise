@@ -41,15 +41,40 @@ export default defineConfig({
 			sidebar: [
 				{
 					label: 'Start',
-					items: [{ label: 'Overview', slug: 'docs' }],
+					items: [
+						{ label: 'Overview', slug: 'docs' },
+						{ label: 'Install', slug: 'docs/install' },
+						{ label: 'Quick start', slug: 'docs/quick-start' },
+					],
 				},
 				{
 					label: 'Agents',
-					items: [{ label: 'Agent setup text', link: '/docs/agents/setup-text/' }],
+					items: [
+						{ label: 'Claude Code', slug: 'docs/agents/claude-code' },
+						{ label: 'Codex CLI', slug: 'docs/agents/codex' },
+						{ label: 'Other agents', slug: 'docs/agents/other' },
+						{ label: 'Agent setup text', link: '/docs/agents/setup-text/' },
+					],
+				},
+				{
+					label: 'Commands',
+					items: [
+						{ label: 'check', slug: 'docs/commands/check' },
+						{ label: 'lint', slug: 'docs/commands/lint' },
+						{ label: 'explain', slug: 'docs/commands/explain' },
+						{ label: 'hook', slug: 'docs/commands/hook' },
+						{ label: 'update', slug: 'docs/commands/update' },
+						{ label: 'agent-setup', slug: 'docs/commands/agent-setup' },
+					],
 				},
 				{
 					label: 'Reference',
-					items: [{ label: 'Changelog', link: '/docs/changelog/' }],
+					items: [
+						{ label: 'Configuration', slug: 'docs/configuration' },
+						{ label: 'Exit codes and JSON', slug: 'docs/reference/exit-codes-and-json' },
+						{ label: 'Limits and FAQ', slug: 'docs/limits' },
+						{ label: 'Changelog', link: '/docs/changelog/' },
+					],
 				},
 				{
 					label: 'Rules',

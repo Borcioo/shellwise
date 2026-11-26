@@ -20,6 +20,14 @@ function isFile(file) {
 	return existsSync(file) && statSync(file).isFile();
 }
 
+/** Every file in `dir` as a forward-slash path relative to it, spelled as on disk. */
+function allFiles(dir, prefix = '') {
+	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		const rel = prefix + entry.name;
+		return entry.isDirectory() ? allFiles(path.join(dir, entry.name), rel + '/') : [rel];
+	});
+}
+
 const landing = path.join(dist, 'index.html');
 if (!isFile(landing)) {
 	fail('dist/index.html is missing (run `npm run build` first)');
@@ -51,6 +59,8 @@ if (failures.length === 0) {
 		if (!isFile(path.join(dist, page))) fail(`dist/${page} is missing`);
 	}
 
+	// Targets are matched against the exact spelling on disk: the Pages host is case-sensitive.
+	const onDisk = new Set(allFiles(dist));
 	const files = htmlFiles(dist);
 	pages = files.length;
 	for (const file of files) {
@@ -61,15 +71,19 @@ if (failures.length === 0) {
 			if (/docs\/(design|spikes)\.md|docs\/superpowers/.test(url)) {
 				fail(`${name}: link to a maintainer document: ${url}`);
 			}
-			if (!url.startsWith('/') || url.startsWith('//')) continue;
+			if (url === '' || url.startsWith('#') || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) continue;
+			if (!url.startsWith('/')) {
+				fail(`${name}: relative link (write it from ${BASE}): ${url}`);
+				continue;
+			}
 			links += 1;
 			if (!url.startsWith(BASE)) {
 				fail(`${name}: internal link without the ${BASE} base: ${url}`);
 				continue;
 			}
 			const target = decodeURIComponent(url.slice(BASE.length).split(/[?#]/)[0]);
-			const onDisk = path.join(dist, target);
-			if (!isFile(onDisk) && !isFile(path.join(onDisk, 'index.html'))) {
+			const asPage = target === '' || target.endsWith('/') ? `${target}index.html` : `${target}/index.html`;
+			if (!onDisk.has(target) && !onDisk.has(asPage)) {
 				fail(`${name}: link points at nothing: ${url}`);
 			}
 		}
