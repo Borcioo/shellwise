@@ -83,7 +83,7 @@ const KEPT: [&str; 5] = ["home", "userprofile", "oldpwd", "cdpath", "ifs"];
 /// Mark what `script` assigns in `env` as `mark_assigned` does, except the names the command
 /// gives literal values: a name valid at every use with one value is set in `env`; the others
 /// that hold somewhere are returned (and stay dynamic in `env`). `aliases`:
-/// `resolve::script_aliases(script, true)`.
+/// `resolve::script_aliases` of `script` in `shell`'s dialect.
 pub fn resolve_assigned(
     env: &mut EnvView,
     script: &Script,

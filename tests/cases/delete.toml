@@ -6429,3 +6429,66 @@ shell = "pwsh"
 command = 'Set-Alias sa Set-Alias; GEN_DEFINER_CALLS_40; sa zz Remove-Item; zz C:\Windows -Recurse -Force'
 level = "warn"
 rules = ["dynamic-target"]
+
+# A PowerShell alias cmdlet in Bash is a program there: it defines no alias and adds no reading
+# of a call, so 32 or more values of one Bash alias (`ALIAS_RUNS`) leave a variable's literal
+# value in sight. Each Bash row reads as its twin with an unknown program (`Foo-Bar x`) in the
+# cmdlet's place; the relative folder also as written in place of the variable (the `zz` call
+# leaves the location unknown). The PowerShell row at the same count keeps reading the cmdlet as
+# any alias.
+
+[[row]]
+id = "bash-alias-32-values-and-a-pwsh-alias-cmdlet-root-through-a-variable"
+os = "any"
+shell = "bash"
+command = "alias zz='echo 1'; alias zz='echo 2'; alias zz='echo 3'; alias zz='echo 4'; alias zz='echo 5'; alias zz='echo 6'; alias zz='echo 7'; alias zz='echo 8'; alias zz='echo 9'; alias zz='echo 10'; alias zz='echo 11'; alias zz='echo 12'; alias zz='echo 13'; alias zz='echo 14'; alias zz='echo 15'; alias zz='echo 16'; alias zz='echo 17'; alias zz='echo 18'; alias zz='echo 19'; alias zz='echo 20'; alias zz='echo 21'; alias zz='echo 22'; alias zz='echo 23'; alias zz='echo 24'; alias zz='echo 25'; alias zz='echo 26'; alias zz='echo 27'; alias zz='echo 28'; alias zz='echo 29'; alias zz='echo 30'; alias zz='echo 31'; alias zz='echo 32'; Import-Alias x; d=/; zz; rm -rf \"$d\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "bash-alias-40-values-and-a-pwsh-alias-cmdlet-root-through-a-variable"
+os = "any"
+shell = "bash"
+command = "alias zz='echo 1'; alias zz='echo 2'; alias zz='echo 3'; alias zz='echo 4'; alias zz='echo 5'; alias zz='echo 6'; alias zz='echo 7'; alias zz='echo 8'; alias zz='echo 9'; alias zz='echo 10'; alias zz='echo 11'; alias zz='echo 12'; alias zz='echo 13'; alias zz='echo 14'; alias zz='echo 15'; alias zz='echo 16'; alias zz='echo 17'; alias zz='echo 18'; alias zz='echo 19'; alias zz='echo 20'; alias zz='echo 21'; alias zz='echo 22'; alias zz='echo 23'; alias zz='echo 24'; alias zz='echo 25'; alias zz='echo 26'; alias zz='echo 27'; alias zz='echo 28'; alias zz='echo 29'; alias zz='echo 30'; alias zz='echo 31'; alias zz='echo 32'; alias zz='echo 33'; alias zz='echo 34'; alias zz='echo 35'; alias zz='echo 36'; alias zz='echo 37'; alias zz='echo 38'; alias zz='echo 39'; alias zz='echo 40'; Import-Alias x; d=/; zz; rm -rf \"$d\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "gb-alias-32-values-and-a-pwsh-alias-cmdlet-root-through-a-variable"
+os = "windows"
+shell = "gitbash"
+command = "alias zz='echo 1'; alias zz='echo 2'; alias zz='echo 3'; alias zz='echo 4'; alias zz='echo 5'; alias zz='echo 6'; alias zz='echo 7'; alias zz='echo 8'; alias zz='echo 9'; alias zz='echo 10'; alias zz='echo 11'; alias zz='echo 12'; alias zz='echo 13'; alias zz='echo 14'; alias zz='echo 15'; alias zz='echo 16'; alias zz='echo 17'; alias zz='echo 18'; alias zz='echo 19'; alias zz='echo 20'; alias zz='echo 21'; alias zz='echo 22'; alias zz='echo 23'; alias zz='echo 24'; alias zz='echo 25'; alias zz='echo 26'; alias zz='echo 27'; alias zz='echo 28'; alias zz='echo 29'; alias zz='echo 30'; alias zz='echo 31'; alias zz='echo 32'; Import-Alias x; d=/; zz; rm -rf \"$d\""
+level = "critical"
+rules = ["delete-critical", "bash-ps-cmdlet"]
+
+[[row]]
+id = "gb-alias-40-values-and-a-pwsh-alias-cmdlet-root-through-a-variable"
+os = "windows"
+shell = "gitbash"
+command = "alias zz='echo 1'; alias zz='echo 2'; alias zz='echo 3'; alias zz='echo 4'; alias zz='echo 5'; alias zz='echo 6'; alias zz='echo 7'; alias zz='echo 8'; alias zz='echo 9'; alias zz='echo 10'; alias zz='echo 11'; alias zz='echo 12'; alias zz='echo 13'; alias zz='echo 14'; alias zz='echo 15'; alias zz='echo 16'; alias zz='echo 17'; alias zz='echo 18'; alias zz='echo 19'; alias zz='echo 20'; alias zz='echo 21'; alias zz='echo 22'; alias zz='echo 23'; alias zz='echo 24'; alias zz='echo 25'; alias zz='echo 26'; alias zz='echo 27'; alias zz='echo 28'; alias zz='echo 29'; alias zz='echo 30'; alias zz='echo 31'; alias zz='echo 32'; alias zz='echo 33'; alias zz='echo 34'; alias zz='echo 35'; alias zz='echo 36'; alias zz='echo 37'; alias zz='echo 38'; alias zz='echo 39'; alias zz='echo 40'; Import-Alias x; d=/; zz; rm -rf \"$d\""
+level = "critical"
+rules = ["delete-critical", "bash-ps-cmdlet"]
+
+[[row]]
+id = "bash-alias-40-values-and-a-pwsh-alias-cmdlet-relative-through-a-variable"
+os = "any"
+shell = "bash"
+command = "alias zz='echo 1'; alias zz='echo 2'; alias zz='echo 3'; alias zz='echo 4'; alias zz='echo 5'; alias zz='echo 6'; alias zz='echo 7'; alias zz='echo 8'; alias zz='echo 9'; alias zz='echo 10'; alias zz='echo 11'; alias zz='echo 12'; alias zz='echo 13'; alias zz='echo 14'; alias zz='echo 15'; alias zz='echo 16'; alias zz='echo 17'; alias zz='echo 18'; alias zz='echo 19'; alias zz='echo 20'; alias zz='echo 21'; alias zz='echo 22'; alias zz='echo 23'; alias zz='echo 24'; alias zz='echo 25'; alias zz='echo 26'; alias zz='echo 27'; alias zz='echo 28'; alias zz='echo 29'; alias zz='echo 30'; alias zz='echo 31'; alias zz='echo 32'; alias zz='echo 33'; alias zz='echo 34'; alias zz='echo 35'; alias zz='echo 36'; alias zz='echo 37'; alias zz='echo 38'; alias zz='echo 39'; alias zz='echo 40'; Import-Alias x; d=build; zz; rm -rf \"$d\""
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "gb-alias-40-values-and-a-pwsh-alias-cmdlet-relative-through-a-variable"
+os = "windows"
+shell = "gitbash"
+command = "alias zz='echo 1'; alias zz='echo 2'; alias zz='echo 3'; alias zz='echo 4'; alias zz='echo 5'; alias zz='echo 6'; alias zz='echo 7'; alias zz='echo 8'; alias zz='echo 9'; alias zz='echo 10'; alias zz='echo 11'; alias zz='echo 12'; alias zz='echo 13'; alias zz='echo 14'; alias zz='echo 15'; alias zz='echo 16'; alias zz='echo 17'; alias zz='echo 18'; alias zz='echo 19'; alias zz='echo 20'; alias zz='echo 21'; alias zz='echo 22'; alias zz='echo 23'; alias zz='echo 24'; alias zz='echo 25'; alias zz='echo 26'; alias zz='echo 27'; alias zz='echo 28'; alias zz='echo 29'; alias zz='echo 30'; alias zz='echo 31'; alias zz='echo 32'; alias zz='echo 33'; alias zz='echo 34'; alias zz='echo 35'; alias zz='echo 36'; alias zz='echo 37'; alias zz='echo 38'; alias zz='echo 39'; alias zz='echo 40'; Import-Alias x; d=build; zz; rm -rf \"$d\""
+level = "break"
+rules = ["delete-unknown-location", "bash-ps-cmdlet"]
+
+[[row]]
+id = "ps-alias-32-values-and-import-alias-protected-through-a-variable-windows"
+os = "windows"
+shell = "pwsh"
+command = "Set-Alias zz Get-A001; Set-Alias zz Get-A002; Set-Alias zz Get-A003; Set-Alias zz Get-A004; Set-Alias zz Get-A005; Set-Alias zz Get-A006; Set-Alias zz Get-A007; Set-Alias zz Get-A008; Set-Alias zz Get-A009; Set-Alias zz Get-A010; Set-Alias zz Get-A011; Set-Alias zz Get-A012; Set-Alias zz Get-A013; Set-Alias zz Get-A014; Set-Alias zz Get-A015; Set-Alias zz Get-A016; Set-Alias zz Get-A017; Set-Alias zz Get-A018; Set-Alias zz Get-A019; Set-Alias zz Get-A020; Set-Alias zz Get-A021; Set-Alias zz Get-A022; Set-Alias zz Get-A023; Set-Alias zz Get-A024; Set-Alias zz Get-A025; Set-Alias zz Get-A026; Set-Alias zz Get-A027; Set-Alias zz Get-A028; Set-Alias zz Get-A029; Set-Alias zz Get-A030; Set-Alias zz Get-A031; Set-Alias zz Get-A032; Import-Alias x; $d = 'C:\\Windows'; zz; Remove-Item -Recurse -Force $d"
+level = "warn"
+rules = ["dynamic-target"]
