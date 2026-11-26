@@ -17,7 +17,7 @@ use super::{Ctx, Rule};
 use crate::fs::bounded;
 use crate::fs::resolve::{self, DeleteBy, Location, Target};
 use crate::fs::walk::{self, WalkResult};
-use crate::ir::{Word, WordPart};
+use crate::ir::{ChainOp, Elem, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::level::{Finding, Level, Span};
 use crate::programs::Program;
 use crate::scan;
@@ -61,6 +61,8 @@ pub(crate) struct GitFacts {
     /// make the switch an orphan one (the branch left holds every tracked file).
     pub branch_switches: Vec<String>,
     pub orphan_options: Vec<String>,
+    /// The environment variables that name another repository, work tree or index.
+    pub repo_env: Vec<String>,
     pub subcommands: Vec<GitSub>,
 }
 
@@ -164,9 +166,11 @@ impl Rule for GitRule {
         let mut scene = Scene::new(ctx);
         let env = scene.env.clone();
         let mut loc = scene.location();
-        // The folder of the last orphan checkout, while no other branch switch has followed it.
-        let mut orphan: Option<Vec<PathBuf>> = None;
-        walk_script(ctx.script, &mut loc, &env, &mut |node, loc| {
+        let script = ctx.script;
+        // The folder and top-level statement of the last orphan checkout, while no other branch
+        // switch has followed it.
+        let mut orphan: Option<(Vec<PathBuf>, usize)> = None;
+        walk_script(script, &mut loc, &env, &mut |node, loc| {
             let Node::Cmd { cmd, piped } = node else {
                 return;
             };
@@ -174,15 +178,69 @@ impl Rule for GitRule {
                 && let Some(facts) = discard_facts(prog)
             {
                 let here = loc.for_git(&call.run, &scene.env).dirs();
-                let after_orphan = here.is_some() && orphan == here;
+                let top = top_statement(script, cmd);
+                // PowerShell keys an environment variable as `env:NAME`.
+                let names_repo = facts.repo_env.iter().any(|n| {
+                    scene.env.is_assigned(&if is_pwsh(shell) {
+                        format!("env:{n}")
+                    } else {
+                        n.clone()
+                    })
+                });
+                let after_orphan = match (&orphan, &here, top) {
+                    (Some((dirs, i)), Some(h), Some(j)) => {
+                        dirs == h && !names_repo && runs_before(script, *i, j)
+                    }
+                    _ => false,
+                };
                 out.extend(judge(&mut scene, &call, facts, loc, after_orphan));
                 match branch_switch(facts, &call) {
-                    Some(true) => orphan = here,
+                    Some(true) => orphan = here.zip(top),
                     Some(false) => orphan = None,
                     None => {}
                 }
             }
         });
+    }
+}
+
+/// The index of the top-level statement that is `cmd` alone: a pipeline of that one command,
+/// not in a body, a subshell, a substitution or a pipe.
+fn top_statement(script: &Script, cmd: &SimpleCommand) -> Option<usize> {
+    script.stmts.iter().position(|st| match st {
+        Stmt::Pipeline(p) => matches!(p.elems.as_slice(), [Elem::Cmd(c)] if std::ptr::eq(c, cmd)),
+        _ => false,
+    })
+}
+
+/// Whether top-level statement `i` has run, and succeeded, whenever statement `j` runs: every
+/// join between them is `&&`, `;` or a newline, and across a `;` the statement `i` is not itself
+/// the right side of an `&&` or `||` that may skip it.
+fn runs_before(script: &Script, i: usize, j: usize) -> bool {
+    let join = |k: usize| {
+        script
+            .join(k)
+            .or_else(|| match script.stmts.get(k.checked_sub(1)?) {
+                Some(Stmt::Pipeline(p)) => p.chain,
+                _ => None,
+            })
+    };
+    if i >= j {
+        return false;
+    }
+    let mut seq = false;
+    for k in i + 1..=j {
+        match join(k) {
+            Some(ChainOp::And) => {}
+            Some(ChainOp::Seq) => seq = true,
+            _ => return false,
+        }
+    }
+    match join(i) {
+        None => i == 0,
+        Some(ChainOp::Seq) => true,
+        Some(ChainOp::And) => !seq,
+        _ => false,
     }
 }
 

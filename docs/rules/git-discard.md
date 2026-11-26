@@ -32,11 +32,15 @@ cannot read (`git rm -rf "$d"`). git takes no `-R`. An option word the guard can
 whole-folder pathspec (`git rm $OPTS .`) warns `git-unreadable`.
 
 Level `warn` for the recipe that starts an empty branch: a whole-folder `git rm -rf` after a
-`git checkout --orphan <branch>` or `git switch --orphan <branch>` earlier in the same command
-(`&&`, `;` or a new line), in the same folder, with no `cd` and no other branch switch between
+`git checkout --orphan <branch>` or `git switch --orphan <branch>` that is sure to have run
+before it: both are top-level statements of the same command, each a single command, joined by
+`&&`, `;` or a new line, in the same folder, with no `cd` and no other branch switch between
 them. The branch left still holds every tracked file; only uncommitted changes carried onto the
-new branch are lost. With no known folder, or with the orphan checkout after the `git rm`, it
-stays danger.
+new branch are lost. It stays danger with no known folder, with the orphan checkout after the
+`git rm`, joined by `||` or `&`, inside an `if`, a loop, a function, a subshell or a pipeline (or
+the `git rm` inside one), after an `a &&` that may skip it across a `;`, and when the command
+assigns `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` anywhere (a prefix, `export`,
+`$env:GIT_DIR = …`): the two calls may then name different repositories.
 
 `Fix: if this is intended, run the same command again with ` # shellwise: allow` at its end`
 (for `git clean`: look at `git clean -nd` first; for `git rm`: to untrack the files only, run

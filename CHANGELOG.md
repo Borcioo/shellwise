@@ -18,9 +18,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - `git-discard`: `git rm -rf .` (and `:/`, `*`, `./*`, a path that is the repo root, `-C <dir>`
   and `--force` alike) is danger, since it removes every tracked file in the folder and throws
   away their uncommitted changes; without `-f` it warns. `--cached` and `-n` are ok. After
-  `git checkout --orphan <branch>` in the same command it warns: the branch left keeps the files,
-  only uncommitted changes are lost. An option word the guard cannot read beside a whole-folder
-  `git rm` pathspec (`git rm $OPTS .`) warns `git-unreadable`.
+  `git checkout --orphan <branch>` that is sure to have run first (top-level, joined by `&&`, `;`
+  or a new line, in the same folder, with no `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE`
+  assigned) it warns: the branch left keeps the files, only uncommitted changes are lost. An
+  option word the guard cannot read beside a whole-folder `git rm` pathspec (`git rm $OPTS .`)
+  warns `git-unreadable`.
 
 ## [0.2.0] - 2026-11-26
 

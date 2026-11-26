@@ -1440,6 +1440,222 @@ level = "danger"
 rules = ["git-discard"]
 
 [[row]]
+id = "rm-orphan-with-C-in-the-same-folder"
+os = "windows"
+shell = "gitbash"
+command = "git -C build checkout --orphan fresh && git -C build rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-joined-by-or-is-danger"
+os = "any"
+shell = "bash"
+command = "git checkout --orphan fresh || true; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-joined-by-or-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh || true; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-inside-if-is-danger"
+os = "any"
+shell = "bash"
+command = "if true; then git checkout --orphan fresh; fi; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-inside-if-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "if true; then git checkout --orphan fresh; fi; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-inside-a-function-is-danger"
+os = "any"
+shell = "bash"
+command = "f() { git checkout --orphan fresh; }; f; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-inside-a-function-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "f() { git checkout --orphan fresh; }; f; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-a-subshell-is-danger"
+os = "any"
+shell = "bash"
+command = "( git checkout --orphan fresh ); git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-a-subshell-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "( git checkout --orphan fresh ); git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-the-background-is-danger"
+os = "any"
+shell = "bash"
+command = "git checkout --orphan fresh & git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-the-background-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh & git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-rm-inside-if-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh; if true; then git rm -rf .; fi"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-that-may-be-skipped-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "cd . && git checkout --orphan fresh; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-inside-if-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "if ($true) { git checkout --orphan fresh }; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-git-dir-prefix-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && GIT_DIR=../other/.git git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-work-tree-prefix-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && GIT_WORK_TREE=../other git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-index-file-prefix-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && GIT_INDEX_FILE=../i git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-with-a-git-dir-prefix-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "GIT_DIR=../other/.git git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-export-git-dir-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && export GIT_DIR=../other/.git && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-export-work-tree-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && export GIT_WORK_TREE=../other && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-export-index-file-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && export GIT_INDEX_FILE=../i && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-env-git-dir-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh; $env:GIT_DIR = '../other/.git'; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-env-work-tree-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh; $env:GIT_WORK_TREE = '../other'; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-env-index-file-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh; $env:GIT_INDEX_FILE = '../i'; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-rm-with-C-elsewhere-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && git -C build rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-rm-with-git-dir-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && git --git-dir=../other/.git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-rm-with-work-tree-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && git --work-tree=../other rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
 id = "nocwd-rm-orphan-recipe-is-danger"
 os = "any"
 shell = "pwsh"

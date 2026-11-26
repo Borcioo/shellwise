@@ -541,6 +541,9 @@ option_ends = ["--end-of-options"]
 # switch branches, and the option that makes the switch an orphan one.
 branch_switches = ["checkout", "switch"]
 orphan_options = ["--orphan"]
+# The environment variables that point git at another repository, work tree or index: a command
+# that assigns one may run the two calls against different repositories.
+repo_env = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]
 
 [[program.discard.subcommands]]
 words = "commit"
