@@ -1536,6 +1536,56 @@ level = "danger"
 rules = ["git-discard"]
 
 [[row]]
+id = "rm-orphan-then-a-negated-rm-is-danger"
+os = "any"
+shell = "bash"
+command = "git checkout --orphan fresh && ! git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-a-negated-rm-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && ! git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+# A `!` with only a comment after it negates nothing: bash runs the next line as written
+# (`! # note` then `false && echo x` prints nothing, status 1).
+[[row]]
+id = "rm-orphan-after-a-lone-bang-and-a-comment-line"
+os = "any"
+shell = "bash"
+command = "! # note\ngit checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-after-a-lone-bang-and-a-comment-line-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! # note\ngit checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-echoed-then-negated-is-danger"
+os = "any"
+shell = "bash"
+command = "echo 'git checkout --orphan fresh' && ! git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-echoed-then-negated-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "echo 'git checkout --orphan fresh' && ! git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
 id = "rm-orphan-with-a-bang-in-quotes-before-it"
 os = "windows"
 shell = "gitbash"

@@ -192,7 +192,7 @@ impl Rule for GitRule {
                         if dirs == h
                             && !names_repo
                             && next_after_and(script, *i, j)
-                            && !bang_before(ctx.input.command, script, *i, cmd.span.start) =>
+                            && !negated_at(script, j) =>
                     {
                         Some(written.clone())
                     }
@@ -204,7 +204,8 @@ impl Rule for GitRule {
                 };
                 out.extend(judge(&mut scene, &call, facts, loc, before));
                 match branch_switch(facts, &call) {
-                    Some(Some(sub)) => {
+                    // `! git checkout --orphan x` may fail and still let the next command run.
+                    Some(Some(sub)) if top.is_some_and(|t| !negated_at(script, t)) => {
                         let opt = facts.orphan_options.first().map_or("", String::as_str);
                         let written = format!("{} {sub} {opt}", call.name);
                         orphan = here.zip(top).map(|(d, t)| (d, t, written));
@@ -246,42 +247,10 @@ fn next_after_and(script: &Script, i: usize, j: usize) -> bool {
         }
 }
 
-/// Whether the text from the start of top-level statement `i` to `end` (the next call) holds a `!`
-/// outside quotes: `! git checkout --orphan x` may fail and still let the next command run, and
-/// the parsed form keeps no `!`, so any `!` there (after a line continuation, a wrapper or an
-/// assignment too) counts. The statement starts after the last command of the one before it; when
-/// that is no plain pipeline, the text is read from the start.
-fn bang_before(text: &str, script: &Script, i: usize, end: usize) -> bool {
-    let from = match i.checked_sub(1).map(|k| &script.stmts[k]) {
-        Some(Stmt::Pipeline(p)) => p
-            .elems
-            .iter()
-            .map(|e| match e {
-                Elem::Cmd(c) => Some(c.span.end),
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()
-            .and_then(|ends| ends.into_iter().max())
-            .unwrap_or(0),
-        _ => 0,
-    };
-    let mut quote = None;
-    text.get(from.min(end)..end)
-        .unwrap_or(text)
-        .chars()
-        .any(|c| match quote {
-            Some(q) => {
-                if c == q {
-                    quote = None;
-                }
-                false
-            }
-            None if c == '\'' || c == '"' => {
-                quote = Some(c);
-                false
-            }
-            None => c == '!',
-        })
+/// Whether top-level statement `i` is a negated pipeline (`! git …`), or no pipeline at all: a
+/// statement the guard cannot read as a plain pipeline counts as negated.
+fn negated_at(script: &Script, i: usize) -> bool {
+    !matches!(script.stmts.get(i), Some(Stmt::Pipeline(p)) if !p.negated)
 }
 
 /// Whether a git call switches branches: `Some(Some(sub))` for an orphan switch that names its

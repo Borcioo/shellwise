@@ -5425,6 +5425,14 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
+id = "wl-bash-jobs-negated-before-until-arith-polls"
+os = "any"
+shell = "bash"
+command = 'until ! (( $(jobs -rp | wc -l) < 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
 id = "wl-bash-jobs-negated-before-a-flipped-bracket-polls"
 os = "any"
 shell = "bash"
@@ -5725,6 +5733,14 @@ id = "wl-gitbash-jobs-negated-before-until-bracket-polls"
 os = "windows"
 shell = "gitbash"
 command = 'until ! [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-negated-before-until-arith-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until ! (( $(jobs -rp | wc -l) < 4 )); do sleep 1; done'
 level = "break"
 rules = ["wait-loop-unbounded"]
 

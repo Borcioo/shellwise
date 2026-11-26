@@ -948,9 +948,10 @@ impl Walk<'_, '_> {
         written: Option<&str>,
     ) -> bool {
         let stmts = &body.stmts[from..from + n];
-        // A throttle on the shell's own jobs bounds the loop only as its whole condition, read
-        // from the header as written: one test and nothing else.
-        let jobs = written.is_some_and(|w| jobs_throttle(w, until));
+        // A throttle on the shell's own jobs bounds the loop only as its whole condition: one
+        // pipeline with no `!`, whose header as written is one test and nothing else.
+        let jobs = matches!(stmts, [Stmt::Pipeline(p)] if !p.negated)
+            && written.is_some_and(|w| jobs_throttle(w, until));
         let fold = !matches!(self.shell, Shell::Bash(_));
         let terms: Vec<(Option<ChainOp>, String)> = if fold {
             pwsh_terms(&self.text_of(stmts), self.shell, self.os)
