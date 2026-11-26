@@ -149,6 +149,14 @@ fn a_line_nested_too_deep_before_an_unclosed_quote_gets_the_raw_scan() {
     assert_eq!(rules, ["parse-error", "parse-error-destructive"], "{v:?}");
     let m = parse_error_message(&v);
     assert!(m.contains("but may run the lines before it"), "{m}");
+    // Delete text fed into a shell behind a wrapper is read there too.
+    let fed = format!(
+        "sudo -u root printf 'rm -rf x' | bash\n{}\necho 'x",
+        nested(201)
+    );
+    let v = bash_verdict(&fed);
+    let rules: Vec<&str> = v.findings.iter().map(|f| f.rule).collect();
+    assert_eq!(rules, ["parse-error", "parse-error-destructive"], "{v:?}");
     let shallow = format!("rm -rf build\n{}\necho 'x", nested(3));
     let m = parse_error_message(&bash_verdict(&shallow)).to_string();
     assert!(m.contains("but runs the lines before it"), "{m}");

@@ -902,6 +902,8 @@ mod tests {
                 "ls; rm x",
                 "git status && rm -rf x",
                 "Remove-Item -Recurse x",
+                // delete text fed into a shell behind a wrapper
+                "sudo -u root printf 'rm -rf x' | bash",
             ],
         );
         assert!(wrong.is_empty(), "not danger: {wrong:?}");

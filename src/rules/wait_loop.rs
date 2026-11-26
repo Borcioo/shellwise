@@ -10,7 +10,9 @@
 //!
 //! A bound is visible when the loop's condition, or a test guarding a `break`/`exit`/`return` in
 //! its body, compares a clock or a counter (a variable whose new value reads its old one); or when
-//! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`). A loop with no wait whose condition
+//! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`): in what the
+//! wrapper runs, not in the words the calling shell expands before it starts (`timeout 60 echo
+//! "$(…)"`). A loop with no wait whose condition
 //! can fail (`while read line`) is no wait loop. A loop whose body runs a command the guard cannot
 //! read (a dynamic name, `eval`) is not judged: that command may end it. PowerShell keeps no
 //! `break` in the IR, so its guards are the `if` statements whose text holds an exit word.
@@ -308,33 +310,34 @@ impl Walk<'_, '_> {
         for elem in &p.elems {
             match elem {
                 Elem::Cmd(c) => self.command(c, bounded),
-                Elem::Method(m) => m.args.iter().for_each(|w| self.word(w, bounded)),
-                Elem::Expr(w) => self.word(w, bounded),
+                Elem::Method(m) => m.args.iter().for_each(|w| self.word(w, bounded, bounded)),
+                Elem::Expr(w) => self.word(w, bounded, bounded),
             }
         }
     }
 
-    fn word(&mut self, w: &Word, bounded: bool) {
+    /// `expanded`: the bound on a substitution, which the shell runs while it expands the word;
+    /// `passed`: the bound on a script block, which the word passes to the command that runs it.
+    fn word(&mut self, w: &Word, expanded: bool, passed: bool) {
         for part in &w.parts {
-            if let WordPart::Subst(s) | WordPart::Block(s) = part {
-                self.script(s, bounded);
+            match part {
+                WordPart::Subst(s) => self.script(s, expanded),
+                WordPart::Block(s) => self.script(s, passed),
+                _ => {}
             }
         }
     }
 
     fn command(&mut self, c: &SimpleCommand, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
-        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs,
-        // only with a duration that sets a limit: `timeout 0 bash -c 'tail -f x'` and
-        // `timeout 0 bash -c 'while true; do sleep 1; done'` run without one.
-        let bounded = bounded
-            || (programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS))
-                && programs::wrapper_chain(c, shell, os)
-                    .first()
-                    .is_none_or(limits));
+        // A wrapper bounds what it runs: the wrapped command and the body it executes (a child
+        // shell's `-c` body, a script block). The calling shell expands the command's words
+        // first, its wrappers' options included, so a substitution in its name, arguments,
+        // redirects or assignments takes the bound of the command's context (`bounded`) only.
+        let runs = bounded || wrapper_bound(c, shell, os);
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
         // A script block first: the table is read only for a command that passes one.
-        let bounded = bounded
+        let runs = runs
             || (self.mode == Mode::Follow
                 && c.args
                     .iter()
@@ -342,21 +345,21 @@ impl Walk<'_, '_> {
                 && named_row(c, shell, os).is_some_and(|p| flag(p, FOLLOW_JOB))
                 && self.job_bound());
         for w in std::iter::once(&c.name).chain(&c.args) {
-            self.word(w, bounded);
+            self.word(w, bounded, runs);
         }
         for r in &c.redirects {
             match r {
-                Redirect::File { target, .. } => self.word(target, bounded),
-                Redirect::Heredoc { body, .. } => self.word(body, bounded),
+                Redirect::File { target, .. } => self.word(target, bounded, runs),
+                Redirect::Heredoc { body, .. } => self.word(body, bounded, runs),
             }
         }
         for (_, w) in &c.assigns {
-            self.word(w, bounded);
+            self.word(w, bounded, runs);
         }
         if self.depth < MAX_DEPTH {
             let inner = programs::strip_wrappers(c, shell, os);
             if let Some(body) = child_body(&inner, shell, os) {
-                self.child(&body, c.span, bounded);
+                self.child(&body, c.span, runs);
             }
         }
     }
@@ -410,9 +413,7 @@ impl Walk<'_, '_> {
             let Some(row) = follows(c, shell, os) else {
                 continue;
             };
-            // `timeout 60 tail -f log`, `nohup timeout 60 tail -f log`: a wrapper of this very
-            // command, at any place in its chain, bounds it.
-            if programs::wrapper_chain(c, shell, os).iter().any(limits) {
+            if wrapper_bound(c, shell, os) {
                 continue;
             }
             let span = self.outer.unwrap_or(c.span);
@@ -1193,6 +1194,15 @@ fn no_limit(w: &programs::Wrapped) -> Option<&Word> {
 /// The wrapper bounds the wait: a `bounds_wait` row with a duration that sets a limit.
 fn limits(w: &programs::Wrapped) -> bool {
     flag(w.row, BOUNDS) && no_limit(w).is_none()
+}
+
+/// A wrapper of `c`, at any place in its chain, bounds what `c` runs, a follow and a wait loop
+/// alike: `timeout 60 tail -f log`, `nohup timeout 60 tail -f log`,
+/// `sudo timeout 60 bash -c '<loop>'`, `timeout 0 timeout 600 bash -c '<loop>'`. A chain whose
+/// every `timeout` sets no limit (`timeout 0 bash -c '<loop>'`) bounds nothing. It bounds no
+/// substitution in the words of `c` (`Walk::command`).
+fn wrapper_bound(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    programs::wrapper_chain(c, shell, os).iter().any(limits)
 }
 
 fn flag(p: &Program, key: &str) -> bool {
