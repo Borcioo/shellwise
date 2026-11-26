@@ -727,9 +727,17 @@ pub(crate) struct How {
 
 impl<'a> Scene<'a> {
     pub fn new(ctx: &'a Ctx<'a>) -> Scene<'a> {
-        let mut env = ctx.input.env.clone();
-        let input = ctx.input;
-        let multi = resolve_assigned(&mut env, ctx.script, input.command, input.shell, input.os);
+        let (env, multi) = ctx
+            .memo
+            .assigned
+            .get_or_init(|| {
+                let mut env = ctx.input.env.clone();
+                let input = ctx.input;
+                let multi =
+                    resolve_assigned(&mut env, ctx.script, input.command, input.shell, input.os);
+                (env, multi)
+            })
+            .clone();
         Scene {
             env,
             multi,
@@ -811,9 +819,17 @@ impl<'a> Scene<'a> {
 
     pub fn location(&self) -> Location {
         let input = self.ctx.input;
-        let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
-        loc.read_script(self.ctx.script);
-        loc.read_text(input.command);
+        let mut loc = self
+            .ctx
+            .memo
+            .location
+            .get_or_init(|| {
+                let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
+                loc.read_script(self.ctx.script);
+                loc.read_text(input.command);
+                loc
+            })
+            .clone();
         loc.use_disk(self.ctx.fs, self.ctx.deadline);
         loc
     }
@@ -2091,6 +2107,21 @@ mod tests {
         fs: &SharedFs,
         ms: u64,
     ) -> Vec<(&'static str, Level)> {
+        levels_with(shell, command, vars, cwd, protected, fs, ms, true)
+    }
+
+    /// `levels_in`, the git rule on the delete rule's `Ctx` when `shared`, else on a new one.
+    #[allow(clippy::too_many_arguments)]
+    fn levels_with(
+        shell: Shell,
+        command: &str,
+        vars: &[(&str, &str)],
+        cwd: Option<&str>,
+        protected: &[&str],
+        fs: &SharedFs,
+        ms: u64,
+        shared: bool,
+    ) -> Vec<(&'static str, Level)> {
         let os = Os::Windows;
         let script = match shell {
             Shell::Bash(profile) => crate::parse::bash::parse(command, profile).unwrap(),
@@ -2121,10 +2152,15 @@ mod tests {
             cfg: &cfg,
             fs,
             deadline: &deadline,
+            memo: Default::default(),
         };
         let mut out = Vec::new();
         DeleteRule.check(&ctx, &mut out);
-        crate::rules::git::GitRule.check(&ctx, &mut out);
+        let fresh = Ctx {
+            memo: Default::default(),
+            ..ctx
+        };
+        crate::rules::git::GitRule.check(if shared { &ctx } else { &fresh }, &mut out);
         out.iter().map(|f| (f.rule, f.level)).collect()
     }
 
@@ -2386,5 +2422,105 @@ mod tests {
         let took = start.elapsed();
         assert!(took < Duration::from_secs(3), "the check took {took:?}");
         assert_eq!(got, [DELETE_OUTSIDE_PROJECT]);
+    }
+
+    /// The delete and git rules on one `Ctx` read what each reads on its own past the deadline:
+    /// each keeps its time-out reading (the delete's danger, the worktree removal's warn).
+    #[test]
+    fn rules_sharing_a_ctx_each_keep_their_time_out_reading() {
+        let fs: SharedFs = ShortNames::shared(false);
+        let command = "Remove-Item -Recurse -Force keep; git worktree remove keep";
+        let env = vars(LONG_TEMP, HOME);
+        let run = |shared| {
+            levels_with(
+                Shell::Pwsh,
+                command,
+                &env,
+                Some(LONG_REPO),
+                &[],
+                &fs,
+                0,
+                shared,
+            )
+        };
+        let alone = run(false);
+        assert_eq!(
+            alone,
+            [(WALK_TIMEOUT, Level::Danger), (WALK_TIMEOUT, Level::Warn)]
+        );
+        assert_eq!(run(true), alone);
+    }
+
+    /// A tree where every folder exists and none holds a `.git`: the project is the cwd.
+    struct Folders;
+
+    impl Fs for Folders {
+        fn lstat(&self, p: &Path) -> io::Result<Meta> {
+            if p.file_name().is_some_and(|n| n == ".git") {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+            Ok(Meta {
+                is_dir: true,
+                is_file: false,
+                is_symlink: false,
+            })
+        }
+        fn read_dir(&self, _p: &Path) -> io::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        fn link_target(&self, _p: &Path) -> io::Result<Option<PathBuf>> {
+            Ok(None)
+        }
+    }
+
+    /// Analyses one after another on one thread each read their own command's assignments and
+    /// their own cwd.
+    #[test]
+    fn each_analysis_reads_its_own_assignments_and_cwd() {
+        let fs: SharedFs = Arc::new(Folders);
+        let rows: [(&str, &str, &[&str]); 3] = [
+            (
+                r"$d = 'C:\Windows'; Remove-Item -Recurse -Force $d",
+                LONG_REPO,
+                &[DELETE_CRITICAL],
+            ),
+            (
+                "$d = 'build'; Remove-Item -Recurse -Force $d",
+                LONG_REPO,
+                &[],
+            ),
+            (
+                r"Remove-Item -Recurse -Force Windows",
+                r"C:\",
+                &[DELETE_CRITICAL],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (command, cwd, want) in rows {
+            let got = rules_of(command, LONG_TEMP, Some(cwd), &fs, 5000);
+            if got != want {
+                wrong.push(format!("{command} in {cwd}: {got:?} (want {want:?})"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The git rule starts from where the command starts, not from where the delete rule's walk
+    /// of the same command ended.
+    #[test]
+    fn the_git_rule_starts_where_the_command_starts() {
+        let fs: SharedFs = Arc::new(Folders);
+        // From `C:\Home`, `u` is the home folder; `Stop` makes the location change certain.
+        let command = "$ErrorActionPreference = 'Stop'; Remove-Item -Recurse -Force build; Set-Location u; git worktree remove .";
+        let got = levels_in(
+            Shell::Pwsh,
+            command,
+            &vars(LONG_TEMP, HOME),
+            Some(r"C:\Home"),
+            &[],
+            &fs,
+            5000,
+        );
+        assert_eq!(got, [(DELETE_CRITICAL, Level::Critical)]);
     }
 }

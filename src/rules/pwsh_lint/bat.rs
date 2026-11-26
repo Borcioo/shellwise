@@ -442,6 +442,7 @@ mod tests {
             cfg: &cfg,
             fs: &fs,
             deadline: &deadline,
+            memo: Default::default(),
         };
         let mut out = Vec::new();
         BatMetachar.check(&ctx, &mut out);

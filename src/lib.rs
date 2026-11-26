@@ -215,6 +215,7 @@ fn length_stage(
             cfg,
             fs: &fs,
             deadline,
+            memo: Default::default(),
         };
         let mut out = Vec::new();
         for rule in rules::length_rules() {
@@ -404,6 +405,7 @@ fn run_rules(
         cfg,
         fs: &fs,
         deadline,
+        memo: Default::default(),
     };
     let mut findings = Vec::new();
     for rule in rules::all() {
