@@ -49,17 +49,18 @@ pub struct Memo {
     /// The location before the first statement, the script and text read, no disk in use
     /// (`delete::Scene::location`).
     pub(crate) location: OnceCell<Location>,
-    /// `script_aliases` of the script read as pwsh (`Ctx::pwsh_aliases`).
+    /// `script_aliases` of the script in its shell's dialect (`Ctx::aliases`).
     pub(crate) aliases: OnceCell<Vec<Alias>>,
 }
 
 impl Ctx<'_> {
-    /// The aliases this Ctx's script defines, read as pwsh (`resolve::script_aliases(script,
-    /// true)`), built on the first call.
-    pub(crate) fn pwsh_aliases(&self) -> &[Alias] {
+    /// The aliases this Ctx's script defines, read in the dialect of `input.shell`
+    /// (`resolve::script_aliases`), built on the first call. A `Memo` belongs to one `Ctx`, so
+    /// the table is keyed by its script and shell.
+    pub(crate) fn aliases(&self) -> &[Alias] {
         self.memo
             .aliases
-            .get_or_init(|| resolve::script_aliases(self.script, true))
+            .get_or_init(|| resolve::script_aliases(self.script, delete::is_pwsh(self.input.shell)))
     }
 }
 

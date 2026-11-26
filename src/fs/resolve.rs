@@ -3026,7 +3026,7 @@ fn alias_words() -> &'static [String] {
 
 impl DefinedAliases {
     /// `command` is the text `s` was parsed from: one that holds no `alias_words` defines none.
-    /// `table` gives `script_aliases(s, true)`, called only when it is needed.
+    /// `table` gives `script_aliases(s, true)` (a pwsh `shell`), called only when it is needed.
     pub(crate) fn of<'t>(
         s: &Script,
         command: &str,
@@ -3718,15 +3718,16 @@ fn writer_switch_word(w: &Word) -> bool {
 /// Mark every name the command may assign as dynamic: assignments, `env X=`, `export`,
 /// `unset`, `read`, `$env:X =`, `Set-Item env:`, `[Environment]::SetEnvironmentVariable`, a
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
-/// command or a script call (PowerShell) may assign anything.
-pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
-    // The dialect is not known here: read the script as pwsh too.
-    mark_assigned_except(env, script, command, &[], &script_aliases(script, true));
+/// command or a script call (PowerShell) may assign anything. The script's aliases are read in
+/// `shell`'s dialect.
+pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str, shell: Shell) {
+    let aliases = script_aliases(script, is_pwsh(shell));
+    mark_assigned_except(env, script, command, &[], &aliases);
 }
 
 /// `mark_assigned`, except the assignments of the commands whose span is in `skip` (the literal
-/// assignments `assigned::resolve_assigned` reads itself). `aliases`: `script_aliases(script,
-/// true)`.
+/// assignments `assigned::resolve_assigned` reads itself). `aliases`: `script_aliases` of
+/// `script` in the shell's dialect.
 pub fn mark_assigned_except(
     env: &mut EnvView,
     script: &Script,
