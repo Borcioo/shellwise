@@ -486,3 +486,53 @@ target; a `.ForEach` block after a space or line end; a comment glued to the com
 redirection target starting with `;` (`ls 2>$null<;ri x` runs `ri`). Of the 20,000 mutants, the
 parser refuses 6,904 that PowerShell accepts and accepts 144 that PowerShell rejects (PowerShell
 runs nothing of a script it cannot parse; the parser judges the commands).
+
+## Plugin hook with a bare command name
+
+2026-11-26. Claude Code 2.1.330, the build the desktop app (6.28899.6) runs; the CLI on PATH was
+2.1.332 and was not used. Windows 11, Git for Windows installed. Method as in "PreToolUse
+contract": `claude -p --plugin-dir plugins/shellwise` in a fresh config directory against a local
+Messages API stub with scripted `tool_use` blocks; the child's environment was built from an
+allowlist (system variables, a short PATH, scratch home, `APPDATA` and config folders, the stub URL,
+`SHELLWISE_BASE_URL` set to an empty local folder). A first run with no plugin got the stub's
+marker reply back, so no request left the machine.
+
+The hook entries use exec form: `"command": "shellwise"` with `"args": ["hook", "claude-code"]`.
+No shell is started, so the event reaches the binary the same way on every platform, and the
+bare name resolves to `shellwise.exe` through `PATH` on Windows. Run bare, `shellwise` exits 64,
+which a host does not read as a block.
+
+| Run | `PATH` | Result |
+|---|---|---|
+| `echo 'abc`, then `echo canary > canary-pos.txt` | a build of this branch first | the first did not run; the second ran (canary file written) |
+| `echo canary > canary-open.txt` | no `shellwise` | ran (canary file written): the hook fails open |
+
+The stub's next request after the refused command holds:
+
+```json
+{"type": "tool_result", "is_error": true, "tool_use_id": "toolu_stub_pos_0",
+ "content": "PreToolUse:Bash hook error: shellwise: break parse-error: bash: unterminated single quote at 1,6: the ' opened at column 6 is never closed, so the shell refuses the whole command and runs none of it\nFix: close the ' opened at column 6, or write the text to a file and pass the file"}
+```
+
+The debug log names the source: `Hooks: PreToolUse:Bash [shellwise hook claude-code] (plugin
+shellwise@inline) finished with status 0`.
+
+Without `shellwise` on `PATH` the debug log reads `failed to start`, the model sees nothing, and
+the stream gets:
+
+```json
+{"type": "system", "subtype": "informational", "level": "warning", "tag": "hook_no_verdict",
+ "content": "A hook of the \"shellwise\" plugin gave no usable answer, so it didn't check this action.",
+ "hook_no_verdict": {"hook_event": "PreToolUse", "timed_out": false, "plugin_id": "shellwise@inline"}}
+```
+
+`SessionStart` (`shellwise update --notify`) with `SHELLWISE_BASE_URL` pointing at an empty folder:
+exit 0 after 812 ms, empty stdout and stderr, the `update-check` stamp written under the scratch
+`APPDATA`, and the session went on to the first request. Without `shellwise` on `PATH` the
+stream's `hook_response` has `exit_code` 1, `outcome` `error` and stderr `Error occurred while
+executing hook command: Executable not found in $PATH: "shellwise"`; the session went on as well.
+
+`claude plugin validate` passes on the repo root (marketplace) and on `plugins/shellwise`.
+
+Not covered: adding the marketplace from GitHub and installing from it (the files are not on the
+default branch yet); macOS and Linux; the one-line notice when a newer release exists.
