@@ -37,8 +37,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet
   the alias names; an alias the guard cannot read, or one read more ways than it follows, warns
   `dynamic-target` on a protected, unreadable or piped target.
-- Bash and Git Bash: a PowerShell alias cmdlet in the command (`Import-Alias x`) is a program
-  there and no longer makes the delete guard read every variable as one the command may set: with
+- Bash and Git Bash: a PowerShell alias cmdlet in the command (`Import-Alias x`, `ipal x`) or an
+  argument holding the text `alias:` (`grep -r alias: .`, a commit message) is a program or plain
+  text there and no longer makes the delete guard read every variable as one the command may set: with
   32 or more values of one Bash alias, `d=/; rm -rf "$d"` is `critical` again instead of a
   `dynamic-target` warn, and a relative folder through a variable reads as written in place.
 
