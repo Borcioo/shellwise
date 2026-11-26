@@ -50,6 +50,11 @@ pub(crate) struct GitFacts {
     pub clean_dirs_options: Vec<String>,
     /// `worktree remove`: the options that remove a worktree holding untracked files.
     pub force_options: Vec<String>,
+    /// `rm`: the option that removes folders, and the ones that leave the files in the tree:
+    /// limited to the index, or only listed (each turned off again by its `--no-` form).
+    pub remove_recursive: Vec<String>,
+    pub remove_cached: Vec<String>,
+    pub dry_run: Vec<String>,
     pub subcommands: Vec<GitSub>,
 }
 
@@ -117,6 +122,8 @@ pub(crate) enum GitAction {
     Discard,
     /// `git clean`: a delete inside the folder git runs in.
     Clean,
+    /// `git rm`: removes tracked files from the working tree (`git-discard` on the whole folder).
+    Remove,
 }
 
 pub(crate) fn discard_facts(prog: &Program) -> Option<&'static GitFacts> {
@@ -371,6 +378,7 @@ fn judge_sub(
         }
         GitAction::Discard => discard(call, sub, rest_lits),
         GitAction::Clean => clean(scene, facts, call, sub, rest, rest_lits, git_loc),
+        GitAction::Remove => remove(scene, facts, call, sub, rest, rest_lits, git_loc),
     }
 }
 
@@ -997,4 +1005,198 @@ fn clean(
         return Some(whole_tree());
     }
     worst
+}
+
+/// What a `git rm` pathspec takes in whole: the folder git runs in or the repository.
+#[derive(Clone, Copy)]
+enum Whole {
+    Folder,
+    Repo,
+}
+
+/// The whole folder or repository a `git rm` pathspec takes, and whether git needs `-r` for it.
+/// By its text wherever git runs: `.`, `./` and a `*` the shell expands (the folder), `:/`, `:/.`
+/// and `:(top)` (the repository); a `*` git expands itself (quoted in Bash, any in PowerShell) and
+/// `:/*` reach nested files without `-r`. Else by what it resolves to: the folder git runs in or
+/// the repo root. A word the guard cannot read: none.
+fn whole_spec(
+    scene: &Scene,
+    w: &Word,
+    git_loc: &Location,
+    here: &[PathBuf],
+    repo: &[PathBuf],
+) -> Option<(Whole, bool)> {
+    let mut text = String::new();
+    let mut globbed = false;
+    for p in &w.parts {
+        match p {
+            WordPart::Literal(s) => text.push_str(s),
+            WordPart::Glob(s) => {
+                globbed = true;
+                text.push_str(s);
+            }
+            _ => return None,
+        }
+    }
+    match text.as_str() {
+        ":/*" => return Some((Whole::Repo, false)),
+        "*" => return Some((Whole::Folder, globbed)),
+        "." | "./" => return Some((Whole::Folder, true)),
+        ":/" | ":/." | ":(top)" => return Some((Whole::Repo, true)),
+        _ if globbed => return None,
+        _ => {}
+    }
+    let Target::Paths(ps) = resolve::target(
+        w,
+        git_loc,
+        &scene.env,
+        DeleteBy::Native,
+        scene.ctx.fs,
+        scene.ctx.deadline,
+    ) else {
+        return None;
+    };
+    if ps.iter().any(|p| same_path(scene, p, repo)) {
+        Some((Whole::Repo, true))
+    } else if ps.iter().any(|p| same_path(scene, p, here)) {
+        Some((Whole::Folder, true))
+    } else {
+        None
+    }
+}
+
+/// `git rm -r` on a pathspec of the whole folder git runs in or of the repository removes every
+/// tracked file there from the working tree: with `-f` it also throws away their uncommitted
+/// changes (danger); without it git refuses a file that has some and the rest is restorable
+/// (warn). `--cached` and a dry run leave the files. A narrow pathspec is no finding of this rule.
+fn remove(
+    scene: &mut Scene,
+    facts: &GitFacts,
+    call: &Call,
+    sub: &GitSub,
+    rest: &[Word],
+    rest_lits: &[Option<String>],
+    git_loc: &Location,
+) -> Option<Finding> {
+    let on = |list: &[String], t: &str| list.iter().any(|e| scan::flag_matches(e, t));
+    let off = |list: &[String], t: &str| {
+        list.iter()
+            .filter_map(|e| e.strip_prefix("--"))
+            .any(|n| t.strip_prefix("--").and_then(|r| r.strip_prefix("no-")) == Some(n))
+    };
+    // Options before `--` as git reads them, the last of an option and its `--no-` form winning;
+    // every other word is a pathspec. A word the guard cannot read before `--` may be an option.
+    let (mut recursive, mut forced, mut cached, mut dry) = (false, false, false, false);
+    let mut unread: Option<&Word> = None;
+    let mut specs: Vec<&Word> = Vec::new();
+    let mut ended = false;
+    for (w, t) in rest.iter().zip(rest_lits) {
+        match t.as_deref() {
+            Some("--") if !ended => ended = true,
+            Some(t) if !ended && t.len() > 1 && t.starts_with('-') => {
+                recursive |= on(&facts.remove_recursive, t);
+                forced |= on(&sub.danger_options, t);
+                if on(&facts.remove_cached, t) {
+                    cached = true;
+                } else if off(&facts.remove_cached, t) {
+                    cached = false;
+                }
+                if on(&facts.dry_run, t) {
+                    dry = true;
+                } else if off(&facts.dry_run, t) {
+                    dry = false;
+                }
+            }
+            // A shell glob expands to paths, never to an option.
+            None if !ended
+                && w.parts
+                    .iter()
+                    .any(|p| !matches!(p, WordPart::Literal(_) | WordPart::Glob(_))) =>
+            {
+                unread.get_or_insert(w);
+                specs.push(w);
+            }
+            _ => specs.push(w),
+        }
+    }
+    if cached || dry {
+        return None;
+    }
+    let repo = scene.repo_spellings().unwrap_or_default();
+    // The folder git runs in, by every spelling a resolved path may use (an 8.3 short name).
+    let here: Vec<PathBuf> = resolve::spellings(
+        &git_loc.dirs().unwrap_or_default(),
+        scene.ctx.fs,
+        scene.ctx.deadline,
+        scene.ctx.input.os,
+    )
+    .into_iter()
+    .flatten()
+    .collect();
+    let classes: Vec<(&Word, Whole, bool)> = specs
+        .iter()
+        .filter_map(|w| {
+            whole_spec(scene, w, git_loc, &here, &repo).map(|(scope, needs_r)| (*w, scope, needs_r))
+        })
+        .collect();
+    let scope_text = |scope: Whole| match scope {
+        Whole::Folder => "the folder git runs in",
+        Whole::Repo => "the repository",
+    };
+    let Some(&(spec, scope, _)) = classes.iter().find(|(_, _, needs_r)| recursive || !needs_r)
+    else {
+        // An option the guard cannot read may be the `-r` that makes it take the whole folder.
+        let (&(_, scope, _), word) = classes.first().zip(unread)?;
+        return Some(warn(
+            GIT_UNREADABLE,
+            format!(
+                "the guard could not read `{}`, which may be an option that makes `git {}` remove every tracked file in {}",
+                shown(scene, word),
+                sub.words,
+                scope_text(scope)
+            ),
+            Some(format!(
+                "write the options of `git {}` literally so the guard can check them",
+                sub.words
+            )),
+            call.span(),
+        ));
+    };
+    let shown_cmd = scene
+        .ctx
+        .input
+        .command
+        .get(call.span().start..call.span().end)
+        .unwrap_or_default()
+        .to_string();
+    let untrack = format!(
+        "to untrack the files only, run `git {} {} {} {}`",
+        sub.words,
+        facts.remove_recursive.first().map_or("", String::as_str),
+        facts.remove_cached.first().map_or("", String::as_str),
+        shown(scene, spec)
+    );
+    let place = scope_text(scope);
+    Some(if forced {
+        finding(
+            GIT_DISCARD,
+            Level::Danger,
+            format!(
+                "`{shown_cmd}` removes every tracked file in {place} from the working tree and throws away their uncommitted changes, which no commit or stash holds"
+            ),
+            format!(
+                "{untrack}; otherwise look at `git status` first and commit or stash what you keep; or, {CONFIRM_FIX}"
+            ),
+            call.span(),
+        )
+    } else {
+        warn(
+            GIT_DISCARD,
+            format!(
+                "`{shown_cmd}` removes every tracked file in {place} from the working tree; git refuses a file with uncommitted changes, and the rest can be restored from HEAD"
+            ),
+            Some(format!("{untrack}; otherwise look at `git status` first")),
+            call.span(),
+        )
+    })
 }

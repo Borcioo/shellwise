@@ -533,6 +533,9 @@ branch_options = ["-b", "-B", "--orphan", "--detach", "-d"]
 clean_value_options = ["-e", "--exclude"]
 clean_dirs_options = ["-d"]
 force_options = ["-f", "--force"]
+remove_recursive = ["-r"]
+remove_cached = ["--cached"]
+dry_run = ["-n", "--dry-run"]
 
 [[program.discard.subcommands]]
 words = "commit"
@@ -605,6 +608,14 @@ warn_only = true
 [[program.discard.subcommands]]
 words = "stash clear"
 action = "discard"
+
+# `rm`: `-f`/`--force` makes a removal of the whole folder a discard of its uncommitted changes
+# (danger); git takes no `-R`.
+[[program.discard.subcommands]]
+words = "rm"
+action = "remove"
+danger_options = ["-f", "--force"]
+long_options = ["--dry-run", "--quiet", "--cached", "--force", "--ignore-unmatch", "--sparse", "--pathspec-from-file", "--pathspec-file-nul", "--no-dry-run", "--no-quiet", "--no-cached", "--no-force", "--no-ignore-unmatch", "--no-sparse", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
 
 [[program.discard.subcommands]]
 words = "clean"

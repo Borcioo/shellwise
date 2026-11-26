@@ -11,6 +11,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   background jobs (`while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`, and the `[ ]`,
   `test`, `[[ ]]` and `until … -lt` forms) reads as bounded: the count drops when a job ends.
 
+### Fixed
+
+- `git-discard`: `git rm -rf .` (and `:/`, `*`, a path that is the repo root, `-C <dir>` and
+  `--force` alike) is danger, since it removes every tracked file in the folder and throws away
+  their uncommitted changes; without `-f` it warns. `--cached` and `-n` are ok.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

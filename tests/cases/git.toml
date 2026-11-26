@@ -1182,3 +1182,383 @@ shell = "pwsh"
 command = "git worktree remove --force FX_LINKED"
 level = "critical"
 rules = ["delete-critical"]
+
+# ---------------------------------------------------------------- git rm on the whole folder
+# `git rm -r` on a pathspec of the whole folder git runs in (`.`, `./`, a `*` the shell expands)
+# or of the repository (`:/`, `:/.`, `:(top)`, a path that is the repo root) removes every tracked
+# file there from the working tree: with `-f`/`--force` it also throws away their uncommitted
+# changes (danger); without it git refuses a file with changes and the rest is restorable (warn).
+# A `*` git expands itself (`'*'` in Bash, any `*` in PowerShell, `:/*`) reaches nested files
+# without `-r` (probed on git 2.53). `--cached` and `-n`/`--dry-run` (before `--`, the last of
+# `--cached`/`--no-cached` and `--dry-run`/`--no-dry-run` wins) leave the files: ok. git rejects
+# `-R` (exit 129). `-C <dir>` makes `.` that folder: still its whole contents.
+
+[[row]]
+id = "rm-rf-dot"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+fix = "git rm -r --cached ."
+
+[[row]]
+id = "rm-rf-dot-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-r-f-dot-bash"
+os = "any"
+shell = "bash"
+command = "git rm -r -f ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-fr-dot-slash"
+os = "windows"
+shell = "gitbash"
+command = "git rm -fr ./"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-the-top"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf :/"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-the-top-dot"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf :/."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-the-top-magic"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf ':(top)'"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-the-top-glob-without-r"
+os = "windows"
+shell = "gitbash"
+command = "git rm -f ':/*'"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-the-top-glob-unquoted-without-r"
+os = "windows"
+shell = "gitbash"
+command = "git rm -f :/*"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-a-shell-glob"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf *"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-a-git-glob-without-r"
+os = "windows"
+shell = "gitbash"
+command = "git rm -f '*'"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-a-star-in-powershell-without-r"
+os = "any"
+shell = "pwsh"
+command = "git rm -f *"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dot-after-dashdash"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf -- ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-a-dry-run-flag-after-dashdash-is-a-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf -- -n ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-force-by-a-prefix"
+os = "windows"
+shell = "gitbash"
+command = "git rm -r --forc ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-r-force-long"
+os = "any"
+shell = "pwsh"
+command = "git rm -r --force ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rfq-dot"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rfq ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-the-repo-by-its-path"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf FX_REPO"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dot-with-C-a-subfolder"
+os = "any"
+shell = "pwsh"
+command = "git -C build rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dotdot-with-C-a-subfolder"
+os = "any"
+shell = "pwsh"
+command = "git -C build rm -rf .."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-the-folder-git-runs-in-by-its-path"
+os = "any"
+shell = "pwsh"
+command = "git -C build rm -rf ../build"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dot-with-a-config-option"
+os = "any"
+shell = "pwsh"
+command = "git -c core.quotepath=off rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "nocwd-rm-rf-dot"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-cached-then-no-cached"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --cached --no-cached ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-dry-run-then-no-dry-run"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf -n --no-dry-run ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-r-dot"
+os = "any"
+shell = "pwsh"
+command = "git rm -r ."
+level = "warn"
+rules = ["git-discard"]
+fix = "git rm -r --cached ."
+
+[[row]]
+id = "rm-r-the-top"
+os = "windows"
+shell = "gitbash"
+command = "git rm -r :/"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-a-git-glob"
+os = "windows"
+shell = "gitbash"
+command = "git rm '*'"
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-r-dot-with-C-a-subfolder"
+os = "any"
+shell = "pwsh"
+command = "git -C build rm -r ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-options-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git rm $OPTS ."
+level = "warn"
+rules = ["git-unreadable"]
+
+[[row]]
+id = "rm-cached"
+os = "any"
+shell = "pwsh"
+command = "git rm -r --cached ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-cached-forced"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --cached ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-cached-by-a-prefix"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --cach ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-dry-run-flag"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf -n ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-dry-run-in-a-cluster"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rfn ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-dry-run-long"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf --dry-run ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-dry-run-by-a-prefix"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --dry ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-folder"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf build/"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-subfolder-by-name"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf src"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-file"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf src/old.rs"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-file-with-C-a-subfolder"
+os = "any"
+shell = "pwsh"
+command = "git -C build rm -rf x.o"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-f-dot-without-r"
+os = "any"
+shell = "pwsh"
+command = "git rm -f ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-capital-r-is-no-option-of-git"
+os = "windows"
+shell = "gitbash"
+command = "git rm -Rf ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-f-a-shell-glob-without-r"
+os = "windows"
+shell = "gitbash"
+command = "git rm -f *"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-variable"
+os = "windows"
+shell = "gitbash"
+command = 'git rm -rf "$d"'
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-pathspec-file"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --pathspec-from-file=list.txt"
+level = "ok"
+rules = []
