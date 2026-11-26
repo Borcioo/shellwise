@@ -5473,6 +5473,22 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
+id = "wl-bash-jobs-negated-after-a-line-continuation-polls"
+os = "any"
+shell = "bash"
+command = "while \\\n! [ \"$(jobs -rp | wc -l)\" -ge 4 ]; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-negated-before-a-line-continuation-polls"
+os = "any"
+shell = "bash"
+command = "while ! \\\n[ \"$(jobs -rp | wc -l)\" -ge 4 ]; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
 id = "wl-bash-jobs-joined-inside-bracket-by-o-polls"
 os = "any"
 shell = "bash"
@@ -5757,6 +5773,22 @@ id = "wl-gitbash-jobs-negated-inside-arith-tight-polls"
 os = "windows"
 shell = "gitbash"
 command = 'while (( !($(jobs -rp | wc -l) >= 4) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-negated-after-a-line-continuation-polls"
+os = "windows"
+shell = "gitbash"
+command = "while \\\n! [ \"$(jobs -rp | wc -l)\" -ge 4 ]; do sleep 1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-negated-before-a-line-continuation-polls"
+os = "windows"
+shell = "gitbash"
+command = "while ! \\\n[ \"$(jobs -rp | wc -l)\" -ge 4 ]; do sleep 1; done"
 level = "break"
 rules = ["wait-loop-unbounded"]
 

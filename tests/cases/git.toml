@@ -1448,6 +1448,102 @@ level = "danger"
 rules = ["git-discard"]
 
 [[row]]
+id = "rm-orphan-negated-before-a-line-continuation-is-danger"
+os = "any"
+shell = "bash"
+command = "! \\\ngit checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-a-line-continuation-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! \\\ngit checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-command-is-danger"
+os = "any"
+shell = "bash"
+command = "! command git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-command-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! command git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-time-is-danger"
+os = "any"
+shell = "bash"
+command = "! time git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-time-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! time git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-env-is-danger"
+os = "any"
+shell = "bash"
+command = "! env A=1 git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-env-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! env A=1 git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-an-assignment-is-danger"
+os = "any"
+shell = "bash"
+command = "! A=1 git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-before-an-assignment-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! A=1 git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-after-a-statement-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "true; ! git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-with-a-bang-in-quotes-before-it"
+os = "windows"
+shell = "gitbash"
+command = "echo '!'; git checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
 id = "rm-orphan-without-a-branch-is-danger"
 os = "windows"
 shell = "gitbash"
