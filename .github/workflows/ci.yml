@@ -32,7 +32,7 @@ jobs:
       - run: cargo clippy --all-targets --features testhooks -- -D warnings
       - run: shellcheck install.sh
         if: runner.os == 'Linux'
-      - run: cargo test --features testhooks
+      - run: cargo test --no-fail-fast --features testhooks
 
   install-scripts:
     name: install scripts (macos-latest)
@@ -44,7 +44,6 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
