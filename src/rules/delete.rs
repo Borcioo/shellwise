@@ -222,8 +222,13 @@ impl Rule for DeleteRule {
                     let opaque = |scene: &mut Scene<'_>| {
                         let (texts, capped) = unread_texts(cmd);
                         let mut found = None;
-                        for t in texts.iter().filter(|t| scan_hits(std::slice::from_ref(t))) {
-                            found = max_finding(found, Some(scene.opaque_in(cmd, t)));
+                        // One scan per text: a readable hit is what `scan_hits` matches, and
+                        // `opaque_in` reads the same hits.
+                        for t in &texts {
+                            let hits = scan::hits(scan::table(), t);
+                            if hits.iter().any(|h| h.kind != scan::Kind::Unreadable) {
+                                found = max_finding(found, Some(scene.opaque_in(cmd, t, hits)));
+                            }
                         }
                         if capped {
                             found = max_finding(found, scene.unread_alias(cmd, piped));
@@ -1386,14 +1391,15 @@ impl<'a> Scene<'a> {
 
     /// The finding for code the guard does not read whose text names a destructive command:
     /// danger when its words hold a literal protected location (Ruling 122 (b)), else warn.
-    /// `text` is the text of `c`, or that text with an alias it calls written as its value.
-    fn opaque_in(&mut self, c: &SimpleCommand, text: &str) -> Finding {
+    /// `text` is the text of `c`, or that text with an alias it calls written as its value;
+    /// `hits` are `scan::hits` of `text`.
+    fn opaque_in(&mut self, c: &SimpleCommand, text: &str, hits: Vec<scan::Hit>) -> Finding {
         let command = self.ctx.input.command;
         let own = command.get(c.span.start..c.span.end).unwrap_or_default();
         let shown: String = own.chars().take(80).collect();
         // Only the words of the destructive commands themselves: a `cd` to the repo root
         // elsewhere in the body names no target.
-        let words: Vec<String> = scan::hits(scan::table(), text)
+        let words: Vec<String> = hits
             .into_iter()
             .filter(|h| h.kind != scan::Kind::Unreadable)
             .filter_map(|h| Some((h.kind, text.get(h.span.start..h.span.end)?)))
