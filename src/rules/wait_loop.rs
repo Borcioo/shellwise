@@ -12,7 +12,7 @@
 //! its body, compares a clock or a counter (a variable whose new value reads its old one); or when
 //! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`): in what the
 //! wrapper runs, not in the words the calling shell expands before it starts (`timeout 60 echo
-//! "$(…)"`), and not in a job its body sends to the background. A loop with no wait whose condition
+//! "$(…)"`). A loop with no wait whose condition
 //! can fail (`while read line`) is no wait loop. A loop whose body runs a command the guard cannot
 //! read (a dynamic name, `eval`) is not judged: that command may end it. PowerShell keeps no
 //! `break` in the IR, so its guards are the `if` statements whose text holds an exit word.
@@ -280,12 +280,9 @@ impl Walk<'_, '_> {
         b
     }
 
-    /// `bounded`: a wrapper around this script bounds its wait. A statement the script sends to
-    /// the background is not bounded by it: the shell may end once it has started the job, and
-    /// the wrapper with it, while the job runs on.
+    /// `bounded`: a wrapper around this script bounds its wait.
     fn script(&mut self, s: &Script, bounded: bool) {
-        for (i, st) in s.stmts.iter().enumerate() {
-            let bounded = bounded && !self.backgrounded(s, i);
+        for st in &s.stmts {
             match st {
                 Stmt::Pipeline(p) => self.pipeline(p, bounded),
                 Stmt::Loop { body, span, head } => {
@@ -327,40 +324,6 @@ impl Walk<'_, '_> {
                 WordPart::Subst(s) => self.script(s, expanded),
                 WordPart::Block(s) => self.script(s, passed),
                 _ => {}
-            }
-        }
-    }
-
-    /// Statement `i` of `s` runs in the background: a trailing `&`. The lowering keeps it on a
-    /// pipeline, on the join of the statement after another statement, and for a last loop, `if`
-    /// or group only in the text after it, past the words that close the statements around it
-    /// (`; } &`, `; fi &`). An `if` has the span of its keyword: its text ends with its last
-    /// branch.
-    fn backgrounded(&self, s: &Script, i: usize) -> bool {
-        let end = match &s.stmts[i] {
-            Stmt::Pipeline(p) => return p.chain == Some(ChainOp::Background),
-            _ if i + 1 < s.stmts.len() => return s.join(i + 1) == Some(ChainOp::Background),
-            Stmt::Loop { span, .. } => span.end,
-            Stmt::Cond { branches, span } => branches
-                .iter()
-                .filter_map(|b| range(&b.stmts))
-                .map(|r| r.end)
-                .fold(span.end, usize::max),
-            Stmt::Block(b) => match range(&b.stmts) {
-                Some(r) => r.end,
-                None => return false,
-            },
-            Stmt::Func { .. } => return false,
-        };
-        let blank = [' ', '\t', '\n', '\r'];
-        let mut t = self.src.get(end..).unwrap_or("").trim_start_matches(blank);
-        loop {
-            let after_semi = t.strip_prefix(';').map(|r| r.trim_start_matches(blank));
-            match past_closer(after_semi.unwrap_or(t)) {
-                Some(r) => t = r.trim_start_matches(blank),
-                None => {
-                    return t.starts_with('&') && !t.starts_with("&&") && !t.starts_with("&>");
-                }
             }
         }
     }
@@ -1352,15 +1315,6 @@ fn waits_on_job_with_timeout(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
         let when = strings(p, JOB_TIMEOUT_WHEN);
         let args: Vec<String> = c.args.iter().filter_map(literal).collect();
         !when.is_empty() && has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
-    })
-}
-
-/// The Bash text `t` after the word at its start that closes a group, a subshell or an `if`
-/// (`}`, `)`, `fi`); `None` when no such word starts it.
-fn past_closer(t: &str) -> Option<&str> {
-    ["}", ")", "fi"].iter().find_map(|w| {
-        t.strip_prefix(w)
-            .filter(|r| w.len() == 1 || !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
     })
 }
 

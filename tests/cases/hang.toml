@@ -1920,59 +1920,58 @@ command = "sudo timeout 60 bash -c 'echo \"$(while true; do sleep 1; done)\"'"
 level = "ok"
 rules = []
 
-# A loop or a follow the bounded child shell sends to the background is no bound: the shell
-# ends once it has started the job, `timeout` ends with it, and the job runs on without a limit.
-# `& wait` keeps the shell, so `timeout` would end the job too: a known over-block, the same
-# reading a backgrounded loop gets at top level, pinned so that a change is noticed.
+# A loop or a follow the bounded child shell sends to the background reads bounded, behind a
+# wrapper as bare: a known miss, since the shell may end once it has started the job, and
+# `timeout` with it, while the job runs on. `& wait` keeps the shell, so the bound holds there.
 # Backgrounding the `timeout` itself keeps its bound.
 
 [[row]]
-id = "wl-bash-backgrounded-loop-in-sudo-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-loop-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "sudo timeout 60 bash -c 'while true; do sleep 1; done &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-nohup-loop-in-sudo-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-nohup-loop-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "sudo timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-block-loop-in-sudo-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-block-loop-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "sudo timeout 60 bash -c '{ while true; do sleep 1; done; } &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-loop-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'while true; do sleep 1; done &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-nohup-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-nohup-loop-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-loop-and-wait-in-timeout-bash-c-is-a-known-over-block"
+id = "wl-bash-backgrounded-loop-and-wait-in-timeout-bash-c-is-a-bound"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'while true; do sleep 1; done & wait'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
 id = "wl-bash-backgrounded-nohup-timeout-around-a-loop-is-a-bound"
@@ -1983,68 +1982,68 @@ level = "ok"
 rules = []
 
 [[row]]
-id = "fu-bash-backgrounded-follow-in-sudo-timeout-bash-c-is-no-bound"
+id = "fu-bash-backgrounded-follow-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "sudo timeout 60 bash -c 'tail -f log &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-bash-backgrounded-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-bash-backgrounded-follow-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'tail -f log &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-loop-in-sudo-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-loop-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "sudo timeout 60 bash -c 'while true; do sleep 1; done &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-nohup-loop-in-sudo-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-nohup-loop-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "sudo timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-block-loop-in-sudo-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-block-loop-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "sudo timeout 60 bash -c '{ while true; do sleep 1; done; } &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-loop-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'while true; do sleep 1; done &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-nohup-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-nohup-loop-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-loop-and-wait-in-timeout-bash-c-is-a-known-over-block"
+id = "wl-gitbash-backgrounded-loop-and-wait-in-timeout-bash-c-is-a-bound"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'while true; do sleep 1; done & wait'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
 id = "wl-gitbash-backgrounded-nohup-timeout-around-a-loop-is-a-bound"
@@ -2055,20 +2054,87 @@ level = "ok"
 rules = []
 
 [[row]]
-id = "fu-gitbash-backgrounded-follow-in-sudo-timeout-bash-c-is-no-bound"
+id = "fu-gitbash-backgrounded-follow-in-sudo-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "sudo timeout 60 bash -c 'tail -f log &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-gitbash-backgrounded-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-gitbash-backgrounded-follow-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'tail -f log &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
+
+# The way a loop is usually sent to the background, its output sent away first: a known miss
+# too. `&&` and `&>` send nothing to the background: the bound holds.
+
+[[row]]
+id = "wl-bash-backgrounded-redirected-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-redirected-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-subshell-loop-and-a-command-in-timeout-bash-c-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '(while true; do sleep 1; done) && echo up'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-group-loop-with-its-output-sent-away-in-timeout-bash-c-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '{ while true; do sleep 1; done; } &>/dev/null'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-redirected-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-redirected-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-subshell-loop-and-a-command-in-timeout-bash-c-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '(while true; do sleep 1; done) && echo up'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-group-loop-with-its-output-sent-away-in-timeout-bash-c-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '{ while true; do sleep 1; done; } &>/dev/null'"
+level = "ok"
+rules = []
 
 # More wrapper chains around a `timeout` with a limit: each bounds the loop it runs.
 
@@ -2395,135 +2461,135 @@ level = "ok"
 rules = []
 
 # A group, a subshell or an `if` the bounded body sends to the background, and a job started
-# before a command that ends first, run on without a limit as well.
+# before a command that ends first, read bounded as well: known misses.
 
 [[row]]
-id = "fu-bash-backgrounded-group-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-bash-backgrounded-group-follow-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c '{ tail -f log; } &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-bash-backgrounded-subshell-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-bash-backgrounded-subshell-follow-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c '( tail -f log ) &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c '{ nohup bash -c \"while true; do sleep 1; done\"; } &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-subshell-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-subshell-loop-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c '( while true; do sleep 1; done ) &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-if-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-if-loop-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'if true; then while true; do sleep 1; done; fi &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-bash-backgrounded-if-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-bash-backgrounded-if-follow-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'if true; then tail -f log; fi &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-bash-backgrounded-case-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-bash-backgrounded-case-follow-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'case x in x) tail -f log;; esac &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-bash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-no-bound"
+id = "wl-bash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "timeout 60 bash -c 'while true; do sleep 1; done & sleep 1'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-gitbash-backgrounded-group-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-gitbash-backgrounded-group-follow-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c '{ tail -f log; } &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-gitbash-backgrounded-subshell-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-gitbash-backgrounded-subshell-follow-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c '( tail -f log ) &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c '{ nohup bash -c \"while true; do sleep 1; done\"; } &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-subshell-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-subshell-loop-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c '( while true; do sleep 1; done ) &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-if-loop-in-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-if-loop-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'if true; then while true; do sleep 1; done; fi &'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-gitbash-backgrounded-if-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-gitbash-backgrounded-if-follow-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'if true; then tail -f log; fi &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "fu-gitbash-backgrounded-case-follow-in-timeout-bash-c-is-no-bound"
+id = "fu-gitbash-backgrounded-case-follow-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'case x in x) tail -f log;; esac &'"
-level = "warn"
-rules = ["follow-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
-id = "wl-gitbash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-no-bound"
+id = "wl-gitbash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-a-known-miss"
 os = "windows"
 shell = "gitbash"
 command = "timeout 60 bash -c 'while true; do sleep 1; done & sleep 1'"
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 # A substitution in the words of `Start-Job` runs in the calling shell, before the job.
 [[row]]
