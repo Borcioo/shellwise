@@ -39,40 +39,72 @@ enum Unreadable {
 
 /// The work left for one scan. Every loop over the input spends from it, so on hostile nesting
 /// the scan stops instead of hanging or overflowing the stack.
+///
+/// The readings of a producer after its first unreadable one (`Unreadable::PassOver`) spend from
+/// `spare`, a quarter of the main budget, never from `left`: the rest of the command keeps every step a
+/// scan that stopped at that reading had. Once `spare` is spent, a producer's readings end at its
+/// first unreadable one again.
 struct Budget {
     left: Cell<usize>,
     spent: Cell<bool>,
+    spare: Cell<usize>,
+    spare_spent: Cell<bool>,
+    /// Spending from `spare`.
+    on_spare: Cell<bool>,
     unreadable: Unreadable,
 }
 
 impl Budget {
     fn for_input(len: usize, unreadable: Unreadable) -> Budget {
+        let steps = len
+            .saturating_mul(BUDGET_PER_BYTE)
+            .saturating_add(BUDGET_BASE);
         Budget {
-            left: Cell::new(
-                len.saturating_mul(BUDGET_PER_BYTE)
-                    .saturating_add(BUDGET_BASE),
-            ),
+            left: Cell::new(steps),
             spent: Cell::new(false),
+            spare: Cell::new(steps / 4),
+            spare_spent: Cell::new(false),
+            on_spare: Cell::new(false),
             unreadable,
         }
     }
 
     /// Take `n` steps; false, from now on, once fewer remain.
     fn spend(&self, n: usize) -> bool {
-        match self.left.get().checked_sub(n) {
-            Some(left) if !self.spent.get() => {
-                self.left.set(left);
+        let (left, spent) = if self.on_spare.get() {
+            (&self.spare, &self.spare_spent)
+        } else {
+            (&self.left, &self.spent)
+        };
+        match left.get().checked_sub(n) {
+            Some(rest) if !spent.get() => {
+                left.set(rest);
                 true
             }
             _ => {
-                self.spent.set(true);
+                spent.set(true);
                 false
             }
         }
     }
 
     fn spent(&self) -> bool {
-        self.spent.get()
+        if self.on_spare.get() {
+            self.spare_spent.get()
+        } else {
+            self.spent.get()
+        }
+    }
+
+    /// Run `f` spending from `spare`; `None` once it is spent.
+    fn on_spare<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        if self.spare_spent.get() {
+            return None;
+        }
+        let outer = self.on_spare.replace(true);
+        let r = f();
+        self.on_spare.set(outer);
+        Some(r)
     }
 }
 
@@ -324,10 +356,12 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
 /// Scan what the producer prints as the code an interpreter runs, in every reading of where its
 /// command starts. A reading whose text is not static (a file, a download, a variable, a command
 /// the scan cannot read) is passed over or ends the producer, as `b.unreadable` says: passed
-/// over, `sudo -u root printf '…' | bash` still scans the `printf` reading.
+/// over, `sudo -u root printf '…' | bash` still scans the `printf` reading. Up to and with the
+/// first unreadable reading the scan spends as one that stops there; the readings after it spend
+/// only the spare budget (`Budget`), and a rejected one costs nothing.
 ///
 /// `producers` are the readings of `words`: each one's words after its first are a tail of
-/// `words`, so what those tails hold is read once, and a rejected reading costs nothing more.
+/// `words`, so what those tails hold is read once.
 fn feed(
     table: &[Entry],
     words: &[Tok],
@@ -337,20 +371,55 @@ fn feed(
     b: &Budget,
     out: &mut Vec<Hit>,
 ) {
-    let Some(tails) = Tails::of(words, b) else {
-        return;
-    };
+    let tails = Tails::of(words);
+    let mut passed_over = false;
     for producer in producers {
-        let Some(text) = piped_text(producer, &tails, b) else {
-            match b.unreadable {
-                Unreadable::PassOver => continue,
-                Unreadable::Stop => return,
+        let piped = piped_text(producer, &tails);
+        if passed_over {
+            if let Piped::Text(text) = piped
+                && b.on_spare(|| scan_piped(table, text, span, depth, b, out))
+                    .is_none()
+            {
+                return;
             }
-        };
-        for h in hits_at(table, &text, depth + 1, b) {
-            out.push(Hit { kind: h.kind, span });
+            continue;
+        }
+        match piped {
+            Piped::Text(text) => {
+                if !scan_piped(table, text, span, depth, b, out) {
+                    return;
+                }
+                continue;
+            }
+            // Its text is charged as the scan that stops here charged it.
+            Piped::Expands(text) => {
+                b.spend(text_len(text));
+            }
+            Piped::Other => {}
+        }
+        match b.unreadable {
+            Unreadable::PassOver => passed_over = true,
+            Unreadable::Stop => return,
         }
     }
+}
+
+/// Scan the static text a reading pipes into the shell; false when the budget is spent first.
+fn scan_piped(
+    table: &[Entry],
+    text: &[Tok],
+    span: Span,
+    depth: usize,
+    b: &Budget,
+    out: &mut Vec<Hit>,
+) -> bool {
+    if !b.spend(text_len(text)) {
+        return false;
+    }
+    for h in hits_at(table, &join(text), depth + 1, b) {
+        out.push(Hit { kind: h.kind, span });
+    }
+    true
 }
 
 /// Every reading of where a segment's command starts: the walk from its first word and, after a
@@ -749,10 +818,8 @@ struct Tails {
 }
 
 impl Tails {
-    fn of(words: &[Tok], b: &Budget) -> Option<Tails> {
-        if !b.spend(text_len(words)) {
-            return None;
-        }
+    /// One pass over words the segmenting already paid for: no budget of its own.
+    fn of(words: &[Tok]) -> Tails {
         let mut tails = Tails {
             unquoted: vec![false; words.len() + 1],
             expands: vec![false; words.len() + 1],
@@ -761,26 +828,40 @@ impl Tails {
             tails.unquoted[k] = tails.unquoted[k + 1] || !w.quoted;
             tails.expands[k] = tails.expands[k + 1] || w.value.contains(EXPANDS);
         }
-        Some(tails)
+        tails
     }
 }
 
-/// The text a segment writes into a pipe when it is static: the words after `echo`/`printf`, or
-/// a segment of string literals. `None` for anything else, or text the writer may still expand.
-/// `tails` are those of the segment whose tail the words after the first are.
-fn piped_text(words: &[Tok], tails: &Tails, b: &Budget) -> Option<String> {
-    let (first, rest) = words.split_first()?;
+/// What a reading of a producer writes into a pipe.
+enum Piped<'a> {
+    /// Static text: these words, joined with blanks.
+    Text(&'a [Tok]),
+    /// The words after `echo`/`printf`, or string literals, holding text the writer may still
+    /// expand.
+    Expands(&'a [Tok]),
+    /// Anything else.
+    Other,
+}
+
+/// What `words`, a reading of a producer, writes into a pipe: the words after `echo`/`printf`, or
+/// a segment of string literals. `tails` are those of the segment whose tail the words after the
+/// first are.
+fn piped_text<'a>(words: &'a [Tok], tails: &Tails) -> Piped<'a> {
+    let Some((first, rest)) = words.split_first() else {
+        return Piped::Other;
+    };
     let at = tails.expands.len() - 1 - rest.len();
     let echo = ECHO_NAMES.contains(&base_name(&first.value).as_str());
     let literals = !echo && first.quoted && !tails.unquoted[at];
-    if !(echo || literals) || tails.expands[at] || (literals && first.value.contains(EXPANDS)) {
-        return None;
+    if !(echo || literals) {
+        return Piped::Other;
     }
     let text = if echo { rest } else { words };
-    if !b.spend(text_len(text)) {
-        return None;
+    if tails.expands[at] || (literals && first.value.contains(EXPANDS)) {
+        Piped::Expands(text)
+    } else {
+        Piped::Text(text)
     }
-    Some(join(text))
 }
 
 fn nested_flag(shell: &str, v: &str) -> Option<Flag> {
@@ -1938,6 +2019,23 @@ mod tests {
                 let row = destructive_row(&cmd);
                 assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
                 assert_eq!(row.map(|s| s.start), Some(at), "{unit:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn passed_over_readings_leave_the_rest_of_the_command_its_budget() {
+        // Readings past the producer's first unreadable one (`hi …`) that are static each cost
+        // their text; they spend only the spare budget, so the delete after the segment is read
+        // with the budget a scan that stopped at `hi …` had.
+        for n in [10, 90, 100, 1000, 5000] {
+            for unit in ["echo hi ", "echo hi $a ", "'a' echo hi "] {
+                let cmd = format!("sudo {}| bash; rm -rf y", unit.repeat(n));
+                let at = cmd.find("rm -rf y").unwrap();
+                let start = std::time::Instant::now();
+                let row = destructive_row(&cmd);
+                assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
+                assert_eq!(row.map(|s| s.start), Some(at), "{unit:?} x{n}");
             }
         }
     }
