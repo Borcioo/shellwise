@@ -167,9 +167,9 @@ impl Rule for GitRule {
         let env = scene.env.clone();
         let mut loc = scene.location();
         let script = ctx.script;
-        // The folder and top-level statement of the last orphan checkout, while no other branch
-        // switch has followed it.
-        let mut orphan: Option<(Vec<PathBuf>, usize)> = None;
+        // The folder, top-level statement and subcommand of the last orphan checkout, while no
+        // other branch switch has followed it.
+        let mut orphan: Option<(Vec<PathBuf>, usize, String)> = None;
         walk_script(script, &mut loc, &env, &mut |node, loc| {
             let Node::Cmd { cmd, piped } = node else {
                 return;
@@ -188,15 +188,26 @@ impl Rule for GitRule {
                     })
                 });
                 let after_orphan = match (&orphan, &here, top) {
-                    (Some((dirs, i)), Some(h), Some(j)) => {
-                        dirs == h && !names_repo && runs_before(script, *i, j)
+                    (Some((dirs, i, written)), Some(h), Some(j))
+                        if dirs == h && !names_repo && next_after_and(script, *i, j) =>
+                    {
+                        Some(written.clone())
                     }
-                    _ => false,
+                    _ => None,
                 };
-                out.extend(judge(&mut scene, &call, facts, loc, after_orphan));
+                let before = Before {
+                    orphan: after_orphan.as_deref(),
+                    repo_env: names_repo,
+                };
+                out.extend(judge(&mut scene, &call, facts, loc, before));
                 match branch_switch(facts, &call) {
-                    Some(true) => orphan = here.zip(top),
-                    Some(false) => orphan = None,
+                    // `! git checkout --orphan x` may fail and still let the next command run.
+                    Some(Some(sub)) if !negated(ctx.input.command, cmd.span.start) => {
+                        let opt = facts.orphan_options.first().map_or("", String::as_str);
+                        let written = format!("{} {sub} {opt}", call.name);
+                        orphan = here.zip(top).map(|(d, t)| (d, t, written));
+                    }
+                    Some(_) => orphan = None,
                     None => {}
                 }
             }
@@ -213,10 +224,10 @@ fn top_statement(script: &Script, cmd: &SimpleCommand) -> Option<usize> {
     })
 }
 
-/// Whether top-level statement `i` has run, and succeeded, whenever statement `j` runs: every
-/// join between them is `&&`, `;` or a newline, and across a `;` the statement `i` is not itself
-/// the right side of an `&&` or `||` that may skip it.
-fn runs_before(script: &Script, i: usize, j: usize) -> bool {
+/// Whether top-level statement `j` runs only after statement `i` succeeded: `j` is the very next
+/// statement, joined to `i` by `&&`, and `i` is not the right side of an `||` that may skip it.
+/// After a `;` or a newline `j` runs whether `i` failed or not.
+fn next_after_and(script: &Script, i: usize, j: usize) -> bool {
     let join = |k: usize| {
         script
             .join(k)
@@ -225,28 +236,28 @@ fn runs_before(script: &Script, i: usize, j: usize) -> bool {
                 _ => None,
             })
     };
-    if i >= j {
-        return false;
-    }
-    let mut seq = false;
-    for k in i + 1..=j {
-        match join(k) {
-            Some(ChainOp::And) => {}
-            Some(ChainOp::Seq) => seq = true,
-            _ => return false,
+    j == i + 1
+        && join(j) == Some(ChainOp::And)
+        && match join(i) {
+            None => i == 0,
+            Some(op) => matches!(op, ChainOp::Seq | ChainOp::And),
         }
-    }
-    match join(i) {
-        None => i == 0,
-        Some(ChainOp::Seq) => true,
-        Some(ChainOp::And) => !seq,
-        _ => false,
-    }
 }
 
-/// Whether a git call switches branches: `Some(true)` for an orphan switch (`checkout --orphan`),
-/// `Some(false)` for any other switch or a subcommand the guard cannot read, `None` otherwise.
-fn branch_switch(facts: &GitFacts, call: &Call) -> Option<bool> {
+/// The command starting at `start` in `text` follows a `!`, which turns its failure into success.
+fn negated(text: &str, start: usize) -> bool {
+    let before = text.get(..start).unwrap_or_default().trim_end();
+    before.strip_suffix('!').is_some_and(|b| {
+        b.chars()
+            .last()
+            .is_none_or(|c| c.is_whitespace() || ";&|(){}".contains(c))
+    })
+}
+
+/// Whether a git call switches branches: `Some(Some(sub))` for an orphan switch that names its
+/// branch (`checkout --orphan x`), `Some(None)` for any other switch or a subcommand the guard
+/// cannot read, `None` otherwise.
+fn branch_switch(facts: &GitFacts, call: &Call) -> Option<Option<String>> {
     let lits = literals(call.args());
     let mut k = 0;
     while let Some(Some(t)) = lits.get(k) {
@@ -260,23 +271,28 @@ fn branch_switch(facts: &GitFacts, call: &Call) -> Option<bool> {
         };
     }
     let Some(sub) = lits.get(k)?.as_deref() else {
-        return Some(false);
+        return Some(None);
     };
     if !facts.branch_switches.iter().any(|s| s == sub) {
         return None;
     }
-    Some(
-        lits[k + 1..]
+    let rest = &lits[k + 1..];
+    // The orphan option with its branch: `--orphan x` or `--orphan=x`.
+    let named = rest.iter().enumerate().any(|(x, t)| {
+        let Some(t) = t else { return false };
+        facts
+            .orphan_options
             .iter()
-            .flatten()
-            .take_while(|t| t.as_str() != "--")
-            .any(|t| {
-                facts
-                    .orphan_options
-                    .iter()
-                    .any(|o| scan::flag_matches(o, t))
-            }),
-    )
+            .any(|o| scan::flag_matches(o, t))
+            && match t.split_once('=') {
+                Some((_, b)) => !b.is_empty(),
+                None => rest
+                    .get(x + 1)
+                    .is_some_and(|n| n.as_deref().is_none_or(|n| !n.starts_with('-'))),
+            }
+            && !rest[..x].iter().flatten().any(|e| e == "--")
+    });
+    Some(named.then(|| sub.to_string()))
 }
 
 /// The span text of a word, or its literal text.
@@ -333,13 +349,13 @@ fn names_subcommand(facts: &GitFacts, lits: &[Option<String>], mut k: usize) -> 
 
 /// The one finding of a git call, in this order: what the guard cannot read, skipped hooks,
 /// then what the subcommand discards or deletes.
-/// `after_orphan`: an earlier statement made an orphan checkout in the folder git runs in.
+/// `before`: what the statements before the call say of where it runs.
 fn judge(
     scene: &mut Scene,
     call: &Call,
     facts: &GitFacts,
     loc: &Location,
-    after_orphan: bool,
+    before: Before,
 ) -> Option<Finding> {
     let args = call.args();
     let lits = literals(args);
@@ -419,7 +435,7 @@ fn judge(
         rest,
         rest_lits,
         (loc, &git_loc),
-        after_orphan,
+        before,
     );
     if found.is_some() || !has_danger_options(call, sub) {
         return found;
@@ -476,7 +492,7 @@ fn judge_sub(
     rest: &[Word],
     rest_lits: &[Option<String>],
     (loc, git_loc): (&Location, &Location),
-    after_orphan: bool,
+    before: Before,
 ) -> Option<Finding> {
     match sub.action {
         GitAction::Hooks => {
@@ -511,7 +527,7 @@ fn judge_sub(
                 global: global.0,
                 git_loc,
                 moved,
-                after_orphan,
+                before,
             };
             remove(scene, facts, call, sub, rest, rest_lits, &place)
         }
@@ -1204,19 +1220,29 @@ fn whole_spec(
     }
 }
 
-/// `git rm -r` on a pathspec of the whole folder git runs in or of the repository removes every
-/// tracked file there from the working tree: with `-f` it also throws away their uncommitted
-/// changes (danger); without it git refuses a file that has some and the rest is restorable
-/// (warn). `--cached` and a dry run leave the files. A narrow pathspec is no finding of this rule.
 /// Where a `git rm` runs: git's own options before it, the location they give, whether a `cd`
-/// before it moved the shell, and whether an orphan checkout in that folder came before it.
+/// before it moved the shell, and what the statements before it say.
 struct Place<'a> {
     global: &'a [Word],
     git_loc: &'a Location,
     moved: bool,
-    after_orphan: bool,
+    before: Before<'a>,
 }
 
+/// What the statements before a git call say of where it runs.
+#[derive(Clone, Copy)]
+struct Before<'a> {
+    /// The orphan call as written (`git switch --orphan`) when the call is the next statement
+    /// after it, joined by `&&`, in the same folder.
+    orphan: Option<&'a str>,
+    /// The command assigns a variable that points git at another repository (`GIT_DIR`).
+    repo_env: bool,
+}
+
+/// `git rm -r` on a pathspec of the whole folder git runs in or of the repository removes every
+/// tracked file there from the working tree: with `-f` it also throws away their uncommitted
+/// changes (danger); without it git refuses a file that has some and the rest is restorable
+/// (warn). `--cached` and a dry run leave the files. A narrow pathspec is no finding of this rule.
 fn remove(
     scene: &mut Scene,
     facts: &GitFacts,
@@ -1322,13 +1348,16 @@ fn remove(
         .unwrap_or_default()
         .to_string();
     let cached_option = facts.remove_cached.first().map_or("", String::as_str);
-    // The suggestion keeps git's own options (`-C sub`); after a `cd` it names no command, which
-    // run from another shell would untrack another folder.
+    // The suggestion keeps git's own options (`-C sub`); after a `cd`, or with a variable that
+    // names the repository, it names no command, which run from another shell would untrack
+    // another folder.
     let untrack = if at.moved {
         format!(
             "to untrack the files only, run the same `git {}` with `{cached_option}` in the folder it runs in",
             sub.words
         )
+    } else if at.before.repo_env {
+        format!("to untrack the files only, run the same command with `{cached_option}`")
     } else {
         let mut words = vec![call.name.clone()];
         words.extend(at.global.iter().map(|w| shown(scene, w)));
@@ -1339,15 +1368,14 @@ fn remove(
         format!("to untrack the files only, run `{}`", words.join(" "))
     };
     let place = scope_text(scope);
-    Some(if forced && at.after_orphan {
-        let orphan = facts.orphan_options.first().map_or("", String::as_str);
+    Some(if let Some(orphan) = at.before.orphan.filter(|_| forced) {
         warn(
             GIT_DISCARD,
             format!(
-                "`{shown_cmd}` after a `{orphan}` checkout removes every tracked file in {place} from the working tree of the new branch: the branch you left still holds them, but uncommitted changes carried onto the new branch are lost"
+                "`{shown_cmd}` after `{orphan}` removes every tracked file in {place} from the working tree of the new branch: the branch you left still holds them, but uncommitted changes carried onto the new branch are lost"
             ),
             Some(format!(
-                "to keep uncommitted changes, commit or stash them before `git checkout {orphan}`; {untrack}"
+                "to keep uncommitted changes, commit or stash them before `{orphan}`; {untrack}"
             )),
             call.span(),
         )

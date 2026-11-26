@@ -1332,15 +1332,6 @@ level = "danger"
 rules = ["git-discard"]
 
 [[row]]
-id = "rm-rf-dot-with-C-keeps-C-in-the-fix"
-os = "any"
-shell = "pwsh"
-command = "git -C build rm -rf ."
-level = "danger"
-rules = ["git-discard"]
-fix = "to untrack the files only, run `git -C build rm -r --cached .`;"
-
-[[row]]
 id = "rm-rf-dot-with-a-work-tree-keeps-it-in-the-fix"
 os = "windows"
 shell = "gitbash"
@@ -1382,13 +1373,110 @@ shell = "gitbash"
 command = "git switch --orphan fresh && git rm -rf ."
 level = "warn"
 rules = ["git-discard"]
+fix = "commit or stash them before `git switch --orphan`;"
 
 [[row]]
-id = "rm-orphan-recipe-on-two-lines"
+id = "rm-orphan-recipe-with-an-attached-branch"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan=fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-after-an-and"
+os = "windows"
+shell = "gitbash"
+command = "true && git checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-on-two-lines-is-danger"
 os = "windows"
 shell = "gitbash"
 command = "git checkout --orphan fresh\ngit rm -rf ."
-level = "warn"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-joined-by-a-semicolon-is-danger"
+os = "any"
+shell = "bash"
+command = "git checkout --orphan fresh; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-joined-by-a-semicolon-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-with-a-command-between-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && true && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-with-a-git-call-between-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && git status && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-is-danger"
+os = "any"
+shell = "bash"
+command = "! git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-negated-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "! git checkout --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-without-a-branch-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-with-an-empty-attached-branch-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git switch --orphan= && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-after-a-checkout-of-paths-after-dashdash-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout -- --orphan fresh && git rm -rf ."
+level = "danger"
+rules = ["git-restore-discards", "git-discard"]
+
+[[row]]
+id = "rm-orphan-after-an-or-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "false || git checkout --orphan fresh && git rm -rf ."
+level = "danger"
 rules = ["git-discard"]
 
 [[row]]
@@ -1400,12 +1488,39 @@ level = "warn"
 rules = ["git-discard"]
 
 [[row]]
-id = "rm-orphan-recipe-powershell5"
+id = "rm-orphan-joined-by-a-semicolon-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-powershell5-is-danger"
 os = "windows"
 shell = "powershell5"
 command = "git checkout --orphan fresh; git rm -rf ."
-level = "warn"
+level = "danger"
 rules = ["git-discard"]
+fix_exact = "to untrack the files only, run `git rm -r --cached .`; otherwise look at `git status` first and commit or stash what you keep; or, if this is intended, run the same command again with ` # shellwise: allow` at its end"
+
+[[row]]
+id = "rm-rf-dot-with-a-git-dir-prefix-names-no-command-in-the-fix"
+os = "windows"
+shell = "gitbash"
+command = "GIT_DIR=.git git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+fix = "Fix: to untrack the files only, run the same command with `--cached`;"
+
+[[row]]
+id = "rm-rf-dot-with-git-dir-set-names-no-command-in-the-fix-pwsh"
+os = "any"
+shell = "pwsh"
+command = "$env:GIT_DIR = '.git'; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+fix = "Fix: to untrack the files only, run the same command with `--cached`;"
 
 [[row]]
 id = "rm-orphan-then-cd-is-danger"
@@ -1611,7 +1726,7 @@ rules = ["git-discard"]
 id = "rm-orphan-after-a-compound-statement"
 os = "windows"
 shell = "gitbash"
-command = "if true; then :; fi; git checkout --orphan fresh; git rm -rf ."
+command = "if true; then :; fi; git checkout --orphan fresh && git rm -rf ."
 level = "warn"
 rules = ["git-discard"]
 
@@ -1814,6 +1929,7 @@ shell = "pwsh"
 command = "git -C build rm -rf ."
 level = "danger"
 rules = ["git-discard"]
+fix = "to untrack the files only, run `git -C build rm -r --cached .`;"
 
 [[row]]
 id = "rm-rf-dotdot-with-C-a-subfolder"

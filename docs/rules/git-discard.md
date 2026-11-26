@@ -31,22 +31,26 @@ A narrow pathspec (`git rm -rf build/`) is no finding of this rule, nor a pathsp
 cannot read (`git rm -rf "$d"`). git takes no `-R`. An option word the guard cannot read with a
 whole-folder pathspec (`git rm $OPTS .`) warns `git-unreadable`.
 
-Level `warn` for the recipe that starts an empty branch: a whole-folder `git rm -rf` after a
-`git checkout --orphan <branch>` or `git switch --orphan <branch>` that is sure to have run
-before it: both are top-level statements of the same command, each a single command, joined by
-`&&`, `;` or a new line, in the same folder, with no `cd` and no other branch switch between
-them. The branch left still holds every tracked file; only uncommitted changes carried onto the
-new branch are lost. It stays danger with no known folder, with the orphan checkout after the
-`git rm`, joined by `||` or `&`, inside an `if`, a loop, a function, a subshell or a pipeline (or
-the `git rm` inside one), after an `a &&` that may skip it across a `;`, and when the command
-assigns `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` anywhere (a prefix, `export`,
-`$env:GIT_DIR = …`): the two calls may then name different repositories.
+Level `warn` for the recipe that starts an empty branch, `git checkout --orphan <branch> && git
+rm -rf .` (or `git switch --orphan <branch>`): the whole-folder `git rm -rf` is the very next
+statement after the orphan call and joined to it by `&&`, so it runs only when the orphan call
+succeeded; both are top-level statements of the same command, each a single command, in the same
+folder. The branch left still holds every tracked file; only uncommitted changes carried onto the
+new branch are lost. It stays danger when they are joined by `;` or a new line (the orphan call
+fails when the branch already exists, and the `git rm` then empties the branch you are on), with
+any statement between them, with a `!` before the orphan call, with no branch name after
+`--orphan`, with no known folder, with the orphan call after the `git rm` or on the right of an
+`||`, inside an `if`, a loop, a function, a subshell or a pipeline (or the `git rm` inside one),
+and when the command assigns `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` anywhere (a prefix,
+`export`, `$env:GIT_DIR = …`): the two calls may then name different repositories. Windows
+PowerShell 5.1 has no `&&`, so there the recipe is always danger.
 
 `Fix: if this is intended, run the same command again with ` # shellwise: allow` at its end`
 (for `git clean`: look at `git clean -nd` first; for `git rm`: to untrack the files only, run
 `git rm -r --cached <pathspec>` with git's own options kept, `git -C sub rm -r --cached .`; after
-a `cd`, run the same `git rm` with `--cached` in the folder it runs in; otherwise look at
-`git status` first and commit or stash what you keep)
+a `cd`, run the same `git rm` with `--cached` in the folder it runs in; when the command assigns
+`GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE`, run the same command with `--cached`; otherwise
+look at `git status` first and commit or stash what you keep)
 
 ## Deny
 
