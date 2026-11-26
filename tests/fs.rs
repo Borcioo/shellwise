@@ -8726,6 +8726,20 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             true,
         ),
         (
+            "KV2 Git Bash alias x='echo 1' … x='echo 40'; Import-Alias y; x (a pwsh cmdlet is a program)",
+            gb,
+            vec![
+                with(
+                    "alias",
+                    (1..=40).map(|i| lit(&format!("x=echo {i}"))).collect(),
+                ),
+                st(lits("Import-Alias", &["y"])),
+                st(lits("x", &[])),
+            ],
+            "TEMP",
+            false,
+        ),
+        (
             "VP2 pwsh git status (control)",
             ps,
             vec![st(lits("git", &["status"]))],
