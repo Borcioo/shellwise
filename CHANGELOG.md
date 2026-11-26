@@ -5,8 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Changed
+
+- `wait-loop-unbounded`: a Bash loop whose whole condition is one test comparing the count of the
+  shell's own background jobs with a literal integer or one variable
+  (`while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`, and the `[ ]`, `test`, `[[ ]]`
+  and `until … -lt` forms) reads as bounded when the comparison ends the loop as the count drops
+  (`while … -ge 4`, `-ne 0`; `until … -lt 4`, `-eq 0`). Any other shape still polls: another
+  direction (`while … -lt 4`, `>= 0`), a `!`, a join inside the test or between tests, `<`/`>`
+  in `[ ]` (redirections there), a mark that is an expression.
+
 ### Fixed
 
+- `git-discard`: `git rm -rf .` (and `:/`, `*`, `./*`, a path that is the repo root, `-C <dir>`
+  and `--force` alike) is danger, since it removes every tracked file in the folder and throws
+  away their uncommitted changes; without `-f` it warns. `--cached` and `-n` are ok. Right after
+  `git checkout --orphan <branch> &&` or `git switch --orphan <branch> &&` (the next top-level
+  statement, in the same folder, with no `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` assigned)
+  it warns: the branch left keeps the files, only uncommitted changes are lost; after `;` or a new
+  line it stays danger, since a failed orphan call lets it empty the current branch. An
+  option word the guard cannot read beside a whole-folder `git rm` pathspec (`git rm $OPTS .`)
+  warns `git-unreadable`.
 - Bash and Git Bash: a destructive `bash -c`, `sh -c`, `zsh -c`, `eval` or `pwsh -Command` body,
   or a script given as `<(…)`, followed by a redirect or here-string (`bash -c '…' 2>&1`,
   `> log`, `2>&1 | tail -5`, or one between the words) now reads as the same body without it,

@@ -80,6 +80,7 @@ fn stmt(c: SimpleCommand, chain: Option<ChainOp>) -> Stmt {
     Stmt::Pipeline(Pipeline {
         elems: vec![Elem::Cmd(c)],
         chain,
+        negated: false,
     })
 }
 
@@ -1826,6 +1827,7 @@ fn a_path_on_a_powershell_drive_that_is_no_file_system_is_not_a_file() {
             Stmt::Pipeline(Pipeline {
                 elems: vec![Elem::Expr(lit("$ExecutionContext.SessionState"))],
                 chain: seq,
+                negated: false,
             }),
         ),
         (
@@ -3038,6 +3040,7 @@ fn unread_code_is_a_fact_and_a_script_run_counts_as_a_remap_in_sight() {
         Stmt::Pipeline(Pipeline {
             elems: vec![Elem::Cmd(head), Elem::Cmd(tail)],
             chain: seq,
+            negated: false,
         })
     };
     let mixed = |head: &str, name: &str| {
@@ -3180,6 +3183,7 @@ fn unread_code_is_a_fact_and_a_script_run_counts_as_a_remap_in_sight() {
             vec![Stmt::Pipeline(Pipeline {
                 elems: vec![Elem::Expr(lit("$ExecutionContext.SessionState"))],
                 chain: seq,
+                negated: false,
             })],
             ri(proj),
             vec![],
@@ -3832,6 +3836,7 @@ fn cd_moves_the_location_and_a_cd_that_may_fail_keeps_the_old_one() {
                 Elem::Cmd(lits("echo", &[]))
             ],
             chain: Some(ChainOp::And),
+            negated: false,
         })]),
         paths(&[r"C:\", r"C:\w"])
     );
@@ -3896,6 +3901,7 @@ fn a_location_change_the_check_cannot_follow_makes_the_location_unknown() {
                 Elem::Cmd(lits("cd", &["a"])),
             ],
             chain: and,
+            negated: false,
         }),
     ]);
     unknown_after(vec![stmt(lits("cd", &["-"]), seq)]);
@@ -5882,7 +5888,13 @@ fn a_script_block_starts_where_its_owner_runs_it_or_unknown() {
     let rr = || block(vec![stmt(lits("Remove-Item", &["-Recurse", "."]), seq)]);
     let cd_up = || block(vec![stmt(lits("cd", &[".."]), seq)]);
     let one = |c: SimpleCommand| stmt(c, seq);
-    let pipe = |elems: Vec<Elem>| Stmt::Pipeline(Pipeline { elems, chain: seq });
+    let pipe = |elems: Vec<Elem>| {
+        Stmt::Pipeline(Pipeline {
+            elems,
+            chain: seq,
+            negated: false,
+        })
+    };
     let stored = || {
         let mut c = assign("sb", "");
         c.assigns = vec![("sb".to_string(), rr())];
@@ -6219,6 +6231,7 @@ fn method(type_name: &str, name: &str, args: Vec<Word>) -> Stmt {
             span: Span::default(),
         })],
         chain: Some(ChainOp::Seq),
+        negated: false,
     })
 }
 
@@ -8380,6 +8393,7 @@ fn a_script_alias_is_read_as_the_command_it_names() {
             Stmt::Pipeline(Pipeline {
                 elems: elems.into_iter().map(Elem::Cmd).collect(),
                 chain: seq,
+                negated: false,
             })
         };
         let dot = |a: &[&str]| lits(".", a);

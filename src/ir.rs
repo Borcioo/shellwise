@@ -73,6 +73,9 @@ pub struct Pipeline {
     pub elems: Vec<Elem>,
     /// The operator joining this pipeline to the next statement, if any.
     pub chain: Option<ChainOp>,
+    /// A Bash `!` before the pipeline (`! cmd`, `! time cmd`): its failure reads as success.
+    /// PowerShell has no such negation.
+    pub negated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

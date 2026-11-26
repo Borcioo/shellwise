@@ -9,6 +9,9 @@ followed by a literal subcommand. Global options with literal values may stand b
 Also a word the guard cannot read where an option of a subcommand that discards by an option
 stands (`git reset $MODE`, `git clean $OPTS`): it may be `--hard` or `-fd`. The value of an
 option that takes one is no option: `git switch -c "$BRANCH"`, `git checkout -b "$BRANCH"`.
+For `git rm`, such a word beside a pathspec of the whole folder (`git rm $OPTS .`), where it may
+be the `-r` that takes it all; with literal `-r` and `-f` it is `git-discard` instead, and a
+literal `--cached` or `-n` keeps it ok.
 
 Level `warn` (Ruling 122).
 

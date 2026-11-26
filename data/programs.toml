@@ -533,6 +533,17 @@ branch_options = ["-b", "-B", "--orphan", "--detach", "-d"]
 clean_value_options = ["-e", "--exclude"]
 clean_dirs_options = ["-d"]
 force_options = ["-f", "--force"]
+remove_recursive = ["-r"]
+remove_cached = ["--cached"]
+dry_run = ["-n", "--dry-run"]
+option_ends = ["--end-of-options"]
+# `rm` after an orphan checkout (`git checkout --orphan x && git rm -rf .`): the subcommands that
+# switch branches, and the option that makes the switch an orphan one.
+branch_switches = ["checkout", "switch"]
+orphan_options = ["--orphan"]
+# The environment variables that point git at another repository, work tree or index: a command
+# that assigns one may run the two calls against different repositories.
+repo_env = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]
 
 [[program.discard.subcommands]]
 words = "commit"
@@ -605,6 +616,14 @@ warn_only = true
 [[program.discard.subcommands]]
 words = "stash clear"
 action = "discard"
+
+# `rm`: `-f`/`--force` makes a removal of the whole folder a discard of its uncommitted changes
+# (danger); git takes no `-R`.
+[[program.discard.subcommands]]
+words = "rm"
+action = "remove"
+danger_options = ["-f", "--force"]
+long_options = ["--dry-run", "--quiet", "--cached", "--force", "--ignore-unmatch", "--sparse", "--pathspec-from-file", "--pathspec-file-nul", "--no-dry-run", "--no-quiet", "--no-cached", "--no-force", "--no-ignore-unmatch", "--no-sparse", "--no-pathspec-from-file", "--no-pathspec-file-nul"]
 
 [[program.discard.subcommands]]
 words = "clean"
@@ -894,6 +913,16 @@ clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopw
 # Operators that compare numbers: a test with one on a variable the loop changes is a counter
 # (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
 compares = ["-lt", "-le", "-gt", "-ge", "-eq", "-ne", "<", "<=", ">", ">=", "==", "!="]
+# Bash pipelines that count the shell's own background jobs, written with single blanks: a loop
+# whose whole condition is one test comparing one in a `$( )` waits for those jobs, which end by
+# themselves, so it is bounded (`while (( $(jobs -rp | wc -l) >= 4 ))`). Another stage, option or
+# command is no bound.
+job_counts = ["jobs | wc -l", "jobs -r | wc -l", "jobs -p | wc -l", "jobs -rp | wc -l", "jobs -pr | wc -l"]
+# What each comparison operator says of the count on its left side, as `<operator> <relation>`:
+# the count only falls, so `while` is bounded by `at-least` (a mark of 1 or more, or a variable),
+# `above` (0 or more, or a variable) and `unequal` 0; `until` by `below` (1 or more), `at-most` (0
+# or more) and `equal` 0. With the count on the right the relation is mirrored.
+job_count_ops = ["-ge at-least", ">= at-least", "-gt above", "> above", "-lt below", "< below", "-le at-most", "<= at-most", "-eq equal", "== equal", "-ne unequal", "!= unequal"]
 # The sentence after the Fix line.
 # A tool call's shell never has the process as its child, so `wait <pid>` fails (127).
 hint_bash = "when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"

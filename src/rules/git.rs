@@ -17,7 +17,7 @@ use super::{Ctx, Rule};
 use crate::fs::bounded;
 use crate::fs::resolve::{self, DeleteBy, Location, Target};
 use crate::fs::walk::{self, WalkResult};
-use crate::ir::{Word, WordPart};
+use crate::ir::{ChainOp, Elem, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::level::{Finding, Level, Span};
 use crate::programs::Program;
 use crate::scan;
@@ -50,6 +50,19 @@ pub(crate) struct GitFacts {
     pub clean_dirs_options: Vec<String>,
     /// `worktree remove`: the options that remove a worktree holding untracked files.
     pub force_options: Vec<String>,
+    /// `rm`: the option that removes folders, and the ones that leave the files in the tree:
+    /// limited to the index, or only listed (each turned off again by its `--no-` form).
+    pub remove_recursive: Vec<String>,
+    pub remove_cached: Vec<String>,
+    pub dry_run: Vec<String>,
+    /// `rm`: words that end the options as `--` does (`--end-of-options`).
+    pub option_ends: Vec<String>,
+    /// `rm` after an orphan checkout: the subcommands that switch branches, and the options that
+    /// make the switch an orphan one (the branch left holds every tracked file).
+    pub branch_switches: Vec<String>,
+    pub orphan_options: Vec<String>,
+    /// The environment variables that name another repository, work tree or index.
+    pub repo_env: Vec<String>,
     pub subcommands: Vec<GitSub>,
 }
 
@@ -117,6 +130,8 @@ pub(crate) enum GitAction {
     Discard,
     /// `git clean`: a delete inside the folder git runs in.
     Clean,
+    /// `git rm`: removes tracked files from the working tree (`git-discard` on the whole folder).
+    Remove,
 }
 
 pub(crate) fn discard_facts(prog: &Program) -> Option<&'static GitFacts> {
@@ -151,17 +166,132 @@ impl Rule for GitRule {
         let mut scene = Scene::new(ctx);
         let env = scene.env.clone();
         let mut loc = scene.location();
-        walk_script(ctx.script, &mut loc, &env, &mut |node, loc| {
+        let script = ctx.script;
+        // The folder, top-level statement and subcommand of the last orphan checkout, while no
+        // other branch switch has followed it.
+        let mut orphan: Option<(Vec<PathBuf>, usize, String)> = None;
+        walk_script(script, &mut loc, &env, &mut |node, loc| {
             let Node::Cmd { cmd, piped } = node else {
                 return;
             };
             if let Read::Call(call, prog) = read_call(cmd, piped, shell, os)
                 && let Some(facts) = discard_facts(prog)
             {
-                out.extend(judge(&mut scene, &call, facts, loc));
+                let here = loc.for_git(&call.run, &scene.env).dirs();
+                let top = top_statement(script, cmd);
+                // PowerShell keys an environment variable as `env:NAME`.
+                let names_repo = facts.repo_env.iter().any(|n| {
+                    scene.env.is_assigned(&if is_pwsh(shell) {
+                        format!("env:{n}")
+                    } else {
+                        n.clone()
+                    })
+                });
+                let after_orphan = match (&orphan, &here, top) {
+                    (Some((dirs, i, written)), Some(h), Some(j))
+                        if dirs == h
+                            && !names_repo
+                            && next_after_and(script, *i, j)
+                            && !negated_at(script, j) =>
+                    {
+                        Some(written.clone())
+                    }
+                    _ => None,
+                };
+                let before = Before {
+                    orphan: after_orphan.as_deref(),
+                    repo_env: names_repo,
+                };
+                out.extend(judge(&mut scene, &call, facts, loc, before));
+                match branch_switch(facts, &call) {
+                    // `! git checkout --orphan x` may fail and still let the next command run.
+                    Some(Some(sub)) if top.is_some_and(|t| !negated_at(script, t)) => {
+                        let opt = facts.orphan_options.first().map_or("", String::as_str);
+                        let written = format!("{} {sub} {opt}", call.name);
+                        orphan = here.zip(top).map(|(d, t)| (d, t, written));
+                    }
+                    Some(_) => orphan = None,
+                    None => {}
+                }
             }
         });
     }
+}
+
+/// The index of the top-level statement that is `cmd` alone: a pipeline of that one command,
+/// not in a body, a subshell, a substitution or a pipe.
+fn top_statement(script: &Script, cmd: &SimpleCommand) -> Option<usize> {
+    script.stmts.iter().position(|st| match st {
+        Stmt::Pipeline(p) => matches!(p.elems.as_slice(), [Elem::Cmd(c)] if std::ptr::eq(c, cmd)),
+        _ => false,
+    })
+}
+
+/// Whether top-level statement `j` runs only after statement `i` succeeded: `j` is the very next
+/// statement, joined to `i` by `&&`, and `i` is not the right side of an `||` that may skip it.
+/// After a `;` or a newline `j` runs whether `i` failed or not.
+fn next_after_and(script: &Script, i: usize, j: usize) -> bool {
+    let join = |k: usize| {
+        script
+            .join(k)
+            .or_else(|| match script.stmts.get(k.checked_sub(1)?) {
+                Some(Stmt::Pipeline(p)) => p.chain,
+                _ => None,
+            })
+    };
+    j == i + 1
+        && join(j) == Some(ChainOp::And)
+        && match join(i) {
+            None => i == 0,
+            Some(op) => matches!(op, ChainOp::Seq | ChainOp::And),
+        }
+}
+
+/// Whether top-level statement `i` is a negated pipeline (`! git …`), or no pipeline at all: a
+/// statement the guard cannot read as a plain pipeline counts as negated.
+fn negated_at(script: &Script, i: usize) -> bool {
+    !matches!(script.stmts.get(i), Some(Stmt::Pipeline(p)) if !p.negated)
+}
+
+/// Whether a git call switches branches: `Some(Some(sub))` for an orphan switch that names its
+/// branch (`checkout --orphan x`), `Some(None)` for any other switch or a subcommand the guard
+/// cannot read, `None` otherwise.
+fn branch_switch(facts: &GitFacts, call: &Call) -> Option<Option<String>> {
+    let lits = literals(call.args());
+    let mut k = 0;
+    while let Some(Some(t)) = lits.get(k) {
+        if !t.starts_with('-') {
+            break;
+        }
+        k += if facts.global_value_options.contains(t) {
+            2
+        } else {
+            1
+        };
+    }
+    let Some(sub) = lits.get(k)?.as_deref() else {
+        return Some(None);
+    };
+    if !facts.branch_switches.iter().any(|s| s == sub) {
+        return None;
+    }
+    let rest = &lits[k + 1..];
+    // The orphan option with its branch: `--orphan x` or `--orphan=x`.
+    let named = rest.iter().enumerate().any(|(x, t)| {
+        let Some(t) = t else { return false };
+        facts
+            .orphan_options
+            .iter()
+            .any(|o| scan::flag_matches(o, t))
+            && match t.split_once('=') {
+                Some((_, b)) => !b.is_empty(),
+                None => rest
+                    .get(x + 1)
+                    .is_some_and(|n| n.as_deref().is_none_or(|n| !n.starts_with('-'))),
+            }
+            && !rest[..x].iter().flatten().any(|e| e == "--")
+    });
+    Some(named.then(|| sub.to_string()))
 }
 
 /// The span text of a word, or its literal text.
@@ -218,7 +348,14 @@ fn names_subcommand(facts: &GitFacts, lits: &[Option<String>], mut k: usize) -> 
 
 /// The one finding of a git call, in this order: what the guard cannot read, skipped hooks,
 /// then what the subcommand discards or deletes.
-fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Option<Finding> {
+/// `before`: what the statements before the call say of where it runs.
+fn judge(
+    scene: &mut Scene,
+    call: &Call,
+    facts: &GitFacts,
+    loc: &Location,
+    before: Before,
+) -> Option<Finding> {
     let args = call.args();
     let lits = literals(args);
     let pwsh = is_pwsh(scene.ctx.input.shell);
@@ -288,7 +425,17 @@ fn judge(scene: &mut Scene, call: &Call, facts: &GitFacts, loc: &Location) -> Op
     let rest_lits = spelled.as_slice();
     let git_loc = loc.for_git(&call.run, &scene.env);
     let global = (&args[..sub_at], &lits[..sub_at]);
-    let found = judge_sub(scene, facts, call, sub, global, rest, rest_lits, &git_loc);
+    let found = judge_sub(
+        scene,
+        facts,
+        call,
+        sub,
+        global,
+        rest,
+        rest_lits,
+        (loc, &git_loc),
+        before,
+    );
     if found.is_some() || !has_danger_options(call, sub) {
         return found;
     }
@@ -343,7 +490,8 @@ fn judge_sub(
     global: (&[Word], &[Option<String>]),
     rest: &[Word],
     rest_lits: &[Option<String>],
-    git_loc: &Location,
+    (loc, git_loc): (&Location, &Location),
+    before: Before,
 ) -> Option<Finding> {
     match sub.action {
         GitAction::Hooks => {
@@ -371,6 +519,17 @@ fn judge_sub(
         }
         GitAction::Discard => discard(call, sub, rest_lits),
         GitAction::Clean => clean(scene, facts, call, sub, rest, rest_lits, git_loc),
+        GitAction::Remove => {
+            // A `cd` before git moved where it runs: a Fix command would then depend on it.
+            let moved = loc.dirs() != scene.location().dirs();
+            let place = Place {
+                global: global.0,
+                git_loc,
+                moved,
+                before,
+            };
+            remove(scene, facts, call, sub, rest, rest_lits, &place)
+        }
     }
 }
 
@@ -997,4 +1156,248 @@ fn clean(
         return Some(whole_tree());
     }
     worst
+}
+
+/// What a `git rm` pathspec takes in whole: the folder git runs in or the repository.
+#[derive(Clone, Copy)]
+enum Whole {
+    Folder,
+    Repo,
+}
+
+/// The whole folder or repository a `git rm` pathspec takes, and whether git needs `-r` for it.
+/// By its text wherever git runs: `.`, `./` and a `*` or `./*` the shell expands (the folder), `:/`, `:/.`
+/// and `:(top)` (the repository); a `*` git expands itself (quoted in Bash, any in PowerShell: the
+/// stricter reading where pwsh expands it first) and
+/// `:/*` reach nested files without `-r`. Else by what it resolves to: the folder git runs in or
+/// the repo root. A word the guard cannot read: none.
+fn whole_spec(
+    scene: &Scene,
+    w: &Word,
+    git_loc: &Location,
+    here: &[PathBuf],
+    repo: &[PathBuf],
+) -> Option<(Whole, bool)> {
+    let mut text = String::new();
+    let mut globbed = false;
+    for p in &w.parts {
+        match p {
+            WordPart::Literal(s) => text.push_str(s),
+            WordPart::Glob(s) => {
+                globbed = true;
+                text.push_str(s);
+            }
+            _ => return None,
+        }
+    }
+    match text.as_str() {
+        ":/*" => return Some((Whole::Repo, false)),
+        // `./*` names the same entries as `*`; `.\*` is how PowerShell writes it.
+        "*" | "./*" => return Some((Whole::Folder, globbed)),
+        ".\\*" => return Some((Whole::Folder, false)),
+        "." | "./" => return Some((Whole::Folder, true)),
+        ":/" | ":/." | ":(top)" => return Some((Whole::Repo, true)),
+        _ if globbed => return None,
+        _ => {}
+    }
+    let Target::Paths(ps) = resolve::target(
+        w,
+        git_loc,
+        &scene.env,
+        DeleteBy::Native,
+        scene.ctx.fs,
+        scene.ctx.deadline,
+    ) else {
+        return None;
+    };
+    if ps.iter().any(|p| same_path(scene, p, repo)) {
+        Some((Whole::Repo, true))
+    } else if ps.iter().any(|p| same_path(scene, p, here)) {
+        Some((Whole::Folder, true))
+    } else {
+        None
+    }
+}
+
+/// Where a `git rm` runs: git's own options before it, the location they give, whether a `cd`
+/// before it moved the shell, and what the statements before it say.
+struct Place<'a> {
+    global: &'a [Word],
+    git_loc: &'a Location,
+    moved: bool,
+    before: Before<'a>,
+}
+
+/// What the statements before a git call say of where it runs.
+#[derive(Clone, Copy)]
+struct Before<'a> {
+    /// The orphan call as written (`git switch --orphan`) when the call is the next statement
+    /// after it, joined by `&&`, in the same folder.
+    orphan: Option<&'a str>,
+    /// The command assigns a variable that points git at another repository (`GIT_DIR`).
+    repo_env: bool,
+}
+
+/// `git rm -r` on a pathspec of the whole folder git runs in or of the repository removes every
+/// tracked file there from the working tree: with `-f` it also throws away their uncommitted
+/// changes (danger); without it git refuses a file that has some and the rest is restorable
+/// (warn). `--cached` and a dry run leave the files. A narrow pathspec is no finding of this rule.
+fn remove(
+    scene: &mut Scene,
+    facts: &GitFacts,
+    call: &Call,
+    sub: &GitSub,
+    rest: &[Word],
+    rest_lits: &[Option<String>],
+    at: &Place,
+) -> Option<Finding> {
+    let git_loc = at.git_loc;
+    let on = |list: &[String], t: &str| list.iter().any(|e| scan::flag_matches(e, t));
+    let off = |list: &[String], t: &str| {
+        list.iter()
+            .filter_map(|e| e.strip_prefix("--"))
+            .any(|n| t.strip_prefix("--").and_then(|r| r.strip_prefix("no-")) == Some(n))
+    };
+    // Options before `--` (or `--end-of-options`) as git reads them, the last of an option and
+    // its `--no-` form winning; every other word is a pathspec. Only a literal word sets an
+    // option; a word the guard cannot read before the end may be one (a shell glob never is).
+    let (mut recursive, mut forced, mut cached, mut dry) = (false, false, false, false);
+    let mut unread: Option<&Word> = None;
+    let mut specs: Vec<&Word> = Vec::new();
+    let mut ended = false;
+    for (w, t) in rest.iter().zip(rest_lits) {
+        match t.as_deref() {
+            Some(t) if !ended && (t == "--" || facts.option_ends.iter().any(|e| e == t)) => {
+                ended = true;
+            }
+            Some(t) if !ended && t.len() > 1 && t.starts_with('-') => {
+                recursive |= on(&facts.remove_recursive, t);
+                forced |= on(&sub.danger_options, t);
+                if on(&facts.remove_cached, t) {
+                    cached = true;
+                } else if off(&facts.remove_cached, t) {
+                    cached = false;
+                }
+                if on(&facts.dry_run, t) {
+                    dry = true;
+                } else if off(&facts.dry_run, t) {
+                    dry = false;
+                }
+            }
+            // A shell glob expands to paths, never to an option.
+            None if !ended
+                && w.parts
+                    .iter()
+                    .any(|p| !matches!(p, WordPart::Literal(_) | WordPart::Glob(_))) =>
+            {
+                unread.get_or_insert(w);
+                specs.push(w);
+            }
+            _ => specs.push(w),
+        }
+    }
+    if cached || dry {
+        return None;
+    }
+    let repo = scene.repo_spellings().unwrap_or_default();
+    // The folder git runs in, by every spelling a resolved path may use (an 8.3 short name).
+    let here: Vec<PathBuf> = resolve::spellings(
+        &git_loc.dirs().unwrap_or_default(),
+        scene.ctx.fs,
+        scene.ctx.deadline,
+        scene.ctx.input.os,
+    )
+    .into_iter()
+    .flatten()
+    .collect();
+    let classes: Vec<(&Word, Whole, bool)> = specs
+        .iter()
+        .filter_map(|w| {
+            whole_spec(scene, w, git_loc, &here, &repo).map(|(scope, needs_r)| (*w, scope, needs_r))
+        })
+        .collect();
+    let scope_text = |scope: Whole| match scope {
+        Whole::Folder => "the folder git runs in",
+        Whole::Repo => "the repository",
+    };
+    let Some(&(spec, scope, _)) = classes.iter().find(|(_, _, needs_r)| recursive || !needs_r)
+    else {
+        // An option the guard cannot read may be the `-r` that makes it take the whole folder.
+        let (&(_, scope, _), word) = classes.first().zip(unread)?;
+        return Some(warn(
+            GIT_UNREADABLE,
+            format!(
+                "the guard could not read `{}`, which may be an option that makes `git {}` remove every tracked file in {}",
+                shown(scene, word),
+                sub.words,
+                scope_text(scope)
+            ),
+            Some(format!(
+                "write the options of `git {}` literally so the guard can check them",
+                sub.words
+            )),
+            call.span(),
+        ));
+    };
+    let shown_cmd = scene
+        .ctx
+        .input
+        .command
+        .get(call.span().start..call.span().end)
+        .unwrap_or_default()
+        .to_string();
+    let cached_option = facts.remove_cached.first().map_or("", String::as_str);
+    // The suggestion keeps git's own options (`-C sub`); after a `cd`, or with a variable that
+    // names the repository, it names no command, which run from another shell would untrack
+    // another folder.
+    let untrack = if at.moved {
+        format!(
+            "to untrack the files only, run the same `git {}` with `{cached_option}` in the folder it runs in",
+            sub.words
+        )
+    } else if at.before.repo_env {
+        format!("to untrack the files only, run the same command with `{cached_option}`")
+    } else {
+        let mut words = vec![call.name.clone()];
+        words.extend(at.global.iter().map(|w| shown(scene, w)));
+        words.push(sub.words.clone());
+        words.extend(facts.remove_recursive.first().cloned());
+        words.push(cached_option.to_string());
+        words.push(shown(scene, spec));
+        format!("to untrack the files only, run `{}`", words.join(" "))
+    };
+    let place = scope_text(scope);
+    Some(if let Some(orphan) = at.before.orphan.filter(|_| forced) {
+        warn(
+            GIT_DISCARD,
+            format!(
+                "`{shown_cmd}` after `{orphan}` removes every tracked file in {place} from the working tree of the new branch: the branch you left still holds them, but uncommitted changes carried onto the new branch are lost"
+            ),
+            Some(format!(
+                "to keep uncommitted changes, commit or stash them before `{orphan}`; {untrack}"
+            )),
+            call.span(),
+        )
+    } else if forced {
+        finding(
+            GIT_DISCARD,
+            Level::Danger,
+            format!(
+                "`{shown_cmd}` removes every tracked file in {place} from the working tree and throws away their uncommitted changes, which no commit or stash holds"
+            ),
+            format!(
+                "{untrack}; otherwise look at `git status` first and commit or stash what you keep; or, {CONFIRM_FIX}"
+            ),
+            call.span(),
+        )
+    } else {
+        warn(
+            GIT_DISCARD,
+            format!(
+                "`{shown_cmd}` removes every tracked file in {place} from the working tree; git refuses a file with uncommitted changes, and the rest can be restored from HEAD"
+            ),
+            Some(format!("{untrack}; otherwise look at `git status` first")),
+            call.span(),
+        )
+    })
 }

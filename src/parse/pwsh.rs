@@ -1935,7 +1935,11 @@ impl<'a> Lower<'a> {
         if !extra.is_empty() {
             elems.push(Elem::Expr(subst_word(script_of(extra), span(n))));
         }
-        Ok(Stmt::Pipeline(Pipeline { elems, chain: None }))
+        Ok(Stmt::Pipeline(Pipeline {
+            elems,
+            chain: None,
+            negated: false,
+        }))
     }
 
     /// The value of `$x = 'a'` or `$x = $y`: a pipeline of one plain string or variable.
@@ -2047,7 +2051,11 @@ impl<'a> Lower<'a> {
                 _ => return Err(self.unmodelled(k)),
             }
         }
-        Ok(Stmt::Pipeline(Pipeline { elems, chain: None }))
+        Ok(Stmt::Pipeline(Pipeline {
+            elems,
+            chain: None,
+            negated: false,
+        }))
     }
 
     /// An expression at the head of a pipeline: a static method call, or an expression.
@@ -3580,6 +3588,7 @@ fn single_pipeline(e: Elem) -> Stmt {
     Stmt::Pipeline(Pipeline {
         elems: vec![e],
         chain: None,
+        negated: false,
     })
 }
 
