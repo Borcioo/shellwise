@@ -156,9 +156,8 @@ impl Rule for DeleteRule {
         // it has more values than the guard follows.
         let unread_texts = |c: &SimpleCommand| {
             let (more, capped) = aliases.texts(c, command);
-            let own = command.get(c.span.start..c.span.end).unwrap_or_default();
             (
-                std::iter::once(own.to_string())
+                std::iter::once(own_text(command, shell, c))
                     .chain(more)
                     .collect::<Vec<_>>(),
                 capped,
@@ -367,6 +366,23 @@ pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) ->
         }),
         prog,
     )
+}
+
+/// The text of `c` in `command`: its span's text, or, for a Bash command with a redirect, its
+/// name and arguments joined by spaces, so a body is read whatever redirect stands before, between
+/// or after the words. The Bash lowering gives such a command the span of its name alone, or a
+/// span that holds the redirect between the words, where the scan stops. A redirect target is no
+/// word of the command.
+fn own_text(command: &str, shell: Shell, c: &SimpleCommand) -> String {
+    let text = |s: Span| command.get(s.start..s.end).unwrap_or_default();
+    if c.redirects.is_empty() || is_pwsh(shell) {
+        return text(c.span).to_string();
+    }
+    std::iter::once(c.name.span)
+        .chain(c.args.iter().map(|w| w.span))
+        .map(text)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The words a destructive hit acts on: those after its command's name, up to the end of that
@@ -1389,8 +1405,7 @@ impl<'a> Scene<'a> {
     /// `text` is the text of `c`, or that text with an alias it calls written as its value;
     /// `hits` are `scan::parsed_hits` of `text`.
     fn opaque_in(&mut self, c: &SimpleCommand, text: &str, hits: Vec<scan::Hit>) -> Finding {
-        let command = self.ctx.input.command;
-        let own = command.get(c.span.start..c.span.end).unwrap_or_default();
+        let own = own_text(self.ctx.input.command, self.ctx.input.shell, c);
         let shown: String = own.chars().take(80).collect();
         // Only the words of the destructive commands themselves: a `cd` to the repo root
         // elsewhere in the body names no target.

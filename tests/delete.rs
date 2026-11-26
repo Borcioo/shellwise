@@ -637,6 +637,206 @@ fn arithmetic_reads_like_its_plain_twin() {
     eprintln!("arith_twins.toml: {} twins read alike", rows.len());
 }
 
+/// A child shell's body reads the same behind any redirect or pipe as bare: every carrier the
+/// delete rule reads, wrappers before it, times every redirect form, for a body that deletes the
+/// home folder (danger), one that deletes a relative folder (warn) and a harmless one (ok), with
+/// the bare form's messages.
+#[test]
+fn a_child_body_behind_a_redirect_reads_as_the_bare_form() {
+    let _fx = fixture();
+    const BASH: [(&str, &str, &str); 3] = [
+        ("rm -rf ~", "danger", "opaque-destructive"),
+        ("rm -rf build", "warn", "opaque-destructive"),
+        ("echo hi", "ok", ""),
+    ];
+    const PWSH: [(&str, &str, &str); 3] = [
+        (
+            "Remove-Item -Recurse -Force ~",
+            "danger",
+            "opaque-destructive",
+        ),
+        (
+            "Remove-Item -Recurse -Force build",
+            "warn",
+            "opaque-destructive",
+        ),
+        ("Write-Output hi", "ok", ""),
+    ];
+    // The carrier's words before the body, the word the body follows last.
+    let carriers: [(&str, bool); 10] = [
+        ("bash -c", false),
+        ("sh -c", false),
+        ("zsh -c", false),
+        ("eval", false),
+        ("pwsh -Command", true),
+        ("sudo bash -c", false),
+        ("env A=1 bash -c", false),
+        ("nohup bash -c", false),
+        ("timeout 60 bash -c", false),
+        ("time bash -c", false),
+    ];
+    let after = [
+        " 2>&1",
+        " > log",
+        " 2>/dev/null",
+        " >> log",
+        " &> log",
+        " > \"$log\"",
+        " > log 2>&1 2>/dev/null",
+        " 2>&1 | tail -5",
+        " | tee log",
+        " <<< x",
+        " <<'EOF'\nhi\nEOF",
+    ];
+    let shells: &[&str] = if cfg!(windows) {
+        &["bash", "gitbash"]
+    } else {
+        &["bash"]
+    };
+    let read = |shell: &str, command: String| {
+        let row = Row {
+            id: command.clone(),
+            os: "any".to_string(),
+            shell: shell.to_string(),
+            command,
+            level: String::new(),
+            rules: Vec::new(),
+            fix: None,
+            fix_exact: None,
+            oracle: None,
+            config: None,
+            twin: None,
+        };
+        let v = verdict(&row);
+        let ids: Vec<&'static str> = v.findings.iter().map(|f| f.rule).collect();
+        let messages: Vec<String> = v.findings.iter().map(|f| f.message.clone()).collect();
+        (v.level.as_str().to_string(), ids, messages)
+    };
+    let mut wrong = Vec::new();
+    let mut cells = 0;
+    for &shell in shells {
+        for (carrier, pwsh) in carriers {
+            for (body, level, rule) in if pwsh { PWSH } else { BASH } {
+                let bare = format!("{carrier} '{body}'");
+                let want = read(shell, bare.clone());
+                let want_ids: Vec<&str> = [rule].into_iter().filter(|r| !r.is_empty()).collect();
+                if (want.0.as_str(), want.1.clone()) != (level, want_ids) {
+                    wrong.push(format!("[{shell}] bare {bare:?}: {} {:?}", want.0, want.1));
+                }
+                let mut forms: Vec<String> = after.iter().map(|a| format!("{bare}{a}")).collect();
+                // A redirect after each of the carrier's words, the body's option included.
+                let words: Vec<&str> = carrier.split(' ').collect();
+                for at in 1..=words.len() {
+                    let (head, tail) = words.split_at(at);
+                    let tail = tail.iter().map(|w| format!(" {w}")).collect::<String>();
+                    forms.push(format!("{} 2>&1{tail} '{body}'", head.join(" ")));
+                }
+                // Known miss of another cause: a redirect before `time` makes it a program
+                // (delete.toml `known-miss-redirect-before-time-program`).
+                if !carrier.starts_with("time ") {
+                    forms.push(format!("2>/dev/null {bare}"));
+                }
+                for text in forms {
+                    cells += 1;
+                    let got = read(shell, text.clone());
+                    if got != want {
+                        wrong.push(format!(
+                            "[{shell}] {text:?}: {} {:?} {:?} (bare {} {:?} {:?})",
+                            got.0, got.1, got.2, want.0, want.1, want.2
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // Away from the start of the command: in a list, a substitution, a compound, a later line,
+    // after a non-ASCII word, piped into, in an unquoted heredoc's substitution.
+    let contexts = [
+        "cd build && {c}",
+        "x=$({c})",
+        "x=`{c}`",
+        "( {c} )",
+        "if true; then {c}; fi",
+        "f() { {c}; }; f",
+        "echo one\n{c}",
+        "echo zażółć && {c}",
+        "echo x | {c}",
+        "cat <<EOF\n$({c})\nEOF",
+    ];
+    let pairs = [
+        ("bash -c 'rm -rf ~'", "bash -c 'rm -rf ~' 2>&1"),
+        ("sudo bash -c 'rm -rf ~'", "sudo bash 2>&1 -c 'rm -rf ~'"),
+    ];
+    for &shell in shells {
+        for ctx in contexts {
+            for (bare, redirected) in pairs {
+                let want = read(shell, ctx.replace("{c}", bare));
+                if want.0 != "danger" {
+                    wrong.push(format!(
+                        "[{shell}] bare in {ctx:?}: {} {:?}",
+                        want.0, want.1
+                    ));
+                }
+                cells += 1;
+                let text = ctx.replace("{c}", redirected);
+                let got = read(shell, text.clone());
+                if got != want {
+                    wrong.push(format!("[{shell}] {text:?}: {got:?} (bare {want:?})"));
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {cells} cells differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    eprintln!("{cells} redirected child bodies read as their bare form");
+}
+
+/// The opaque-destructive message quotes a command as written where its text holds its words: a
+/// Bash command with no redirect (its spacing kept) and a PowerShell one (its call operator and
+/// redirect kept).
+#[test]
+fn an_unread_command_is_quoted_as_written() {
+    let _fx = fixture();
+    let cases = [
+        ("bash", "bash -c  'rm -rf ~'", "`bash -c  'rm -rf ~'`"),
+        (
+            "pwsh",
+            "Set-Alias zz Remove-Item; & { zz ~ -Recurse -Force } 2>&1",
+            "`& { zz ~ -Recurse -Force } 2>&1`",
+        ),
+    ];
+    for (shell, command, quoted) in cases {
+        let row = Row {
+            id: command.to_string(),
+            os: "any".to_string(),
+            shell: shell.to_string(),
+            command: command.to_string(),
+            level: String::new(),
+            rules: Vec::new(),
+            fix: None,
+            fix_exact: None,
+            oracle: None,
+            config: None,
+            twin: None,
+        };
+        let v = verdict(&row);
+        let messages: Vec<&str> = v
+            .findings
+            .iter()
+            .filter(|f| f.rule == "opaque-destructive")
+            .map(|f| f.message.as_str())
+            .collect();
+        assert!(
+            messages.len() == 1 && messages[0].contains(quoted),
+            "{command:?}: {messages:?} (want one quoting {quoted})"
+        );
+    }
+}
+
 /// Rows ported from the baseline guard's tests/test_rules.py, per rule, as git.toml's header records
 /// them (every OS counted).
 const PORTED: [(&str, usize); 3] = [
