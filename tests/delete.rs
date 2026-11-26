@@ -858,6 +858,189 @@ fn an_unread_command_is_quoted_as_written() {
     }
 }
 
+/// An assignment before a child shell's carrier changes nothing: every carrier the delete rule
+/// reads, wrappers before it, the body as a quoted word or a process substitution, behind every
+/// assignment shape, bare and behind a redirect, reads as the carrier without the assignment:
+/// level, rule ids, and the messages but for the assignment text. A value is data: one that holds
+/// delete text fires nothing of its own.
+#[test]
+fn a_child_body_behind_an_assignment_reads_as_the_bare_form() {
+    let _fx = fixture();
+    // The body, and the bare carrier's level and rule ids for it: a quoted word, then a process
+    // substitution (a script operand: warn whatever it deletes).
+    const BASH: [(&str, [&str; 2]); 3] = [
+        ("rm -rf ~", ["danger", "warn"]),
+        ("rm -rf build", ["warn", "warn"]),
+        ("echo hi", ["ok", "ok"]),
+    ];
+    const PWSH: [(&str, [&str; 2]); 3] = [
+        ("Remove-Item -Recurse -Force ~", ["danger", "warn"]),
+        ("Remove-Item -Recurse -Force build", ["warn", "warn"]),
+        ("Write-Output hi", ["ok", "ok"]),
+    ];
+    const QUOTED: &str = "'{b}'";
+    const FED: &str = "<(echo '{b}')";
+    let carriers: [(&str, &str, bool); 19] = [
+        ("bash -c", QUOTED, false),
+        ("sh -c", QUOTED, false),
+        ("zsh -c", QUOTED, false),
+        ("eval", QUOTED, false),
+        ("pwsh -Command", QUOTED, true),
+        ("sudo bash -c", QUOTED, false),
+        ("env A=1 bash -c", QUOTED, false),
+        ("nohup bash -c", QUOTED, false),
+        ("timeout 60 bash -c", QUOTED, false),
+        ("time bash -c", QUOTED, false),
+        ("bash", FED, false),
+        ("sh", FED, false),
+        ("zsh", FED, false),
+        ("bash -x", FED, false),
+        ("sudo bash", FED, false),
+        ("env A=1 bash", FED, false),
+        ("nohup bash", FED, false),
+        ("timeout 60 bash", FED, false),
+        ("time bash", FED, false),
+    ];
+    let assignments = [
+        "X=ab",
+        "X=a\\ b",
+        "X=\"ab\"",
+        "X='a b'",
+        "X=$'a b'",
+        "X=\"\"",
+        "X=''",
+        "MSG=\"hello world\"",
+        "X=\"a=b\"",
+        "X=\"it's\"",
+        "X='say \"hi\"'",
+        "X=\"$(date)\"",
+        "X=\"`date`\"",
+        "X=\"${V:-d}\"",
+        "X=$(date)",
+        "X=\"a b\" Y='c d'",
+        "X=ab Y=\"c d\"",
+        "X+=\"a b\"",
+        "X+=ab",
+        "A=(a b)",
+        "CMD=\"rm -rf ~\"",
+        "CMD='Remove-Item -Recurse -Force ~'",
+    ];
+    let shells: &[&str] = if cfg!(windows) {
+        &["bash", "gitbash"]
+    } else {
+        &["bash"]
+    };
+    let read = |shell: &str, command: String| {
+        let row = Row {
+            id: command.clone(),
+            os: "any".to_string(),
+            shell: shell.to_string(),
+            command,
+            level: String::new(),
+            rules: Vec::new(),
+            fix: None,
+            fix_exact: None,
+            oracle: None,
+            config: None,
+            twin: None,
+        };
+        let v = verdict(&row);
+        let ids: Vec<&'static str> = v.findings.iter().map(|f| f.rule).collect();
+        let messages: Vec<String> = v.findings.iter().map(|f| f.message.clone()).collect();
+        (v.level.as_str().to_string(), ids, messages)
+    };
+    // A message quotes the command's first 80 characters as written: that quote is compared
+    // as present, the rest of the message word for word.
+    let unquoted = |messages: &[String], text: &str| -> Vec<String> {
+        let shown: String = text.chars().take(80).collect();
+        messages
+            .iter()
+            .map(|m| m.replacen(&format!("`{shown}`"), "`<command>`", 1))
+            .collect()
+    };
+    let mut wrong = Vec::new();
+    let mut cells = 0;
+    for &shell in shells {
+        for (carrier, word, pwsh) in carriers {
+            // Known miss of another cause: after an assignment `time` is a program, not bash's
+            // keyword (delete.toml `known-miss-assignment-before-time-program`).
+            if carrier.starts_with("time ") {
+                continue;
+            }
+            for (body, levels) in if pwsh { PWSH } else { BASH } {
+                let word = word.replace("{b}", body);
+                let bare = format!("{carrier} {word}");
+                let level = levels[usize::from(word.starts_with('<'))];
+                let want = read(shell, bare.clone());
+                let want_ids: Vec<&str> = if level == "ok" {
+                    Vec::new()
+                } else {
+                    vec!["opaque-destructive"]
+                };
+                if (want.0.as_str(), want.1.clone()) != (level, want_ids) {
+                    wrong.push(format!(
+                        "[{shell}] bare {bare:?}: {} {:?} (want {level})",
+                        want.0, want.1
+                    ));
+                }
+                // The bare carrier behind each redirect form, read with the same assignment.
+                let first = carrier.split(' ').next().unwrap_or(carrier);
+                let rest = &carrier[first.len()..];
+                let forms = [
+                    bare.clone(),
+                    format!("{bare} 2>&1"),
+                    format!("{bare} > log"),
+                    format!("{first} 2>&1{rest} {word}"),
+                    format!("2>/dev/null {{a}} {bare}"),
+                ];
+                for form in forms {
+                    let bare_text = form.replace("{a} ", "");
+                    let bare_form = read(shell, bare_text.clone());
+                    if form != bare && (bare_form.0.as_str(), &bare_form.1) != (level, &want.1) {
+                        wrong.push(format!(
+                            "[{shell}] bare {bare_text:?}: {} {:?} (want {level})",
+                            bare_form.0, bare_form.1
+                        ));
+                    }
+                    let bare_messages = unquoted(&bare_form.2, &bare_text);
+                    for assign in assignments {
+                        // Known over-read of another cause: the scan's PowerShell reading takes
+                        // the backtick for its escape, so the value's closing quote is escaped and
+                        // the rest reads as code (delete.toml
+                        // `known-over-read-backtick-value-before-procsub`).
+                        if assign.contains('`') && word.starts_with('<') && body.contains('~') {
+                            continue;
+                        }
+                        let text = if form.contains("{a}") {
+                            form.replace("{a}", assign)
+                        } else {
+                            format!("{assign} {form}")
+                        };
+                        cells += 1;
+                        let got = read(shell, text.clone());
+                        let messages = unquoted(&got.2, &text);
+                        if (&got.0, &got.1, &messages)
+                            != (&bare_form.0, &bare_form.1, &bare_messages)
+                        {
+                            wrong.push(format!(
+                                "[{shell}] {text:?}: {} {:?} {:?} (bare {} {:?} {:?})",
+                                got.0, got.1, got.2, bare_form.0, bare_form.1, bare_form.2
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {cells} cells differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    eprintln!("{cells} child bodies behind an assignment read as their bare form");
+}
+
 /// Rows ported from the baseline guard's tests/test_rules.py, per rule, as git.toml's header records
 /// them (every OS counted).
 const PORTED: [(&str, usize); 3] = [
