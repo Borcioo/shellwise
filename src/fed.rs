@@ -125,6 +125,14 @@ fn produced(prev: &Elem, src: &str, shell: Shell, os: Os) -> Option<(String, Opt
     if !p.redirects.is_empty() {
         return None;
     }
+    if let (FEEDS_FORMAT, [format, arg]) = (feeds, p.args.as_slice()) {
+        let format = literal(format)?;
+        return scan::PRINTF_ARG_FORMATS
+            .contains(&format.as_str())
+            .then(|| fixed(arg))
+            .flatten()
+            .map(|t| (t.clone(), Some(t)));
+    }
     let args = p.args.iter().map(fixed).collect::<Option<Vec<_>>>()?;
     let text = match (feeds, args.as_slice()) {
         (FEEDS_WORDS, [first, ..]) if !first.starts_with('-') => args.join(" "),

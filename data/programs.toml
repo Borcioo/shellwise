@@ -485,9 +485,10 @@ dry_run = ["/L"]
 # stdin_encoded_params on PowerShell: parameters whose value is an encoded program
 # feeds                on a producer before the shell in a pipeline: what it writes the guard can
 #                      read: "words" (its arguments joined by blanks, the first no option),
-#                      "format" (one format with no `%` and no `\`), "stdin" (its own heredoc,
-#                      with no operand but `-`), "one" (one argument). A word that
-#                      holds `$`, a backtick, `\` or `%` is never read.
+#                      "format" (one format with no `%` and no `\`, or `%s` or `%s\n` and one
+#                      argument), "stdin" (its own heredoc, with no operand but `-`), "one" (one
+#                      argument). Any other word that holds `$`, a backtick, `\` or `%` is never
+#                      read.
 
 [[program]]
 name = "bash"

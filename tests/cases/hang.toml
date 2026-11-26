@@ -8289,3 +8289,11 @@ shell = "bash"
 command = "bash -eo pipefail <<'EOF'\nwhile true; do sleep 1; done\nEOF"
 level = "ok"
 rules = []
+
+[[row]]
+id = "fu-bash-fed-pipe-printf-line-follow"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'tail -f log' | bash"
+level = "warn"
+rules = ["follow-unbounded"]

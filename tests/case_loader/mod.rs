@@ -177,7 +177,9 @@ const BASH_CARRIERS: [(&str, bool); 8] = [
 ];
 
 /// Forms that feed a Bash body (`{b}`) to a Bash carrier (`{c}`).
-const BASH_FORMS: [&str; 13] = [
+const BASH_FORMS: [&str; 15] = [
+    "printf '%s\\n' '{b}' | {c}",
+    "printf '%s' '{b}' | {c}",
     "{c} <<'EOF'\n{b}\nEOF",
     "{c} <<EOF\n{b}\nEOF",
     "{c} <<-'EOF'\n\t{b}\n\tEOF",

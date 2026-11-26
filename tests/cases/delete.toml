@@ -7664,3 +7664,54 @@ shell = "bash"
 command = "bash \"$S\" <<'EOF'\nrm -rf ~\nEOF"
 level = "danger"
 rules = ["opaque-destructive"]
+
+# `printf '%s\n' '…'` and `printf '%s' '…'` with one argument print that argument: read as it,
+# on a command that parses and beside a syntax error alike.
+[[row]]
+id = "fed-pipe-printf-line-home"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-printf-string-relative"
+os = "any"
+shell = "bash"
+command = "printf '%s' 'rm -rf build' | sh"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-printf-line-home-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~' | bash\n; )"
+level = "danger"
+rules = ["parse-error-destructive"]
+
+[[row]]
+id = "fed-control-pipe-printf-other-format"
+os = "any"
+shell = "bash"
+command = "printf '%d\\n' 5 | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-printf-variable"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' \"$CMD\" | bash"
+level = "ok"
+rules = []
+
+# Known miss: with more than one argument the format runs once per argument; that is not read.
+[[row]]
+id = "known-miss-fed-pipe-printf-two-arguments"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'cd /tmp' 'rm -rf ~' | bash"
+level = "ok"
+rules = []
