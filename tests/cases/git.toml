@@ -1552,6 +1552,70 @@ level = "danger"
 rules = ["git-discard"]
 
 [[row]]
+id = "rm-orphan-joined-by-or-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh || $true; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-a-background-job-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh &\ngit rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-a-pipeline-is-danger"
+os = "any"
+shell = "bash"
+command = "git checkout --orphan fresh | cat; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-a-pipeline-is-danger-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh | cat; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-in-a-pipeline-is-danger-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh | Out-Null; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-rm-in-a-pipeline-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh; git rm -rf . | cat"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-after-a-compound-and-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "if true; then :; fi && git checkout --orphan fresh; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-after-a-compound-statement"
+os = "windows"
+shell = "gitbash"
+command = "if true; then :; fi; git checkout --orphan fresh; git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
 id = "rm-orphan-then-git-dir-prefix-is-danger"
 os = "windows"
 shell = "gitbash"
