@@ -15,17 +15,17 @@ use crate::level::Span;
 const TABLE_TEXT: &str = include_str!("../data/destructive.toml");
 const SHELLS: [&str; 3] = ["bash", "pwsh", "cmd"];
 /// Nested bodies (`bash -c "…"` inside `pwsh -c "…"`, `env -S '…'`) and wrappers (`sudo`,
-/// `timeout 5`) each cost one level; past this the command is unreadable.
+/// `timeout 5`) each cost one level; past this the scan stops reading the command.
 const MAX_DEPTH: usize = 4;
 /// The scan's work for one input, in steps (a character segmented, a word examined): this many
-/// per input byte, plus a base. Past it the input is unreadable.
+/// per input byte, plus a base. Once it is spent the scan stops, with the hits found so far.
 const BUDGET_PER_BYTE: usize = 16;
 const BUDGET_BASE: usize = 1 << 18;
 /// The cost of one word-level step (a walk step, a reading tried), in byte steps.
 const WORD: usize = 8;
 
-/// The work left for one scan. Every loop over the input spends from it, so hostile nesting ends
-/// in an unreadable verdict instead of a hang or a stack overflow.
+/// The work left for one scan. Every loop over the input spends from it, so on hostile nesting
+/// the scan stops instead of hanging or overflowing the stack.
 struct Budget {
     left: Cell<usize>,
     spent: Cell<bool>,
