@@ -77,8 +77,8 @@ claude plugin install shellwise@shellwise
 Any other agent: run `shellwise agent-setup` and paste the output to your agent. It finds its
 host's hook that runs before a shell command, registers shellwise there and proves the wiring.
 
-Update with `shellwise update`. The binary never updates itself; the plugin prints one line at
-session start when a newer release exists. To uninstall, delete the binary and remove the hook
+Update with `shellwise update`. The binary never updates itself; when a newer release exists,
+the plugin adds one line to the session at its start, so the agent sees it and can tell you. To uninstall, delete the binary and remove the hook
 entry or the plugin. To switch shellwise off, set `SHELLWISE=off`.
 
 Status: these lines work from the first release that contains them (v0.1.1 has no musl builds,

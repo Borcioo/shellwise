@@ -2,7 +2,8 @@
 
 Checks every Bash and PowerShell command Claude Code is about to run with `shellwise hook
 claude-code`, and refuses the ones shellwise finds broken or destructive. Once a day, at session
-start, it prints one line when a newer shellwise is released (`shellwise update --notify`).
+start, it adds one line to the session when a newer shellwise is released (`shellwise update
+--notify`), so the agent sees it and can tell the user.
 
 The plugin ships no binary: it runs the `shellwise` found on `PATH`. Without it the hook fails and
 every command runs unchecked, so install the binary first.
