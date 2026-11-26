@@ -870,6 +870,8 @@ fn an_empty_or_missing_path_gets_just_the_folder() {
             let f = Fixture::new("pathempty");
             publish_latest(&f);
             let key = ScratchKey::new(i, seed);
+            let seeded = seed.map(|s| ("ExpandString".to_string(), s.to_string()));
+            assert_eq!(key.read().path, seeded, "{} {seed:?}: the seed", i.name);
             let out = f.run(i, &key.env("0"));
             assert_success(&out);
             let state = key.read();
@@ -908,7 +910,9 @@ fn session_path_row(i: Interp) {
     let f = Fixture::new("sessionpath");
     publish_latest(&f);
     let key = ScratchKey::new(i, Some(SEED));
-    let after = "'inpath:' + @(([string]$env:Path) -split ';' | Where-Object { $_ -eq $env:SHELLWISE_INSTALL_DIR }).Count";
+    // Both sides through GetFullPath: it turns an 8.3 temp folder into its long spelling.
+    let after = "$want = [IO.Path]::GetFullPath($env:SHELLWISE_INSTALL_DIR).TrimEnd('\\')\n\
+                 'inpath:' + @(([string]$env:Path) -split ';' | Where-Object { try { $_ -and [IO.Path]::GetFullPath($_).TrimEnd('\\') -ieq $want } catch { $false } }).Count";
     let out = run_through_iex(&f, i, &key.env("0"), after);
     assert_eq!(out.code, 0, "{}: {}", i.name, out.context());
     assert!(
