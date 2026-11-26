@@ -11,6 +11,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   or a script given as `<(…)`, followed by a redirect or here-string (`bash -c '…' 2>&1`,
   `> log`, `2>&1 | tail -5`, or one between the words) now reads as the same body without it,
   instead of ok.
+- Bash and Git Bash: a destructive child-shell body behind a variable assignment whose value is
+  quoted or appended (`X="a b" bash -c '…'`, `MSG='hi' eval '…'`, `X+=1 bash <(…)`), and a delete
+  behind such an assignment inside a body, now reads as the same command without the assignment,
+  instead of ok.
 
 ## [0.2.0] - 2026-11-26
 

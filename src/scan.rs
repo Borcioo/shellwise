@@ -336,7 +336,9 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
                         producers.push(command_words(&next.words[start..], w, b));
                         false
                     });
-                    let span = seg_span(&s.words);
+                    // From the first word that is no assignment: a value is no target.
+                    let lead = s.words.iter().take_while(|w| is_assignment_word(w)).count();
+                    let span = seg_span(&s.words[lead.min(s.words.len() - 1)..]);
                     feed(table, &next.words, &producers, span, depth, b, &mut out);
                 }
             }
@@ -956,12 +958,13 @@ fn walk(words: &[Tok], depth: usize, b: &Budget) -> Walk {
             return SPENT;
         }
         let w = &words[k];
-        if w.quoted {
+        let assignment = is_assignment_word(w);
+        if w.quoted && !assignment {
             break;
         }
         let v = w.value.as_str();
         let lower = v.to_lowercase();
-        if PREFIX_WORDS.contains(&lower.as_str()) || is_assignment(v) {
+        if PREFIX_WORDS.contains(&lower.as_str()) || assignment {
             k += 1;
         } else if let Some(&(name, opts)) = WRAPPERS.iter().find(|(n, _)| *n == base_name(v)) {
             depth += 1;
@@ -1138,11 +1141,18 @@ fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }
 
-/// `NAME=value`
+/// `NAME=value` or `NAME+=value` whose name and `=` are not quoted: a quoted value still makes
+/// an assignment (`X="a b"`), a word quoted from its start is a command's name (`"X=a"`).
+fn is_assignment_word(w: &Tok) -> bool {
+    w.value.get(..w.bare).is_some_and(|b| b.contains('=')) && is_assignment(&w.value)
+}
+
+/// `NAME=value`, `NAME+=value`
 fn is_assignment(v: &str) -> bool {
     let Some((name, _)) = v.split_once('=') else {
         return false;
     };
+    let name = name.strip_suffix('+').unwrap_or(name);
     let mut chars = name.chars();
     chars.next().is_some_and(is_ident_start) && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
@@ -1175,6 +1185,8 @@ enum Mode {
 struct Tok {
     value: String,
     quoted: bool,
+    /// The bytes of `value` before its first quoted part.
+    bare: usize,
     span: Span,
 }
 
@@ -1274,9 +1286,13 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
         let t = cur.get_or_insert_with(|| Tok {
             value: String::new(),
             quoted: false,
+            bare: 0,
             span: Span { start, end },
         });
         t.value.push_str(s);
+        if !t.quoted && !quoted {
+            t.bare = t.value.len();
+        }
         t.quoted |= quoted;
         t.span.end = end;
     }
