@@ -598,6 +598,45 @@ fn git_rows() {
     run_file("git.toml");
 }
 
+#[test]
+fn arith_twin_rows() {
+    run_file("arith_twins.toml");
+}
+
+/// Ruling 161: arithmetic around a substitution or a name changes no verdict. Each row's command
+/// gives the rule ids of its plain twin, in the same fixture cwd.
+#[test]
+fn arithmetic_reads_like_its_plain_twin() {
+    let _fx = fixture();
+    let rows = case_loader::rows("arith_twins.toml");
+    let ids =
+        |row: &Row| -> Vec<&'static str> { verdict(row).findings.iter().map(|f| f.rule).collect() };
+    let mut wrong = Vec::new();
+    for row in &rows {
+        let twin = row
+            .twin
+            .clone()
+            .unwrap_or_else(|| panic!("{}: no twin", row.id));
+        let plain = Row {
+            command: twin,
+            twin: None,
+            ..row.clone()
+        };
+        let (got, want) = (ids(row), ids(&plain));
+        if got != want {
+            wrong.push(format!("{}: {got:?} (its twin {want:?})", row.id));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} rows differ from their twin:\n{}",
+        wrong.len(),
+        rows.len(),
+        wrong.join("\n")
+    );
+    eprintln!("arith_twins.toml: {} twins read alike", rows.len());
+}
+
 /// Rows ported from the baseline guard's tests/test_rules.py, per rule, as git.toml's header records
 /// them (every OS counted).
 const PORTED: [(&str, usize); 3] = [
