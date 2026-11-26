@@ -55,10 +55,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   (`timeout 60 echo "$(while true; do sleep 1; done)"`, `sudo -u "$(…)" timeout 60 …`,
   `timeout 60 cat <(…)`, `X="$(…)" timeout 60 …`, `timeout 60 bash -c "$(…)"`) now blocks, and a
   follow there warns, as one in the words of a PowerShell `Start-Job` that is waited for with a
-  timeout (`Start-Job -Name "$(Get-Content log -Wait)" { … }`). So does a loop or a follow the child shell sends to the background
-  (`timeout 60 bash -c '<loop> &'`, also in a group, a subshell or an `if`): the shell may end
-  once it has started it, and `timeout` with it. A body that waits for the job
-  (`timeout 60 bash -c '<loop> & wait'`) is bounded, but it blocks too.
+  timeout (`Start-Job -Name "$(Get-Content log -Wait)" { … }`). Known miss: a loop or a follow
+  the child shell sends to the background still reads bounded, now behind a wrapper as well
+  (`sudo timeout 60 bash -c '<loop> &'`), as its bare twin (`timeout 60 bash -c '<loop> &'`) did.
 - A command that does not parse for a reason other than an unclosed quote (an unclosed quote
   already blocks, with the wrapper or without it), or whose analysis cannot finish, and pipes
   static delete text into a shell behind a wrapper (`sudo -u root printf 'rm -rf x' | bash`,
