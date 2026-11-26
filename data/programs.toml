@@ -536,6 +536,7 @@ force_options = ["-f", "--force"]
 remove_recursive = ["-r"]
 remove_cached = ["--cached"]
 dry_run = ["-n", "--dry-run"]
+option_ends = ["--end-of-options"]
 
 [[program.discard.subcommands]]
 words = "commit"

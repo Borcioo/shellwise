@@ -24,7 +24,8 @@ A `*` git expands itself (`'*'` in Bash, any `*` in PowerShell) and `:/*` reach 
 without `-r`. Level `danger` with `-f`/`--force` (also in a cluster, `-rf`, or by a prefix, `--forc`):
 their uncommitted changes are lost too. Level `warn` without it: git refuses a file with
 uncommitted changes, and the rest can be restored from HEAD. `--cached` (only the index) and
-`-n`/`--dry-run` before `--` are no finding; the last of an option and its `--no-` form counts.
+`-n`/`--dry-run` before `--` or `--end-of-options` are no finding; the last of an option and its
+`--no-` form counts.
 A narrow pathspec (`git rm -rf build/`) is no finding of this rule, nor a pathspec the guard
 cannot read (`git rm -rf "$d"`). git takes no `-R`. An option word the guard cannot read with a
 whole-folder pathspec (`git rm $OPTS .`) warns `git-unreadable`.
@@ -60,3 +61,10 @@ git clean -n
 git rm -r --cached .
 git rm -rf build/
 ```
+
+## Limits
+
+- `git rm` pathspec magic is read only in the literal forms above: an exclude-only pathspec
+  (`git rm -rf ':!keep'`, which takes everything but `keep`), long magic other than `:(top)`
+  (`':(glob)**'`, `':(icase)…'`) and a wildcard git expands itself other than a bare `*` or `:/*`
+  (`'*.log'`, which also reaches nested files) are no finding of this rule.

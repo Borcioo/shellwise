@@ -55,6 +55,8 @@ pub(crate) struct GitFacts {
     pub remove_recursive: Vec<String>,
     pub remove_cached: Vec<String>,
     pub dry_run: Vec<String>,
+    /// `rm`: words that end the options as `--` does (`--end-of-options`).
+    pub option_ends: Vec<String>,
     pub subcommands: Vec<GitSub>,
 }
 
@@ -1084,15 +1086,18 @@ fn remove(
             .filter_map(|e| e.strip_prefix("--"))
             .any(|n| t.strip_prefix("--").and_then(|r| r.strip_prefix("no-")) == Some(n))
     };
-    // Options before `--` as git reads them, the last of an option and its `--no-` form winning;
-    // every other word is a pathspec. A word the guard cannot read before `--` may be an option.
+    // Options before `--` (or `--end-of-options`) as git reads them, the last of an option and
+    // its `--no-` form winning; every other word is a pathspec. Only a literal word sets an
+    // option; a word the guard cannot read before the end may be one (a shell glob never is).
     let (mut recursive, mut forced, mut cached, mut dry) = (false, false, false, false);
     let mut unread: Option<&Word> = None;
     let mut specs: Vec<&Word> = Vec::new();
     let mut ended = false;
     for (w, t) in rest.iter().zip(rest_lits) {
         match t.as_deref() {
-            Some("--") if !ended => ended = true,
+            Some(t) if !ended && (t == "--" || facts.option_ends.iter().any(|e| e == t)) => {
+                ended = true;
+            }
             Some(t) if !ended && t.len() > 1 && t.starts_with('-') => {
                 recursive |= on(&facts.remove_recursive, t);
                 forced |= on(&sub.danger_options, t);

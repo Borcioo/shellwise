@@ -1189,9 +1189,10 @@ rules = ["delete-critical"]
 # file there from the working tree: with `-f`/`--force` it also throws away their uncommitted
 # changes (danger); without it git refuses a file with changes and the rest is restorable (warn).
 # A `*` git expands itself (`'*'` in Bash, any `*` in PowerShell, `:/*`) reaches nested files
-# without `-r` (probed on git 2.53). `--cached` and `-n`/`--dry-run` (before `--`, the last of
-# `--cached`/`--no-cached` and `--dry-run`/`--no-dry-run` wins) leave the files: ok. git rejects
-# `-R` (exit 129). `-C <dir>` makes `.` that folder: still its whole contents.
+# without `-r` (probed on git 2.53). `--cached` and `-n`/`--dry-run` (before `--` or
+# `--end-of-options`, the last of `--cached`/`--no-cached` and `--dry-run`/`--no-dry-run` wins)
+# leave the files: ok; only a literal word sets them. git rejects `-R` (exit 129). `-C <dir>`
+# makes `.` that folder: still its whole contents. A narrow wildcard (`'*.log'`) keeps its verdict.
 
 [[row]]
 id = "rm-rf-dot"
@@ -1303,6 +1304,38 @@ id = "rm-a-dry-run-flag-after-dashdash-is-a-pathspec"
 os = "windows"
 shell = "gitbash"
 command = "git rm -rf -- -n ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dot-after-the-end-of-options"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --end-of-options ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-a-dry-run-flag-after-the-end-of-options-is-a-pathspec"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --end-of-options -n ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "nocwd-rm-fr-dot-slash"
+os = "any"
+shell = "pwsh"
+command = "git rm -fr ./"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dot-beside-a-word-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf $X ."
 level = "danger"
 rules = ["git-discard"]
 
@@ -1440,6 +1473,38 @@ id = "rm-cached"
 os = "any"
 shell = "pwsh"
 command = "git rm -r --cached ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-cached-beside-a-word-the-guard-cannot-read"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf --cached $X ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-narrow-git-glob"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf '*.log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-narrow-shell-glob"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf src/*.bak"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-a-narrow-glob-in-powershell"
+os = "any"
+shell = "pwsh"
+command = "git rm -rf *.log"
 level = "ok"
 rules = []
 
