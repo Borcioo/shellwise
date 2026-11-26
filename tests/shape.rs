@@ -56,13 +56,19 @@ const SCAN_TABLES: &[&str] = &[
     "ECHO_NAMES",
 ];
 
-/// New files allowed host tool names that are not program names, with the reason. Their caps
-/// are otherwise 0.
+/// New files allowed host tool names and event keys that are not program names, with the reason.
+/// A file may also hold the names and options of programs the binary itself starts (never ones
+/// it analyses), each registered with that reason. Their caps are otherwise 0.
 const NEW_FILES: &[(&str, &[&str], &str)] = &[
     (
         "src/adapter/claude_code.rs",
         &["Bash", "PowerShell"],
         "the hook event's tool names, compared to pick the shell",
+    ),
+    (
+        "src/adapter/generic.rs",
+        &["command", "powershell"],
+        "the hook event's `command` key, and its tool name compared to pick the shell",
     ),
     (
         "src/bench.rs",
@@ -73,6 +79,23 @@ const NEW_FILES: &[(&str, &[&str], &str)] = &[
         "src/fs/assigned.rs",
         &["foreach"],
         "the PowerShell loop keyword a loop header starts with, not a command",
+    ),
+    (
+        "src/update.rs",
+        &[
+            "sh",
+            "-s",
+            "pwsh",
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "-Command",
+            "taskkill.exe",
+            "/T",
+            "/F",
+        ],
+        "started by `update` to run the install script / to end its process tree",
     ),
 ];
 

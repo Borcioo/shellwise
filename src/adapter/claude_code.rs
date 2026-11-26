@@ -155,7 +155,7 @@ pub fn malformed(bytes: &[u8], reason: &str, deadline: &Deadline) -> Option<Stri
 /// command inside a JSON string (`"command":"rm -rf x"`) is a line of its own, not glued to the
 /// key before it; the string escapes are decoded best-effort (`\n` and `\r` a line break, `\t` a
 /// tab, `\uXXXX` its character, `\"` a quote), so a multi-line command keeps its lines.
-fn scan_text(raw: &str) -> String {
+pub(crate) fn scan_text(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(c) = chars.next() {
@@ -283,7 +283,7 @@ fn text(lines: &[String], n: usize) -> String {
 }
 
 /// `shellwise: <level> <rule>: <message>`, then the `Fix:` line when the finding has one.
-fn finding_text(f: &Finding) -> String {
+pub(crate) fn finding_text(f: &Finding) -> String {
     let head = cut(&format!(
         "shellwise: {} {}: {}",
         f.level.as_str(),
