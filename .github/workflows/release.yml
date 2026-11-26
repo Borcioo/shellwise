@@ -43,7 +43,7 @@ jobs:
           # Cross-compiled on the Apple silicon runner.
           - os: macos-latest
             target: x86_64-apple-darwin
-          # Static builds. Without CC_<target>, cc looks for aarch64-linux-musl-gcc on the ARM row.
+          # Static builds; the toolchain step points cc at musl-gcc for the C grammar.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
           - os: ubuntu-26.04-arm

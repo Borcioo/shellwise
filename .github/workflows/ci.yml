@@ -32,7 +32,7 @@ jobs:
       - run: cargo clippy --all-targets --features testhooks -- -D warnings
       - run: shellcheck install.sh
         if: runner.os == 'Linux'
-      - run: cargo test --no-fail-fast --features testhooks
+      - run: cargo test --features testhooks
 
   install-scripts:
     name: install scripts (macos-latest)
@@ -44,6 +44,7 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -62,7 +63,7 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             bin: shellwise
-          # Static builds. Without CC_<target>, cc looks for aarch64-linux-musl-gcc on the ARM row.
+          # Static builds; the toolchain step points cc at musl-gcc for the C grammar.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             bin: shellwise
