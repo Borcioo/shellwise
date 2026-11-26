@@ -120,8 +120,9 @@ cd shellwise
 cargo build --release
 ```
 
-The built binary is `target/release/shellwise` (`shellwise.exe` on Windows). It needs no service, no
-network and no interpreter.
+The built binary is `target/release/shellwise` (`shellwise.exe` on Windows). Checking a command
+needs no service, no network and no interpreter; only `shellwise update` reaches the network, and
+it runs the install script through `sh` or PowerShell.
 
 ### Claude Code hook
 
