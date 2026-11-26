@@ -2005,7 +2005,7 @@ command = 'while read -t 5 line; do echo "$line"; done'
 level = "ok"
 rules = []
 
-# --- A count polled in arithmetic or in an arithmetic `[[ -gt ]]` test (Ruling 161) ---
+# --- A count polled in arithmetic, in `let` or in an arithmetic `[[ ]]` test (`-gt`, `-ne`) ---
 # Arithmetic reads a `$(…)` like the same `$(…)` outside it, so such a loop with nothing that
 # bounds it breaks like its `[ ]` twin. A counter or a clock in the condition, or `timeout`
 # around the loop, bounds it; a throttle that waits on a job (`wait -n`) does not poll.
@@ -2031,6 +2031,22 @@ id = "wl-bash-a-count-polled-in-a-test-comparison"
 os = "any"
 shell = "bash"
 command = 'while [[ $(pgrep -c worker) -gt 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-count-polled-in-a-test-not-equal"
+os = "any"
+shell = "bash"
+command = 'while [[ $(pgrep -c worker) -ne 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-count-polled-in-let"
+os = "any"
+shell = "bash"
+command = 'while let "$(pgrep -c worker) > 0"; do sleep 1; done'
 level = "break"
 rules = ["wait-loop-unbounded"]
 
@@ -2183,6 +2199,22 @@ id = "wl-gitbash-a-count-polled-in-a-test-comparison"
 os = "windows"
 shell = "gitbash"
 command = 'while [[ $(pgrep -c worker) -gt 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-a-test-not-equal"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(pgrep -c worker) -ne 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-let"
+os = "windows"
+shell = "gitbash"
+command = 'while let "$(pgrep -c worker) > 0"; do sleep 1; done'
 level = "break"
 rules = ["wait-loop-unbounded"]
 
