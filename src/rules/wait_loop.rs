@@ -2239,14 +2239,22 @@ enum TestForm {
     Arith,
 }
 
-/// The operators a test form compares numbers with, and the ones it compares text with. In `[ ]`
-/// and `test`, `<` and `>` are redirections and `<=`/`>=` no operators.
-fn form_operators(form: TestForm) -> (&'static [&'static str], &'static [&'static str]) {
-    const WORDS: &[&str] = &["-ge", "-gt", "-lt", "-le", "-ne", "-eq"];
+/// The operators a test form compares numbers with (`[loops] compares`: the `-xx` words, or in
+/// `(( ))` the symbols), and the ones it compares text with. In `[ ]` and `test`, `<` and `>` are
+/// redirections and `<=`/`>=` no operators.
+fn form_operators(form: TestForm) -> (Vec<&'static str>, &'static [&'static str]) {
+    let compares = &programs::loops().compares;
+    let words = |dash: bool| {
+        compares
+            .iter()
+            .map(String::as_str)
+            .filter(|o| o.starts_with('-') == dash)
+            .collect()
+    };
     match form {
-        TestForm::Single => (WORDS, &[]),
-        TestForm::Double => (WORDS, &["<", ">"]),
-        TestForm::Arith => (&[">=", ">", "<", "<=", "!=", "=="], &[]),
+        TestForm::Single => (words(true), &[]),
+        TestForm::Double => (words(true), &["<", ">"]),
+        TestForm::Arith => (words(false), &[]),
     }
 }
 
