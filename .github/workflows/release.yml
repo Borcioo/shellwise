@@ -62,6 +62,21 @@ jobs:
       - run: cargo test --features testhooks
         if: runner.os != 'macOS' && !contains(matrix.target, 'musl')
       - run: cargo build --release --locked --target ${{ matrix.target }}
+      # Each musl row's runner is native for its target, so the binary runs here.
+      - name: Run the musl binary
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/shellwise"
+          "$bin" --version
+          proof="$RUNNER_TEMP/proof-bash.txt"
+          printf '%s' "echo 'abc" > "$proof"
+          code=0
+          cat "$proof" | "$bin" check --shell bash || code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "shellwise check exited $code on the proof command; expected 1" >&2
+            exit 1
+          fi
       - name: Package
         shell: bash
         run: |
