@@ -162,7 +162,9 @@ Known gap: `lint` on a whole script is slower than its target of 50 ms per 500 l
 - Bash: arithmetic reads a `$(…)` written inside it like the same `$(…)` outside it. A `$(…)`
   that only a variable's value holds, in an array subscript, and that bash runs when arithmetic
   reads the variable (`x='a[$(cmd)]'; (( x ))`), is not seen; one written in a static subscript
-  that bash evaluates (`let 'a[$(cmd)]'`, `declare -i n; n='a[$(cmd)]'`) is.
+  that bash evaluates (`let 'a[$(cmd)]'`, `declare -i n; n='a[$(cmd)]'`) is, when the integer
+  name is declared earlier in the text than the assignment (an assignment in a function written
+  before the `declare -i` that precedes its call is not seen).
 - `CDPATH` set by a shell profile the hook cannot see is not modelled.
 
 ## Develop

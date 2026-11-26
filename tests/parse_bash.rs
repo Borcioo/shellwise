@@ -572,6 +572,64 @@ fn eval_behind_a_descriptor_name_and_a_misread_coproc_are_opaque() {
     }
     assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
 }
+
+/// A command that writes a name the lowering cannot read (a name that is not static or no name,
+/// an option letter it does not know, `${x:=…}`) is opaque: the write may reach any name. Outside
+/// any command (`case`, a `coproc` name) the text gets an opaque `((` command. A static name, a
+/// known option, and `let` (arithmetic, read like the same text outside it) mark nothing.
+#[test]
+fn a_write_to_a_name_the_lowering_cannot_read_is_opaque() {
+    // (row, the command that must be opaque: the last one with this name)
+    let opaque: &[(&str, &str)] = &[
+        ("read \"$v\" <<< 1", "read"),
+        ("read -k x", "read"),
+        ("mapfile -k a < f", "mapfile"),
+        ("getopts ab", "getopts"),
+        ("wait -n -p \"$v\"", "wait"),
+        ("o=-v; printf $o n %s 1", "printf"),
+        ("printf -v", "printf"),
+        ("declare -i \"$k=1\"", "declare"),
+        ("declare \"$k=1\"", "declare"),
+        ("declare 'x:-y=1'", "declare"),
+        ("echo \"${a[x]:=d}\"", "echo"),
+        ("echo \"${a[x]=}\"", "echo"),
+        ("declare -i n; : ${n:='a[$(rm -rf y)]'}", ":"),
+        ("[[ ${x:=1} == 1 ]]", "[["),
+        ("(( ${x:=1} ))", "(("),
+        ("case ${x:=a} in *) ;; esac", "(("),
+        ("x=PATH; coproc $x { :; }; wait", "(("),
+        ("x=C; coproc $x [[ 1 ]]; wait", "(("),
+    ];
+    let plain = [
+        "read -r -a arr < f",
+        "read -rs -p x n < f",
+        "mapfile -t a < f",
+        "getopts ab o",
+        "wait -n -p x",
+        "printf -v n %s 1",
+        "declare x=1 'y=2'",
+        "let \"n = $(git rev-list --count HEAD)\"",
+        "let $v",
+        "coproc C { :; }; wait",
+    ];
+    let mut bad = Vec::new();
+    for (src, name) in opaque {
+        let s = ok(src);
+        let c = commands(&s);
+        match c.iter().rev().find(|c| bash_util::name_of(c) == *name) {
+            None => bad.push(format!("no {name}: {src}")),
+            Some(c) if !c.opaque => bad.push(format!("not opaque: {src}")),
+            Some(_) => {}
+        }
+    }
+    for src in plain {
+        if commands(&ok(src)).iter().any(|c| c.opaque) {
+            bad.push(format!("opaque: {src}"));
+        }
+    }
+    assert!(bad.is_empty(), "{} rows: {bad:#?}", bad.len());
+}
+
 #[test]
 fn compound_statements_keep_their_kind() {
     let s = ok("if git diff --quiet; then rm x; elif true; then a; else b; fi");
