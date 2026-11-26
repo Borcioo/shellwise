@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 pub mod adapter;
 pub mod config;
+mod fed;
 pub mod fs;
 pub mod ir;
 pub mod level;

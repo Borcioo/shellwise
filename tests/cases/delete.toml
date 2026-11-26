@@ -7130,3 +7130,284 @@ shell = "pwsh"
 command = "Set-Alias zz Get-A001; Set-Alias zz Get-A002; Set-Alias zz Get-A003; Set-Alias zz Get-A004; Set-Alias zz Get-A005; Set-Alias zz Get-A006; Set-Alias zz Get-A007; Set-Alias zz Get-A008; Set-Alias zz Get-A009; Set-Alias zz Get-A010; Set-Alias zz Get-A011; Set-Alias zz Get-A012; Set-Alias zz Get-A013; Set-Alias zz Get-A014; Set-Alias zz Get-A015; Set-Alias zz Get-A016; Set-Alias zz Get-A017; Set-Alias zz Get-A018; Set-Alias zz Get-A019; Set-Alias zz Get-A020; Set-Alias zz Get-A021; Set-Alias zz Get-A022; Set-Alias zz Get-A023; Set-Alias zz Get-A024; Set-Alias zz Get-A025; Set-Alias zz Get-A026; Set-Alias zz Get-A027; Set-Alias zz Get-A028; Set-Alias zz Get-A029; Set-Alias zz Get-A030; Set-Alias zz Get-A031; Set-Alias zz Get-A032; Import-Alias x; $d = 'C:\\Windows'; zz; Remove-Item -Recurse -Force $d"
 level = "warn"
 rules = ["dynamic-target"]
+
+# ---------------------------------------------------------------- a body fed on stdin to a local shell
+# A heredoc or here-string a local bash, sh, zsh or PowerShell reads as its program is read as the
+# same shell's `-c` / `-Command` body: danger with a literal protected location, else warn.
+# `tests/delete.rs` `a_body_fed_on_stdin_reads_as_its_c_twin` pins every carrier and form against
+# its twin; these rows name the shapes.
+
+[[row]]
+id = "fed-heredoc-quoted-home"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-quoted-home-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-unquoted-home"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# An unquoted body reads as `bash -c "…"` with the same expansions: `$HOME` spells the home folder.
+[[row]]
+id = "fed-heredoc-unquoted-home-variable"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf $HOME\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-unquoted-unknown-variable"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf $D\nEOF"
+level = "warn"
+rules = ["opaque-destructive"]
+
+# The calling shell runs the substitution while it expands the body: judged there too, as
+# `bash -c "echo $(rm -rf ~)"` is.
+[[row]]
+id = "fed-heredoc-unquoted-substitution-home"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\necho $(rm -rf ~)\nEOF"
+level = "critical"
+rules = ["opaque-destructive", "delete-critical"]
+
+[[row]]
+id = "fed-heredoc-tabs-home"
+os = "any"
+shell = "bash"
+command = "bash <<-'EOF'\n\trm -rf ~\n\tEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-home"
+os = "any"
+shell = "bash"
+command = "bash <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-relative"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf build\""
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-sudo-heredoc-home"
+os = "any"
+shell = "bash"
+command = "sudo bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-sh-heredoc-home"
+os = "any"
+shell = "bash"
+command = "sh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-zsh-heredoc-home"
+os = "any"
+shell = "bash"
+command = "zsh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-sh-s-with-operands-heredoc-home"
+os = "any"
+shell = "bash"
+command = "sh -s -- arg <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-bash-option-value-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash -o pipefail <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-in-a-substitution-home"
+os = "any"
+shell = "bash"
+command = "out=$(bash <<'EOF'\nrm -rf ~\nEOF\n)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# The last stdin redirect wins: the heredoc after a file is the program.
+[[row]]
+id = "fed-heredoc-after-a-file-home"
+os = "any"
+shell = "bash"
+command = "bash < run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pwsh-command-dash-heredoc-home"
+os = "any"
+shell = "bash"
+command = "pwsh -Command - <<'EOF'\nRemove-Item -Recurse -Force ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pwsh-file-dash-here-string-relative"
+os = "any"
+shell = "bash"
+command = "pwsh -File - <<< 'Remove-Item -Recurse -Force build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-harmless"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\necho hi\nEOF"
+level = "ok"
+rules = []
+
+# A body that does not parse is read as text, as `bash -c 'echo a; )'` is.
+[[row]]
+id = "fed-heredoc-body-that-does-not-parse"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\necho a; )\nEOF"
+level = "ok"
+rules = []
+
+# After a syntax error the whole text is scanned, the heredoc body included.
+[[row]]
+id = "fed-heredoc-home-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ~\nEOF\n; )"
+level = "danger"
+rules = ["parse-error-destructive"]
+
+# Stdin that is data: a `-c` body or a script runs, the heredoc is its input.
+[[row]]
+id = "fed-control-c-body-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "bash -c 'echo hi' <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-script-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "bash script.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-process-substitution-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "bash <(echo hi) <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pwsh-file-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "pwsh -File run.ps1 <<'EOF'\nRemove-Item -Recurse -Force ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-file-after-the-heredoc"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF' < run.sh\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-cat-heredoc"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-cat-heredoc-to-a-file"
+os = "any"
+shell = "bash"
+command = "cat > setup.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# Known limit: a body run on another machine or in a container is not read, on stdin or as an
+# argument (`ssh host bash -c '…'` reads ok too).
+[[row]]
+id = "known-miss-fed-ssh-heredoc"
+os = "any"
+shell = "bash"
+command = "ssh host bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-docker-exec-heredoc"
+os = "any"
+shell = "bash"
+command = "docker exec -i c bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-kubectl-exec-heredoc"
+os = "any"
+shell = "bash"
+command = "kubectl exec -i p -- bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-wsl-heredoc"
+os = "any"
+shell = "bash"
+command = "wsl bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# Known miss, another cause: `dash` and `ksh` have no shell row, so `dash -c 'rm -rf ~'` reads ok
+# too; the fed form reads as that twin.
+[[row]]
+id = "known-miss-fed-dash-heredoc"
+os = "any"
+shell = "bash"
+command = "dash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []

@@ -22,7 +22,8 @@
 //! comes from its `delete` facts in `data/programs.toml` (`Program::extra`). A command whose
 //! code the guard cannot read (an opaque name, a shell or eval body, an unread wrapper) is
 //! flagged only when its raw text names a destructive command (Ruling 91a): danger when its
-//! words also hold a literal protected location, warn otherwise. The git commands are judged in
+//! words also hold a literal protected location, warn otherwise. The program a local shell reads
+//! on stdin (`fed`) is such text too, read as the shell's `-c` body. The git commands are judged in
 //! `git.rs`.
 
 use std::borrow::Cow;
@@ -33,6 +34,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use super::{Ctx, Rule};
+use crate::fed;
 use crate::fs::assigned::{Assigned, resolve_assigned};
 use crate::fs::resolve::{self, AliasRun, DeleteBy, Location, SwitchState, Target, UnknownKind};
 use crate::fs::walk::{self, WalkResult, is_within};
@@ -151,6 +153,8 @@ impl Rule for DeleteRule {
         let command = ctx.input.command;
         // A call of an alias the command defined before it is also read as what it runs.
         let aliases = resolve::DefinedAliases::of(ctx.script, command, shell, os, || ctx.aliases());
+        // The program a shell reads on stdin, read as its `-c` body is.
+        let fed = fed::Index::of(ctx.script, command, shell, os);
         // Code the guard does not read, its text also read with each alias it calls written as
         // the alias's value (Ruling 153): the texts the raw scan reads, and whether an alias in
         // it has more values than the guard follows.
@@ -158,6 +162,7 @@ impl Rule for DeleteRule {
             let (more, capped) = aliases.texts(c, command);
             (
                 std::iter::once(own_text(command, shell, c))
+                    .chain(fed.text(c).map(str::to_string))
                     .chain(more)
                     .collect::<Vec<_>>(),
                 capped,

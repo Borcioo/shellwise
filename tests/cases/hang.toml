@@ -8158,3 +8158,92 @@ command = 'read x 2>/dev/null'
 level = "break"
 rules = ["will-hang"]
 fix = 'feed read its input on the same line: read x 2>/dev/null <<< "<value>"'
+
+# ---------------------------------------------------------------- a body fed on stdin to a local shell
+# A heredoc or here-string a local bash, sh or zsh reads as its program is read as the same shell's
+# `-c` body: a loop or follow there is a finding, a wrapper's bound covers it. `tests/hang.rs`
+# `a_body_fed_on_stdin_reads_as_its_c_twin` pins every carrier and form against its twin.
+
+[[row]]
+id = "wl-bash-fed-heredoc-loop"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 600); do sleep 1; [ \"$i\" -lt 600 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+[[row]]
+id = "wl-bash-fed-here-string-loop"
+os = "any"
+shell = "bash"
+command = "sh <<< 'until grep -q done run.log; do sleep 15; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-timeout-heredoc-loop"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+# Read only when every part is literal, as `bash -c "x=$y; …"` is.
+[[row]]
+id = "wl-bash-fed-unquoted-heredoc-with-a-variable"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nx=$y; while true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-fed-heredoc-to-a-script-is-data"
+os = "any"
+shell = "bash"
+command = "bash run.sh <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-fed-ssh-heredoc-is-not-read"
+os = "any"
+shell = "bash"
+command = "ssh host bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-fed-heredoc-follow-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\ntail -f log\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
+
+[[row]]
+id = "fu-bash-fed-sudo-here-string-follow"
+os = "any"
+shell = "bash"
+command = "sudo bash <<< 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-fed-timeout-heredoc-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash <<'EOF'\ntail -f log\nEOF"
+level = "ok"
+rules = []
+
+# A PowerShell body is read for deletes only, as `pwsh -Command '…'` is.
+[[row]]
+id = "wl-pwsh-fed-heredoc-loop-is-not-read"
+os = "any"
+shell = "bash"
+command = "pwsh -Command - <<'EOF'\nwhile ($true) { Start-Sleep 1 }\nEOF"
+level = "ok"
+rules = []

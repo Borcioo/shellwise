@@ -464,34 +464,51 @@ slash_options = true
 dry_run = ["/L"]
 
 # --- Code the guard does not read: danger only with a raw destructive match (opaque-destructive) ---
+# The program a local shell reads on stdin (src/fed.rs) is read as its `-c` body:
+# stdin_value_options  on a Bash-family shell: options whose value is the next word (`-o pipefail`)
+# stdin_positional     on a Bash-family shell: with one of these the words after the options are
+#                      arguments, and the program comes on stdin (`bash -s -- a b`)
+# stdin_program_params on PowerShell: parameters (any unambiguous prefix) whose value is the
+#                      program, `-` for stdin (`-Command -`, `-File -`)
+# stdin_encoded_params on PowerShell: parameters whose value is an encoded program
 
 [[program]]
 name = "bash"
 shells = ["bash"]
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_positional = ["-s"]
 
 [[program]]
 name = "sh"
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_positional = ["-s"]
 
 [[program]]
 name = "zsh"
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_positional = ["-s"]
 
 [[program]]
 name = "pwsh"
 kind = ["shell"]
 value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-SettingsFile", "-WindowStyle", "-w", "-CustomPipeName", "-EncodedCommand", "-e", "-ec", "-Version", "-v"]
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+stdin_program_params = ["-Command", "-CommandWithArgs", "-cwa", "-File"]
+stdin_encoded_params = ["-EncodedCommand", "-ec"]
 
 [[program]]
 name = "powershell"
 kind = ["shell"]
 value_options = ["-ExecutionPolicy", "-ep", "-ex", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+stdin_program_params = ["-Command", "-File"]
+stdin_encoded_params = ["-EncodedCommand", "-ec"]
 
 # cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit). pwsh
 # starts it as "C:\WINDOWS\system32\cmd.exe" (29 characters with the quotes) in place of the typed
@@ -641,6 +658,8 @@ name = "bash"
 shells = ["pwsh"]
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_positional = ["-s"]
 fix ="& \"$env:ProgramFiles\\Git\\bin\\bash.exe\""
 lint = { tags = ["wsl-bash"] }
 

@@ -140,6 +140,154 @@ pub fn mismatch(row: &Row) -> Option<String> {
     (!wrong.is_empty()).then(|| format!("{}: {}", row.id, wrong.join("; ")))
 }
 
+/// The language of a body fed to a shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang {
+    Bash,
+    Pwsh,
+}
+
+/// One stdin-fed form of a body and its `-c` twin, in one shell.
+#[derive(Debug, Clone)]
+pub struct FedCell {
+    pub shell: &'static str,
+    /// The command that feeds the body to the shell on stdin.
+    pub fed: String,
+    /// The same shell given the same body as its `-c` / `-Command` argument.
+    pub twin: String,
+    pub lang: Lang,
+    /// The index of the body in the bodies given to `fed_cells`.
+    pub body: usize,
+    /// A wrapper bounds how long the shell runs (`timeout 60`).
+    pub bounded: bool,
+    /// A bash called by its bare name from PowerShell (the twin draws `ps-bare-bash` too).
+    pub bare_bash: bool,
+}
+
+/// Bash carriers: the words before the shell's own options, the shell, and whether it is bounded.
+const BASH_CARRIERS: [(&str, bool); 8] = [
+    ("bash", false),
+    ("sh", false),
+    ("zsh", false),
+    ("sudo bash", false),
+    ("env A=1 bash", false),
+    ("nohup bash", false),
+    ("timeout 60 bash", true),
+    ("bash -o pipefail", false),
+];
+
+/// Forms that feed a Bash body (`{b}`) to a Bash carrier (`{c}`).
+const BASH_FORMS: [&str; 8] = [
+    "{c} <<'EOF'\n{b}\nEOF",
+    "{c} <<EOF\n{b}\nEOF",
+    "{c} <<-'EOF'\n\t{b}\n\tEOF",
+    "{c} <<-EOF\n\t{b}\n\tEOF",
+    "{c} <<< '{b}'",
+    "{c} <<< \"{b}\"",
+    "{c} -s <<'EOF'\n{b}\nEOF",
+    "{c} -s -- arg <<'EOF'\n{b}\nEOF",
+];
+
+/// PowerShell carriers that read their stdin as the program, with their `-Command` twin's words.
+const PWSH_CARRIERS: [(&str, &str); 7] = [
+    ("pwsh -Command -", "pwsh -Command"),
+    ("pwsh -c -", "pwsh -c"),
+    ("pwsh -NoProfile -Command -", "pwsh -NoProfile -Command"),
+    ("pwsh -File -", "pwsh -Command"),
+    ("pwsh -", "pwsh -Command"),
+    ("pwsh", "pwsh -Command"),
+    ("powershell -Command -", "powershell -Command"),
+];
+
+/// Forms that feed a PowerShell body (`{b}`) to a PowerShell carrier (`{c}`) from Bash.
+const PWSH_FORMS_IN_BASH: [&str; 2] = ["{c} <<'EOF'\n{b}\nEOF", "{c} <<< '{b}'"];
+
+/// The shells a Bash form runs in on this host.
+pub fn bash_shells() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["bash", "gitbash"]
+    } else {
+        &["bash"]
+    }
+}
+
+/// Every stdin-fed form of each body with its `-c` twin: Bash bodies to every Bash carrier, and
+/// PowerShell bodies to every PowerShell carrier, from Bash and from PowerShell.
+pub fn fed_cells(bash_bodies: &[&str], pwsh_bodies: &[&str]) -> Vec<FedCell> {
+    let mut out = Vec::new();
+    for &shell in bash_shells() {
+        for (carrier, bounded) in BASH_CARRIERS {
+            for (body, b) in bash_bodies.iter().enumerate() {
+                for form in BASH_FORMS {
+                    out.push(FedCell {
+                        shell,
+                        fed: form.replace("{c}", carrier).replace("{b}", b),
+                        twin: format!("{carrier} -c '{b}'"),
+                        lang: Lang::Bash,
+                        body,
+                        bounded,
+                        bare_bash: false,
+                    });
+                }
+            }
+        }
+        for (carrier, twin) in PWSH_CARRIERS {
+            for (body, b) in pwsh_bodies.iter().enumerate() {
+                for form in PWSH_FORMS_IN_BASH {
+                    out.push(FedCell {
+                        shell,
+                        fed: form.replace("{c}", carrier).replace("{b}", b),
+                        twin: format!("{twin} '{b}'"),
+                        lang: Lang::Pwsh,
+                        body,
+                        bounded: false,
+                        bare_bash: false,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A verdict as the twin rule compares it: level, rule ids in order, and each message with every
+/// backtick-quoted text (the command as written) left out.
+pub fn reading(v: &Verdict) -> (String, Vec<&'static str>, Vec<String>) {
+    let messages = v
+        .findings
+        .iter()
+        .map(|f| {
+            f.message
+                .split('`')
+                .enumerate()
+                .map(|(k, part)| if k % 2 == 1 { "`…`" } else { part })
+                .collect()
+        })
+        .collect();
+    (
+        v.level.as_str().to_string(),
+        v.findings.iter().map(|f| f.rule).collect(),
+        messages,
+    )
+}
+
+/// The verdict of `command` in `shell`, as a row with no cwd and the default config reads it.
+pub fn verdict_of(shell: &str, command: &str) -> Verdict {
+    verdict(&Row {
+        id: command.to_string(),
+        os: "any".to_string(),
+        shell: shell.to_string(),
+        command: command.to_string(),
+        level: String::new(),
+        rules: Vec::new(),
+        fix: None,
+        fix_exact: None,
+        oracle: None,
+        config: None,
+        twin: None,
+    })
+}
+
 /// The row's config: the defaults, or its `config` text loaded as an integration file, which
 /// must load without a finding.
 fn config(row: &Row) -> Config {

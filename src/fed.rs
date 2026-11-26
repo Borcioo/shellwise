@@ -1,0 +1,420 @@
+//! The program a local shell reads on its stdin when the command fixes that text: the shell's own
+//! heredoc or here-string. The delete rule's raw scan and the wait-loop and follow walks read it
+//! as they read the same shell's `-c` / `-Command` body, so the two forms read alike. A shell
+//! that runs a script, a `-c` body or a file on stdin reads its stdin as data, and a shell on
+//! another machine or in a container (`ssh host bash`, `docker exec -i c bash`) is no local shell:
+//! neither has a body here.
+
+use crate::Os;
+use crate::Shell;
+use crate::ir::{Elem, Quote, Redirect, Script, SimpleCommand, Stmt, Word, WordPart};
+use crate::programs::{self, Kind, Program};
+use crate::rules::delete::literal;
+
+/// The `extra` keys of a shell row this reader reads (`data/programs.toml`).
+const LOOP_BODY: &str = "loop_body";
+const STDIN_VALUE_OPTIONS: &str = "stdin_value_options";
+const STDIN_POSITIONAL: &str = "stdin_positional";
+const STDIN_PROGRAM_PARAMS: &str = "stdin_program_params";
+const STDIN_ENCODED_PARAMS: &str = "stdin_encoded_params";
+/// Paths that name the process's own stdin, as a shell's script operand.
+const STDIN_PATHS: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
+/// A body a shell reads on stdin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Fed {
+    /// The body as the raw scan reads a `-c` body: its text with expansions as written.
+    pub text: String,
+    /// The body the wait-loop and follow walks read: set for a shell whose `-c` body they read
+    /// (bash, sh, zsh), when every part of the body is literal.
+    pub script: Option<String>,
+}
+
+/// The body `c` reads on stdin as its program. `prev` is the pipeline element before `c`, and
+/// `src` the text the spans point into.
+pub(crate) fn body(
+    c: &SimpleCommand,
+    _prev: Option<&Elem>,
+    src: &str,
+    shell: Shell,
+    os: Os,
+) -> Option<Fed> {
+    // Cheap first: a command with no stdin of its own is read no further.
+    let stdin = c.redirects.iter().rev().find(|r| is_stdin(r))?;
+    let run = programs::strip_wrappers(c, shell, os);
+    if run.opaque {
+        return None;
+    }
+    let name = literal(&run.name).unwrap_or_else(|| run.typed.clone());
+    let row = programs::lookup(&name, shell, os).filter(|p| p.is(Kind::Shell))?;
+    let loops = strings(row, LOOP_BODY);
+    let program = strings(row, STDIN_PROGRAM_PARAMS);
+    // A Bash-family shell reads a `-c` body; PowerShell names its program parameters; any other
+    // shell (`cmd`) is not read.
+    let reads = if !loops.is_empty() {
+        bash_reads_stdin(&run.args, row, &loops)
+    } else if !program.is_empty() {
+        pwsh_reads_stdin(&run.args, row, &program)
+    } else {
+        false
+    };
+    if !reads {
+        return None;
+    }
+    let (word, text) = match stdin {
+        Redirect::Heredoc { body, .. } => (body, heredoc_text(body, src)),
+        Redirect::File { op, target, .. } if is_here_string(op) => {
+            (target, here_string_text(target, src))
+        }
+        // A file or a descriptor: text the guard does not have.
+        Redirect::File { .. } => return None,
+    };
+    // The walks read a `-c` body only after options that take no value.
+    let values = strings(row, STDIN_VALUE_OPTIONS);
+    let plain = !run
+        .args
+        .iter()
+        .any(|w| literal(w).is_some_and(|a| values.contains(&a.as_str())));
+    Some(Fed {
+        script: literal(word).filter(|_| !loops.is_empty() && plain),
+        text,
+    })
+}
+
+/// A list of strings a row holds under `key`; empty when it holds none.
+fn strings<'a>(row: &'a Program, key: &str) -> Vec<&'a str> {
+    row.extra
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default()
+}
+
+/// An input redirect of descriptor 0: a heredoc, a here-string, a file (`<`, `0<`, `<&`).
+fn is_stdin(r: &Redirect) -> bool {
+    match r {
+        Redirect::Heredoc { .. } => true,
+        Redirect::File { op, .. } => {
+            let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
+            let fd = &op[..op.len() - rest.len()];
+            rest.starts_with('<') && matches!(fd, "" | "0")
+        }
+    }
+}
+
+fn is_here_string(op: &str) -> bool {
+    op.trim_start_matches(|ch: char| ch.is_ascii_digit()) == "<<<"
+}
+
+/// Whether a bash-family shell with these arguments runs its stdin: no `-c` body (alone or in a
+/// cluster of short options) and no script operand. With `-s` the words after the options are
+/// positional parameters; without it the first is the script, which is stdin only as
+/// `/dev/stdin`.
+fn bash_reads_stdin(args: &[Word], row: &Program, loops: &[&str]) -> bool {
+    let values = strings(row, STDIN_VALUE_OPTIONS);
+    let positional = strings(row, STDIN_POSITIONAL);
+    let mut stdin_flag = false;
+    let mut k = 0;
+    while let Some(w) = args.get(k) {
+        // A word the guard cannot read may be the script.
+        let Some(a) = literal(w) else {
+            return stdin_flag;
+        };
+        let operand = |w: Option<&Word>| {
+            stdin_flag
+                || w.is_none_or(|w| literal(w).is_some_and(|s| STDIN_PATHS.contains(&s.as_str())))
+        };
+        if a == "--" || a == "-" {
+            return operand(args.get(k + 1));
+        }
+        if !(a.len() > 1 && (a.starts_with('-') || a.starts_with('+'))) {
+            return operand(Some(w));
+        }
+        let cluster = !a.starts_with("--") && a[1..].chars().all(|ch| ch.is_ascii_alphabetic());
+        let has = |letter: &str| cluster && a.starts_with('-') && a[1..].contains(letter);
+        if loops
+            .iter()
+            .any(|o| a == *o || o.strip_prefix('-').is_some_and(has))
+        {
+            return false;
+        }
+        stdin_flag |= positional
+            .iter()
+            .any(|o| a == *o || o.strip_prefix('-').is_some_and(has));
+        k += if values.contains(&a.as_str()) { 2 } else { 1 };
+    }
+    true
+}
+
+/// Whether PowerShell with these arguments runs its stdin as the program: `-Command -`, `-File -`,
+/// a lone `-`, or no command and no file at all. A command, a file, an encoded command or a word
+/// the guard cannot read is no stdin program. A parameter is any unambiguous prefix of its name.
+fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
+    let encoded = strings(row, STDIN_ENCODED_PARAMS);
+    // `p` (lowercase, no dash) spells one of the parameters.
+    let spells = |list: &[&str], p: &str| {
+        list.iter()
+            .any(|n| n.trim_start_matches('-').to_lowercase().starts_with(p))
+    };
+    let mut k = 0;
+    while let Some(w) = args.get(k) {
+        let Some(a) = literal(w) else { return false };
+        let lower = a.to_lowercase();
+        let Some(p) = ["--", "-", "/", "\u{2013}", "\u{2014}", "\u{2015}"]
+            .iter()
+            .find_map(|d| lower.strip_prefix(d))
+        else {
+            // A positional: the file or the command.
+            return false;
+        };
+        if p.is_empty() {
+            return a == "-";
+        }
+        let next_is_dash = || args.get(k + 1).and_then(literal).as_deref() == Some("-");
+        if spells(program, p) {
+            return next_is_dash();
+        }
+        if spells(&encoded, p) {
+            return false;
+        }
+        let value = row
+            .value_options
+            .iter()
+            .any(|o| o.eq_ignore_ascii_case(&format!("-{p}")));
+        k += if value { 2 } else { 1 };
+    }
+    true
+}
+
+/// `text` when the word's literal parts are all in it, in order: the word as written. `None`
+/// when it does not hold the word (an inexact location).
+fn written<'s>(w: &Word, text: &'s str) -> Option<&'s str> {
+    let mut rest = text;
+    for p in &w.parts {
+        if let WordPart::Literal(s) = p {
+            let at = rest.find(s.as_str())?;
+            rest = &rest[at + s.len()..];
+        }
+    }
+    Some(text)
+}
+
+/// A word with each variable as `${name}` and each substitution as `$(…)`: the shape of the text
+/// when its span does not hold it.
+fn rendered(w: &Word) -> String {
+    let mut out = String::new();
+    for p in &w.parts {
+        match p {
+            WordPart::Literal(s) | WordPart::Glob(s) => out.push_str(s),
+            WordPart::Var(v) => {
+                out.push_str("${");
+                out.push_str(v);
+                out.push('}');
+            }
+            WordPart::Tilde => out.push('~'),
+            WordPart::Subst(_) | WordPart::Block(_) | WordPart::ListSep => out.push_str("$(…)"),
+        }
+    }
+    out
+}
+
+/// A heredoc body as the shell gets it: a quoted delimiter's body as is, an expanding one as
+/// written (its expansions as `bash -c "…"` holds them).
+fn heredoc_text(body: &Word, src: &str) -> String {
+    if let Some(s) = literal(body) {
+        return s;
+    }
+    // The body's span runs through its delimiter line.
+    let lines = src
+        .get(body.span.start..body.span.end)
+        .map(|t| t.strip_suffix('\n').unwrap_or(t))
+        .map(|t| t.rfind('\n').map_or("", |k| &t[..=k]));
+    lines
+        .and_then(|t| written(body, t))
+        .map_or_else(|| rendered(body), str::to_string)
+}
+
+/// A here-string's word without its quotes, as the raw scan reads a quoted `-c` body.
+fn here_string_text(w: &Word, src: &str) -> String {
+    let Some(text) = src
+        .get(w.span.start..w.span.end)
+        .and_then(|t| written(w, t))
+    else {
+        return rendered(w);
+    };
+    let q = match w.quote {
+        Quote::Single => '\'',
+        Quote::Double => '"',
+        _ => return text.to_string(),
+    };
+    text.strip_prefix(q)
+        .and_then(|t| t.strip_suffix(q))
+        .unwrap_or(text)
+        .to_string()
+}
+
+/// The fed bodies of every command of a script, inside compound statements and substitutions
+/// too, keyed by the command (the delete rule reads them by its command).
+pub(crate) struct Index<'s> {
+    bodies: Vec<(&'s SimpleCommand, String)>,
+}
+
+impl<'s> Index<'s> {
+    pub(crate) fn of(script: &'s Script, src: &str, shell: Shell, os: Os) -> Index<'s> {
+        let mut bodies = Vec::new();
+        visit(script, &mut |c, prev| {
+            if let Some(f) = body(c, prev, src, shell, os) {
+                bodies.push((c, f.text));
+            }
+        });
+        Index { bodies }
+    }
+
+    /// The text `c` reads on stdin as its program, if any.
+    pub(crate) fn text(&self, c: &SimpleCommand) -> Option<&str> {
+        self.bodies
+            .iter()
+            .find(|(k, _)| std::ptr::eq(*k, c))
+            .map(|(_, t)| t.as_str())
+    }
+}
+
+/// Every simple command of `s` with the pipeline element before it, inside compound statements,
+/// substitutions and script blocks too.
+fn visit<'s>(s: &'s Script, f: &mut dyn FnMut(&'s SimpleCommand, Option<&'s Elem>)) {
+    for st in &s.stmts {
+        match st {
+            Stmt::Pipeline(p) => {
+                for (k, e) in p.elems.iter().enumerate() {
+                    let words: Vec<&Word> = match e {
+                        Elem::Cmd(c) => {
+                            f(c, k.checked_sub(1).and_then(|j| p.elems.get(j)));
+                            std::iter::once(&c.name)
+                                .chain(&c.args)
+                                .chain(c.assigns.iter().map(|(_, w)| w))
+                                .chain(c.redirects.iter().map(|r| match r {
+                                    Redirect::File { target, .. } => target,
+                                    Redirect::Heredoc { body, .. } => body,
+                                }))
+                                .collect()
+                        }
+                        Elem::Method(m) => m.args.iter().collect(),
+                        Elem::Expr(w) => vec![w],
+                    };
+                    for w in words {
+                        for part in &w.parts {
+                            if let WordPart::Subst(inner) | WordPart::Block(inner) = part {
+                                visit(inner, f);
+                            }
+                        }
+                    }
+                }
+            }
+            Stmt::Loop { body, .. } | Stmt::Func { body, .. } | Stmt::Block(body) => visit(body, f),
+            Stmt::Cond { branches, .. } => branches.iter().for_each(|b| visit(b, f)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BashProfile;
+    use crate::parse::bash;
+
+    const BASH: Shell = Shell::Bash(BashProfile::Posix);
+
+    /// The text of every fed body in a Bash command, in order.
+    fn texts(src: &str) -> Vec<String> {
+        let script = bash::parse(src, BashProfile::Posix).expect("parses");
+        let mut out = Vec::new();
+        visit(&script, &mut |c, prev| {
+            out.extend(body(c, prev, src, BASH, Os::Posix).map(|f| f.text));
+        });
+        out
+    }
+
+    /// The body is the text between the operator's line and the delimiter line, its expansions as
+    /// written, wherever the heredoc stands: after a non-ASCII word, beside a second heredoc on
+    /// its line, inside a substitution.
+    #[test]
+    fn a_heredoc_body_is_its_own_text() {
+        let cases: [(&str, &[&str]); 10] = [
+            ("bash <<'EOF'\nrm -rf ~\nEOF", &["rm -rf ~"]),
+            ("bash <<EOF\nrm -rf $HOME/x\nEOF", &["rm -rf $HOME/x"]),
+            (
+                "bash <<EOF\nrm -rf $HOME/x\nEOF\necho next",
+                &["rm -rf $HOME/x"],
+            ),
+            ("bash <<EOF 2>&1\n$(id)\nEOF", &["$(id)"]),
+            ("bash <<EOF\nEOF\nrm -rf $D", &[""]),
+            (
+                "echo zażółć; bash <<EOF\nrm -rf \"${D}\"\nEOF",
+                &["rm -rf \"${D}\""],
+            ),
+            (
+                "cat <<A; bash <<EOF\nnot this\nA\nrm -rf $D\nEOF",
+                &["rm -rf $D"],
+            ),
+            ("x=$(bash <<EOF\necho $(id)\nEOF\n)", &["echo $(id)"]),
+            ("bash <<-EOF\n\trm -rf $D\n\tEOF", &["rm -rf $D"]),
+            (
+                "bash <<< \"rm -rf $D\"; sh <<< 'rm -rf ~'",
+                &["rm -rf $D", "rm -rf ~"],
+            ),
+        ];
+        for (src, want) in cases {
+            let got = texts(src);
+            let got: Vec<&str> = got.iter().map(|t| t.trim()).collect();
+            assert_eq!(got, want, "{src:?}");
+        }
+    }
+
+    #[test]
+    fn stdin_that_is_data_has_no_body() {
+        for src in [
+            "bash -c 'echo hi' <<'EOF'\nrm -rf ~\nEOF",
+            "bash -lc 'echo hi' <<< 'rm -rf ~'",
+            "bash run.sh <<'EOF'\nrm -rf ~\nEOF",
+            "bash \"$S\" <<'EOF'\nrm -rf ~\nEOF",
+            "bash <<'EOF' < run.sh\nrm -rf ~\nEOF",
+            "bash <<'EOF' <&3\nrm -rf ~\nEOF",
+            "bash 0< run.sh",
+            "bash 3<<< 'rm -rf ~'",
+            "cat <<'EOF'\nrm -rf ~\nEOF",
+            "cmd <<< 'rd /s /q x'",
+            "pwsh -File run.ps1 <<< 'Remove-Item -Recurse x'",
+            "pwsh -Command 'Get-Date' <<< 'Remove-Item -Recurse x'",
+            "pwsh -EncodedCommand AAAA <<< 'Remove-Item -Recurse x'",
+            "pwsh -NoProfile run.ps1 <<< 'Remove-Item -Recurse x'",
+            "sudo --weird x bash <<< 'rm -rf ~'",
+        ] {
+            assert_eq!(texts(src), Vec::<String>::new(), "{src:?}");
+        }
+    }
+
+    /// `-s` and `/dev/stdin` read stdin with words after them; a value option's value is no
+    /// script; `-` and `--` end the options.
+    #[test]
+    fn a_shell_with_no_script_reads_stdin() {
+        for src in [
+            "bash -s <<< 'rm -rf ~'",
+            "bash -s -- a b <<< 'rm -rf ~'",
+            "bash -xs a <<< 'rm -rf ~'",
+            "bash -s \"$X\" <<< 'rm -rf ~'",
+            "bash /dev/stdin a <<< 'rm -rf ~'",
+            "bash -- /dev/stdin <<< 'rm -rf ~'",
+            "bash - <<< 'rm -rf ~'",
+            "bash -o pipefail -e <<< 'rm -rf ~'",
+            "bash --norc --login <<< 'rm -rf ~'",
+            "bash < run.sh <<< 'rm -rf ~'",
+            "pwsh -NoProfile -ExecutionPolicy Bypass -Command - <<< 'rm -rf ~'",
+            "pwsh -File - <<< 'rm -rf ~'",
+            "pwsh -f - <<< 'rm -rf ~'",
+            "pwsh - <<< 'rm -rf ~'",
+            "powershell -NoProfile <<< 'rm -rf ~'",
+        ] {
+            assert_eq!(texts(src), vec!["rm -rf ~".to_string()], "{src:?}");
+        }
+    }
+}
