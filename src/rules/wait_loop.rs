@@ -717,7 +717,13 @@ impl Walk<'_, '_> {
         let header = match head {
             LoopHead::Test { .. } if !cond.is_empty() => {
                 let from = if at_end { stmts.len() - cond.len() } else { 0 };
-                self.condition_bounds(body, from, cond.len(), until, &counters)
+                let written = if bash {
+                    self.bash_header(span, cond, rest)
+                } else {
+                    None
+                };
+                let n = cond.len();
+                self.condition_bounds(body, from, n, until, &counters, written.as_deref())
             }
             _ => bounds(&self.header(span, rest, at_end), &counters, fold),
         };
@@ -831,6 +837,24 @@ impl Walk<'_, '_> {
     /// header may hold a comment, or does not hold the condition's statements, their text with
     /// the `!` before them.
     fn bash_condition(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> String {
+        if let Some(c) = self.bash_header(span, cond, rest) {
+            return c;
+        }
+        let stmts = self.text_of(cond);
+        let negated = range(cond).is_some_and(|r| {
+            self.slice(Span {
+                start: span.start,
+                end: r.start,
+            })
+            .trim_end()
+            .ends_with('!')
+        });
+        if negated { format!("! {stmts}") } else { stmts }
+    }
+
+    /// A Bash loop's header between its keyword and `do`, exactly as written: `None` when it may
+    /// hold a comment or does not hold the condition's statements.
+    fn bash_header(&self, span: Span, cond: &[Stmt], rest: &[Stmt]) -> Option<String> {
         let stmts = self.text_of(cond);
         let header = match self.bash_do(span, cond, rest) {
             Some(d) => self.slice(Span {
@@ -846,18 +870,7 @@ impl Walk<'_, '_> {
             .trim_end();
         let c = c.strip_suffix("do").unwrap_or(c).trim_end();
         let c = c.strip_suffix(';').unwrap_or(c).trim();
-        if !stmts.is_empty() && !c.contains('#') && c.contains(stmts.as_str()) {
-            return c.to_string();
-        }
-        let negated = range(cond).is_some_and(|r| {
-            self.slice(Span {
-                start: span.start,
-                end: r.start,
-            })
-            .trim_end()
-            .ends_with('!')
-        });
-        if negated { format!("! {stmts}") } else { stmts }
+        (!stmts.is_empty() && !c.contains('#') && c.contains(stmts.as_str())).then(|| c.to_string())
     }
 
     /// Where a Bash loop's `do` stands: the first `do` after the condition's statements, comments
@@ -924,7 +937,7 @@ impl Walk<'_, '_> {
     /// 141): reaching the bound stops the loop whatever the other tests say. `until A || bound`
     /// and `while A && bound` do; `until A && bound` and `while A || bound` wait for `A` too. The
     /// tests are read left to right, as both shells bind `&&`/`||` and `-and`/`-or`; a group or a
-    /// test command (`( … )`, `[[ … ]]`) is one test.
+    /// test command (`( … )`, `[[ … ]]`) is one test. `written`: a Bash header as written.
     fn condition_bounds(
         &self,
         body: &Script,
@@ -932,8 +945,12 @@ impl Walk<'_, '_> {
         n: usize,
         until: bool,
         counters: &[String],
+        written: Option<&str>,
     ) -> bool {
         let stmts = &body.stmts[from..from + n];
+        // A throttle on the shell's own jobs bounds the loop only as its whole condition, read
+        // from the header as written: one test and nothing else.
+        let jobs = written.is_some_and(|w| jobs_throttle(w, until));
         let fold = !matches!(self.shell, Shell::Bash(_));
         let terms: Vec<(Option<ChainOp>, String)> = if fold {
             pwsh_terms(&self.text_of(stmts), self.shell, self.os)
@@ -949,8 +966,7 @@ impl Walk<'_, '_> {
         // `;` starts again: a list's last and-or chain decides.
         let mut can = (false, false);
         for (k, (op, t)) in terms.iter().enumerate() {
-            // A count of the shell's own jobs bounds only here, in the loop's own condition.
-            let b = bounds(t, counters, fold) || (!fold && compares_own_jobs(t, until));
+            let b = bounds(t, counters, fold) || jobs;
             can = match op {
                 Some(ChainOp::And) if k > 0 => (can.0 && b, can.1 || b),
                 Some(ChainOp::Or) if k > 0 => (can.0 || b, can.1 && b),
@@ -2211,53 +2227,207 @@ fn bounds(test: &str, counters: &[String], fold: bool) -> bool {
     })
 }
 
-/// A Bash test that compares the count of the shell's own background jobs (`[ "$(jobs -rp | wc
-/// -l)" -ge 4 ]`) the way that ends the loop as jobs end. The count only falls, so a `while` test
-/// must turn false as it falls (`-ge 4`, `-ne 0`) and an `until` test true (`-lt 4`, `-eq 0`).
-/// What each operator says comes from `[loops] job_count_ops`; the count may stand on either side.
-fn compares_own_jobs(test: &str, until: bool) -> bool {
-    let loops = programs::loops();
-    let toks = tokens(test);
-    toks.iter().enumerate().any(|(k, t)| {
-        let Some(relation) = loops.job_count_ops.iter().find_map(|e| {
-            let (op, relation) = e.split_once(' ')?;
-            (op == *t).then_some(relation)
-        }) else {
-            return false;
-        };
-        let (left, right) = sides(&toks, k);
-        let (left, right) = (left.unwrap_or_default(), right.unwrap_or_default());
-        if counts_own_jobs(&left, &loops.job_counts) {
-            ends_as_count_falls(relation, &right, until)
-        } else if counts_own_jobs(&right, &loops.job_counts) {
-            ends_as_count_falls(mirrored(relation), &left, until)
-        } else {
-            false
-        }
-    })
+/// A Bash test form a throttle on the shell's own jobs may take.
+#[derive(Clone, Copy, PartialEq)]
+enum TestForm {
+    /// `[ … ]` and `test …`
+    Single,
+    /// `[[ … ]]`
+    Double,
+    /// `(( … ))`
+    Arith,
 }
 
-/// `operand` holds a `$( )` whose pipeline is a `job_counts` entry, outside single quotes.
-fn counts_own_jobs(operand: &str, job_counts: &[String]) -> bool {
-    let operand = without_literals(operand);
-    let mut rest = operand.as_str();
-    while let Some(at) = rest.find("$(") {
-        if rest[at..].starts_with("$((") {
-            rest = &rest[at + 3..];
+/// The operators a test form compares numbers with, and the ones it compares text with. In `[ ]`
+/// and `test`, `<` and `>` are redirections and `<=`/`>=` no operators.
+fn form_operators(form: TestForm) -> (&'static [&'static str], &'static [&'static str]) {
+    const WORDS: &[&str] = &["-ge", "-gt", "-lt", "-le", "-ne", "-eq"];
+    match form {
+        TestForm::Single => (WORDS, &[]),
+        TestForm::Double => (WORDS, &["<", ">"]),
+        TestForm::Arith => (&[">=", ">", "<", "<=", "!=", "=="], &[]),
+    }
+}
+
+/// A Bash loop condition, as written, that is a throttle on the shell's own background jobs and
+/// nothing else: one test (`[ ]`, `test`, `[[ ]]`, `(( ))`) holding one comparison of their count
+/// (`"$(jobs -rp | wc -l)"`, a `[loops] job_counts` pipeline) with a mark, one literal integer or
+/// one variable, by an operator of that form, the way that ends the loop as jobs end. The count
+/// only falls, so a `while` test must turn false as it falls (`-ge 4`, `-ne 0`) and an `until`
+/// test true (`-lt 4`, `-eq 0`); the count may stand on either side. A `!`, a join (`-o`, `-a`,
+/// `||`, `&&`) or any other word is no throttle. `[[ ]]` compares text with `<` and `>`: a count
+/// passes a mark of digits there as it does with `-lt`/`-gt`, and an empty mark never.
+fn jobs_throttle(written: &str, until: bool) -> bool {
+    let w = written.trim();
+    let (a, op, b, form) =
+        if let Some(inner) = w.strip_prefix("((").and_then(|r| r.strip_suffix("))")) {
+            let Some((a, op, b)) = arith_comparison(inner) else {
+                return false;
+            };
+            (a, op, b, TestForm::Arith)
+        } else {
+            match shell_words(w).as_slice() {
+                ["[", a, op, b, "]"] | ["test", a, op, b] => (*a, *op, *b, TestForm::Single),
+                ["[[", a, op, b, "]]"] => (*a, *op, *b, TestForm::Double),
+                _ => return false,
+            }
+        };
+    let (numbers, text) = form_operators(form);
+    let by_text = text.contains(&op);
+    if !by_text && !numbers.contains(&op) {
+        return false;
+    }
+    let loops = programs::loops();
+    let Some(relation) = loops.job_count_ops.iter().find_map(|e| {
+        let (o, relation) = e.split_once(' ')?;
+        (o == op).then_some(relation)
+    }) else {
+        return false;
+    };
+    let (relation, mark_word) = if own_jobs_count(a, &loops.job_counts) {
+        (relation, b)
+    } else if own_jobs_count(b, &loops.job_counts) {
+        (mirrored(relation), a)
+    } else {
+        return false;
+    };
+    match mark(mark_word, form == TestForm::Arith) {
+        Some(Mark::Number(n, digits)) if digits || !by_text => {
+            ends_as_count_falls(relation, Some(n), until)
+        }
+        Some(Mark::Variable) if !by_text => ends_as_count_falls(relation, None, until),
+        _ => false,
+    }
+}
+
+/// The first comparison of a `(( … ))` expression: the text before it, its operator (`<`, `>`, `=`
+/// or `!`, with a `=` after it) outside quotes and parentheses, and the text after it. Any other
+/// operator stays in a side, which then is no count and no mark.
+fn arith_comparison(inner: &str) -> Option<(&str, &str, &str)> {
+    let b = inner.as_bytes();
+    let (mut depth, mut quote) = (0usize, None);
+    for (i, &c) in b.iter().enumerate() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
             continue;
         }
-        let end = closing_paren(rest, at + 1);
-        let inner = rest.get(at + 2..end).unwrap_or("");
-        let pipeline: Vec<String> = inner
-            .split('|')
-            .map(|stage| stage.split_whitespace().collect::<Vec<_>>().join(" "))
-            .collect();
-        if job_counts.contains(&pipeline.join(" | ")) {
-            return true;
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'(' => depth += 1,
+            b')' => depth = depth.checked_sub(1)?,
+            b'<' | b'>' | b'=' | b'!' if depth == 0 => {
+                let len = if b.get(i + 1) == Some(&b'=') { 2 } else { 1 };
+                return Some((
+                    inner[..i].trim(),
+                    &inner[i..i + len],
+                    inner[i + len..].trim(),
+                ));
+            }
+            _ => {}
         }
-        rest = rest.get(end + 1..).unwrap_or("");
     }
-    false
+    None
+}
+
+/// `text` split into words at blanks outside quotes and parentheses (`"$(jobs -rp | wc -l)"` is
+/// one word); nothing when a quote or a parenthesis stays open.
+fn shell_words(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut depth, mut quote, mut escaped) = (None, 0usize, None, false);
+    for (k, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else if ch == '\\' && q == '"' {
+                escaped = true;
+            }
+            continue;
+        }
+        if ch.is_whitespace() && depth == 0 {
+            if let Some(s) = start.take() {
+                out.push(&text[s..k]);
+            }
+            continue;
+        }
+        start.get_or_insert(k);
+        match ch {
+            '\\' => escaped = true,
+            '\'' | '"' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if quote.is_some() || depth > 0 {
+        return Vec::new();
+    }
+    out.extend(start.map(|s| &text[s..]));
+    out
+}
+
+/// `word` is the count of the shell's own jobs and nothing else: `$( )` (quoted or not) whose
+/// pipeline is a `job_counts` entry.
+fn own_jobs_count(word: &str, job_counts: &[String]) -> bool {
+    let w = word
+        .strip_prefix('"')
+        .and_then(|w| w.strip_suffix('"'))
+        .unwrap_or(word);
+    let Some(inner) = w.strip_prefix("$(").and_then(|r| r.strip_suffix(')')) else {
+        return false;
+    };
+    let pipeline: Vec<String> = inner
+        .split('|')
+        .map(|stage| stage.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    job_counts.contains(&pipeline.join(" | "))
+}
+
+/// The mark a jobs count is compared with.
+enum Mark {
+    /// A literal integer, and whether it is written in digits alone (no sign).
+    Number(i64, bool),
+    Variable,
+}
+
+/// `word` as a mark: a literal integer (quoted or not), or one variable (`$max`, `"${max}"`; a
+/// bare name where `(( ))` reads it as one). Anything else, an expression or a substitution, is
+/// none.
+fn mark(word: &str, bare_names: bool) -> Option<Mark> {
+    let (inner, quote) = ['"', '\'']
+        .into_iter()
+        .find_map(|q| {
+            word.strip_prefix(q)
+                .and_then(|w| w.strip_suffix(q))
+                .map(|w| (w, Some(q)))
+        })
+        .unwrap_or((word, None));
+    let name = |s: &str| {
+        !s.is_empty()
+            && (s.bytes().all(|c| c.is_ascii_digit())
+                || (!s.as_bytes()[0].is_ascii_digit() && s.bytes().all(is_ident)))
+    };
+    let digits = inner.strip_prefix('-').unwrap_or(inner);
+    if !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit()) {
+        return inner.parse().ok().map(|n| Mark::Number(n, digits == inner));
+    }
+    if quote == Some('\'') {
+        return None;
+    }
+    let var = inner
+        .strip_prefix("${")
+        .and_then(|v| v.strip_suffix('}'))
+        .or_else(|| inner.strip_prefix('$'));
+    match var {
+        Some(v) if name(v) => Some(Mark::Variable),
+        None if bare_names && quote.is_none() && name(inner) => Some(Mark::Variable),
+        _ => None,
+    }
 }
 
 /// The relation with its sides swapped: `4 -le count` says of the count what `count -ge 4` does.
@@ -2271,15 +2441,12 @@ fn mirrored(relation: &str) -> &str {
     }
 }
 
-/// A comparison of a count that falls toward 0 with `mark` ends the loop: a `while` once it turns
-/// false, an `until` once it turns true. A number must be one the count can pass (`-ge 0` never
-/// turns false); a variable mark is taken as one; `-ne`/`-eq` end it only against 0.
-fn ends_as_count_falls(relation: &str, mark: &str, until: bool) -> bool {
-    let m = mark.trim_matches(|c: char| {
-        matches!(c, '"' | '\'' | '(' | ')' | '[' | ']') || c.is_whitespace()
-    });
-    let n = m.parse::<i64>().ok();
-    let reached = |least: i64| n.map_or(!m.is_empty(), |n| n >= least);
+/// A comparison of a count that falls toward 0 with a mark (`Some` number, `None` for a variable)
+/// ends the loop: a `while` once it turns false, an `until` once it turns true. A number must be
+/// one the count can pass (`-ge 0` never turns false); a variable mark is taken as one;
+/// `-ne`/`-eq` end it only against 0.
+fn ends_as_count_falls(relation: &str, n: Option<i64>, until: bool) -> bool {
+    let reached = |least: i64| n.is_none_or(|n| n >= least);
     match (until, relation) {
         (false, "at-least") | (true, "below") => reached(1),
         (false, "above") | (true, "at-most") => reached(0),

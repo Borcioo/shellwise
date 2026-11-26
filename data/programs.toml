@@ -914,8 +914,9 @@ clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopw
 # (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
 compares = ["-lt", "-le", "-gt", "-ge", "-eq", "-ne", "<", "<=", ">", ">=", "==", "!="]
 # Bash pipelines that count the shell's own background jobs, written with single blanks: a loop
-# condition that compares one in a `$( )` waits for those jobs, which end by themselves, so it is
-# bounded (`while (( $(jobs -rp | wc -l) >= 4 ))`). Another stage, option or command is no bound.
+# whose whole condition is one test comparing one in a `$( )` waits for those jobs, which end by
+# themselves, so it is bounded (`while (( $(jobs -rp | wc -l) >= 4 ))`). Another stage, option or
+# command is no bound.
 job_counts = ["jobs | wc -l", "jobs -r | wc -l", "jobs -p | wc -l", "jobs -rp | wc -l", "jobs -pr | wc -l"]
 # What each comparison operator says of the count on its left side, as `<operator> <relation>`:
 # the count only falls, so `while` is bounded by `at-least` (a mark of 1 or more, or a variable),
