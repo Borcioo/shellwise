@@ -134,3 +134,10 @@ $n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.tx
 - Bash `for ((;;))` written without blanks is a parse error for the Bash parser (warn
   `parse-error`); `for (( ; ; ))` is read.
 - Only the outermost wrapper counts as a bound, as for `will-hang`.
+- A Bash loop a local `bash`, `sh` or `zsh` reads on stdin is read as its `bash -c '…'` twin: the
+  shell's own heredoc or here-string (`bash <<'EOF'`, `sh -s <<< '…'`) or a literal producer
+  before it (`echo '…' | bash`, `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`), also behind
+  `sudo`, `env`, `nohup` and `timeout`, when every part of it is literal. Not read: a body after
+  an option that takes a value (`bash -o pipefail <<'EOF'`), as its `-c` twin is not; a body that
+  expands (`bash <<EOF` holding `$x`); a PowerShell program on stdin; a script operand or a `-c`
+  body beside it, where stdin is data; a shell on another machine or in a container.

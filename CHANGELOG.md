@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- `opaque-destructive`, `wait-loop-unbounded`, `follow-unbounded`: a program a local shell reads
+  on stdin is read as the same shell's `-c` body (`-Command` in PowerShell): its own heredoc or
+  here-string (`bash <<'EOF'`, `sh -s <<< '…'`, `pwsh -Command - <<'EOF'`) or what a literal
+  producer before it in the pipeline writes (`echo '…' | bash`, `printf '…' | sh`,
+  `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`, `'…' | pwsh -Command -`), also behind `sudo`,
+  `env`, `nohup`, `timeout` and `time`. Options are read as the shell reads them (`bash -eo
+  pipefail`, `bash -ox pipefail`, `zsh -oerrexit`, `pwsh -ex Bypass`); a script operand, a `-c`
+  body or a heredoc on another descriptor leaves stdin as data. Not read: a producer that may
+  still expand or reads a file, `ssh`, `docker exec`, `kubectl exec`, `wsl`, `cmd`, `dash` and
+  `ksh` by those names; the loop and follow rules also skip a body after an option that takes a
+  value and a PowerShell program.
+
 ### Changed
 
 - `wait-loop-unbounded`: a Bash loop whose whole condition is one test comparing the count of the

@@ -19,6 +19,17 @@ a rooted path with no drive under an MSYS system folder (`/usr`) and a `/<letter
 (`/c/` is the drive root). A `.git` spelling is danger too when the repo lookup that would place
 it ran out of time. Level `warn` otherwise.
 
+A program a local shell reads on stdin is read as the same shell's `-c` body (`-Command` in
+PowerShell): its own heredoc or here-string (`bash <<'EOF'`, `sh -s <<< '…'`,
+`pwsh -Command - <<'EOF'`), or what a literal producer before it in the pipeline writes
+(`echo '…' | bash`, `printf '…' | sh`, `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`, in
+PowerShell `'…' | pwsh -Command -` and `Write-Output '…' | pwsh`), also behind `sudo`, `env`,
+`nohup`, `timeout` and `time`. The shell reads its options as the shell does: `bash -eo pipefail`,
+`bash -ox pipefail` and `zsh -oerrexit` read stdin, `bash -s a b` too; a script operand
+(`bash run.sh`, `zsh -O extglob`), a `-c` body or a heredoc on another descriptor (`bash 3<<EOF`)
+leaves stdin as data. An argument the guard cannot read (`bash "$S" <<'EOF'`) reads stdin as the
+program.
+
 `Fix: run the delete as a plain command of its own so the guard can check it` (danger: `Fix: run
 the delete as a plain command of its own, or, if this is intended, run the same command again
 with ` # shellwise: allow` at its end`)
@@ -29,12 +40,14 @@ with ` # shellwise: allow` at its end`)
 bash -c 'rm -rf "$HOME" && make'
 bash -c 'builtin rm -rf ~'
 bash -c 'rm -rf /c/'      # Git Bash
+printf '%s\n' 'rm -rf ~' | bash
 ```
 
 ## Warns
 
 ```bash
 bash -c 'rm -rf build && make'
+echo 'rm -rf build' | sh
 timeout --weird 60 rm -rf build
 cmd //c "rmdir node_modules"
 ```
@@ -44,6 +57,8 @@ cmd //c "rmdir node_modules"
 ```bash
 bash -c "$script_text"
 timeout 60 newtool -x
+bash run.sh <<< 'rm -rf build'
+ssh host bash <<< 'rm -rf build'
 ```
 
 ## Limits
@@ -51,3 +66,9 @@ timeout 60 newtool -x
 - A redirect before `time` makes `time` a program rather than Bash's keyword, and the guard does
   not read what that program runs: `2>/dev/null time bash -c 'rm -rf ~'` is ok, while
   `time bash -c 'rm -rf ~' 2>/dev/null` is danger.
+- A program on stdin is not read when the guard does not have its text or the shell is not
+  local: a producer that may still expand (`echo "rm -rf $DIR" | bash`), reads a file or the
+  network (`cat setup.sh | bash`, `curl … | sh`), has a redirect, or is `printf` with a format
+  that is not `%s` / `%s\n`, or with more than one argument; a shell on another machine or in a
+  container (`ssh host bash`, `docker exec -i c bash`, `kubectl exec`, `wsl`); `cmd`; `dash` and
+  `ksh` called by those names.
