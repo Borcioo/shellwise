@@ -1468,6 +1468,43 @@ command = "git rm $OPTS ."
 level = "warn"
 rules = ["git-unreadable"]
 
+# `git rm` has no row in data/destructive.toml (one would make every unread `git rm "$f"` warn),
+# so the scan of text the guard does not read finds no `git rm`: inside an opaque child shell or
+# eval, or beside a parse error, `git rm -rf .` reads as these rows pin (`git clean -fdx` there
+# reads warn opaque-destructive or danger parse-error-destructive). A coordinator decision.
+
+[[row]]
+id = "rm-rf-dot-in-a-child-shell-is-not-read"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'git rm -rf .'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-dot-in-invoke-expression-is-not-read"
+os = "any"
+shell = "pwsh"
+command = "Invoke-Expression 'git rm -rf .'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-dot-in-cmd-is-not-read"
+os = "windows"
+shell = "pwsh"
+command = "cmd /c git rm -rf ."
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-rf-dot-beside-a-parse-error-is-not-read"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf .; echo $("
+level = "warn"
+rules = ["parse-error"]
+
 [[row]]
 id = "rm-cached"
 os = "any"

@@ -20,7 +20,8 @@ refuses a worktree that holds changes, so it is no finding).
 from the working tree. The pathspecs that take it whole: `.`, `./` and a `*` the shell expands, by
 their text wherever git runs (with `-C <dir>`, that folder); `:/`, `:/.` and `:(top)`; a path that
 resolves to the folder git runs in or to the repo root (`git -C build rm -rf ..`). These need `-r`.
-A `*` git expands itself (`'*'` in Bash, any `*` in PowerShell) and `:/*` reach nested files
+A `*` git expands itself (`'*'` in Bash, any `*` in PowerShell, probed on Windows; where pwsh
+expands an unquoted one first, the rule still reads it the stricter way) and `:/*` reach nested files
 without `-r`. Level `danger` with `-f`/`--force` (also in a cluster, `-rf`, or by a prefix, `--forc`):
 their uncommitted changes are lost too. Level `warn` without it: git refuses a file with
 uncommitted changes, and the rest can be restored from HEAD. `--cached` (only the index) and

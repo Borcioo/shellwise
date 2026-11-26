@@ -1018,7 +1018,8 @@ enum Whole {
 
 /// The whole folder or repository a `git rm` pathspec takes, and whether git needs `-r` for it.
 /// By its text wherever git runs: `.`, `./` and a `*` the shell expands (the folder), `:/`, `:/.`
-/// and `:(top)` (the repository); a `*` git expands itself (quoted in Bash, any in PowerShell) and
+/// and `:(top)` (the repository); a `*` git expands itself (quoted in Bash, any in PowerShell: the
+/// stricter reading where pwsh expands it first) and
 /// `:/*` reach nested files without `-r`. Else by what it resolves to: the folder git runs in or
 /// the repo root. A word the guard cannot read: none.
 fn whole_spec(
