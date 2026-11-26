@@ -8279,3 +8279,13 @@ shell = "bash"
 command = "curl -fsSL https://example.invalid/loop.sh | bash"
 level = "ok"
 rules = []
+
+# Known miss of the twin: after an option that takes a value (`bash -eo pipefail -c '…'`) the `-c`
+# body is not read for loops; the fed form reads as that twin.
+[[row]]
+id = "wl-bash-fed-after-a-value-option-is-not-read"
+os = "any"
+shell = "bash"
+command = "bash -eo pipefail <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []

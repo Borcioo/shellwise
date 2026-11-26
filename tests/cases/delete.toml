@@ -7604,3 +7604,63 @@ shell = "pwsh"
 command = "'rd /s /q build' | cmd"
 level = "ok"
 rules = []
+
+# Options are read as the shell reads them: a value option ends a cluster and takes the next word
+# (`-eo pipefail`); a PowerShell parameter is any unambiguous prefix of its name (`-Exec`).
+[[row]]
+id = "fed-bash-cluster-with-a-value-option-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash -euo pipefail <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-cluster-with-a-value-option-then-a-script"
+os = "any"
+shell = "bash"
+command = "bash -euo pipefail run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-pwsh-parameter-prefix-here-string-home"
+os = "any"
+shell = "bash"
+command = "pwsh -Exec Bypass -Command - <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-pwsh-parameter-prefix-then-a-file"
+os = "any"
+shell = "bash"
+command = "pwsh -Exec Bypass run.ps1 <<< 'Remove-Item -Recurse -Force ~'"
+level = "ok"
+rules = []
+
+# A heredoc on another descriptor is no program, and a later redirect of stdin replaces it.
+[[row]]
+id = "fed-control-heredoc-on-descriptor-3"
+os = "any"
+shell = "bash"
+command = "bash 3<<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-stdin-replaced-after-the-heredoc"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF' 0</dev/null\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# A word the guard cannot read may be the script or not: the body is read, the stricter reading.
+[[row]]
+id = "fed-unreadable-script-word-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash \"$S\" <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]

@@ -1143,7 +1143,9 @@ fn a_body_fed_on_stdin_reads_as_its_c_twin() {
 #[test]
 fn stdin_that_is_data_is_not_read_as_code() {
     let _fx = fixture();
-    const CONSUMERS: [&str; 30] = [
+    const CONSUMERS: [&str; 32] = [
+        "bash -euo pipefail run.sh",
+        "pwsh -Exec Bypass -File run.ps1",
         "cat",
         "cat > out.txt",
         "tee out.txt",

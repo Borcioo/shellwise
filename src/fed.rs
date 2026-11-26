@@ -63,29 +63,20 @@ pub(crate) fn body(
     let program = strings(row, STDIN_PROGRAM_PARAMS);
     // A Bash-family shell reads a `-c` body; PowerShell names its program parameters; any other
     // shell (`cmd`) is not read.
-    let reads = if !loops.is_empty() {
-        bash_reads_stdin(&run.args, row, &loops)
+    let plain = if !loops.is_empty() {
+        bash_reads_stdin(&run.args, src, row, &loops)?
     } else if !program.is_empty() {
-        pwsh_reads_stdin(&run.args, row, &program)
+        pwsh_reads_stdin(&run.args, row, &program).then_some(false)?
     } else {
-        false
-    };
-    if !reads {
         return None;
-    }
+    };
     let (text, script) = match (stdin, prev) {
         (Some(r), _) => redirected(r, src)?,
         (None, Some(p)) => produced(p, src, shell, os)?,
         (None, None) => return None,
     };
-    // The walks read a `-c` body only after options that take no value.
-    let values = strings(row, STDIN_VALUE_OPTIONS);
-    let plain = !run
-        .args
-        .iter()
-        .any(|w| literal(w).is_some_and(|a| values.contains(&a.as_str())));
     Some(Fed {
-        script: script.filter(|_| !loops.is_empty() && plain),
+        script: script.filter(|_| plain),
         text,
     })
 }
@@ -152,10 +143,11 @@ fn strings<'a>(row: &'a Program, key: &str) -> Vec<&'a str> {
         .unwrap_or_default()
 }
 
-/// An input redirect of descriptor 0: a heredoc, a here-string, a file (`<`, `0<`, `<&`).
+/// An input redirect of descriptor 0: a heredoc, a here-string, a file (`<`, `0<`, `<&`); `3<<EOF`
+/// feeds descriptor 3.
 fn is_stdin(r: &Redirect) -> bool {
     match r {
-        Redirect::Heredoc { .. } => true,
+        Redirect::Heredoc { fd, .. } => matches!(fd.as_str(), "" | "0"),
         Redirect::File { op, .. } => {
             let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
             let fd = &op[..op.len() - rest.len()];
@@ -168,51 +160,85 @@ fn is_here_string(op: &str) -> bool {
     op.trim_start_matches(|ch: char| ch.is_ascii_digit()) == "<<<"
 }
 
-/// Whether a bash-family shell with these arguments runs its stdin: no `-c` body (alone or in a
-/// cluster of short options) and no script operand. With `-s` the words after the options are
-/// positional parameters; without it the first is the script, which is stdin only as
-/// `/dev/stdin`.
-fn bash_reads_stdin(args: &[Word], row: &Program, loops: &[&str]) -> bool {
+/// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
+/// operand. Options are read as getopt reads them: a short one alone or in a cluster (`-ec`),
+/// where a letter that takes a value ends the cluster and, as its last letter, takes the next
+/// word (`-eo pipefail`). With `-s` the words after the options are positional parameters;
+/// without it the first is the script, which is stdin only as `/dev/stdin`. A word the guard
+/// cannot read is read as no script, the stricter reading, unless it is a process substitution.
+/// `Some(plain)` when stdin is the
+/// program, `plain` when no option took a value (the walks read a `-c` body only then).
+fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> Option<bool> {
     let values = strings(row, STDIN_VALUE_OPTIONS);
     let positional = strings(row, STDIN_POSITIONAL);
+    // `sign` and `letter` spell one of the short options in `list` (`-o`, `+O`).
+    let spells = |list: &[&str], sign: char, letter: char| {
+        list.iter().any(|o| {
+            let mut ch = o.chars();
+            ch.next() == Some(sign) && ch.next() == Some(letter) && ch.next().is_none()
+        })
+    };
+    // Whether the first operand `w` leaves stdin the program: none, `/dev/stdin`, or a word the
+    // guard cannot read but a process substitution, which is the script (`bash <(…)`).
+    let no_script = |w: Option<&Word>| {
+        w.is_none_or(|w| match literal(w) {
+            Some(s) => STDIN_PATHS.contains(&s.as_str()),
+            None => !src
+                .get(w.span.start..w.span.end)
+                .is_some_and(|t| t.starts_with("<(") || t.starts_with(">(")),
+        })
+    };
     let mut stdin_flag = false;
+    let mut plain = true;
     let mut k = 0;
     while let Some(w) = args.get(k) {
-        // A word the guard cannot read may be the script.
+        k += 1;
+        let script = |w: Option<&Word>| stdin_flag || no_script(w);
         let Some(a) = literal(w) else {
-            return stdin_flag;
-        };
-        let operand = |w: Option<&Word>| {
-            stdin_flag
-                || w.is_none_or(|w| literal(w).is_some_and(|s| STDIN_PATHS.contains(&s.as_str())))
+            return script(Some(w)).then_some(plain);
         };
         if a == "--" || a == "-" {
-            return operand(args.get(k + 1));
+            return script(args.get(k)).then_some(plain);
         }
-        if !(a.len() > 1 && (a.starts_with('-') || a.starts_with('+'))) {
-            return operand(Some(w));
+        if a.starts_with("--") {
+            if values.contains(&a.as_str()) {
+                k += 1;
+                plain = false;
+            }
+            continue;
         }
-        let cluster = !a.starts_with("--") && a[1..].chars().all(|ch| ch.is_ascii_alphabetic());
-        let has = |letter: &str| cluster && a.starts_with('-') && a[1..].contains(letter);
-        if loops
-            .iter()
-            .any(|o| a == *o || o.strip_prefix('-').is_some_and(has))
-        {
-            return false;
+        let sign = a.chars().next().unwrap_or(' ');
+        if !(a.len() > 1 && (sign == '-' || sign == '+')) {
+            return script(Some(w)).then_some(plain);
         }
-        stdin_flag |= positional
-            .iter()
-            .any(|o| a == *o || o.strip_prefix('-').is_some_and(has));
-        k += if values.contains(&a.as_str()) { 2 } else { 1 };
+        let letters = &a[1..];
+        for (j, letter) in letters.char_indices() {
+            if !letter.is_ascii_alphabetic() {
+                break;
+            }
+            if sign == '-' && spells(loops, '-', letter) {
+                return None;
+            }
+            stdin_flag |= sign == '-' && spells(&positional, '-', letter);
+            if spells(&values, sign, letter) {
+                plain = false;
+                if j + 1 == letters.len() {
+                    k += 1;
+                }
+                break;
+            }
+        }
     }
-    true
+    Some(plain)
 }
 
 /// Whether PowerShell with these arguments runs its stdin as the program: `-Command -`, `-File -`,
-/// a lone `-`, or no command and no file at all. A command, a file, an encoded command or a word
-/// the guard cannot read is no stdin program. A parameter is any unambiguous prefix of its name.
+/// a lone `-`, or no command and no file at all. A command, a file or an encoded command is no
+/// stdin program. A parameter is any unambiguous prefix of its name (`-ex` for
+/// `-ExecutionPolicy`). A word the guard cannot read is read as no command: the stricter reading.
 fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
     let encoded = strings(row, STDIN_ENCODED_PARAMS);
+    let values: Vec<&str> = row.value_options.iter().map(String::as_str).collect();
     // `p` (lowercase, no dash) spells one of the parameters.
     let spells = |list: &[&str], p: &str| {
         list.iter()
@@ -220,7 +246,7 @@ fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
     };
     let mut k = 0;
     while let Some(w) = args.get(k) {
-        let Some(a) = literal(w) else { return false };
+        let Some(a) = literal(w) else { return true };
         let lower = a.to_lowercase();
         let Some(p) = ["--", "-", "/", "\u{2013}", "\u{2014}", "\u{2015}"]
             .iter()
@@ -239,11 +265,7 @@ fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
         if spells(&encoded, p) {
             return false;
         }
-        let value = row
-            .value_options
-            .iter()
-            .any(|o| o.eq_ignore_ascii_case(&format!("-{p}")));
-        k += if value { 2 } else { 1 };
+        k += if spells(&values, p) { 2 } else { 1 };
     }
     true
 }
@@ -438,17 +460,28 @@ mod tests {
             "bash -c 'echo hi' <<'EOF'\nrm -rf ~\nEOF",
             "bash -lc 'echo hi' <<< 'rm -rf ~'",
             "bash run.sh <<'EOF'\nrm -rf ~\nEOF",
-            "bash \"$S\" <<'EOF'\nrm -rf ~\nEOF",
             "bash <<'EOF' < run.sh\nrm -rf ~\nEOF",
             "bash <<'EOF' <&3\nrm -rf ~\nEOF",
+            "bash <<'EOF' 0</dev/null\nrm -rf ~\nEOF",
             "bash 0< run.sh",
             "bash 3<<< 'rm -rf ~'",
+            "bash 3<<'EOF' run.sh\nrm -rf ~\nEOF",
+            "bash 3<<'EOF'\nrm -rf ~\nEOF",
+            "bash -o pipefail run.sh <<< 'rm -rf ~'",
+            "bash <(echo hi) <<< 'rm -rf ~'",
+            "bash -- <(echo hi) <<< 'rm -rf ~'",
+            "bash -eo pipefail run.sh <<< 'rm -rf ~'",
+            "bash -euo pipefail run.sh <<< 'rm -rf ~'",
+            "bash -xO extglob run.sh <<< 'rm -rf ~'",
+            "bash -ec 'echo hi' <<< 'rm -rf ~'",
             "cat <<'EOF'\nrm -rf ~\nEOF",
             "cmd <<< 'rd /s /q x'",
             "pwsh -File run.ps1 <<< 'Remove-Item -Recurse x'",
             "pwsh -Command 'Get-Date' <<< 'Remove-Item -Recurse x'",
             "pwsh -EncodedCommand AAAA <<< 'Remove-Item -Recurse x'",
             "pwsh -NoProfile run.ps1 <<< 'Remove-Item -Recurse x'",
+            "pwsh -ex Bypass run.ps1 <<< 'Remove-Item -Recurse x'",
+            "pwsh -wo C:/x run.ps1 <<< 'Remove-Item -Recurse x'",
             "sudo --weird x bash <<< 'rm -rf ~'",
         ] {
             assert_eq!(texts(src), Vec::<String>::new(), "{src:?}");
@@ -468,15 +501,60 @@ mod tests {
             "bash -- /dev/stdin <<< 'rm -rf ~'",
             "bash - <<< 'rm -rf ~'",
             "bash -o pipefail -e <<< 'rm -rf ~'",
+            "bash -eo pipefail <<< 'rm -rf ~'",
+            "bash -euo pipefail <<< 'rm -rf ~'",
+            "bash -xO extglob <<< 'rm -rf ~'",
+            "bash -opipefail <<< 'rm -rf ~'",
+            "bash --rcfile x.rc <<< 'rm -rf ~'",
             "bash --norc --login <<< 'rm -rf ~'",
             "bash < run.sh <<< 'rm -rf ~'",
+            "bash 0<<'EOF'\nrm -rf ~\nEOF",
+            "bash \"$S\" <<< 'rm -rf ~'",
+            "bash -- \"$S\" <<< 'rm -rf ~'",
             "pwsh -NoProfile -ExecutionPolicy Bypass -Command - <<< 'rm -rf ~'",
+            "pwsh -ex Bypass <<< 'rm -rf ~'",
+            "pwsh -ep Bypass -c - <<< 'rm -rf ~'",
+            "pwsh -wo C:/x <<< 'rm -rf ~'",
+            "pwsh -WorkingDir C:/x -Command - <<< 'rm -rf ~'",
+            "pwsh \"$S\" <<< 'rm -rf ~'",
             "pwsh -File - <<< 'rm -rf ~'",
             "pwsh -f - <<< 'rm -rf ~'",
             "pwsh - <<< 'rm -rf ~'",
             "powershell -NoProfile <<< 'rm -rf ~'",
         ] {
-            assert_eq!(texts(src), vec!["rm -rf ~".to_string()], "{src:?}");
+            let got = texts(src);
+            let got: Vec<&str> = got.iter().map(|t| t.trim_end()).collect();
+            assert_eq!(got, ["rm -rf ~"], "{src:?}");
+        }
+    }
+
+    /// The loop and follow walks read the body only where they read a `-c` body: a Bash-family
+    /// shell whose options take no value, and a literal body.
+    #[test]
+    fn the_walks_read_a_literal_body_after_plain_options() {
+        let script = |src: &str| {
+            let s = bash::parse(src, BashProfile::Posix).expect("parses");
+            let mut out = Vec::new();
+            visit(&s, &mut |c, prev| {
+                out.extend(body(c, prev, src, BASH, Os::Posix).map(|f| f.script));
+            });
+            out
+        };
+        let loop_text = Some("sleep 1".to_string());
+        for src in [
+            "bash <<< 'sleep 1'",
+            "bash -xs a <<< 'sleep 1'",
+            "echo 'sleep 1' | sh",
+        ] {
+            assert_eq!(script(src), std::slice::from_ref(&loop_text), "{src:?}");
+        }
+        for src in [
+            "bash -o pipefail <<< 'sleep 1'",
+            "bash -eo pipefail <<< 'sleep 1'",
+            "bash <<< \"sleep $N\"",
+            "pwsh -Command - <<< 'sleep 1'",
+        ] {
+            assert_eq!(script(src), [None], "{src:?}");
         }
     }
 }
