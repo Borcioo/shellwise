@@ -693,8 +693,8 @@ mod tests {
 
     #[test]
     fn incomplete_quotes_only_a_short_one_line_hit() {
-        // A hit may be an unreadable region or the whole text (a spent budget): it is not quoted
-        // when long or multi-line, so the reason stays one short line.
+        // A hit may span a long or multi-line command (a nested body): it is not quoted then, so
+        // the reason stays one short line.
         let long = format!("{} #", "env -S ".repeat(100));
         let all = |c: &str| {
             Some(Span {

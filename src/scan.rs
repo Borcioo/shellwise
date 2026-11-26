@@ -61,13 +61,6 @@ impl Budget {
     }
 }
 
-fn opaque(span: Span) -> Hit {
-    Hit {
-        kind: Kind::Unreadable,
-        span,
-    }
-}
-
 /// One `[[command]]` row of `data/destructive.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -85,8 +78,6 @@ pub enum Kind {
     Row(usize),
     /// A .NET `Delete()` call on an object (`(Get-Item x).Delete()`), which no row names.
     DeleteMethod,
-    /// A region the scan cannot read (an encoded command, nesting too deep, a spent budget).
-    Unreadable,
 }
 
 /// A match, and the span of the simple command it matched.
@@ -160,34 +151,15 @@ pub fn table() -> &'static [Entry] {
 
 /// Every simple command of `cmd` that a row of `table` names.
 pub fn hits(table: &[Entry], cmd: &str) -> Vec<Hit> {
-    let budget = Budget::for_input(cmd.len());
-    let mut out = hits_at(table, cmd, 0, &budget);
-    if budget.spent() {
-        // The scan stopped early: nothing proves the rest harmless.
-        out.push(opaque(Span {
-            start: 0,
-            end: cmd.len(),
-        }));
-    }
-    out
-}
-
-/// The span of the first hit in `cmd`, an unreadable region included. A verdict reads
-/// `destructive_row` instead.
-pub fn raw_destructive(cmd: &str) -> Option<Span> {
-    hits(table(), cmd)
-        .into_iter()
-        .map(|h| h.span)
-        .min_by_key(|s| (s.start, s.end))
+    hits_at(table, cmd, 0, &Budget::for_input(cmd.len()))
 }
 
 /// The span of the first simple command in `cmd` that a row of the destructive table names, or
-/// that calls a .NET `Delete()`. An unreadable region (a spent budget, nesting past `MAX_DEPTH`,
-/// a pipe into a shell) is neither.
+/// that calls a .NET `Delete()`. A region the scan cannot read (a spent budget, nesting past
+/// `MAX_DEPTH`, a pipe into a shell) is neither.
 pub fn destructive_row(cmd: &str) -> Option<Span> {
     hits(table(), cmd)
         .into_iter()
-        .filter(|h| h.kind != Kind::Unreadable)
         .map(|h| h.span)
         .min_by_key(|s| (s.start, s.end))
 }
@@ -253,13 +225,10 @@ const VALUE_OPTS: [&str; 4] = ["-e", "--exclude", "-s", "--source"];
 
 fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
     if depth > MAX_DEPTH {
-        // Too deep to read: nothing proves it harmless.
-        return vec![opaque(Span {
-            start: 0,
-            end: cmd.len(),
-        })];
+        // Too deep to read.
+        return Vec::new();
     }
-    // Two readings of the text. A spent budget is reported once, by `hits`.
+    // Two readings of the text.
     if !b.spend(cmd.len().saturating_mul(2)) {
         return Vec::new();
     }
@@ -319,7 +288,6 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
                 out.push(Hit { kind: h.kind, span });
             }
         }
-        out.extend(seg.unreadable.into_iter().map(opaque));
     }
     // Both readings usually find the same command.
     out.sort_by_key(|h| (h.span.start, h.span.end, h.kind));
@@ -328,8 +296,8 @@ fn hits_at(table: &[Entry], cmd: &str, depth: usize, b: &Budget) -> Vec<Hit> {
 }
 
 /// Scan what the producer prints as the code an interpreter runs, in every reading of where its
-/// command starts. Text that is not static (a file, a download, a variable) in any reading makes
-/// the code unreadable.
+/// command starts. Text that is not static (a file, a download, a variable) in any reading ends
+/// the scan of the code.
 fn feed(
     table: &[Entry],
     producers: &[Cow<[Tok]>],
@@ -345,12 +313,7 @@ fn feed(
                     out.push(Hit { kind: h.kind, span });
                 }
             }
-            // A spent budget is reported once, by `hits`.
-            None if b.spent() => return,
-            None => {
-                out.push(opaque(span));
-                return;
-            }
+            None => return,
         }
     }
 }
@@ -386,7 +349,7 @@ fn text_len(words: &[Tok]) -> usize {
     words.iter().map(|w| w.value.len() + 1).sum()
 }
 
-/// Scan the command a walk found: its words, an `env -S` body, or an unreadable command.
+/// Scan the command a walk found: its words or an `env -S` body.
 fn scan_walk(
     table: &[Entry],
     words: &[Tok],
@@ -405,8 +368,7 @@ fn scan_walk(
                 out.push(Hit { kind: h.kind, span });
             }
         }
-        Walk::Opaque => out.push(opaque(seg_span(words))),
-        Walk::Bare { .. } => {}
+        Walk::Opaque | Walk::Bare { .. } => {}
     }
 }
 
@@ -453,10 +415,7 @@ fn segment_hits(
             }
             return;
         }
-        Some(Nested::Opaque) => {
-            out.push(opaque(span));
-            return;
-        }
+        Some(Nested::Opaque) => return,
         None => {}
     }
     if !in_exec && name == "find" && b.spend(words.len() * WORD) {
@@ -837,7 +796,7 @@ enum Walk {
     /// `env -S 'cmd args' rest…`: the command is this text, read as a nested command.
     Split { body: String, depth: usize },
     /// Only prefix words: no command (`wsl` alone runs the default shell). Also the walk's
-    /// answer once the budget is spent, which `hits` reports.
+    /// answer once the budget is spent.
     Bare { wrapper: Option<&'static str> },
     /// More wrappers than `MAX_DEPTH`.
     Opaque,
@@ -1090,8 +1049,6 @@ struct Segments {
     /// Text that may run as code (a substitution in `"…"`, an unclosed quote, a heredoc or
     /// here-string a shell reads), with its span, for the caller to scan as a nested command.
     embedded: Vec<(Span, String)>,
-    /// Text the reader cannot place (after a heredoc delimiter it cannot resolve).
-    unreadable: Vec<Span>,
 }
 
 fn is_single_quote(mode: Mode, c: char) -> bool {
@@ -1161,7 +1118,6 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
     let mut out = Segments {
         segs: Vec::new(),
         embedded: Vec::new(),
-        unreadable: Vec::new(),
     };
     let mut words: Vec<Tok> = Vec::new();
     let mut cur: Option<Tok> = None;
@@ -1308,7 +1264,7 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
                 j += 1;
             }
             // After a delimiter the reader cannot resolve, nothing shows where the body ends:
-            // the rest of the input is unreadable (and still scanned as code).
+            // the rest of the input is scanned as code.
             match heredoc_word(text, j) {
                 Some((delim, quoted, end)) => {
                     if quoted || !delim.is_empty() {
@@ -1320,10 +1276,7 @@ fn segments(text: &str, mode: Mode, b: &Budget) -> Segments {
                     }
                     i = end;
                 }
-                None => {
-                    out.unreadable.push(Span { start: i, end: n });
-                    i = j;
-                }
+                None => i = j,
             }
         } else if mode == Mode::Pwsh
             && cur.is_none()
@@ -1708,8 +1661,8 @@ mod tests {
         "echo \u{2018}a; cat <<EOF\r\nhello\r\nEOF\nrm -rf x\r\nEOF\r\necho \u{2019}",
     ];
 
-    /// Destructive spellings the scan cannot read, with the unreadable class each is in: the
-    /// raw scan flags them, the verdicts do not (no row and no `Delete()` call is seen).
+    /// Destructive spellings the scan cannot read, with the unreadable class each is in: no row
+    /// and no `Delete()` call is seen.
     const UNREADABLE_DESTRUCTIVE: &[(&str, &str)] = &[
         ("pwsh -EncodedCommand AAAA", "an encoded body"),
         ("powershell -e AAAA", "an encoded body"),
@@ -1721,25 +1674,6 @@ mod tests {
             "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
             "nesting past MAX_DEPTH",
         ),
-    ];
-
-    /// Commands the scan cannot read to the end (too deep, too much work, text it cannot see):
-    /// flagged as unreadable whatever they hold.
-    const OPAQUE: &[&str] = &[
-        "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Get-Date",
-        "env -S env -S env -S env -S env -S echo hi",
-        "sudo sudo sudo sudo sudo echo hi",
-        "cat script.sh | bash",
-        "Get-Content x.ps1 | iex",
-        "bash <(cat script.sh)",
-        // printed text the writer still expands
-        "echo \"$X\" | bash",
-        "echo \"a`x`b\" | bash",
-        "printf 'r\\155 -rf x' | bash",
-        "printf 'rm%s-rf x' ' ' | bash",
-        // a heredoc delimiter the reader cannot resolve: the rest of the input is unread
-        "cat <<$'A'\nhello\nA\necho hi",
-        "cat <<'EOF\nhello\nEOF\necho hi",
     ];
 
     /// Every wrapper name: the shell after it reads the pipe.
@@ -1826,25 +1760,12 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_destructive_spellings_are_raw_hits_but_no_row() {
-        let missed: Vec<&(&str, &str)> = UNREADABLE_DESTRUCTIVE
+    fn unreadable_destructive_spellings_are_no_row() {
+        let read: Vec<&(&str, &str)> = UNREADABLE_DESTRUCTIVE
             .iter()
-            .filter(|(cmd, _)| raw_destructive(cmd).is_none() || destructive_row(cmd).is_some())
+            .filter(|(cmd, _)| destructive_row(cmd).is_some())
             .collect();
-        assert!(missed.is_empty(), "missed or read as a row: {missed:?}");
-    }
-
-    #[test]
-    fn unreadable_commands_are_flagged() {
-        let missed: Vec<&&str> = OPAQUE
-            .iter()
-            .filter(|cmd| {
-                !hits(table(), cmd)
-                    .iter()
-                    .any(|h| h.kind == Kind::Unreadable)
-            })
-            .collect();
-        assert!(missed.is_empty(), "not flagged as unreadable: {missed:?}");
+        assert!(read.is_empty(), "read as a row: {read:?}");
     }
 
     #[test]
@@ -1864,18 +1785,19 @@ mod tests {
         }
         let missed: Vec<&String> = rows
             .iter()
-            .filter(|cmd| raw_destructive(cmd).is_none())
+            .filter(|cmd| destructive_row(cmd).is_none())
             .collect();
         assert!(missed.is_empty(), "missed: {missed:?}");
     }
 
     #[test]
     fn chained_env_split_strings_stay_bounded() {
-        // 64 KiB of `env -S` links: past the depth limit the tail is unreadable, harmless or not.
-        for tail in ["rm -rf x", "echo hi"] {
+        // 64 KiB of `env -S` links: a wrapper reading still finds a destructive tail, and a
+        // harmless one names no row.
+        for (tail, row) in [("rm -rf x", true), ("echo hi", false)] {
             let cmd = format!("{}{tail}", "env -S ".repeat(64 * 1024 / 7));
             let start = std::time::Instant::now();
-            assert!(raw_destructive(&cmd).is_some(), "{tail}");
+            assert_eq!(destructive_row(&cmd).is_some(), row, "{tail}");
             assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
         }
     }
@@ -1886,36 +1808,25 @@ mod tests {
         for unit in ["sudo eval ", "sudo bash -c "] {
             let cmd = format!("{}echo hi", unit.repeat(64 * 1024 / unit.len()));
             let start = std::time::Instant::now();
-            assert!(raw_destructive(&cmd).is_some(), "{unit}");
+            assert!(destructive_row(&cmd).is_none(), "{unit}");
             assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
         }
     }
 
     #[test]
-    fn a_spent_budget_hides_nothing() {
+    fn a_spent_budget_ends_the_scan() {
         // The first segment spends the budget without nesting deeper than one body; the `rm`
-        // after it is never read, so the input as a whole is unreadable.
+        // after it is never read.
         let cmd = format!("sudo x {}; rm -rf x", "bash -c 'echo hi' ".repeat(1000));
         let hits = hits(table(), &cmd);
-        assert!(
-            hits.iter().all(|h| h.kind == Kind::Unreadable),
-            "the rm was read: {hits:?}"
-        );
-        assert!(
-            hits.iter().any(|h| h.span
-                == Span {
-                    start: 0,
-                    end: cmd.len()
-                }),
-            "{hits:?}"
-        );
+        assert!(hits.is_empty(), "the rm was read: {hits:?}");
     }
 
     #[test]
     fn long_wrapper_segments_stay_linear() {
         let cmd = format!("sudo {}rm -rf x", "a ".repeat(20_000));
         let start = std::time::Instant::now();
-        assert!(raw_destructive(&cmd).is_some());
+        assert!(destructive_row(&cmd).is_some());
         assert!(start.elapsed().as_millis() < 2000, "{:?}", start.elapsed());
     }
 
@@ -1923,7 +1834,7 @@ mod tests {
     fn find_exec_chains_stay_linear() {
         let cmd = format!("find . {}-exec rm -rf x", "-exec find . ".repeat(22));
         let start = std::time::Instant::now();
-        assert!(raw_destructive(&cmd).is_some());
+        assert!(destructive_row(&cmd).is_some());
         assert!(start.elapsed().as_millis() < 1000, "{:?}", start.elapsed());
     }
 
@@ -1948,7 +1859,7 @@ mod tests {
     fn harmless_commands_pass() {
         let flagged: Vec<&&str> = HARMLESS
             .iter()
-            .filter(|cmd| raw_destructive(cmd).is_some())
+            .filter(|cmd| destructive_row(cmd).is_some())
             .collect();
         assert!(flagged.is_empty(), "flagged: {flagged:?}");
     }
@@ -1956,10 +1867,10 @@ mod tests {
     #[test]
     fn span_covers_the_destructive_simple_command() {
         let cmd = "echo hi; rm -rf x";
-        assert_eq!(raw_destructive(cmd), Some(Span { start: 9, end: 17 }));
+        assert_eq!(destructive_row(cmd), Some(Span { start: 9, end: 17 }));
         // The first destructive command wins.
         let cmd = "rm a; git reset --hard";
-        assert_eq!(raw_destructive(cmd), Some(Span { start: 0, end: 4 }));
+        assert_eq!(destructive_row(cmd), Some(Span { start: 0, end: 4 }));
     }
 
     #[test]
@@ -1998,7 +1909,7 @@ mod tests {
         let mut cmd = "(".repeat(200 * 1024);
         cmd.push_str("rm -rf x");
         let start = std::time::Instant::now();
-        assert!(raw_destructive(&cmd).is_some());
+        assert!(destructive_row(&cmd).is_some());
         assert!(start.elapsed().as_millis() < 2000, "{:?}", start.elapsed());
     }
 }
