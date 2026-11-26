@@ -17,6 +17,8 @@ use crate::scan;
 const LOOP_BODY: &str = "loop_body";
 const STDIN_VALUE_OPTIONS: &str = "stdin_value_options";
 const STDIN_POSITIONAL: &str = "stdin_positional";
+const STDIN_CLUSTER_VALUE: &str = "stdin_value_in_cluster";
+const CLUSTER_VALUE_REST: &str = "rest";
 const STDIN_PROGRAM_PARAMS: &str = "stdin_program_params";
 const STDIN_ENCODED_PARAMS: &str = "stdin_encoded_params";
 /// The `extra` key of a producer row and its values (`data/programs.toml`).
@@ -113,7 +115,7 @@ fn produced(prev: &Elem, src: &str, shell: Shell, os: Os) -> Option<(String, Opt
         // `cat <<'EOF' | bash`: its own heredoc, nothing written to a file. (The raw scan reads a
         // heredoc there and no here-string, so neither does this.)
         let operands = p.args.iter().map(literal).collect::<Option<Vec<_>>>()?;
-        if !(operands.is_empty() || operands == ["-"]) || !p.redirects.iter().all(is_stdin) {
+        if !(operands.is_empty() || operands == ["-"]) || p.redirects.iter().any(moves_output) {
             return None;
         }
         return match p.redirects.iter().rev().find(|r| is_stdin(r))? {
@@ -164,14 +166,29 @@ fn is_stdin(r: &Redirect) -> bool {
     }
 }
 
+/// A redirect that may change what a producer writes on stdout: its stdout to a file or a copied
+/// descriptor (`>out`, `&>out`, `>&2`, `2>&1`). A heredoc or a file on another descriptor
+/// (`3<<X`, `2>/dev/null`) does not, and stdin's last redirect is read on its own.
+fn moves_output(r: &Redirect) -> bool {
+    match r {
+        Redirect::Heredoc { .. } => false,
+        Redirect::File { op, .. } => {
+            let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
+            let fd = &op[..op.len() - rest.len()];
+            rest.contains('&') || (rest.contains('>') && matches!(fd, "" | "1"))
+        }
+    }
+}
+
 fn is_here_string(op: &str) -> bool {
     op.trim_start_matches(|ch: char| ch.is_ascii_digit()) == "<<<"
 }
 
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
-/// operand. Options are read as getopt reads them: a short one alone or in a cluster (`-ec`),
-/// where a letter that takes a value ends the cluster and, as its last letter, takes the next
-/// word (`-eo pipefail`). With `-s` the words after the options are positional parameters;
+/// operand. A short option stands alone or in a cluster (`-ec`). A letter that takes a value
+/// takes the next word and the letters after it still count (bash: `-ox pipefail`), or, where
+/// the row says so, takes the rest of its word, or the next word as the last letter (zsh:
+/// `-oerrexit`, `-eo errexit`). With `-s` the words after the options are positional parameters;
 /// without it the first is the script, which is stdin only as `/dev/stdin`. A word the guard
 /// cannot read is read as no script, the stricter reading, unless it is a process substitution.
 /// `Some(plain)` when stdin is the
@@ -196,6 +213,10 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
                 .is_some_and(|t| t.starts_with("<(") || t.starts_with(">(")),
         })
     };
+    // Bash takes the value of each value letter in a cluster from the next words and reads the
+    // letters after it (`-ox pipefail`); zsh takes the rest of the word (`-oerrexit`).
+    let rest_is_value =
+        row.extra.get(STDIN_CLUSTER_VALUE).and_then(|v| v.as_str()) == Some(CLUSTER_VALUE_REST);
     let mut stdin_flag = false;
     let mut plain = true;
     let mut k = 0;
@@ -230,6 +251,10 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
             stdin_flag |= sign == '-' && spells(&positional, '-', letter);
             if spells(&values, sign, letter) {
                 plain = false;
+                if !rest_is_value {
+                    k += 1;
+                    continue;
+                }
                 if j + 1 == letters.len() {
                     k += 1;
                 }
@@ -482,7 +507,18 @@ mod tests {
             "bash -euo pipefail run.sh <<< 'rm -rf ~'",
             "bash -xO extglob run.sh <<< 'rm -rf ~'",
             "bash -ec 'echo hi' <<< 'rm -rf ~'",
+            "bash -oo errexit xtrace run.sh <<< 'rm -rf ~'",
+            "bash -oc errexit 'echo hi' <<< 'rm -rf ~'",
+            "bash -oxtrace <<< 'rm -rf ~'",
+            "zsh -oerrexit run.sh <<< 'rm -rf ~'",
+            "zsh -O extglob <<< 'rm -rf ~'",
+            "zsh --emulate sh run.sh <<< 'rm -rf ~'",
             "cat <<'EOF'\nrm -rf ~\nEOF",
+            "cat <<'EOF' >out.txt | bash\nrm -rf ~\nEOF",
+            "cat <<'EOF' 2>&1 | bash\nrm -rf ~\nEOF",
+            "cat <<'EOF' &>out.txt | bash\nrm -rf ~\nEOF",
+            "cat <<'EOF' 0<&3 | bash\nrm -rf ~\nEOF",
+            "cat 3<<'X' | bash\nrm -rf ~\nX",
             "cmd <<< 'rd /s /q x'",
             "pwsh -File run.ps1 <<< 'Remove-Item -Recurse x'",
             "pwsh -Command 'Get-Date' <<< 'Remove-Item -Recurse x'",
@@ -513,6 +549,16 @@ mod tests {
             "bash -euo pipefail <<< 'rm -rf ~'",
             "bash -xO extglob <<< 'rm -rf ~'",
             "bash -opipefail <<< 'rm -rf ~'",
+            "bash -ox errexit <<< 'rm -rf ~'",
+            "bash -os errexit run.sh <<< 'rm -rf ~'",
+            "bash -so errexit run.sh <<< 'rm -rf ~'",
+            "bash -oo errexit xtrace <<< 'rm -rf ~'",
+            "zsh -oerrexit <<< 'rm -rf ~'",
+            "zsh -eo errexit <<< 'rm -rf ~'",
+            "zsh --emulate sh <<< 'rm -rf ~'",
+            "zsh -Os extglob run.sh <<< 'rm -rf ~'",
+            "cat <<'EOF' 3<<'X' | bash\nrm -rf ~\nEOF\nhi\nX",
+            "cat 3<<'X' <<'EOF' 2>/dev/null | bash\nhi\nX\nrm -rf ~\nEOF",
             "bash --rcfile x.rc <<< 'rm -rf ~'",
             "bash --norc --login <<< 'rm -rf ~'",
             "bash < run.sh <<< 'rm -rf ~'",
@@ -529,6 +575,7 @@ mod tests {
             "pwsh -f - <<< 'rm -rf ~'",
             "pwsh - <<< 'rm -rf ~'",
             "powershell -NoProfile <<< 'rm -rf ~'",
+            "powershell -wo C:/x <<< 'rm -rf ~'",
         ] {
             let got = texts(src);
             let got: Vec<&str> = got.iter().map(|t| t.trim_end()).collect();

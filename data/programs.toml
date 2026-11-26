@@ -480,6 +480,10 @@ dry_run = ["/L"]
 # stdin_value_options  on a Bash-family shell: options whose value is the next word (`-o pipefail`)
 # stdin_positional     on a Bash-family shell: with one of these the words after the options are
 #                      arguments, and the program comes on stdin (`bash -s -- a b`)
+# stdin_value_in_cluster  where a short value option inside a cluster finds its value: "next"
+#                      (the next word, and the letters after it still count: bash `-ox pipefail`)
+#                      or "rest" (the rest of the word, or the next word as the last letter: zsh
+#                      `-oerrexit`, `-eo errexit`)
 # stdin_program_params on PowerShell: parameters (any unambiguous prefix) whose value is the
 #                      program, `-` for stdin (`-Command -`, `-File -`)
 # stdin_encoded_params on PowerShell: parameters whose value is an encoded program
@@ -496,6 +500,7 @@ shells = ["bash"]
 kind = ["shell"]
 loop_body = ["-c"]
 stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_in_cluster = "next"
 stdin_positional = ["-s"]
 
 [[program]]
@@ -503,13 +508,15 @@ name = "sh"
 kind = ["shell"]
 loop_body = ["-c"]
 stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_in_cluster = "next"
 stdin_positional = ["-s"]
 
 [[program]]
 name = "zsh"
 kind = ["shell"]
 loop_body = ["-c"]
-stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_options = ["-o", "+o", "--emulate"]
+stdin_value_in_cluster = "rest"
 stdin_positional = ["-s"]
 
 [[program]]
@@ -523,7 +530,7 @@ stdin_encoded_params = ["-EncodedCommand", "-ec"]
 [[program]]
 name = "powershell"
 kind = ["shell"]
-value_options = ["-ExecutionPolicy", "-ep", "-ex", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
+value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
 stdin_program_params = ["-Command", "-File"]
 stdin_encoded_params = ["-EncodedCommand", "-ec"]
@@ -677,6 +684,7 @@ shells = ["pwsh"]
 kind = ["shell"]
 loop_body = ["-c"]
 stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_in_cluster = "next"
 stdin_positional = ["-s"]
 fix ="& \"$env:ProgramFiles\\Git\\bin\\bash.exe\""
 lint = { tags = ["wsl-bash"] }

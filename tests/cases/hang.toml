@@ -8297,3 +8297,11 @@ shell = "bash"
 command = "printf '%s\\n' 'tail -f log' | bash"
 level = "warn"
 rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-fed-pipe-cat-heredoc-beside-another-descriptor-follow"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 3<<'X' | bash\ntail -f log\nEOF\nhello\nX"
+level = "warn"
+rules = ["follow-unbounded"]

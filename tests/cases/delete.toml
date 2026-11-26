@@ -7715,3 +7715,136 @@ shell = "bash"
 command = "printf '%s\\n' 'cd /tmp' 'rm -rf ~' | bash"
 level = "ok"
 rules = []
+
+# Bash takes the value of each value letter in a cluster from the next word and reads the letters
+# after it; zsh takes the rest of the word.
+[[row]]
+id = "fed-here-string-cluster-value-then-letter-home"
+os = "any"
+shell = "bash"
+command = "bash -ox errexit <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-cluster-value-then-s-home"
+os = "any"
+shell = "bash"
+command = "bash -os errexit run.sh <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-two-value-letters-home"
+os = "any"
+shell = "bash"
+command = "bash -oo errexit xtrace <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-two-value-letters-then-a-script"
+os = "any"
+shell = "bash"
+command = "bash -oo errexit xtrace run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-value-letter-then-c"
+os = "any"
+shell = "bash"
+command = "bash -oc errexit 'echo hi' <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-zsh-value-in-the-word-home"
+os = "any"
+shell = "bash"
+command = "zsh -oerrexit <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-zsh-value-in-the-word-then-a-script"
+os = "any"
+shell = "bash"
+command = "zsh -oerrexit run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-zsh-emulate-home"
+os = "any"
+shell = "bash"
+command = "zsh --emulate sh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-zsh-emulate-then-a-script"
+os = "any"
+shell = "bash"
+command = "zsh --emulate sh run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# zsh's -O is a flag: the word after it is the script.
+[[row]]
+id = "fed-control-heredoc-zsh-capital-o-then-a-script"
+os = "any"
+shell = "bash"
+command = "zsh -O extglob <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# `cat` writes its fd-0 heredoc whatever other descriptors it is given; a redirect of its output,
+# a file on its stdin or a duplicated descriptor leaves the text unread.
+[[row]]
+id = "fed-pipe-cat-heredoc-beside-another-descriptor-home"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 3<<'X' | bash\nrm -rf ~\nEOF\nhello\nX"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-cat-heredoc-after-another-descriptor-home"
+os = "any"
+shell = "bash"
+command = "cat 3<<'X' <<'EOF' | bash\nhello\nX\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-cat-heredoc-stderr-to-a-file-home"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 2>/dev/null | bash\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-pipe-cat-heredoc-output-to-a-file"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' >out.txt | bash\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-cat-heredoc-descriptor-copied"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 0<&3 | bash\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-cat-heredoc-on-another-descriptor-only"
+os = "any"
+shell = "bash"
+command = "cat 3<<'X' | bash\nrm -rf ~\nX"
+level = "ok"
+rules = []
