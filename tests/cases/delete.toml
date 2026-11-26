@@ -1002,9 +1002,10 @@ command = "bash -c 'rm -rf build && make'"
 level = "warn"
 rules = ["opaque-destructive"]
 
-# In a command that parses, the raw scan of a body the guard does not read stops at the first
-# reading of a piped producer it cannot read (`root printf …`): only after a parse error does it
-# read the later ones. The twin with no wrapper is read.
+# In a command that parses, delete text a wrapper the scan cannot read (`sudo -u root printf …`)
+# pipes into a shell, inside a body the guard does not read, is not judged: a known miss on the
+# parsed path, pinned so that a change is noticed. The twin with no wrapper is read, and a command
+# that does not parse reads the fed delete too.
 [[row]]
 id = "bash-c-with-a-delete-fed-into-a-shell-is-warn"
 os = "any"
@@ -1014,13 +1015,14 @@ level = "warn"
 rules = ["opaque-destructive"]
 
 [[row]]
-id = "bash-c-with-a-delete-fed-behind-sudo-stops-at-the-unread-reading"
+id = "bash-c-with-a-delete-fed-behind-sudo-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "bash -c \"sudo -u root printf 'rm -rf x' | bash\""
 level = "ok"
 rules = []
 
+# Delete text that is only an argument of another command (`cat f printf '…'`) feeds no delete.
 [[row]]
 id = "eval-with-a-delete-text-argument-fed-behind-sudo-stops-at-the-unread-reading"
 os = "any"
@@ -1029,10 +1031,10 @@ command = "eval \"sudo cat f printf 'rm -rf x' | bash\""
 level = "ok"
 rules = []
 
-# A delete elsewhere in the command makes the guard judge every command: the body is still read
-# up to the unread reading.
+# A delete elsewhere in the command makes the guard judge every command: the fed delete behind
+# the wrapper is still the same known miss.
 [[row]]
-id = "bash-c-fed-behind-sudo-after-a-delete-stops-at-the-unread-reading"
+id = "bash-c-fed-behind-sudo-after-a-delete-is-a-known-miss"
 os = "any"
 shell = "bash"
 command = "rm -rf build; bash -c \"sudo -u root printf 'rm -rf x' | bash\""
