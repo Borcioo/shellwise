@@ -536,3 +536,71 @@ executing hook command: Executable not found in $PATH: "shellwise"`; the session
 
 Not covered: adding the marketplace from GitHub and installing from it (the files are not on the
 default branch yet); macOS and Linux; the one-line notice when a newer release exists.
+
+## Generic hook on Codex CLI
+
+2026-11-26. codex-cli 0.166.0 (`codex --version`), Windows 11, PowerShell 7.7.0. Each run used
+its own fresh `CODEX_HOME` with no login; the app server's `initialize` reply named that folder as
+`codexHome`, and Codex wrote its state files there. The scratch `config.toml` set a custom model
+provider (`base_url = "http://127.0.0.1:<port>/v1"`, `wire_api = "responses"`,
+`requires_openai_auth = false`): a local Responses API stub that answered with scripted
+`exec_command` calls and then a final message. Codex still listed the skills folder under the
+user's own home (`.agents/skills`). Runs: `codex exec --skip-git-repo-check --json -C <work> -s
+danger-full-access`, so the event's `permission_mode` was `bypassPermissions`. The two scripted
+commands were `Write-Output "$name: done"` (refused at `break`, rule `ps-var-colon`) and a
+`Set-Content` that writes `$PSVersionTable.PSEdition` and `PSVersion` to a canary file. The
+`hooks.json` had one `PreToolUse` group with matcher `^Bash$`. In most runs a second handler
+saved the event and its parent process.
+
+The event, as one handler received it on stdin:
+
+```json
+{"session_id":"...","turn_id":"...","transcript_path":"<home>\\sessions\\2026\\11\\26\\rollout-....jsonl",
+ "cwd":"<work>","hook_event_name":"PreToolUse","model":"stub-model","permission_mode":"bypassPermissions",
+ "tool_name":"Bash","tool_input":{"command":"Write-Output \"$name: done\""},"tool_use_id":"call_0"}
+```
+
+The event has no shell field. `cwd` is the session's working folder.
+
+Codex starts each hook entry as `pwsh.exe -NoProfile -Command "<entry>"` and appends nothing to
+the entry. That is the same PowerShell 7 its shell tool uses (`pwsh.exe -Command <command>`; the
+canary held `Core 7.7.0`), so `--shell pwsh` was the right value here. Which shell Codex picks on a
+machine without PowerShell 7 was not measured.
+
+| Entry (`--shell pwsh`) | Trust | Refused command | Harmless command |
+|---|---|---|---|
+| bare: `<build>\shellwise.exe hook generic --shell pwsh` | bypass flag | ran (PowerShell `ParserError`, exit 1) | ran |
+| `guard-pwsh` line | bypass flag | blocked | ran |
+| `guard-pwsh` line, the only handler | `trusted_hash` in `config.toml` | blocked | ran |
+| bare, path to a missing file | bypass flag | ran | ran |
+| `guard-pwsh` line, path to a missing file | bypass flag | ran | ran |
+| `guard-pwsh` line | none | ran; no hook ran | ran |
+
+The bare entry loses the block. Replaying the saved event through `pwsh.exe -NoProfile -Command
+"<entry>"` gives exit 1 with the `shellwise: break ps-var-colon` text on stderr, and Codex lets
+the command run on any exit code other than 2. The `guard-pwsh` line gives exit 2 with the same
+stderr. With a missing binary, the bare entry exits 1 (PowerShell's "not recognized" error) and the
+guard line exits 0. Both let the command run. Later Codex versions were not measured.
+
+After the blocked command, the stub's next request holds:
+
+```json
+{"type":"function_call_output","call_id":"call_0","output":"Command blocked by PreToolUse hook: shellwise: break ps-var-colon: in a double-quoted string PowerShell reads $name: as a variable on a drive called name, and refuses the whole command\nFix: write \"${name}:\" instead of \"$name:\". Command: Write-Output \"$name: done\""}
+```
+
+No `command_execution` item was emitted for it. The harmless command's output began `Process
+exited with code 0`.
+
+Trust: a hook from the user's `hooks.json` that has not been reviewed does not run in `codex
+exec`. Neither the `--json` stream nor stderr says so. `--dangerously-bypass-hook-trust` runs it for
+one invocation, and each run prints the item "`--dangerously-bypass-hook-trust` is enabled. Enabled
+hooks may run without review for this invocation." The persisted form works too. The app server's
+`hooks/list` reports each handler with a `key` (`<hooks.json path>:pre_tool_use:<group>:<handler>`),
+a `currentHash` (`sha256:...`) and `trustStatus` `untrusted`. Adding `[hooks.state.'<key>']` with
+`trusted_hash = "<currentHash>"` to `config.toml` makes `hooks/list` report `trusted`, and the hook
+then runs without the flag. The hash follows the handler, not the file's folder: the same
+`guard-pwsh` text in two scratch homes gave the same hash.
+
+Not covered: approval through `/hooks` in the interactive CLI, and the review after a changed
+entry; `--shell powershell5` and Git Bash as the shell tool; macOS and Linux; a model-chosen
+`shell` argument on `exec_command`.

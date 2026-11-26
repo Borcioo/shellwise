@@ -81,7 +81,7 @@ Paths start at the user's home folder (`%USERPROFILE%` on Windows) unless they s
 | Host | Mark | Config file | Event | Matcher | Timeout | Entry | Reason shown |
 |---|---|---|---|---|---|---|---|
 | Claude Code | tested | `.claude/settings.json` | `PreToolUse` | `Bash` or `PowerShell` (one regex, below) | `timeout`, seconds | `hook claude-code` (below), or the shellwise plugin | yes |
-| Codex CLI | from the host's documentation | `.codex/hooks.json` | `PreToolUse` | `^Bash$` | `timeout`, seconds | bare command; `guard-pwsh` line on Windows | yes |
+| Codex CLI | tested | `.codex/hooks.json` | `PreToolUse` | `^Bash$` | `timeout`, seconds | bare command; `guard-pwsh` line on Windows | yes |
 | Cursor | from the host's documentation | `.cursor/hooks.json` | `beforeShellExecution` | none | `timeout`, seconds | bare command; `guard-pwsh` line on Windows | not documented |
 | Gemini CLI | from the host's documentation | `.gemini/settings.json` | `BeforeTool` | `run_shell_command` | `timeout`, milliseconds | `guard-sh` line on macOS and Linux; `guard-pwsh` line on Windows | yes |
 | Copilot CLI | from the host's documentation | own file `.copilot/hooks/shellwise.json` | `preToolUse` | `bash` or `powershell` (one regex, below) | `timeoutSec`, seconds | guard line | not documented |
@@ -98,8 +98,8 @@ Notes per host:
   pass `--shell` to match what it runs. The entry is a `{"type": "command", "command": "<entry>",
   "timeout": 10}` handler in a `PreToolUse` group with the matcher. On Windows the host runs the
   entry through PowerShell: use the `guard-pwsh` line. The user must approve the hook in the host's
-  hook settings (`/hooks` in the CLI) before it runs, and again after every change to the entry.
-  Tell the user; the proof cannot pass before that.
+  hook settings (`/hooks` in the CLI) before it runs, and again after every change to the entry;
+  until then the host skips it without a message. Tell the user; the proof cannot pass before that.
 - Cursor: it already runs a Claude Code hook found in the user's Claude settings
   (`.claude/settings.json`). If one for shellwise is there, add nothing. Add an entry only when
   there is none: `{"version": 1, "hooks": {"beforeShellExecution": [{"command": "<entry>", "timeout": 10}]}}`.
