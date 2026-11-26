@@ -27,7 +27,7 @@
 ## Review Focus
 
 - A host leaves stdin open for `hook generic`: the user's shell tool must keep working (exit 0 at the read bound unless the bytes read show a destructive command). Test in task 1.
-- The install folder path holds a space or a non-ASCII character (`C:\Users\Zoë Q\…`): both scripts must install and report the right path. Test in task 2.
+- The install folder path holds a space or a non-ASCII character (a folder named `Zoë Q`): both scripts must install and report the right path. Test in task 2.
 - The download is cut short or `SHA256SUMS` is an HTML error page: the old binary must still be in place and runnable. Test in task 2.
 - `shellwise update` run from a binary the install scripts did not place (a `cargo install` copy, a read-only folder): it must fail with one clear line and leave the binary alone. Test in task 3.
 - `update --notify` with no network, or a release host that never answers: no output, exit 0, back within 3 seconds. Test in task 3.

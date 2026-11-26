@@ -121,10 +121,10 @@ fn absolute_path_in(text: &str) -> Option<String> {
 #[test]
 fn the_absolute_path_check_knows_its_cases() {
     for hit in [
-        "C:\\Users\\x\\bin",
+        "C:\\tools\\x\\bin",
         "run d:/tools/x",
         "\\\\server\\share",
-        "/home/x/bin",
+        "/opt/x/bin",
         "\"/usr/local/bin/shellwise\"",
         "~/bin",
     ] {
