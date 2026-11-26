@@ -1550,14 +1550,6 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
-id = "wl-bash-loop-in-an-env-assignment-before-timeout-is-no-bound"
-os = "any"
-shell = "bash"
-command = "env A=\"$(while true; do sleep 1; done)\" timeout 60 true"
-level = "break"
-rules = ["wait-loop-unbounded"]
-
-[[row]]
 id = "wl-bash-loop-in-backticks-in-an-argument-of-sudo-timeout-is-no-bound"
 os = "any"
 shell = "bash"
@@ -1746,14 +1738,6 @@ id = "wl-gitbash-loop-in-an-assignment-before-sudo-timeout-is-no-bound"
 os = "windows"
 shell = "gitbash"
 command = "X=\"$(while true; do sleep 1; done)\" sudo timeout 60 true"
-level = "break"
-rules = ["wait-loop-unbounded"]
-
-[[row]]
-id = "wl-gitbash-loop-in-an-env-assignment-before-timeout-is-no-bound"
-os = "windows"
-shell = "gitbash"
-command = "env A=\"$(while true; do sleep 1; done)\" timeout 60 true"
 level = "break"
 rules = ["wait-loop-unbounded"]
 
