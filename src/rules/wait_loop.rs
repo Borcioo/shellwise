@@ -324,15 +324,14 @@ impl Walk<'_, '_> {
 
     fn command(&mut self, c: &SimpleCommand, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
-        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs;
-        // for a follow, only with a duration that sets a limit (`timeout 0 bash -c 'tail -f x'`
-        // does not, Ruling 155).
+        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs,
+        // only with a duration that sets a limit: `timeout 0 bash -c 'tail -f x'` and
+        // `timeout 0 bash -c 'while true; do sleep 1; done'` run without one.
         let bounded = bounded
             || (programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS))
-                && (self.mode != Mode::Follow
-                    || programs::wrapper_chain(c, shell, os)
-                        .first()
-                        .is_none_or(limits)));
+                && programs::wrapper_chain(c, shell, os)
+                    .first()
+                    .is_none_or(limits));
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
         // A script block first: the table is read only for a command that passes one.
         let bounded = bounded

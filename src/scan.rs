@@ -15,17 +15,17 @@ use crate::level::Span;
 const TABLE_TEXT: &str = include_str!("../data/destructive.toml");
 const SHELLS: [&str; 3] = ["bash", "pwsh", "cmd"];
 /// Nested bodies (`bash -c "…"` inside `pwsh -c "…"`, `env -S '…'`) and wrappers (`sudo`,
-/// `timeout 5`) each cost one level; past this the command is unreadable.
+/// `timeout 5`) each cost one level; past this the scan stops reading the command.
 const MAX_DEPTH: usize = 4;
 /// The scan's work for one input, in steps (a character segmented, a word examined): this many
-/// per input byte, plus a base. Past it the input is unreadable.
+/// per input byte, plus a base. Once it is spent the scan stops, with the hits found so far.
 const BUDGET_PER_BYTE: usize = 16;
 const BUDGET_BASE: usize = 1 << 18;
 /// The cost of one word-level step (a walk step, a reading tried), in byte steps.
 const WORD: usize = 8;
 
-/// The work left for one scan. Every loop over the input spends from it, so hostile nesting ends
-/// in an unreadable verdict instead of a hang or a stack overflow.
+/// The work left for one scan. Every loop over the input spends from it, so on hostile nesting
+/// the scan stops instead of hanging or overflowing the stack.
 struct Budget {
     left: Cell<usize>,
     spent: Cell<bool>,
@@ -1659,17 +1659,37 @@ mod tests {
         // that drops CR stops there): the earliest end is the safe side
         "echo \u{2018}a; cat <<EOF\nhello\nEOF\r\nrm -rf x\nEOF\necho \u{2019}",
         "echo \u{2018}a; cat <<EOF\r\nhello\r\nEOF\nrm -rf x\r\nEOF\r\necho \u{2019}",
+        // a consumer behind more wrappers than MAX_DEPTH counts as one that runs its input as
+        // code (its four-wrapper twin in HARMLESS does not)
+        "echo 'rm -rf x' | sudo sudo sudo sudo sudo cat",
+        "sudo sudo sudo sudo sudo cat <(echo 'rm -rf x')",
+        // a shell with no command runs the pipe (the twin of the encoded rows below)
+        "echo 'rm -rf x' | pwsh",
+        "echo 'rm -rf x' | powershell",
     ];
 
     /// Destructive spellings the scan cannot read, with the unreadable class each is in: no row
     /// and no `Delete()` call is seen.
     const UNREADABLE_DESTRUCTIVE: &[(&str, &str)] = &[
-        ("pwsh -EncodedCommand AAAA", "an encoded body"),
-        ("powershell -e AAAA", "an encoded body"),
-        ("pwsh.exe -enc AAAA", "an encoded body"),
-        ("pwsh -ec AAAA", "an encoded body"),
-        ("pwsh /enc AAAA", "an encoded body"),
-        ("pwsh --EncodedCommand AAAA", "an encoded body"),
+        // A shell given an encoded command runs that command, not the pipe.
+        (
+            "echo 'rm -rf x' | pwsh -EncodedCommand AAAA",
+            "an encoded body",
+        ),
+        ("echo 'rm -rf x' | powershell -e AAAA", "an encoded body"),
+        ("echo 'rm -rf x' | pwsh.exe -enc AAAA", "an encoded body"),
+        ("echo 'rm -rf x' | pwsh -ec AAAA", "an encoded body"),
+        ("echo 'rm -rf x' | pwsh /enc AAAA", "an encoded body"),
+        (
+            "echo 'rm -rf x' | pwsh --EncodedCommand AAAA",
+            "an encoded body",
+        ),
+        // The first reading of the producer (`$u` as the command) prints text the scan cannot
+        // read, so the later `printf` reading is not scanned either.
+        (
+            "sudo -u $u printf 'rm -rf x' | bash",
+            "a producer the scan cannot read",
+        ),
         (
             "pwsh -c pwsh -c pwsh -c pwsh -c pwsh -c Remove-Item x",
             "nesting past MAX_DEPTH",
@@ -1743,6 +1763,9 @@ mod tests {
         // static text an interpreter reads is scanned, not taken as unreadable
         "'Get-Date' | iex",
         "echo hi | bash",
+        // four wrappers are readable: `cat` runs no code
+        "echo 'rm -rf x' | sudo sudo sudo sudo cat",
+        "sudo sudo sudo sudo cat <(echo 'rm -rf x')",
     ];
 
     #[test]
