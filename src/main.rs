@@ -25,6 +25,7 @@ use shellwise::{
 
 mod bench;
 mod shellcheck;
+mod update;
 
 /// Exit code for usage errors.
 const EXIT_USAGE: i32 = 64;
@@ -68,6 +69,8 @@ enum Cmd {
     Lint(LintArgs),
     /// Print the text to paste to your AI agent so it wires shellwise into its host.
     AgentSetup,
+    /// Update this binary in its own folder from the latest release; exit 0 updated or current, 1 refused.
+    Update(update::UpdateArgs),
 }
 
 /// The setup text, embedded at build time so it matches this version and works offline.
@@ -207,6 +210,7 @@ fn run(start: Instant) -> i32 {
         Cmd::Explain { id } => run_explain(&id),
         Cmd::Lint(args) => run_lint(start, args),
         Cmd::AgentSetup => run_agent_setup(),
+        Cmd::Update(args) => update::run(start, args),
     }
 }
 
