@@ -517,7 +517,7 @@ fn notify_returns_within_the_bound() {
     assert_eq!(out.stderr, "", "{}", out.context());
     // The 3 s bound runs inside the process; starting and ending the process on a busy runner
     // adds to what is measured here (3.29 s seen on Windows CI). The plugin's session-start hook
-    // gives the command 5 s, and a run without the bound waits 10 s for this silent server.
+    // gives the command 5 s.
     assert!(
         out.elapsed < Duration::from_secs(4),
         "back within 4 s: {}",
