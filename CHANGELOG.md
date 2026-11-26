@@ -9,13 +9,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 - `wait-loop-unbounded`: a Bash loop whose condition compares the count of the shell's own
   background jobs (`while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`, and the `[ ]`,
-  `test`, `[[ ]]` and `until … -lt` forms) reads as bounded: the count drops when a job ends.
+  `test`, `[[ ]]` and `until … -lt` forms) reads as bounded when the comparison ends the loop as
+  the count drops (`while … -ge 4`, `-ne 0`; `until … -lt 4`, `-eq 0`); one that never ends that
+  way (`while … -lt 4`, `>= 0`) still polls.
 
 ### Fixed
 
-- `git-discard`: `git rm -rf .` (and `:/`, `*`, a path that is the repo root, `-C <dir>` and
-  `--force` alike) is danger, since it removes every tracked file in the folder and throws away
-  their uncommitted changes; without `-f` it warns. `--cached` and `-n` are ok.
+- `git-discard`: `git rm -rf .` (and `:/`, `*`, `./*`, a path that is the repo root, `-C <dir>`
+  and `--force` alike) is danger, since it removes every tracked file in the folder and throws
+  away their uncommitted changes; without `-f` it warns. `--cached` and `-n` are ok. After
+  `git checkout --orphan <branch>` in the same command it warns: the branch left keeps the files,
+  only uncommitted changes are lost. An option word the guard cannot read beside a whole-folder
+  `git rm` pathspec (`git rm $OPTS .`) warns `git-unreadable`.
 
 ## [0.2.0] - 2026-11-26
 

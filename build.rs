@@ -77,6 +77,7 @@ fn main() {
                     "clocks",
                     "compares",
                     "job_counts",
+                    "job_count_ops",
                     "hint_bash",
                     "hint_pwsh"
                 ]
@@ -93,12 +94,13 @@ fn main() {
     };
     writeln!(
         out,
-        "        loops: Loops {{ exits: {}, always: {}, clocks: {}, compares: {}, job_counts: {}, hint_bash: {}, hint_pwsh: {} }},",
+        "        loops: Loops {{ exits: {}, always: {}, clocks: {}, compares: {}, job_counts: {}, job_count_ops: {}, hint_bash: {}, hint_pwsh: {} }},",
         vec_of(&loops_list("exits")),
         vec_of(&loops_list("always")),
         vec_of(&loops_list("clocks")),
         vec_of(&loops_list("compares")),
         vec_of(&loops_list("job_counts")),
+        vec_of(&loops_list("job_count_ops")),
         string_expr(&loops_text("hint_bash")),
         string_expr(&loops_text("hint_pwsh"))
     )

@@ -950,7 +950,7 @@ impl Walk<'_, '_> {
         let mut can = (false, false);
         for (k, (op, t)) in terms.iter().enumerate() {
             // A count of the shell's own jobs bounds only here, in the loop's own condition.
-            let b = bounds(t, counters, fold) || (!fold && compares_own_jobs(t));
+            let b = bounds(t, counters, fold) || (!fold && compares_own_jobs(t, until));
             can = match op {
                 Some(ChainOp::And) if k > 0 => (can.0 && b, can.1 || b),
                 Some(ChainOp::Or) if k > 0 => (can.0 || b, can.1 && b),
@@ -2126,27 +2126,9 @@ fn operands(test: &str, compares: &[String], fold: bool) -> Vec<String> {
         if !compares.iter().any(|op| same(t, op, fold)) {
             continue;
         }
-        let mut first = k;
-        while first > 0 {
-            first -= 1;
-            // Going left, a `)` opens a group and its `(` closes it.
-            if balance(&toks[first..k]) >= 0 {
-                break;
-            }
-        }
-        let mut last = k;
-        while last + 1 < toks.len() {
-            last += 1;
-            if balance(&toks[k + 1..=last]) <= 0 {
-                break;
-            }
-        }
-        if first < k {
-            out.push(toks[first..k].join(" "));
-        }
-        if last > k {
-            out.push(toks[k + 1..=last].join(" "));
-        }
+        let (left, right) = sides(&toks, k);
+        out.extend(left);
+        out.extend(right);
     }
     let symbols: Vec<&String> = compares.iter().filter(|op| !op.starts_with('-')).collect();
     let mut rest = test;
@@ -2174,6 +2156,29 @@ fn operands(test: &str, compares: &[String], fold: bool) -> Vec<String> {
         rest = &region[end.max(2)..];
     }
     out
+}
+
+/// The two sides of the operator at token `k`: the words next to it, parentheses kept whole.
+fn sides(toks: &[&str], k: usize) -> (Option<String>, Option<String>) {
+    let mut first = k;
+    while first > 0 {
+        first -= 1;
+        // Going left, a `)` opens a group and its `(` closes it.
+        if balance(&toks[first..k]) >= 0 {
+            break;
+        }
+    }
+    let mut last = k;
+    while last + 1 < toks.len() {
+        last += 1;
+        if balance(&toks[k + 1..=last]) <= 0 {
+            break;
+        }
+    }
+    (
+        (first < k).then(|| toks[first..k].join(" ")),
+        (last > k).then(|| toks[k + 1..=last].join(" ")),
+    )
 }
 
 /// `text` with the contents of its single-quoted strings removed: a literal is never a clock or a
@@ -2207,33 +2212,80 @@ fn bounds(test: &str, counters: &[String], fold: bool) -> bool {
 }
 
 /// A Bash test that compares the count of the shell's own background jobs (`[ "$(jobs -rp | wc
-/// -l)" -ge 4 ]`): one side of a comparison holds a `$( )` whose pipeline is a `job_counts` entry
-/// of `[loops]`, outside single quotes. The count drops when a job ends.
-fn compares_own_jobs(test: &str) -> bool {
+/// -l)" -ge 4 ]`) the way that ends the loop as jobs end. The count only falls, so a `while` test
+/// must turn false as it falls (`-ge 4`, `-ne 0`) and an `until` test true (`-lt 4`, `-eq 0`).
+/// What each operator says comes from `[loops] job_count_ops`; the count may stand on either side.
+fn compares_own_jobs(test: &str, until: bool) -> bool {
     let loops = programs::loops();
-    operands(test, &loops.compares, false)
-        .iter()
-        .any(|operand| {
-            let operand = without_literals(operand);
-            let mut rest = operand.as_str();
-            while let Some(at) = rest.find("$(") {
-                if rest[at..].starts_with("$((") {
-                    rest = &rest[at + 3..];
-                    continue;
-                }
-                let end = closing_paren(rest, at + 1);
-                let inner = rest.get(at + 2..end).unwrap_or("");
-                let pipeline: Vec<String> = inner
-                    .split('|')
-                    .map(|stage| stage.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .collect();
-                if loops.job_counts.contains(&pipeline.join(" | ")) {
-                    return true;
-                }
-                rest = rest.get(end + 1..).unwrap_or("");
-            }
+    let toks = tokens(test);
+    toks.iter().enumerate().any(|(k, t)| {
+        let Some(relation) = loops.job_count_ops.iter().find_map(|e| {
+            let (op, relation) = e.split_once(' ')?;
+            (op == *t).then_some(relation)
+        }) else {
+            return false;
+        };
+        let (left, right) = sides(&toks, k);
+        let (left, right) = (left.unwrap_or_default(), right.unwrap_or_default());
+        if counts_own_jobs(&left, &loops.job_counts) {
+            ends_as_count_falls(relation, &right, until)
+        } else if counts_own_jobs(&right, &loops.job_counts) {
+            ends_as_count_falls(mirrored(relation), &left, until)
+        } else {
             false
-        })
+        }
+    })
+}
+
+/// `operand` holds a `$( )` whose pipeline is a `job_counts` entry, outside single quotes.
+fn counts_own_jobs(operand: &str, job_counts: &[String]) -> bool {
+    let operand = without_literals(operand);
+    let mut rest = operand.as_str();
+    while let Some(at) = rest.find("$(") {
+        if rest[at..].starts_with("$((") {
+            rest = &rest[at + 3..];
+            continue;
+        }
+        let end = closing_paren(rest, at + 1);
+        let inner = rest.get(at + 2..end).unwrap_or("");
+        let pipeline: Vec<String> = inner
+            .split('|')
+            .map(|stage| stage.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        if job_counts.contains(&pipeline.join(" | ")) {
+            return true;
+        }
+        rest = rest.get(end + 1..).unwrap_or("");
+    }
+    false
+}
+
+/// The relation with its sides swapped: `4 -le count` says of the count what `count -ge 4` does.
+fn mirrored(relation: &str) -> &str {
+    match relation {
+        "at-least" => "at-most",
+        "at-most" => "at-least",
+        "above" => "below",
+        "below" => "above",
+        r => r,
+    }
+}
+
+/// A comparison of a count that falls toward 0 with `mark` ends the loop: a `while` once it turns
+/// false, an `until` once it turns true. A number must be one the count can pass (`-ge 0` never
+/// turns false); a variable mark is taken as one; `-ne`/`-eq` end it only against 0.
+fn ends_as_count_falls(relation: &str, mark: &str, until: bool) -> bool {
+    let m = mark.trim_matches(|c: char| {
+        matches!(c, '"' | '\'' | '(' | ')' | '[' | ']') || c.is_whitespace()
+    });
+    let n = m.parse::<i64>().ok();
+    let reached = |least: i64| n.map_or(!m.is_empty(), |n| n >= least);
+    match (until, relation) {
+        (false, "at-least") | (true, "below") => reached(1),
+        (false, "above") | (true, "at-most") => reached(0),
+        (false, "unequal") | (true, "equal") => n == Some(0),
+        _ => false,
+    }
 }
 
 /// Where a compared operand reads the time (Ruling 140). Outside quotes any clock word counts

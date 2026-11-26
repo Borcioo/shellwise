@@ -3798,8 +3798,9 @@ rules = []
 
 # --- A throttle on the count of the shell's own jobs ---
 # `jobs` (`-r`, `-p`, `-rp`, `-pr`) piped to `wc -l` counts the shell's own background jobs, which
-# end by themselves: a loop whose condition compares that count waits for one of them and is
-# bounded, in the `(( ))`, `[ ]`, `test` and `[[ ]]` forms alike. A count of anything else (`pgrep
+# end by themselves: a loop whose condition compares that count so that the falling count ends it
+# waits for them and is bounded, in the `(( ))`, `[ ]`, `test` and `[[ ]]` forms alike (each
+# direction is pinned by the generated rows further down). A count of anything else (`pgrep
 # -c`, `ps | grep -c`, `docker ps -q | wc -l`), another stage or option, a count with no
 # comparison, a count read in the body or into a variable, and a condition joined so that the loop
 # still waits for its other part (`while A || count`, `until A && count`) still poll.
@@ -4057,6 +4058,1996 @@ id = "wl-gitbash-a-job-count-in-a-body-guard-polls"
 os = "windows"
 shell = "gitbash"
 command = 'while true; do [ "$(jobs -rp | wc -l)" -lt 4 ] && break; sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# --- Which way a jobs-count comparison runs (the count only falls) ---
+# Generated from the ruling's table by a script (one row per loop, operator, mark, side, test
+# form and shell): `while count -ge|-gt N` (a mark the count can fall below), `while count -ne 0`,
+# `until count -lt|-le N` (a mark it can reach), `until count -eq 0` and their mirrored forms end
+# as jobs end; a variable mark is accepted. Any other operator or mark never ends: break.
+
+[[row]]
+id = "wl-bash-jobs-while-test-ge-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -ge 4; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ge-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-ge-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -ge 4 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ge-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-gt-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -gt 3; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-gt-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -gt 3 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-gt-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -gt 3 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-gt-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) > 3 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-ne-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -ne 0; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ne-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -ne 0 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-ne-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -ne 0 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ne-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) != 0 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-ge-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -ge "$max"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ge-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge "$max" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-ge-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -ge $max ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ge-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) >= max )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-lt-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -lt 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-lt-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-lt-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -lt 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-lt-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) < 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-le-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -le 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-le-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -le 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-le-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -le 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-le-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) <= 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -eq 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -eq 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -eq 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) == 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-eq-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -eq 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-eq-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -eq 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-eq-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -eq 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-eq-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) == 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-ne-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -ne 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ne-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -ne 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-ne-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -ne 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ne-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) != 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-ge-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -ge 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ge-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-ge-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -ge 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ge-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) >= 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-gt-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -gt -1; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-gt-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -gt -1 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-gt-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -gt -1 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-gt-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) > -1 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-le-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test 4 -le "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-le-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ 4 -le "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-le-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ 4 -le $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-le-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( 4 <= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-lt-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test 3 -lt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-lt-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ 3 -lt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-lt-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ 3 -lt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-lt-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( 3 < $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-ne-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test 0 -ne "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ne-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ 0 -ne "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-double-ne-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ 0 -ne $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ne-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( 0 != $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-while-test-ge-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while test 4 -ge "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-ge-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while [ 4 -ge "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-ge-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ 4 -ge $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-ge-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while (( 4 >= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-test-le-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while test 0 -le "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-bracket-le-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while [ 0 -le "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-double-le-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while [[ 0 -le $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-while-arith-le-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'while (( 0 <= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-lt-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -lt 4; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-lt-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-lt-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -lt 4 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-lt-4-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) < 4 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-le-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -le 3; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-le-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -le 3 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-le-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -le 3 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-le-3-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) <= 3 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-eq-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -eq 0; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-eq-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -eq 0 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-eq-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -eq 0 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-eq-0-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) == 0 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-lt-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -lt "$max"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-lt-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -lt "$max" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-lt-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -lt $max ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-lt-var-max-count-left-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) < max )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-ge-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -ge 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-ge-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-ge-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -ge 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-ge-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) >= 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-gt-3-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -gt 3; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-gt-3-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -gt 3 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-gt-3-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -gt 3 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-gt-3-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) > 3 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-ne-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -ne 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-ne-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -ne 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-ne-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -ne 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-ne-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) != 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -eq 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -eq 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -eq 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-eq-4-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) == 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-lt-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -lt 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-lt-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -lt 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-lt-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -lt 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-lt-0-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) < 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-le-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until test "$(jobs -rp | wc -l)" -le -1; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-le-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -rp | wc -l)" -le -1 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-le-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ $(jobs -rp | wc -l) -le -1 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-le-minus1-count-left-polls"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) <= -1 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-gt-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test 4 -gt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-gt-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ 4 -gt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-gt-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ 4 -gt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-gt-4-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( 4 > $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-ge-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test 3 -ge "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-ge-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ 3 -ge "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-ge-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ 3 -ge $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-ge-3-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( 3 >= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-eq-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until test 0 -eq "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-eq-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ 0 -eq "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-double-eq-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [[ 0 -eq $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-arith-eq-0-count-right-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( 0 == $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-jobs-until-test-lt-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until test 4 -lt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-lt-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until [ 4 -lt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-lt-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ 4 -lt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-lt-4-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until (( 4 < $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-test-gt-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until test 0 -gt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-bracket-gt-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until [ 0 -gt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-double-gt-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until [[ 0 -gt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-until-arith-gt-0-count-right-polls"
+os = "any"
+shell = "bash"
+command = 'until (( 0 > $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ge-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -ge 4; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ge-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ge-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -ge 4 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ge-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-gt-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -gt 3; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-gt-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -gt 3 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-gt-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -gt 3 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-gt-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) > 3 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ne-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -ne 0; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ne-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -ne 0 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ne-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -ne 0 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ne-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) != 0 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ge-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -ge "$max"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ge-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge "$max" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ge-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -ge $max ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ge-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) >= max )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-lt-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -lt 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-lt-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-lt-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -lt 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-lt-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) < 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-le-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -le 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-le-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -le 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-le-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -le 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-le-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) <= 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -eq 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -eq 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -eq 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) == 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-eq-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -eq 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-eq-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -eq 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-eq-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -eq 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-eq-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) == 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ne-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -ne 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ne-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -ne 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ne-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -ne 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ne-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) != 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ge-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -ge 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ge-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ge-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -ge 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ge-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) >= 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-gt-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -gt -1; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-gt-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -gt -1 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-gt-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -gt -1 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-gt-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) > -1 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-le-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test 4 -le "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-le-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ 4 -le "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-le-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ 4 -le $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-le-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( 4 <= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-lt-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test 3 -lt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-lt-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ 3 -lt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-lt-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ 3 -lt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-lt-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( 3 < $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ne-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test 0 -ne "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ne-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ 0 -ne "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ne-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ 0 -ne $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ne-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( 0 != $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-ge-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test 4 -ge "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-ge-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ 4 -ge "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-ge-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ 4 -ge $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-ge-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( 4 >= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-test-le-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while test 0 -le "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-bracket-le-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [ 0 -le "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-double-le-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ 0 -le $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-while-arith-le-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( 0 <= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-lt-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -lt 4; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-lt-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-lt-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -lt 4 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-lt-4-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) < 4 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-le-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -le 3; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-le-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -le 3 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-le-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -le 3 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-le-3-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) <= 3 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-eq-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -eq 0; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-eq-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -eq 0 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-eq-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -eq 0 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-eq-0-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) == 0 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-lt-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -lt "$max"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-lt-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -lt "$max" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-lt-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -lt $max ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-lt-var-max-count-left-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) < max )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-ge-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -ge 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-ge-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-ge-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -ge 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-ge-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) >= 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-gt-3-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -gt 3; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-gt-3-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -gt 3 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-gt-3-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -gt 3 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-gt-3-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) > 3 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-ne-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -ne 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-ne-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -ne 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-ne-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -ne 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-ne-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) != 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -eq 4; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -eq 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -eq 4 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-eq-4-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) == 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-lt-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -lt 0; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-lt-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -lt 0 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-lt-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -lt 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-lt-0-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) < 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-le-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test "$(jobs -rp | wc -l)" -le -1; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-le-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ "$(jobs -rp | wc -l)" -le -1 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-le-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ $(jobs -rp | wc -l) -le -1 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-le-minus1-count-left-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) <= -1 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-gt-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test 4 -gt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-gt-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ 4 -gt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-gt-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ 4 -gt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-gt-4-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( 4 > $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-ge-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test 3 -ge "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-ge-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ 3 -ge "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-ge-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ 3 -ge $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-ge-3-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( 3 >= $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-eq-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until test 0 -eq "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-eq-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [ 0 -eq "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-eq-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ 0 -eq $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-eq-0-count-right-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( 0 == $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-lt-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test 4 -lt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-lt-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ 4 -lt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-lt-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ 4 -lt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-lt-4-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( 4 < $(jobs -rp | wc -l) )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-test-gt-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until test 0 -gt "$(jobs -rp | wc -l)"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-bracket-gt-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [ 0 -gt "$(jobs -rp | wc -l)" ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-double-gt-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until [[ 0 -gt $(jobs -rp | wc -l) ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-jobs-until-arith-gt-0-count-right-polls"
+os = "windows"
+shell = "gitbash"
+command = 'until (( 0 > $(jobs -rp | wc -l) )); do sleep 1; done'
 level = "break"
 rules = ["wait-loop-unbounded"]
 

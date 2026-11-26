@@ -1292,6 +1292,162 @@ level = "danger"
 rules = ["git-discard"]
 
 [[row]]
+id = "rm-rf-a-shell-glob-under-dot"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf ./*"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-a-git-glob-under-dot-without-r"
+os = "windows"
+shell = "gitbash"
+command = "git rm -f './*'"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-a-shell-glob-under-dot-without-r"
+os = "windows"
+shell = "gitbash"
+command = "git rm -f ./*"
+level = "ok"
+rules = []
+
+[[row]]
+id = "rm-f-a-glob-under-dot-in-powershell-without-r"
+os = "any"
+shell = "pwsh"
+command = "git rm -f ./*"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-f-a-glob-under-dot-backslash-in-powershell-without-r"
+os = "any"
+shell = "pwsh"
+command = "git rm -f .\\*"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-rf-dot-with-C-keeps-C-in-the-fix"
+os = "any"
+shell = "pwsh"
+command = "git -C build rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+fix = "to untrack the files only, run `git -C build rm -r --cached .`;"
+
+[[row]]
+id = "rm-rf-dot-with-a-work-tree-keeps-it-in-the-fix"
+os = "windows"
+shell = "gitbash"
+command = "git --work-tree=build rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+fix = "to untrack the files only, run `git --work-tree=build rm -r --cached .`;"
+
+[[row]]
+id = "rm-rf-dot-after-cd-names-no-command-in-the-fix"
+os = "windows"
+shell = "gitbash"
+command = "cd build && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+fix = "Fix: to untrack the files only, run the same `git rm` with `--cached` in the folder it runs in;"
+
+[[row]]
+id = "rm-orphan-recipe-bash"
+os = "any"
+shell = "bash"
+command = "git checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+fix = "git checkout --orphan"
+
+[[row]]
+id = "rm-orphan-recipe-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-with-switch"
+os = "windows"
+shell = "gitbash"
+command = "git switch --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-on-two-lines"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh\ngit rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-pwsh"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh && git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-recipe-powershell5"
+os = "windows"
+shell = "powershell5"
+command = "git checkout --orphan fresh; git rm -rf ."
+level = "warn"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-cd-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && cd build && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-before-the-orphan-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git rm -rf . && git checkout --orphan fresh"
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-after-a-branch-checkout-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout main && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "rm-orphan-then-a-branch-checkout-is-danger"
+os = "windows"
+shell = "gitbash"
+command = "git checkout --orphan fresh && git checkout main && git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
+id = "nocwd-rm-orphan-recipe-is-danger"
+os = "any"
+shell = "pwsh"
+command = "git checkout --orphan fresh; git rm -rf ."
+level = "danger"
+rules = ["git-discard"]
+
+[[row]]
 id = "rm-rf-dot-after-dashdash"
 os = "any"
 shell = "pwsh"
@@ -1468,10 +1624,9 @@ command = "git rm $OPTS ."
 level = "warn"
 rules = ["git-unreadable"]
 
-# `git rm` has no row in data/destructive.toml (one would make every unread `git rm "$f"` warn),
-# so the scan of text the guard does not read finds no `git rm`: inside an opaque child shell or
-# eval, or beside a parse error, `git rm -rf .` reads as these rows pin (`git clean -fdx` there
-# reads warn opaque-destructive or danger parse-error-destructive). A coordinator decision.
+# `git rm` has no row in data/destructive.toml, so the scan of text the guard does not read finds
+# no `git rm`: inside an opaque child shell, `Invoke-Expression` or `cmd /c`, or beside a parse
+# error, `git rm -rf .` reads as these rows pin.
 
 [[row]]
 id = "rm-rf-dot-in-a-child-shell-is-not-read"
