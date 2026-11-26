@@ -65,6 +65,11 @@ const NEW_FILES: &[(&str, &[&str], &str)] = &[
         "the hook event's tool names, compared to pick the shell",
     ),
     (
+        "src/adapter/generic.rs",
+        &["command", "powershell"],
+        "the hook event's `command` key, and its tool name compared to pick the shell",
+    ),
+    (
         "src/bench.rs",
         &["Bash", "PowerShell"],
         "the corpus rows' tool names, compared to pick the shell",
