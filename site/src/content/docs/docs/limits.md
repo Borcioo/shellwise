@@ -18,7 +18,7 @@ UTF-8, the config did not load, or an internal error occurs. shellwise then fail
 |---|---|
 | The raw text names a destructive command (a delete, a discard) | `danger` |
 | The raw text names none, or the scan does not finish | `warn` |
-| Input over 1 MiB, or stdin still open at the deadline | `danger`, unread |
+| Input over 1 MiB, or stdin still open at the deadline | `danger`, unread, in `check` and `hook claude-code`; `hook generic` scans the bytes it read and blocks only when they name a destructive command |
 | A hook event that is not valid JSON, and the scan does not finish | `danger` |
 
 The allow marker has no effect on these findings. See the
@@ -62,9 +62,10 @@ Known gap: `lint` on a whole script is slower than its target of 50 ms per 500 l
 | Platform | What has run on it |
 |---|---|
 | Windows x64 | the full test suite in CI |
-| Linux x64 | the full test suite in CI |
+| Linux x64 (`x86_64-unknown-linux-gnu`) | the full test suite in CI |
+| Linux x64 static (`x86_64-unknown-linux-musl`, what `install.sh` installs) | CI builds on `main` and manual runs: `--version` and one `check` proof command |
 | Linux arm64 (static) | CI builds on `main` and manual runs: `--version` and one `check` proof command; nobody has run it beyond that |
-| macOS (Apple silicon, Intel) | CI runs only the install-script and `shellwise update` tests; nobody has run the binaries beyond CI |
+| macOS (Apple silicon, Intel) | CI runs a debug build only in the install-script and `shellwise update` tests; the release binaries are never run, in CI or anywhere else |
 
 | Host | Status |
 |---|---|

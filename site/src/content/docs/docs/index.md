@@ -7,7 +7,7 @@ shellwise is a guard and linter for the shell commands AI coding agents run. It 
 PowerShell command before the shell runs it and stops the careless mistakes: the command that
 will not run, the one that will hang, and the one that deletes the wrong thing.
 
-Every finding carries a `Fix:` line the agent can copy, so it corrects the command and carries on.
+Most findings carry a `Fix:` line the agent can copy, so it corrects the command and carries on.
 
 ## How it runs
 
@@ -76,7 +76,8 @@ scan of the raw text:
 - `warn` when it finds none. The command runs, and the agent gets the reason.
 
 Input over 1 MiB, or stdin still open at the deadline, is `danger` without a scan: the text is
-unknown. In `hook claude-code`, an event that could not be read whole is denied, unless the part
+unknown. `hook generic` instead scans what it read and lets the command run when nothing
+destructive shows. In `hook claude-code`, an event that could not be read whole is denied, unless the part
 that was read names a tool that is not a shell.
 
 The allow marker has no effect on `analysis-incomplete`: without a parse nothing shows that the

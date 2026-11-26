@@ -107,7 +107,7 @@ analysis is incomplete (`analysis-incomplete`); `lint` exits 74.
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `SHELLWISE` | every command that analyses | `off` turns shellwise off: the hooks exit 0 with no output, `check` prints `ok`, `lint` runs only ShellCheck. Any other value leaves it on. |
+| `SHELLWISE` | every command that analyses | `off` turns shellwise off: the hooks exit 0 with no output, `check` reports no findings (config warnings still print), `lint` runs only ShellCheck. Any other value leaves it on. |
 | `SHELLWISE_VERSION` | `update`, install scripts | The version to install instead of the latest. |
 | `SHELLWISE_INSTALL_DIR` | install scripts | The install folder. `update` always sets it to the binary's own folder. |
 | `SHELLWISE_BASE_URL` | install scripts, passed on by `update` | The release URL, or a local folder with the same layout. |

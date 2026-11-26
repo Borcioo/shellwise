@@ -131,8 +131,8 @@ else Windows PowerShell, on Windows). It installs into the folder of the running
 - Exit 1: refused. A folder it cannot write, a failed download or a checksum mismatch. For a
   folder it cannot write, update that copy the way it was installed.
 
-`shellwise update --check` only compares versions: exit 0 when they match, 1 when a newer release
-exists, 2 when the latest version cannot be read.
+`shellwise update --check` only compares versions: exit 0 when the latest release is not newer, 1 when
+a newer release exists, 2 when the latest version cannot be read.
 
 ```text
 $ shellwise update --check
@@ -153,7 +153,7 @@ The binary never updates itself. See [`update`](/shellwise/docs/commands/update/
 ## Switch off
 
 Set `SHELLWISE=off` in the environment. The hooks then let every command through and `check`
-prints `ok`. Remove the variable to switch shellwise on again.
+reports no findings (config warnings still print). Remove the variable to switch shellwise on again.
 
 ## Platform status
 
@@ -163,5 +163,5 @@ prints `ok`. Remove the variable to switch shellwise on again.
 - Linux x64 static (`x86_64-unknown-linux-musl`) and Linux arm64 (`aarch64-unknown-linux-musl`):
   CI builds each on a native runner and runs only `shellwise --version` and one `check` on it.
   Nobody has run the arm64 binary beyond that.
-- macOS (both): on macOS, CI runs only the install-script and `update` tests. The two macOS
-  binaries are built but never run, in CI or anywhere else.
+- macOS (both): CI runs a debug build only in the install-script and `update` tests. The two
+  release binaries are built but never run, in CI or anywhere else.

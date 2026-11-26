@@ -48,7 +48,7 @@ current.
 
 ## What the agent sees
 
-`hook claude-code` reads the `PreToolUse` event on stdin and always exits 0. Its reply is one JSON
+`hook claude-code` reads the `PreToolUse` event on stdin and exits 0 (64 on a usage error). Its reply is one JSON
 line on stdout. A `Bash` tool command is read as Git Bash on Windows and as bash elsewhere; a
 `PowerShell` tool command as PowerShell 7. Other tools are ignored.
 

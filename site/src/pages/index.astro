@@ -66,14 +66,14 @@ const fixVarColon = 'Fix: write "${name}:" instead of "$name:"';
 				<p class="eyebrow">What the agent sees</p>
 				<h2>A reason and a fix, not just “no”</h2>
 				<p class="lead">
-					Every finding carries a Fix line the agent can copy, so it corrects itself and carries on
+					Most findings carry a Fix line the agent can copy, so it corrects itself and carries on
 					without you.
 				</p>
 				<div class="term mono">
 					<div class="cmd">$ shellwise check --shell bash -- 'until grep -q done build.log; do sleep 15; done'</div>
 					<div class="out">break wait-loop-unbounded</div>
 					<div class="why">the loop polls and nothing bounds it: no counter, deadline or timeout ends it, so when what it waits for never comes it runs forever</div>
-					<div class="fix">Fix: for i in $(seq 1 40); do grep -q done build.log &amp;&amp; break; sleep 15; done</div>
+					<div class="fix">Fix: for i in $(seq 1 40); do grep -q done build.log &amp;&amp; break; sleep 15; [ "$i" -lt 40 ]; done</div>
 				</div>
 				<div class="term mono">
 					<div class="cmd">$ shellwise check --shell pwsh -- 'Write-Output "$name: done"'</div>
@@ -185,7 +185,7 @@ claude plugin install shellwise@shellwise</pre>
 						<ul>
 							<li>A guard against careless mistakes of an agent that means well</li>
 							<li>A linter for the commands and scripts agents write</li>
-							<li>A teacher: every finding carries a fix the agent can copy</li>
+							<li>A teacher: most findings carry a fix the agent can copy</li>
 							<li>Small: one binary, no service, no network, no telemetry</li>
 						</ul>
 					</div>

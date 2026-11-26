@@ -61,17 +61,39 @@ if (failures.length === 0) {
 
 	// Targets are matched against the exact spelling on disk: the Pages host is case-sensitive.
 	const onDisk = new Set(allFiles(dist));
+	if (!onDisk.has('pagefind/pagefind.js')) fail('dist/pagefind/pagefind.js is missing: search would not work');
+
 	const files = htmlFiles(dist);
 	pages = files.length;
-	for (const file of files) {
-		const name = path.relative(dist, file).replaceAll('\\', '/');
-		const html = readFileSync(file, 'utf8');
-		for (const match of html.matchAll(/\s(?:href|src)="([^"]*)"/g)) {
-			const url = match[1].replaceAll('&amp;', '&');
-			if (/docs\/(design|spikes)\.md|docs\/superpowers/.test(url)) {
+	const htmlOf = new Map(files.map((file) => [path.relative(dist, file).replaceAll('\\', '/'), readFileSync(file, 'utf8')]));
+	const idsOf = new Map();
+	const idsIn = (name) => {
+		if (!idsOf.has(name)) {
+			idsOf.set(name, new Set([...htmlOf.get(name).matchAll(/\sid=(?:"([^"]*)"|'([^']*)')/g)].map((m) => m[1] ?? m[2])));
+		}
+		return idsOf.get(name);
+	};
+
+	// A rendered repository document must carry content, not only the page chrome.
+	const rendered = [...built.map((id) => `docs/rules/${id}/index.html`), 'docs/changelog/index.html', 'docs/agents/setup-text/index.html'];
+	for (const name of rendered) {
+		const body = htmlOf.get(name)?.split('class="source-doc"')[1] ?? '';
+		if (body.replace(/<[^>]*>/g, '').trim().length < 80) fail(`${name}: the rendered document is empty or missing`);
+	}
+	if (!/<section[\s\S]*<footer/.test(htmlOf.get('index.html') ?? '')) fail('index.html: the landing page has lost its sections or footer');
+
+	for (const [name, html] of htmlOf) {
+		for (const match of html.matchAll(/\s(?:href|src)=(?:"([^"]*)"|'([^']*)')/g)) {
+			const url = (match[1] ?? match[2]).replaceAll('&amp;', '&');
+			if (/docs\/(design|spikes)\.md|docs\/superpowers|\/(tree|blob)\/[^/]+\/docs\/?(?:[#?]|$)/.test(url)) {
 				fail(`${name}: link to a maintainer document: ${url}`);
 			}
-			if (url === '' || url.startsWith('#') || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) continue;
+			if (url === '' || url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) continue;
+			if (url.startsWith('#')) {
+				const id = decodeURIComponent(url.slice(1));
+				if (id !== '' && !idsIn(name).has(id)) fail(`${name}: link to a missing anchor: ${url}`);
+				continue;
+			}
 			if (!url.startsWith('/')) {
 				fail(`${name}: relative link (write it from ${BASE}): ${url}`);
 				continue;
@@ -81,10 +103,14 @@ if (failures.length === 0) {
 				fail(`${name}: internal link without the ${BASE} base: ${url}`);
 				continue;
 			}
-			const target = decodeURIComponent(url.slice(BASE.length).split(/[?#]/)[0]);
+			const [pathPart, fragment = ''] = url.slice(BASE.length).split('?')[0].split('#');
+			const target = decodeURIComponent(pathPart);
 			const asPage = target === '' || target.endsWith('/') ? `${target}index.html` : `${target}/index.html`;
-			if (!onDisk.has(target) && !onDisk.has(asPage)) {
+			const hit = onDisk.has(target) ? target : onDisk.has(asPage) ? asPage : null;
+			if (hit === null) {
 				fail(`${name}: link points at nothing: ${url}`);
+			} else if (fragment !== '' && htmlOf.has(hit) && !idsIn(hit).has(decodeURIComponent(fragment))) {
+				fail(`${name}: link to a missing anchor: ${url}`);
 			}
 		}
 	}

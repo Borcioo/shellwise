@@ -37,9 +37,12 @@ line ends, as Git Bash reads it.
 
 - The shellwise rules, except the ones about a command line a host is about to run (the length
   rules and the rules about what a host does to a command line).
-- ShellCheck, on `.sh` and `.bash` files up to 64 KiB (65,536 bytes). A bigger Bash file gets a
-  line on stderr, `<path>: ShellCheck skipped: the file is over 65536 bytes`, and only the
-  shellwise rules. SC2164 is left out.
+- ShellCheck, on `.sh` and `.bash` files. SC2164 is left out.
+
+Both run on files up to 64 KiB (65,536 bytes). On a bigger file no rule runs: it gets only a scan
+for destructive commands, reported as `analysis-incomplete` (`danger` when the scan finds one,
+else `warn`), and a Bash file also gets a line on stderr,
+`<path>: ShellCheck skipped: the file is over 65536 bytes`.
 
 ShellCheck findings carry their code as the rule id, such as `SC2086`. They are `warn`. A
 ShellCheck parse error is `break` only when the shellwise parser also fails at the same place.
