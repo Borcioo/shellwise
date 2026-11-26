@@ -23,8 +23,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   `d=x rm -rf "$d/"`, fewer `opaque-destructive`), and a long Bash file lints about a third
   faster. No rule id changed.
 - The hook and `check` now block, as `wait-loop-unbounded`, a Bash wait loop that polls a count
-  in arithmetic or in an arithmetic `[[ ]]` test (`-gt`, `-ne`) and that nothing bounds, as they
-  already blocked its `[ ]` form (`while (( $(pgrep -c worker) > 0 )); do sleep 1; done`, the job throttle
+  in arithmetic, in `let` (`while let "$(pgrep -c worker) > 0"`) or in an arithmetic `[[ ]]` test
+  (any of `-eq`, `-ne`, `-lt`, `-le`, `-gt`, `-ge`) and that nothing bounds, as they already
+  blocked its `[ ]` form (`while (( $(pgrep -c worker) > 0 )); do sleep 1; done`, the job throttle
   `while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`): put a counter or a deadline in
   the condition or run the loop under `timeout`, and throttle jobs with `wait -n` instead of
   `sleep`.
