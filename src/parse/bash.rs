@@ -350,6 +350,7 @@ impl Lower {
                 vec![Stmt::Pipeline(Pipeline {
                     elems: vec![Elem::Cmd(cmd)],
                     chain: Some(ChainOp::Seq),
+                    negated: false,
                 })],
                 ChainOp::Seq,
             );
@@ -399,6 +400,7 @@ impl Lower {
                 let stmt = Stmt::Pipeline(Pipeline {
                     elems: vec![Elem::Cmd(cmd)],
                     chain: Some(last),
+                    negated: false,
                 });
                 out.push(vec![stmt], last);
                 continue;
@@ -458,6 +460,7 @@ impl Lower {
             return Ok(vec![Stmt::Pipeline(Pipeline {
                 elems,
                 chain: Some(chain),
+                negated: p.bang,
             })]);
         }
         // A compound stage is a statement of its own; `Script::joins` keeps its chain.
@@ -476,6 +479,7 @@ impl Lower {
             ast::Command::Simple(s) => Ok(vec![Stmt::Pipeline(Pipeline {
                 elems: vec![Elem::Cmd(self.simple(t, s, cx)?)],
                 chain: None,
+                negated: false,
             })]),
             ast::Command::Compound(cc, redirects) => {
                 let mut out = self.redirect_exprs(t, redirects.as_ref(), cx)?;
@@ -497,6 +501,7 @@ impl Lower {
             ast::Command::ExtendedTest(test, redirects) => Ok(vec![Stmt::Pipeline(Pipeline {
                 elems: vec![Elem::Cmd(self.test_command(t, test, redirects, cx)?)],
                 chain: None,
+                negated: false,
             })]),
         }
     }
@@ -624,6 +629,7 @@ impl Lower {
                 let mut out = vec![Stmt::Pipeline(Pipeline {
                     elems: vec![Elem::Cmd(self.arith_command(t, &exprs, span, None, cx)?)],
                     chain: Some(ChainOp::Seq),
+                    negated: false,
                 })];
                 let open = f
                     .condition
@@ -685,6 +691,7 @@ impl Lower {
                     cx,
                 )?)],
                 chain: None,
+                negated: false,
             })],
             C::Coprocess(c) => {
                 // `coproc NAME` writes NAME (bash expands the word). (`list` fails closed on
@@ -1554,6 +1561,7 @@ fn expr_stmt(words: Vec<Word>) -> Vec<Stmt> {
     vec![Stmt::Pipeline(Pipeline {
         elems,
         chain: Some(ChainOp::Seq),
+        negated: false,
     })]
 }
 
