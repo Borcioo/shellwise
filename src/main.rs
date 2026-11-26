@@ -66,6 +66,19 @@ enum Cmd {
     },
     /// Lint a .ps1, .sh or .bash file; exit 0 clean or warn, 1 break or worse, 64 refused, 74 unreadable.
     Lint(LintArgs),
+    /// Print the text to paste to your AI agent so it wires shellwise into its host.
+    AgentSetup,
+}
+
+/// The setup text, embedded at build time so it matches this version and works offline.
+const AGENT_SETUP: &str = include_str!("../docs/agent-setup.md");
+
+/// `agent-setup`: print the setup text byte for byte.
+fn run_agent_setup() -> i32 {
+    let mut stdout = io::stdout().lock();
+    let _ = stdout.write_all(AGENT_SETUP.as_bytes());
+    let _ = stdout.flush();
+    0
 }
 
 use shellwise::RULE_DOCS;
@@ -193,6 +206,7 @@ fn run(start: Instant) -> i32 {
         Cmd::Bench(args) => bench::run(args),
         Cmd::Explain { id } => run_explain(&id),
         Cmd::Lint(args) => run_lint(start, args),
+        Cmd::AgentSetup => run_agent_setup(),
     }
 }
 
