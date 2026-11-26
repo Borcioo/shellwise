@@ -1,0 +1,41 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { listRuleIds, ruleSummary } from '../../../lib/rules.mjs';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const rules = listRuleIds().map((id) => ({ id, summary: ruleSummary(id) }));
+
+/** Escapes HTML and turns `code` spans into <code>. */
+function inline(text: string) {
+	const escaped = text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+	return escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+---
+
+<StarlightPage
+	frontmatter={{ title: 'Rules', description: 'Every rule shellwise can report, one page each.' }}
+>
+	<p>
+		Every finding names the rule that produced it. Each rule has one page, rendered from the same
+		file that <code>shellwise explain &lt;id&gt;</code> prints. There are {rules.length} rules.
+	</p>
+	<table>
+		<thead>
+			<tr><th>Rule</th><th>What it is about</th></tr>
+		</thead>
+		<tbody>
+			{
+				rules.map((rule) => (
+					<tr>
+						<td>
+							<a href={`${base}/docs/rules/${rule.id}/`}>
+								<code>{rule.id}</code>
+							</a>
+						</td>
+						<td set:html={inline(rule.summary)} />
+					</tr>
+				))
+			}
+		</tbody>
+	</table>
+</StarlightPage>

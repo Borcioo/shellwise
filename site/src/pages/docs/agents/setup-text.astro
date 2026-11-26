@@ -1,0 +1,23 @@
+---
+import { getEntry, render } from 'astro:content';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+
+const entry = await getEntry('repo', 'docs/agent-setup.md');
+if (!entry) throw new Error('docs/agent-setup.md was not loaded');
+const { Content, headings } = await render(entry);
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Agent setup text',
+		description: 'The text shellwise agent-setup prints for an AI agent to follow.',
+	}}
+	headings={headings.filter((heading) => heading.depth > 1)}
+>
+	<p>
+		This is the text <code>shellwise agent-setup</code> prints. It is written for the AI agent that
+		reads it: “you” below is the agent, not you.
+	</p>
+	<hr />
+	<div class="source-doc"><Content /></div>
+</StarlightPage>
