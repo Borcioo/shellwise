@@ -1794,7 +1794,7 @@ command = 'while read -t 5 line; do echo "$line"; done'
 level = "ok"
 rules = []
 
-# --- A count polled in arithmetic or in a `[[ ]]` comparison (Ruling 161) ---
+# --- A count polled in arithmetic or in an arithmetic `[[ -gt ]]` test (Ruling 161) ---
 # Arithmetic reads a `$(…)` like the same `$(…)` outside it, so such a loop with nothing that
 # bounds it breaks like its `[ ]` twin. A counter or a clock in the condition, or `timeout`
 # around the loop, bounds it; a throttle that waits on a job (`wait -n`) does not poll.
