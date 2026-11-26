@@ -1,0 +1,17 @@
+/* Colour and type tokens shared by the landing page and the docs theme. */
+:root {
+	--bg: #0e1116;
+	--bg2: #161b22;
+	--bg-code: #0a0d11;
+	--line: #2a323d;
+	--text: #e6edf3;
+	--soft: #9ba7b4;
+	--mid: #c3ccd6;
+	--accent: #f2b544;
+	--ink: #14181f;
+	--fix: #5fd3a6;
+	--bad: #ff8a7a;
+	--font-display: 'Space Grotesk', Arial, sans-serif;
+	--font-body: 'Inter', Arial, sans-serif;
+	--font-mono: 'JetBrains Mono', 'Courier New', monospace;
+}

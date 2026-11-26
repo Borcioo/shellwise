@@ -1,0 +1,221 @@
+---
+import Landing from '../layouts/Landing.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const repo = 'https://github.com/Borcioo/shellwise';
+const fixVarColon = 'Fix: write "${name}:" instead of "$name:"';
+---
+
+<Landing
+	title="shellwise — a seatbelt for AI agents in your terminal"
+	description="shellwise reads every shell command your AI agent is about to run and stops the ones that will not run, will hang, or will delete the wrong thing. In about 15 ms."
+>
+	<main>
+		<div class="hero">
+			<div class="wrap">
+				<p class="eyebrow">$ shellwise hook claude-code</p>
+				<h1>shellwise</h1>
+				<p class="tag">A seatbelt for AI agents in your terminal.</p>
+				<p class="sub">
+					It reads every shell command your agent is about to run and stops the ones that won’t run,
+					will hang, or will delete the wrong thing. In about 15&nbsp;ms.
+				</p>
+				<div class="cta">
+					<a class="btn primary" href={`${base}/docs/install/`}>Install</a>
+					<a class="btn ghost" href={`${base}/docs/`}>Read the docs</a>
+					<a class="btn ghost" href={repo}>View on GitHub</a>
+				</div>
+				<p class="meta">Open source (GPL-3.0) · Rust · Bash and PowerShell · Windows, Linux, macOS</p>
+			</div>
+		</div>
+
+		<section class="alt">
+			<div class="wrap">
+				<p class="eyebrow">The problem</p>
+				<h2>Your agent runs commands you never read</h2>
+				<p class="lead">
+					A coding agent writes a shell command and runs it within the same second, hundreds of times
+					a day. Most are fine. A wrong quote costs a retry. A loop that never ends costs a night. A
+					delete in the wrong folder costs the work.
+				</p>
+				<div class="grid">
+					<div class="card">
+						<h3>It won’t run</h3>
+						<p>The shell will refuse it or read it differently than the agent meant.</p>
+						<code>Write-Output "$name: done"</code>
+						<p class="note">PowerShell reads <b>$name:</b> as a drive.</p>
+					</div>
+					<div class="card">
+						<h3>It will hang</h3>
+						<p>The command waits for something that may never come.</p>
+						<code>until grep -q done log; do sleep 15; done</code>
+						<p class="note">No counter, no deadline.</p>
+					</div>
+					<div class="card">
+						<h3>It will destroy</h3>
+						<p>A delete aimed at more than the agent thinks.</p>
+						<code>rm -rf "$DIR/"</code>
+						<p class="note">If <b>DIR</b> is empty, this is <b>rm -rf /</b>.</p>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section>
+			<div class="wrap">
+				<p class="eyebrow">What the agent sees</p>
+				<h2>A reason and a fix, not just “no”</h2>
+				<p class="lead">
+					Most findings carry a Fix line the agent can copy, so it corrects itself and carries on
+					without you.
+				</p>
+				<div class="term mono">
+					<div class="cmd">$ shellwise check --shell bash -- 'until grep -q done build.log; do sleep 15; done'</div>
+					<div class="out">break wait-loop-unbounded</div>
+					<div class="why">the loop polls and nothing bounds it: no counter, deadline or timeout ends it, so when what it waits for never comes it runs forever</div>
+					<div class="fix">Fix: for i in $(seq 1 40); do grep -q done build.log &amp;&amp; break; sleep 15; [ "$i" -lt 40 ]; done</div>
+				</div>
+				<div class="term mono">
+					<div class="cmd">$ shellwise check --shell pwsh -- 'Write-Output "$name: done"'</div>
+					<div class="out">break ps-var-colon</div>
+					<div class="why">in a double-quoted string PowerShell reads $name: as a variable on a drive called name, and refuses the whole command</div>
+					<div class="fix">{fixVarColon}</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="band">
+			<div class="wrap">
+				<p class="eyebrow">A true story from building it</p>
+				<p class="big">One of our own agents waited 9 hours for a line in a log file that was never written.</p>
+				<p class="pill">until grep -q '^done' status.txt; do sleep 15; done</p>
+				<p class="after">
+					The job it was waiting for had already failed, and the loop had no way to notice. shellwise
+					now stops this shape and offers a version with a limit.
+				</p>
+			</div>
+		</section>
+
+		<section>
+			<div class="wrap">
+				<p class="eyebrow">Speed</p>
+				<h2>You will not feel it</h2>
+				<div class="stats">
+					<div class="stat"><p class="num">15 ms</p><p class="label">the whole hook, process start included (median of 2,000 calls)</p></div>
+					<div class="stat"><p class="num">22 ms</p><p class="label">99 calls out of 100 finish within this</p></div>
+					<div class="stat"><p class="num">0.3 ms</p><p class="label">the analysis itself for a typical Bash command</p></div>
+					<div class="stat"><p class="num">7×</p><p class="label">faster than a Python guard doing a similar job (105 ms)</p></div>
+				</div>
+				<p class="lead">
+					One native binary: no interpreter, no service, no network. Measured on 20 November 2026 on
+					one Windows 11 developer machine.
+				</p>
+			</div>
+		</section>
+
+		<section class="alt">
+			<div class="wrap">
+				<p class="eyebrow">False alarms</p>
+				<h2>It stays out of the way of good commands</h2>
+				<div class="stats">
+					<div class="stat"><p class="num">50,862</p><p class="label">real agent commands replayed through every build</p></div>
+					<div class="stat"><p class="num">1 in 1,700</p><p class="label">commands that had run fine were stopped by mistake (26 of 45,303)</p></div>
+					<div class="stat"><p class="num">890</p><p class="label">tests, run on Windows and on Linux before every merge</p></div>
+				</div>
+				<div class="grid">
+					<div class="card"><h3>Unknown tool? Not its business</h3><p>A command shellwise has never heard of is never blocked for being unknown. No allow-list to maintain.</p></div>
+					<div class="card"><h3>The shell is the judge</h3><p>Where a rule says “Bash will refuse this”, a test asks real Bash. Same for PowerShell.</p></div>
+					<div class="card"><h3>Silent when it agrees</h3><p>An ok command produces no output at all. You see shellwise only when it has something to say.</p></div>
+				</div>
+			</div>
+		</section>
+
+		<section>
+			<div class="wrap">
+				<p class="eyebrow">Five answers</p>
+				<h2>It speaks up in proportion to the risk</h2>
+				<div class="tablewrap">
+					<table>
+						<thead>
+							<tr><th>Level</th><th>What it means</th><th>What happens</th></tr>
+						</thead>
+						<tbody>
+							<tr><td>ok</td><td>Nothing to say</td><td>Runs. No output.</td></tr>
+							<tr><td>warn</td><td>Probably fine, worth a note</td><td>Runs. The agent gets one line of advice.</td></tr>
+							<tr><td>break</td><td>Will fail or hang as written</td><td>Not run. The agent gets the corrected command.</td></tr>
+							<tr><td>danger</td><td>May destroy work</td><td>Not run, unless repeated with <code># shellwise: allow</code> at its end.</td></tr>
+							<tr><td>critical</td><td>System files, the repository itself</td><td>Never run. A human has to do it by hand.</td></tr>
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</section>
+
+		<section class="alt" id="install">
+			<div class="wrap">
+				<p class="eyebrow">Try it</p>
+				<h2>One binary, one hook entry</h2>
+				<p class="lead">Install the binary with one line:</p>
+				<pre class="block"><span class="comment"># macOS and Linux</span>
+curl -fsSL https://raw.githubusercontent.com/Borcioo/shellwise/main/install.sh | sh
+<span class="comment"># Windows (PowerShell)</span>
+irm https://raw.githubusercontent.com/Borcioo/shellwise/main/install.ps1 | iex</pre>
+				<p class="lead spaced">Claude Code: add the plugin, which checks every Bash and PowerShell command before it runs:</p>
+				<pre class="block">claude plugin marketplace add Borcioo/shellwise
+claude plugin install shellwise@shellwise</pre>
+				<p class="lead spaced">
+					Any other agent: run <code>shellwise agent-setup</code> and paste the output to your agent.
+					Switch shellwise off any time with <code>SHELLWISE=off</code>. The same check is a plain CLI
+					(<code>shellwise check</code>, <code>shellwise lint</code>), so any agent or script can call it.
+				</p>
+				<div class="cta">
+					<a class="btn primary" href={`${base}/docs/install/`}>Full install instructions</a>
+					<a class="btn ghost" href={`${repo}/releases/latest`}>Download a release</a>
+				</div>
+			</div>
+		</section>
+
+		<section>
+			<div class="wrap">
+				<p class="eyebrow">Honest scope</p>
+				<h2>What it is, and what it is not</h2>
+				<div class="cols">
+					<div class="yes">
+						<h3>It is</h3>
+						<ul>
+							<li>A guard against careless mistakes of an agent that means well</li>
+							<li>A linter for the commands and scripts agents write</li>
+							<li>A teacher: most findings carry a fix the agent can copy</li>
+							<li>Small: one binary, no service, no network, no telemetry</li>
+						</ul>
+					</div>
+					<div class="no">
+						<h3>It is not</h3>
+						<ul>
+							<li>A security boundary. It catches mistakes, not someone deliberately working around it</li>
+							<li>A permission system. It does not decide which tools an agent may use</li>
+							<li>A replacement for backups, version control or reading the diff</li>
+							<li>Finished. This is an early version; known gaps are listed under <a href={`${base}/docs/limits/`}>Limits</a></li>
+						</ul>
+					</div>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<div class="wrap">
+			<p>
+				shellwise is open source under GPL-3.0-or-later. Found a command it got wrong?
+				<a href={`${repo}/issues/new/choose`}>That is the most useful thing you can send.</a>
+			</p>
+			<p class="links">
+				<a href={`${base}/docs/`}>Docs</a> ·
+				<a href={`${base}/docs/rules/`}>Rules</a> ·
+				<a href={`${base}/docs/changelog/`}>Changelog</a> ·
+				<a href={repo}>GitHub</a> ·
+				<a href={`${repo}/releases`}>Releases</a>
+			</p>
+		</div>
+	</footer>
+</Landing>
