@@ -1222,7 +1222,13 @@ impl Lower {
         sub: &ast::SubshellCommand,
         cx: Cx,
     ) -> Result<Word, ParseError> {
-        let span = t.span(&sub.loc);
+        // The word as written holds its operator (`<(…)`, `>(…)`); the location starts at `(`.
+        let (start, end) = (t.byte(sub.loc.start.index), t.byte(sub.loc.end.index));
+        let start = match t.src.get(..start) {
+            Some(before) if before.ends_with(['<', '>']) => start - 1,
+            _ => start,
+        };
+        let span = t.origin.span(start, end);
         let inner = self.body(t, &sub.list, cx)?;
         Ok(Word {
             parts: vec![WordPart::Subst(Box::new(inner))],

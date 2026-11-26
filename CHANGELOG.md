@@ -26,6 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   line it stays danger, since a failed orphan call lets it empty the current branch. An
   option word the guard cannot read beside a whole-folder `git rm` pathspec (`git rm $OPTS .`)
   warns `git-unreadable`.
+- Bash and Git Bash: a destructive `bash -c`, `sh -c`, `zsh -c`, `eval` or `pwsh -Command` body,
+  or a script given as `<(…)`, followed by a redirect or here-string (`bash -c '…' 2>&1`,
+  `> log`, `2>&1 | tail -5`, or one between the words) now reads as the same body without it,
+  instead of ok.
+- A destructive child-shell body behind a variable assignment whose value is quoted or appended
+  (`X="a b" bash -c '…'`, `MSG='hi' eval '…'`, `X+=1 bash <(…)`), and a delete behind such an
+  assignment inside a body, now reads as the same command without the assignment. Under Bash and
+  Git Bash these read ok before, or only as a parse warning beside a syntax error; a body given to
+  `bash -c` or `pwsh -Command` under PowerShell is read the same way. An assignment's value before
+  `bash <(…)` is no longer taken for a delete target.
 
 ## [0.2.0] - 2026-11-26
 
