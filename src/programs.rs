@@ -168,6 +168,9 @@ pub struct Loops {
     /// Operators that compare numbers (`-lt`, `<`): a test with one on a variable the loop
     /// changes is a counter.
     pub compares: Vec<String>,
+    /// Bash pipelines that count the shell's own jobs (`jobs -rp | wc -l`): a loop condition
+    /// that compares one is bounded.
+    pub job_counts: Vec<String>,
     /// The sentence after a Bash and a PowerShell Fix line.
     pub hint_bash: String,
     pub hint_pwsh: String,
@@ -258,7 +261,7 @@ pub fn load(text: &str) -> Result<Table, String> {
         return Err("msys.roots: a root is empty or holds a /".to_string());
     }
     let l = &raw.loops;
-    let words = [&l.exits, &l.always, &l.clocks, &l.compares];
+    let words = [&l.exits, &l.always, &l.clocks, &l.compares, &l.job_counts];
     if words.iter().any(|l| l.iter().any(|s| s.trim().is_empty())) {
         return Err("loops: a list holds an empty string".to_string());
     }

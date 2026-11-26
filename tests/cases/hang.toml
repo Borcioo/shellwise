@@ -3565,12 +3565,12 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
-id = "wl-bash-a-job-throttle-polled-in-arithmetic"
+id = "wl-bash-a-job-throttle-polled-in-arithmetic-is-ok"
 os = "any"
 shell = "bash"
 command = 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done'
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
 id = "wl-bash-a-polled-count-with-a-counter-in-arithmetic-is-ok"
@@ -3733,12 +3733,12 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
-id = "wl-gitbash-a-job-throttle-polled-in-arithmetic"
+id = "wl-gitbash-a-job-throttle-polled-in-arithmetic-is-ok"
 os = "windows"
 shell = "gitbash"
 command = 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done'
-level = "break"
-rules = ["wait-loop-unbounded"]
+level = "ok"
+rules = []
 
 [[row]]
 id = "wl-gitbash-a-polled-count-with-a-counter-in-arithmetic-is-ok"
@@ -3795,6 +3795,270 @@ shell = "gitbash"
 command = 'until (( $(pgrep -c worker) == 0 || SECONDS >= 600 )); do sleep 1; done'
 level = "ok"
 rules = []
+
+# --- A throttle on the count of the shell's own jobs ---
+# `jobs` (`-r`, `-p`, `-rp`, `-pr`) piped to `wc -l` counts the shell's own background jobs, which
+# end by themselves: a loop whose condition compares that count waits for one of them and is
+# bounded, in the `(( ))`, `[ ]`, `test` and `[[ ]]` forms alike. A count of anything else (`pgrep
+# -c`, `ps | grep -c`, `docker ps -q | wc -l`), another stage or option, a count with no
+# comparison, a count read in the body or into a variable, and a condition joined so that the loop
+# still waits for its other part (`while A || count`, `until A && count`) still poll.
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-a-test-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-a-test-command-is-ok"
+os = "any"
+shell = "bash"
+command = 'while test "$(jobs -rp | wc -l)" -ge 4; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-a-double-bracket-test-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ $(jobs -rp | wc -l) -ge 4 ]]; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-an-until-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( $(jobs -rp | wc -l) < 4 )); do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-an-until-test-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ "$(jobs -p | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-against-a-variable-is-ok"
+os = "any"
+shell = "bash"
+command = 'max=4; while (( $(jobs -r | wc -l) >= max )); do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-on-every-job-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ "$(jobs | wc -l)" -ge "$max" ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-with-pr-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -pr | wc -l) >= 4 )); do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-inside-arithmetic-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ $(( $(jobs -rp | wc -l) )) -ge 4 ]; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-ps-a-job-count-text-polls"
+os = "any"
+shell = "pwsh"
+command = 'while ("$(jobs -rp | wc -l)" -ge 4) { Start-Sleep 1 }'
+level = "break"
+rules = ["ps-unix-command", "wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-throttle-joined-by-and-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [ -f lock ] && [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-an-until-joined-by-or-is-ok"
+os = "any"
+shell = "bash"
+command = 'until [ ! -f lock ] || [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-joined-by-or-polls"
+os = "any"
+shell = "bash"
+command = 'while [ -f lock ] || [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-throttle-in-an-until-joined-by-and-polls"
+os = "any"
+shell = "bash"
+command = 'until [ ! -f lock ] && [ "$(jobs -rp | wc -l)" -lt 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-process-count-in-a-test-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(pgrep -c worker)" -ge 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-grep-count-of-ps-polls"
+os = "any"
+shell = "bash"
+command = 'while [ "$(ps | grep -c worker)" -ge 4 ]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-container-count-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(docker ps -q | wc -l) >= 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-of-bytes-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -c) >= 4 )); do sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-through-another-stage-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | grep -v x | wc -l) >= 4 )); do sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-with-another-option-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -l | wc -l) >= 4 )); do sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-with-no-comparison-polls"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) )); do sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-in-single-quotes-polls"
+os = "any"
+shell = "bash"
+command = "while [ '$(jobs -rp | wc -l)' -ge 4 ]; do sleep 0.1; done"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-jobs-only-in-the-body-polls"
+os = "any"
+shell = "bash"
+command = 'while [ -f lock ]; do jobs -l; sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-in-a-body-guard-polls"
+os = "any"
+shell = "bash"
+command = 'while true; do [ "$(jobs -rp | wc -l)" -lt 4 ] && break; sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-read-into-a-variable-polls"
+os = "any"
+shell = "bash"
+command = 'while true; do n=$(jobs -rp | wc -l); [ "$n" -lt 4 ] && break; sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-count-printed-in-an-endless-loop-polls"
+os = "any"
+shell = "bash"
+command = 'while true; do echo "$(jobs -rp | wc -l)"; sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-job-throttle-in-a-test-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [ "$(jobs -rp | wc -l)" -ge 4 ]; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-job-throttle-in-a-test-command-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while test "$(jobs -rp | wc -l)" -ge 4; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-job-throttle-in-a-double-bracket-test-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(jobs -rp | wc -l) -ge 4 ]]; do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-job-throttle-in-an-until-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(jobs -rp | wc -l) < 4 )); do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-container-count-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(docker ps -q | wc -l) >= 4 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-job-count-in-a-body-guard-polls"
+os = "windows"
+shell = "gitbash"
+command = 'while true; do [ "$(jobs -rp | wc -l)" -lt 4 ] && break; sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
 
 # --- More waits: `[Threading.Thread]::Sleep` ---
 

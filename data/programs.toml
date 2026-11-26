@@ -894,6 +894,10 @@ clocks = ["SECONDS", "EPOCHSECONDS", "date", "Get-Date", "Now", "UtcNow", "Stopw
 # Operators that compare numbers: a test with one on a variable the loop changes is a counter
 # (`[ $n -lt 60 ]`, `(( n++ < 60 ))`, `$i -lt 60`).
 compares = ["-lt", "-le", "-gt", "-ge", "-eq", "-ne", "<", "<=", ">", ">=", "==", "!="]
+# Bash pipelines that count the shell's own background jobs, written with single blanks: a loop
+# condition that compares one in a `$( )` waits for those jobs, which end by themselves, so it is
+# bounded (`while (( $(jobs -rp | wc -l) >= 4 ))`). Another stage, option or command is no bound.
+job_counts = ["jobs | wc -l", "jobs -r | wc -l", "jobs -p | wc -l", "jobs -rp | wc -l", "jobs -pr | wc -l"]
 # The sentence after the Fix line.
 # A tool call's shell never has the process as its child, so `wait <pid>` fails (127).
 hint_bash = "when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"

@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Changed
+
+- `wait-loop-unbounded`: a Bash loop whose condition compares the count of the shell's own
+  background jobs (`while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`, and the `[ ]`,
+  `test`, `[[ ]]` and `until … -lt` forms) reads as bounded: the count drops when a job ends.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

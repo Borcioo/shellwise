@@ -949,7 +949,8 @@ impl Walk<'_, '_> {
         // `;` starts again: a list's last and-or chain decides.
         let mut can = (false, false);
         for (k, (op, t)) in terms.iter().enumerate() {
-            let b = bounds(t, counters, fold);
+            // A count of the shell's own jobs bounds only here, in the loop's own condition.
+            let b = bounds(t, counters, fold) || (!fold && compares_own_jobs(t));
             can = match op {
                 Some(ChainOp::And) if k > 0 => (can.0 && b, can.1 || b),
                 Some(ChainOp::Or) if k > 0 => (can.0 || b, can.1 && b),
@@ -2203,6 +2204,36 @@ fn bounds(test: &str, counters: &[String], fold: bool) -> bool {
         let operand = without_literals(operand);
         clock || variables(&operand).any(|(_, v)| counters.iter().any(|n| same(n, v, fold)))
     })
+}
+
+/// A Bash test that compares the count of the shell's own background jobs (`[ "$(jobs -rp | wc
+/// -l)" -ge 4 ]`): one side of a comparison holds a `$( )` whose pipeline is a `job_counts` entry
+/// of `[loops]`, outside single quotes. The count drops when a job ends.
+fn compares_own_jobs(test: &str) -> bool {
+    let loops = programs::loops();
+    operands(test, &loops.compares, false)
+        .iter()
+        .any(|operand| {
+            let operand = without_literals(operand);
+            let mut rest = operand.as_str();
+            while let Some(at) = rest.find("$(") {
+                if rest[at..].starts_with("$((") {
+                    rest = &rest[at + 3..];
+                    continue;
+                }
+                let end = closing_paren(rest, at + 1);
+                let inner = rest.get(at + 2..end).unwrap_or("");
+                let pipeline: Vec<String> = inner
+                    .split('|')
+                    .map(|stage| stage.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect();
+                if loops.job_counts.contains(&pipeline.join(" | ")) {
+                    return true;
+                }
+                rest = rest.get(end + 1..).unwrap_or("");
+            }
+            false
+        })
 }
 
 /// Where a compared operand reads the time (Ruling 140). Outside quotes any clock word counts
