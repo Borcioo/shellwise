@@ -21,7 +21,7 @@ carries a `Fix:` line. It guards against mistakes; it is not a security boundary
   `gitbash` for Git Bash on Windows, `powershell5` for Windows PowerShell 5.1.
 - `shellwise check --shell <shell> [--json] [-- COMMAND]` checks one command by hand; without
   `-- COMMAND` it reads the command from stdin. Exit codes: 0 ok or warn, 1 break, 2 danger,
-  3 critical, 64 usage error. `--json` prints the verdict as JSON.
+  3 critical, 64 usage error, 74 input could not be read. `--json` prints the verdict as JSON.
 - `SHELLWISE=off` in the environment switches shellwise off without removing the hook.
 - A `danger` command runs when repeated with ` # shellwise: allow` at its end; `critical` never
   runs. Add the marker only after reading the finding, never by habit.
@@ -36,8 +36,9 @@ carries a `Fix:` line. It guards against mistakes; it is not a security boundary
    in PowerShell). Use that full path in the entry, never a bare `shellwise`.
 3. Find out which shell your shell tool runs. That decides `--shell`.
 4. Before editing, back up the config file: copy it next to itself with `.shellwise-backup`
-   appended to its name. If the file does not exist, note that; the undo is then deleting it.
-5. Add one entry, keeping everything already in the file. Register it for your host's shell tool
+   appended to its name. Do not overwrite an existing backup: pick a new backup name. If the file
+   does not exist, note that; the undo is then deleting it.
+5. Add one entry: merge this entry into the existing file; do not replace the file. Register it for your host's shell tool
    only, never for every tool. Where the host offers a form that spawns the program directly
    (a command plus a list of arguments), use it. Where the host runs the entry through `sh` or
    `bash`, quote the path: `'/full/path/to/shellwise' hook generic --shell bash`. Where the host
@@ -81,7 +82,7 @@ Paths start at the user's home folder (`%USERPROFILE%` on Windows) unless they s
 | Host | Mark | Config file | Event | Matcher | Timeout | Entry | Reason shown |
 |---|---|---|---|---|---|---|---|
 | Claude Code | tested | `.claude/settings.json` | `PreToolUse` | `Bash` or `PowerShell` (one regex, below) | `timeout`, seconds | `hook claude-code` (below), or the shellwise plugin | yes |
-| Codex CLI | tested | `.codex/hooks.json` | `PreToolUse` | `^Bash$` | `timeout`, seconds | bare command; `guard-pwsh` line on Windows | yes |
+| Codex CLI | tested on Windows (PowerShell 7) | `.codex/hooks.json` | `PreToolUse` | `^Bash$` | `timeout`, seconds | bare command; `guard-pwsh` line on Windows | yes |
 | Cursor | from the host's documentation | `.cursor/hooks.json` | `beforeShellExecution` | none | `timeout`, seconds | bare command; `guard-pwsh` line on Windows | not documented |
 | Gemini CLI | from the host's documentation | `.gemini/settings.json` | `BeforeTool` | `run_shell_command` | `timeout`, milliseconds | `guard-sh` line on macOS and Linux; `guard-pwsh` line on Windows | yes |
 | Copilot CLI | from the host's documentation | own file `.copilot/hooks/shellwise.json` | `preToolUse` | `bash` or `powershell` (one regex, below) | `timeoutSec`, seconds | guard line | not documented |
@@ -97,13 +98,14 @@ Notes per host:
 - Codex CLI: the shell tool is `Bash` on every system, also when it runs PowerShell on Windows, so
   pass `--shell` to match what it runs. The entry is a `{"type": "command", "command": "<entry>",
   "timeout": 10}` handler in a `PreToolUse` group with the matcher. On Windows the host runs the
-  entry through PowerShell: use the `guard-pwsh` line. The user must approve the hook in the host's
-  hook settings (`/hooks` in the CLI) before it runs, and again after every change to the entry;
-  until then the host skips it without a message. Tell the user; the proof cannot pass before that.
+  entry through PowerShell: use the `guard-pwsh` line. Tested on Windows with PowerShell 7 only.
+  The user must approve the hook before it runs, and again after every change to the entry; the
+  approval can be given in the host's hook settings (`/hooks` in the CLI). An unapproved hook is
+  skipped without a message. Tell the user; the proof cannot pass before that.
 - Cursor: it already runs a Claude Code hook found in the user's Claude settings
   (`.claude/settings.json`). If one for shellwise is there, add nothing. Add an entry only when
   there is none: `{"version": 1, "hooks": {"beforeShellExecution": [{"command": "<entry>", "timeout": 10}]}}`.
-  Give no matcher: here it filters the command text. On Windows the desktop app runs the entry
+  Merge this entry into the existing file; do not replace the file. Give no matcher: here it filters the command text. On Windows the desktop app runs the entry
   through PowerShell: use the `guard-pwsh` line.
 - Gemini CLI: the entry is `{"name": "shellwise", "type": "command", "command": "<entry>", "timeout":
   10000}` in a `BeforeTool` group with the matcher, under `"hooks"`. On macOS and Linux the host
@@ -136,9 +138,10 @@ Write-Output "$name: done"
    without a trailing newline (or after `--`): `printf '%s' "echo 'abc" | shellwise check --shell bash`,
    or `'Write-Output "$name: done"' | shellwise check --shell pwsh` in PowerShell. Its output must
    start with `break` (exit code 1; read `$LASTEXITCODE` in PowerShell). If not, stop and report.
-2. Run the proof command itself through your own shell tool. A block shows a line starting
-   `shellwise: break`. An unguarded run shows the shell's own syntax error instead: the hook is
-   not wired. Fix the entry and repeat.
+2. Run the proof command itself through your own shell tool. It is blocked when the command did
+   not run and the host's message contains `shellwise: break` (often after the host's own prefix)
+   or says a hook blocked or denied the command. It ran unguarded when the shell's own syntax
+   error appears as the command's output: the hook is not wired. Fix the entry and repeat.
 3. Run one harmless command through your shell tool: `echo shellwise-proof-ok` (bash) or
    `Write-Output shellwise-proof-ok` (PowerShell). It must run and print its text. If it is
    blocked, your shell tool no longer works: undo the change with your file-editing tool (see

@@ -20,7 +20,6 @@
 - Do not touch `src/rules/wait_loop.rs`, `src/scan.rs`, `tests/cases/*.toml` or `CHANGELOG.md` before task 8 (another branch holds them).
 - Nothing is published: no tag, no release, no registry. The branch merges into `develop` only.
 - Scripts and hooks write LF. Text encodings are explicit (UTF-8 without BOM).
-- Every commit command ends with ` # workbench:confirmed`.
 - Tests: `cargo test --features testhooks <filter>` while working; the full gate (`pwsh -NoProfile -File scripts/gate.ps1`, with `SHELLWISE_CORPUS` and `SHELLWISE_DENYLIST` set) once before the PR.
 - Risk marks: the checksum check (task 2) and the `hook generic` failure rules (task 1) are guards: each refusal branch is shown red once by breaking the code, with the mutation named in the report. Everything else: one test per behaviour, one red run per test.
 
