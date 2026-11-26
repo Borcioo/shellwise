@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Changed
+
+- `shellwise lint` is faster on long files (a 500-line PowerShell script about a third faster, a
+  500-line Bash script about a sixth); its output is unchanged.
+
 ### Fixed
 
 - `follow-unbounded`: the Bash Fix puts `timeout 60` after the follow's assignments and leading
