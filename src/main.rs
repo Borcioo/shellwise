@@ -16,8 +16,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use shellwise::adapter::check_json;
 use shellwise::adapter::claude_code::{self, Event};
+use shellwise::adapter::generic;
 use shellwise::config::{Config, HOOK_MARGIN_MS, MIN_HOOK_TIMEOUT_MS};
-use shellwise::level::{Finding, Verdict, exit_code};
+use shellwise::level::{Finding, Level, Verdict, exit_code};
 use shellwise::{
     AnalyseInput, BashProfile, Deadline, MAX_READ_BYTES, Origin, Os, Shell, analyse, unread,
 };
@@ -53,7 +54,7 @@ struct Cli {
 enum Cmd {
     /// Check one command; exit 0 ok/warn, 1 break, 2 danger, 3 critical.
     Check(CheckArgs),
-    /// Run as an agent host's hook; always exits 0.
+    /// Run as an agent host's hook; exits 0, or 2 from `generic` for a refused command.
     #[command(subcommand)]
     Hook(HookCmd),
     /// Replay the corpus through the analysis and report the meters; exit 1 when it cannot measure.
@@ -109,10 +110,22 @@ struct LintArgs {
 enum HookCmd {
     /// Claude Code PreToolUse: the event on stdin, the host's JSON reply on stdout.
     ClaudeCode(HookArgs),
+    /// Hosts that block on exit code 2: the event on stdin, the findings on stderr.
+    Generic(GenericArgs),
 }
 
 #[derive(clap::Args)]
 struct HookArgs {
+    /// An integration config file; the user file overrides it, the repo file only raises.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct GenericArgs {
+    /// The shell that runs the command; without it the event's tool name, then the OS, decides.
+    #[arg(long, value_enum)]
+    shell: Option<ShellArg>,
     /// An integration config file; the user file overrides it, the repo file only raises.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
@@ -166,12 +179,17 @@ fn run(start: Instant) -> i32 {
         Ok(cli) => cli,
         Err(e) => {
             let _ = e.print();
+            // A mistyped `hook generic` entry must never block the host's tool.
+            if is_hook_generic() {
+                return 0;
+            }
             return if e.use_stderr() { EXIT_USAGE } else { 0 };
         }
     };
     match cli.cmd {
         Cmd::Check(args) => run_check(start, args),
         Cmd::Hook(HookCmd::ClaudeCode(args)) => run_hook(start, args),
+        Cmd::Hook(HookCmd::Generic(args)) => run_hook_generic(start, args),
         Cmd::Bench(args) => bench::run(args),
         Cmd::Explain { id } => run_explain(&id),
         Cmd::Lint(args) => run_lint(start, args),
@@ -258,8 +276,23 @@ fn run_hook(start: Instant, args: HookArgs) -> i32 {
             cwd,
         } => (shell, command, cwd),
     };
+    let (verdict, cfg) = analyse_event(start, args.config, shell, &command, cwd, os);
+    emit(claude_code::reply(&verdict, &cfg))
+}
+
+/// The hooks' analysis of a command read from an event: the config loads from the event's `cwd`
+/// (one that does not load leaves the defaults and fails the analysis closed), and its own
+/// findings join the verdict.
+fn analyse_event(
+    start: Instant,
+    integration: Option<PathBuf>,
+    shell: Shell,
+    command: &str,
+    cwd: Option<PathBuf>,
+    os: Os,
+) -> (Verdict, Config) {
     let budget = hook_config_budget(start, Instant::now());
-    let (cfg, cfg_findings, cfg_problem) = match load_config(budget, args.config, cwd.clone()) {
+    let (cfg, cfg_findings, cfg_problem) = match load_config(budget, integration, cwd.clone()) {
         Ok((cfg, findings)) => (cfg, findings, None),
         Err(reason) => (Config::default(), Vec::new(), Some(reason)),
     };
@@ -278,7 +311,87 @@ fn run_hook(start: Instant, args: HookArgs) -> i32 {
     };
     let mut findings = analyse(&input, &cfg, &deadline).findings;
     findings.extend(cfg_findings);
-    emit(claude_code::reply(&Verdict::new(findings), &cfg))
+    (Verdict::new(findings), cfg)
+}
+
+/// True when the command line is `shellwise hook generic …`. Reads `args_os`, which never panics
+/// on an argument that is not Unicode.
+fn is_hook_generic() -> bool {
+    let mut words = std::env::args_os().skip(1);
+    words.next().is_some_and(|w| w == "hook") && words.next().is_some_and(|w| w == "generic")
+}
+
+/// `hook generic`: read the event, analyse its command, write the findings to stderr; exit
+/// `EXIT_BLOCK` at `break` or above, 0 otherwise. A panic outside the analysis exits 0 with a line
+/// on stderr, so a broken hook never blocks the host's tool.
+fn run_hook_generic(start: Instant, args: GenericArgs) -> i32 {
+    if shellwise::turned_off() {
+        return 0;
+    }
+    // The host shows stderr to the model: it holds only the findings or the one line below, never
+    // a Rust panic message (a panic inside the analysis is its fail-closed verdict).
+    panic::set_hook(Box::new(|_| {}));
+    match panic::catch_unwind(|| hook_generic(start, args)) {
+        Ok(code) => code,
+        Err(_) => {
+            eprintln!("shellwise: internal error; the command was not checked");
+            0
+        }
+    }
+}
+
+fn hook_generic(start: Instant, args: GenericArgs) -> i32 {
+    if testhook_is("generic-panic") {
+        panic!("testhook: panic in the generic hook");
+    }
+    let os = Os::host();
+    let bytes = match read_stdin(Deadline::new(start, HOOK_READ_MS)) {
+        Input::Bytes(bytes) if bytes.len() > MAX_READ_BYTES => {
+            return generic_unread(start, "input over the hard size cap", &bytes);
+        }
+        Input::Bytes(bytes) => bytes,
+        Input::Unread(reason, partial) => return generic_unread(start, reason, &partial),
+        Input::Error(e, partial) => {
+            let reason = format!("stdin could not be read: {e}");
+            return generic_unread(start, &reason, &partial);
+        }
+    };
+    let (shell, command, cwd) =
+        match generic::parse_event(&bytes, args.shell.map(ShellArg::shell), os) {
+            generic::Event::NotOurs => return 0,
+            generic::Event::Malformed(reason) => return generic_unread(start, reason, &bytes),
+            generic::Event::Command {
+                shell,
+                command,
+                cwd,
+            } => (shell, command, cwd),
+        };
+    let (verdict, _) = analyse_event(start, args.config, shell, &command, cwd, os);
+    if let Some(text) = generic::render(&verdict) {
+        eprintln!("{text}");
+    }
+    if verdict.level >= Level::Break {
+        generic::EXIT_BLOCK
+    } else {
+        0
+    }
+}
+
+/// `hook generic` on an event not read whole: the raw scan of the bytes read decides
+/// (`generic::unread_verdict`); a host that leaves stdin open keeps its shell tool unless they
+/// show a destructive command.
+fn generic_unread(start: Instant, reason: &str, bytes: &[u8]) -> i32 {
+    let deadline = hook_scan_deadline(start, Instant::now());
+    match generic::unread_verdict(bytes, reason, &deadline) {
+        Some(text) => {
+            eprintln!("{text}");
+            generic::EXIT_BLOCK
+        }
+        None => {
+            eprintln!("shellwise: event not read ({reason}); the command was not checked");
+            0
+        }
+    }
 }
 
 /// The hook's reply to an event not read whole: no output when the bytes read name a tool that

@@ -2,3 +2,4 @@
 
 pub mod check_json;
 pub mod claude_code;
+pub mod generic;
