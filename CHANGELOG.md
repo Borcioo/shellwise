@@ -44,6 +44,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   counts as a bound on a wait loop it runs, as it already did not on a follow: GNU `timeout`
   then sets no limit (`timeout 0 bash -c 'while true; do sleep 1; done'` now blocks). A duration the guard cannot
   read (`timeout "$T"`, `timeout "${T:-0}"`) still counts as a limit.
+- `wait-loop-unbounded`: a `timeout` with a limit behind another wrapper now bounds the wait loop
+  it runs, as it already bounded a follow: `sudo timeout 60 bash -c '<loop>'`, `env A=1 timeout 60
+  …`, `nice timeout 60 …`, `nohup timeout 600 …` and `timeout 0 timeout 600 …` no longer block. A
+  chain whose every `timeout` sets no limit (`sudo timeout 0 …`, `timeout 0 timeout 0 …`) still
+  blocks.
 - A PowerShell delete through an alias the same command defines before it
   (`Set-Alias zz Remove-Item; zz C:\Windows -Recurse`, `Set-Alias -Name zz -Value Remove-Item;
   zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet

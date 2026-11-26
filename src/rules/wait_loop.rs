@@ -324,14 +324,7 @@ impl Walk<'_, '_> {
 
     fn command(&mut self, c: &SimpleCommand, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
-        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs,
-        // only with a duration that sets a limit: `timeout 0 bash -c 'tail -f x'` and
-        // `timeout 0 bash -c 'while true; do sleep 1; done'` run without one.
-        let bounded = bounded
-            || (programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS))
-                && programs::wrapper_chain(c, shell, os)
-                    .first()
-                    .is_none_or(limits));
+        let bounded = bounded || wrapper_bound(c, shell, os);
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
         // A script block first: the table is read only for a command that passes one.
         let bounded = bounded
@@ -410,9 +403,7 @@ impl Walk<'_, '_> {
             let Some(row) = follows(c, shell, os) else {
                 continue;
             };
-            // `timeout 60 tail -f log`, `nohup timeout 60 tail -f log`: a wrapper of this very
-            // command, at any place in its chain, bounds it.
-            if programs::wrapper_chain(c, shell, os).iter().any(limits) {
+            if wrapper_bound(c, shell, os) {
                 continue;
             }
             let span = self.outer.unwrap_or(c.span);
@@ -1193,6 +1184,14 @@ fn no_limit(w: &programs::Wrapped) -> Option<&Word> {
 /// The wrapper bounds the wait: a `bounds_wait` row with a duration that sets a limit.
 fn limits(w: &programs::Wrapped) -> bool {
     flag(w.row, BOUNDS) && no_limit(w).is_none()
+}
+
+/// A wrapper of `c`, at any place in its chain, bounds what `c` runs, a follow and a wait loop
+/// alike: `timeout 60 tail -f log`, `nohup timeout 60 tail -f log`,
+/// `sudo timeout 60 bash -c '<loop>'`, `timeout 0 timeout 600 bash -c '<loop>'`. A chain whose
+/// every `timeout` sets no limit (`timeout 0 bash -c '<loop>'`) bounds nothing.
+fn wrapper_bound(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    programs::wrapper_chain(c, shell, os).iter().any(limits)
 }
 
 fn flag(p: &Program, key: &str) -> bool {
