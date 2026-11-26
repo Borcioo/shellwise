@@ -5,6 +5,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- `install.sh` and `install.ps1`: one-line installers that verify the release archive against
+  `SHA256SUMS` and install `shellwise`; running one again updates the binary.
+- `shellwise update`: replaces the binary in its own folder with the latest release; `--check`
+  compares the installed and the latest version, `--notify` prints one line at most once a day
+  when a newer release exists.
+- `shellwise agent-setup`: prints a text to paste to your AI agent, which then registers
+  shellwise in its host's hook that runs before a shell command and proves the wiring.
+- `shellwise hook generic`: a hook for hosts that block a command on exit code 2, with the
+  findings and their `Fix:` lines on stderr.
+- A Claude Code plugin and marketplace manifest in the repository:
+  `claude plugin marketplace add Borcioo/shellwise`, then
+  `claude plugin install shellwise@shellwise`.
+- Static Linux builds among the release assets: `x86_64-unknown-linux-musl` and
+  `aarch64-unknown-linux-musl`. The install scripts pick them on Linux.
+- `install.sh` and `install.ps1` among the release assets and in `SHA256SUMS`, so a pinned version
+  has its own installer.
+
 ### Changed
 
 - `shellwise lint` is faster on long files (a 500-line PowerShell script about a third faster, a

@@ -7,6 +7,9 @@ start, it prints one line when a newer shellwise is released (`shellwise update 
 The plugin ships no binary: it runs the `shellwise` found on `PATH`. Without it the hook fails and
 every command runs unchecked, so install the binary first.
 
+If your PATH contains `.` or another relative entry, a file named `shellwise` in a project folder
+can run instead of the installed one; remove such entries.
+
 ## Install
 
 1. Install the binary.
