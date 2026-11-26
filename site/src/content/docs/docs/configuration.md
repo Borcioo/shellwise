@@ -56,7 +56,7 @@ An example user file:
 ```toml
 hook_timeout_ms = 5000
 ask_instead_of_deny = ["delete-empty-expansion"]
-protected = ["C:/Users/me/notes"]
+protected = ["D:/notes"]
 
 [levels]
 follow-unbounded = "break"
