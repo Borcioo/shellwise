@@ -1672,12 +1672,18 @@ mod tests {
     /// and no `Delete()` call is seen.
     const UNREADABLE_DESTRUCTIVE: &[(&str, &str)] = &[
         // A shell given an encoded command runs that command, not the pipe.
-        ("echo 'rm -rf x' | pwsh -EncodedCommand AAAA", "an encoded body"),
+        (
+            "echo 'rm -rf x' | pwsh -EncodedCommand AAAA",
+            "an encoded body",
+        ),
         ("echo 'rm -rf x' | powershell -e AAAA", "an encoded body"),
         ("echo 'rm -rf x' | pwsh.exe -enc AAAA", "an encoded body"),
         ("echo 'rm -rf x' | pwsh -ec AAAA", "an encoded body"),
         ("echo 'rm -rf x' | pwsh /enc AAAA", "an encoded body"),
-        ("echo 'rm -rf x' | pwsh --EncodedCommand AAAA", "an encoded body"),
+        (
+            "echo 'rm -rf x' | pwsh --EncodedCommand AAAA",
+            "an encoded body",
+        ),
         // The first reading of the producer (`$u` as the command) prints text the scan cannot
         // read, so the later `printf` reading is not scanned either.
         (
