@@ -5,7 +5,8 @@
 //! ids in order (`rules`), and optionally `fix` (a text the first finding's Fix line holds),
 //! `fix_exact` (the whole text of the first finding's Fix line, after `Fix: `),
 //! `oracle` (`"refuses"` or `"accepts"`: what the real shell's parser does with the text) and
-//! `config` (the text of an integration config file the row runs under, loaded by `Config::load`).
+//! `config` (the text of an integration config file the row runs under, loaded by `Config::load`)
+//! and `twin` (a command that must give the same rule ids: `tests/delete.rs` checks it).
 //! A row for another OS is skipped and counted; loading fails when no row runs.
 
 #![allow(dead_code)]
@@ -31,6 +32,7 @@ pub struct Row {
     pub fix_exact: Option<String>,
     pub oracle: Option<String>,
     pub config: Option<String>,
+    pub twin: Option<String>,
 }
 
 #[derive(Deserialize)]

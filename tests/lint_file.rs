@@ -517,6 +517,48 @@ fn a_10_kb_sh_with_a_doubled_backslash_lints_clean() {
     assert_eq!(r.code, 0, "{} {}", r.stdout, r.stderr);
 }
 
+/// The analysis runs on a thread of its own while ShellCheck runs; when that thread cannot start,
+/// both run on the calling thread and the report is the same, shellwise and ShellCheck findings
+/// alike.
+#[cfg(feature = "testhooks")]
+#[test]
+fn lint_reports_the_same_when_the_analysis_thread_does_not_start() {
+    let dir = folder("lint_spawn_fail");
+    let path = dir.join("both.sh");
+    std::fs::write(&path, "rm -rf \"$UNSET_DIR\"/\necho $x\n").unwrap();
+    let arg = path.to_string_lossy();
+    let normal = common::run(&["lint", &arg], None, &[]);
+    let failed = common::run(
+        &["lint", &arg],
+        None,
+        &[("SHELLWISE_TESTHOOK", "lint-spawn-fail")],
+    );
+    let rules = |out: &str| -> Vec<String> {
+        out.lines()
+            .filter_map(|l| l.split(": ").nth(1))
+            .filter_map(|l| l.split(' ').nth(1))
+            .map(str::to_string)
+            .collect()
+    };
+    let found = rules(&normal.stdout);
+    assert!(
+        found.iter().any(|r| r.starts_with("SC")),
+        "{}",
+        normal.stdout
+    );
+    assert!(
+        found.iter().any(|r| !r.starts_with("SC")),
+        "{}",
+        normal.stdout
+    );
+    assert_eq!(
+        (failed.code, &failed.stdout),
+        (normal.code, &normal.stdout),
+        "{}",
+        failed.stderr
+    );
+}
+
 #[test]
 fn an_external_linter_adds_findings_sorted_and_deduplicated() {
     let dir = folder("external");

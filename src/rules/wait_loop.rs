@@ -10,7 +10,9 @@
 //!
 //! A bound is visible when the loop's condition, or a test guarding a `break`/`exit`/`return` in
 //! its body, compares a clock or a counter (a variable whose new value reads its old one); or when
-//! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`). A loop with no wait whose condition
+//! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`): in what the
+//! wrapper runs, not in the words the calling shell expands before it starts (`timeout 60 echo
+//! "$(…)"`). A loop with no wait whose condition
 //! can fail (`while read line`) is no wait loop. A loop whose body runs a command the guard cannot
 //! read (a dynamic name, `eval`) is not judged: that command may end it. PowerShell keeps no
 //! `break` in the IR, so its guards are the `if` statements whose text holds an exit word.
@@ -38,6 +40,7 @@ const READS_INPUT: &str = "loop_reads_input";
 const SKIPS_ROUND: &str = "loop_skips_round";
 const BODY: &str = "loop_body";
 const BOUNDS: &str = "bounds_wait";
+const DURATION_SUFFIXES: &str = "duration_suffixes";
 const FOLLOW: &str = "follow";
 const FOLLOW_WHEN: &str = "follow_when";
 const FOLLOW_SUB: &str = "follow_sub";
@@ -47,6 +50,13 @@ const FOLLOW_FIX_LOCALS: &str = "follow_fix_locals";
 const FOLLOW_FIX_SCOPES: &str = "follow_fix_scopes";
 const FOLLOW_FIX_SETS: &str = "follow_fix_sets";
 const FOLLOW_FIX_SENTENCE: &str = "follow_fix_sentence";
+const FOLLOW_FIX_WRAPPERS: &str = "follow_fix_wrappers";
+const FOLLOW_FIX_LOOKUP: &str = "follow_fix_lookup";
+const FOLLOW_FIX_LOOKUP_VARS: &str = "follow_fix_lookup_vars";
+const FOLLOW_FIX_DURATION: &str = "follow_fix_duration";
+/// The `extra` keys of a wrapper row that runs only shell builtins, and of one that is a builtin.
+const BUILTINS_ONLY: &str = "builtins_only";
+const SHELL_BUILTIN: &str = "shell_builtin";
 const LOOP_JOIN: &str = "loop_join";
 const INTEGER_WHEN: &str = "loop_integer_when";
 /// The `loop_join` values.
@@ -64,6 +74,10 @@ const IN_STATEMENT: &str = "the follow pipeline is part of a longer statement";
 const SETS_VARIABLE: &str =
     "the pipeline assigns a variable or names its scope, which `$using:` cannot pass";
 const SET_LATER: &str = "a variable it reads is assigned only after it";
+const UNDER_WRAPPER: &str = "the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run";
+const UNDER_BUILTINS_ONLY: &str = "the follow runs under a wrapper that runs only shell builtins";
+const SETS_LOOKUP: &str =
+    "an assignment in front of the follow sets where the bound itself is looked up";
 /// The `loop_role` of a command that pauses.
 const WAIT: &str = "wait";
 
@@ -141,7 +155,20 @@ struct Site {
     at: usize,
     row: &'static Program,
     /// The text that replaces the follow in place, or why none can.
-    edit: Result<(Span, String), &'static str>,
+    edit: Result<(Span, String), NoCommand>,
+}
+
+/// Why a follow is not replaced in place, and the sentence's head when it names this follow's
+/// own bounded form (else the row's sentence).
+struct NoCommand {
+    why: &'static str,
+    head: Option<String>,
+}
+
+impl From<&'static str> for NoCommand {
+    fn from(why: &'static str) -> Self {
+        NoCommand { why, head: None }
+    }
 }
 
 /// Every follow finding's Fix (Ruling 148): the whole command with each follow replaced in place,
@@ -164,26 +191,30 @@ fn follow_fixes(command: &str, out: &mut [Finding], sites: &[Site]) {
     for (span, t) in &edits {
         text.replace_range(span.start..span.end, t);
     }
-    // Every finding gives the first reason, so each carries the same text.
-    let why = sites.iter().find_map(|s| s.edit.as_ref().err().copied());
+    // Every finding gives the first reason's sentence, so each carries the same text.
+    let why = sites
+        .iter()
+        .find_map(|s| s.edit.as_ref().err().map(|e| (s.row, e)));
+    let sentence = why.and_then(|(row, e)| follow_sentence(row, e));
     for s in sites {
         let Some(f) = out.get_mut(s.at) else { continue };
         f.fix = match why {
             None => Some(text.trim().to_string()),
-            Some(why) => follow_sentence(s.row, why),
+            Some(_) => sentence.clone(),
         };
     }
 }
 
-/// A follow row's sentence: its `follow_fix_sentence`, or one made from its `follow_fix`, with
-/// why no command is built.
-fn follow_sentence(row: &Program, why: &str) -> Option<String> {
+/// A follow's sentence: the head that names its bounded form, else its row's
+/// `follow_fix_sentence` or one made from its `follow_fix`, with why no command is built.
+fn follow_sentence(row: &Program, e: &NoCommand) -> Option<String> {
     let text = |k: &str| row.extra.get(k).and_then(|v| v.as_str());
-    let head = match text(FOLLOW_FIX_SENTENCE) {
-        Some(s) => s.to_string(),
-        None => format!("rewrite each follow as `{}` in place", text(FOLLOW_FIX)?),
+    let head = match (&e.head, text(FOLLOW_FIX_SENTENCE)) {
+        (Some(h), _) => h.clone(),
+        (None, Some(s)) => s.to_string(),
+        (None, None) => format!("rewrite each follow as `{}` in place", text(FOLLOW_FIX)?),
     };
-    Some(format!("{head} (no command is built: {why})"))
+    Some(format!("{head} (no command is built: {})", e.why))
 }
 
 /// What a walk looks for.
@@ -279,28 +310,34 @@ impl Walk<'_, '_> {
         for elem in &p.elems {
             match elem {
                 Elem::Cmd(c) => self.command(c, bounded),
-                Elem::Method(m) => m.args.iter().for_each(|w| self.word(w, bounded)),
-                Elem::Expr(w) => self.word(w, bounded),
+                Elem::Method(m) => m.args.iter().for_each(|w| self.word(w, bounded, bounded)),
+                Elem::Expr(w) => self.word(w, bounded, bounded),
             }
         }
     }
 
-    fn word(&mut self, w: &Word, bounded: bool) {
+    /// `expanded`: the bound on a substitution, which the shell runs while it expands the word;
+    /// `passed`: the bound on a script block, which the word passes to the command that runs it.
+    fn word(&mut self, w: &Word, expanded: bool, passed: bool) {
         for part in &w.parts {
-            if let WordPart::Subst(s) | WordPart::Block(s) = part {
-                self.script(s, bounded);
+            match part {
+                WordPart::Subst(s) => self.script(s, expanded),
+                WordPart::Block(s) => self.script(s, passed),
+                _ => {}
             }
         }
     }
 
     fn command(&mut self, c: &SimpleCommand, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
-        // A wrapper that bounds the wait (`timeout`) as the outermost command bounds what it runs.
-        let bounded =
-            bounded || programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS));
+        // A wrapper bounds what it runs: the wrapped command and the body it executes (a child
+        // shell's `-c` body, a script block). The calling shell expands the command's words
+        // first, its wrappers' options included, so a substitution in its name, arguments,
+        // redirects or assignments takes the bound of the command's context (`bounded`) only.
+        let runs = bounded || wrapper_bound(c, shell, os);
         // A job (`Start-Job { … }`) the command waits for with a timeout bounds its follow.
         // A script block first: the table is read only for a command that passes one.
-        let bounded = bounded
+        let runs = runs
             || (self.mode == Mode::Follow
                 && c.args
                     .iter()
@@ -308,21 +345,21 @@ impl Walk<'_, '_> {
                 && named_row(c, shell, os).is_some_and(|p| flag(p, FOLLOW_JOB))
                 && self.job_bound());
         for w in std::iter::once(&c.name).chain(&c.args) {
-            self.word(w, bounded);
+            self.word(w, bounded, runs);
         }
         for r in &c.redirects {
             match r {
-                Redirect::File { target, .. } => self.word(target, bounded),
-                Redirect::Heredoc { body, .. } => self.word(body, bounded),
+                Redirect::File { target, .. } => self.word(target, bounded, runs),
+                Redirect::Heredoc { body, .. } => self.word(body, bounded, runs),
             }
         }
         for (_, w) in &c.assigns {
-            self.word(w, bounded);
+            self.word(w, bounded, runs);
         }
         if self.depth < MAX_DEPTH {
             let inner = programs::strip_wrappers(c, shell, os);
             if let Some(body) = child_body(&inner, shell, os) {
-                self.child(&body, c.span, bounded);
+                self.child(&body, c.span, runs);
             }
         }
     }
@@ -376,8 +413,7 @@ impl Walk<'_, '_> {
             let Some(row) = follows(c, shell, os) else {
                 continue;
             };
-            // `timeout 60 tail -f log`: the wrapper of this very command bounds it.
-            if programs::lookup(&c.typed, shell, os).is_some_and(|w| flag(w, BOUNDS)) {
+            if wrapper_bound(c, shell, os) {
                 continue;
             }
             let span = self.outer.unwrap_or(c.span);
@@ -411,14 +447,14 @@ impl Walk<'_, '_> {
         p: &Pipeline,
         c: &SimpleCommand,
         row: &Program,
-    ) -> Result<(Span, String), &'static str> {
+    ) -> Result<(Span, String), NoCommand> {
         let template = row
             .extra
             .get(FOLLOW_FIX)
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         if self.outer.is_some() {
-            return Err(IN_CHILD);
+            return Err(IN_CHILD.into());
         }
         // A statement of the command, or the first stage of one whose later stage is a compound
         // command (`tail -f log | while read l; do …; done`), which the lowering makes a block.
@@ -436,11 +472,141 @@ impl Walk<'_, '_> {
             _ => false,
         });
         let Some(whole) = pipeline_extent(p).filter(|_| top) else {
-            return Err(NESTED);
+            return Err(NESTED.into());
         };
         if !template.contains(PIPELINE) {
-            let at = command_extent(c);
-            return Ok((at, template.replace(COMMAND, self.slice(at).trim())));
+            // The bound goes right before the command's name, after its assignments and leading
+            // redirects; around a wrapper only when the row says the bound runs that wrapper.
+            let (shell, os) = (self.shell, self.os);
+            let chain = programs::wrapper_chain(c, shell, os);
+            // A bound with no limit (`timeout 0 tail`, Ruling 155): the bound's duration goes in
+            // its place, so the bound is not doubled.
+            if let (Some(word), Some(duration)) = (
+                chain.iter().find_map(no_limit),
+                row.extra.get(FOLLOW_FIX_DURATION).and_then(|v| v.as_str()),
+            ) {
+                return Ok((word.span, duration.to_string()));
+            }
+            let inner = programs::strip_wrappers(c, shell, os);
+            let listed = strings(row, FOLLOW_FIX_WRAPPERS);
+            // Every wrapper of the chain, not only the first, must be listed (`nohup nice tail`).
+            let unlisted = std::iter::once(&c.name)
+                .chain(&c.args)
+                .filter(|w| w.span.start < inner.name.span.start)
+                .filter_map(literal)
+                .any(|n| {
+                    programs::lookup(&n, shell, os).is_some_and(|p| p.is(Kind::Wrapper))
+                        && !listed.contains(&n.as_str())
+                });
+            let under =
+                unlisted || (inner.name.span != c.name.span && !listed.contains(&c.typed.as_str()));
+            // A wrapper that runs only builtins fails in front of what is none (`builtin tail`,
+            // `builtin nohup tail`); in front of a builtin wrapper it runs (`builtin command tail`).
+            let builtins_only = (0..chain.len()).find(|&k| {
+                flag(chain[k].row, BUILTINS_ONLY)
+                    && chain
+                        .get(k + 1)
+                        .is_none_or(|next| !flag(next.row, SHELL_BUILTIN))
+            });
+            // An assignment in front (`PATH=/x tail`) applies to the bound too; an append
+            // (`PATH+=:/x`) keeps the old value first. The parser also holds one after a wrapper
+            // (`env PATH=/x tail`) as an assignment. Its word spans the whole `NAME=value`.
+            let lookup = strings(row, FOLLOW_FIX_LOOKUP_VARS);
+            let sets_lookup = c.assigns.iter().any(|(n, w)| {
+                w.span.start < c.name.span.start
+                    && lookup.contains(&n.as_str())
+                    && !self
+                        .slice(w.span)
+                        .get(n.len()..)
+                        .is_some_and(|t| t.starts_with("+="))
+            });
+            let end = command_extent(c).end;
+            // The bound goes on the name's own line: a line continuation before it stays.
+            let at = Span {
+                start: self.code_from(c.name.span.start),
+                end,
+            };
+            if !(under || builtins_only.is_some() || sets_lookup) {
+                return Ok((at, template.replace(COMMAND, self.slice(at).trim())));
+            }
+            // The sentence names this follow's bounded form: the bound right before the program,
+            // after the wrappers (without the one that fails); an assignment that sets the lookup
+            // moves behind the bound (`follow_fix_lookup`).
+            let word = |span: Span| {
+                self.slice(Span {
+                    start: self.code_from(span.start),
+                    end: span.end,
+                })
+                .trim()
+            };
+            let program = self
+                .slice(Span {
+                    start: self.code_from(inner.name.span.start),
+                    end,
+                })
+                .trim();
+            let mut wrappers = String::new();
+            for (k, w) in chain.iter().enumerate() {
+                let next = chain
+                    .get(k + 1)
+                    .map_or(inner.name.span.start, |n| n.name.start);
+                if builtins_only != Some(k) {
+                    wrappers.push_str(self.slice(Span {
+                        start: self.code_from(w.name.start),
+                        end: self.code_from(next),
+                    }));
+                }
+            }
+            // The text in front of the name: its assignments and leading redirects. The Bash
+            // lowering gives a command with a redirect the span of its name only (`2>&1 sudo
+            // tail`); the earliest of that span and its redirects' spans starts at the command's
+            // first word, assignments included (rows `fu-bash-fix-…-redirect-…`).
+            let front_start = c
+                .redirects
+                .iter()
+                .map(|r| match r {
+                    Redirect::File { span, .. } | Redirect::Heredoc { span, .. } => span.start,
+                })
+                .fold(c.span.start, usize::min);
+            let front = self.slice(Span {
+                start: front_start,
+                end: at.start,
+            });
+            let form = match row.extra.get(FOLLOW_FIX_LOOKUP).and_then(|v| v.as_str()) {
+                Some(moved) if sets_lookup => format!(
+                    "{wrappers}{}",
+                    moved.replace(COMMAND, &format!("{} {program}", trim_code(front)))
+                ),
+                _ => format!("{front}{wrappers}{}", template.replace(COMMAND, program)),
+            };
+            let bound = template.replace(COMMAND, "");
+            let bound = bound.trim();
+            let (why, head) = if let Some(k) = builtins_only {
+                let wrapper = word(chain[k].name);
+                let name = chain
+                    .get(k + 1)
+                    .map_or(inner.typed.as_str(), |n| word(n.name));
+                (
+                    UNDER_BUILTINS_ONLY,
+                    format!(
+                        "Bash has no `{name}` builtin, so `{wrapper} {name}` fails and follows nothing: drop `{wrapper}` and bound the program: `{form}`"
+                    ),
+                )
+            } else if sets_lookup {
+                (
+                    SETS_LOOKUP,
+                    format!("put `{bound}` in front and set the assignments after it: `{form}`"),
+                )
+            } else {
+                (
+                    UNDER_WRAPPER,
+                    format!("put `{bound}` after the wrappers, right before the program: `{form}`"),
+                )
+            };
+            return Err(NoCommand {
+                why,
+                head: Some(head),
+            });
         }
         let (before, after) = (
             self.src.get(..whole.start).unwrap_or_default(),
@@ -451,21 +617,21 @@ impl Walk<'_, '_> {
         let alone = (before_ends.is_empty() || before_ends.ends_with([';', '\n', '\r']))
             && (after_starts.is_empty() || after_starts.starts_with([';', '\n', '\r']));
         if !alone {
-            return Err(IN_STATEMENT);
+            return Err(IN_STATEMENT.into());
         }
         // A job sees none of the caller's variables: they go in through `$using:` (Ruling 143),
         // each one the command sets before the follow or not at all (Ruling 148).
         let mut pipeline = self.slice(whole).trim().to_string();
         if row.extra.contains_key(FOLLOW_FIX_LOCALS) {
             let Some((text, names)) = pass_variables(&pipeline, row) else {
-                return Err(SETS_VARIABLE);
+                return Err(SETS_VARIABLE.into());
             };
             let sets = strings(row, FOLLOW_FIX_SETS);
             if names
                 .iter()
                 .any(|n| assigned_in(after, n, &sets) && !assigned_in(before, n, &sets))
             {
-                return Err(SET_LATER);
+                return Err(SET_LATER.into());
             }
             pipeline = text;
         }
@@ -631,6 +797,25 @@ impl Walk<'_, '_> {
     /// The source text of `span`, empty when it does not lie in the text.
     fn slice(&self, span: Span) -> &str {
         self.src.get(span.start..span.end).unwrap_or("")
+    }
+
+    /// The first place at or after `pos` that is no blank, line end or Bash line continuation (a
+    /// word's span may start at the line end a continuation leaves).
+    fn code_from(&self, pos: usize) -> usize {
+        let mut at = pos;
+        loop {
+            let t = self.src.get(at..).unwrap_or("");
+            let t = t.trim_start_matches([' ', '\t', '\n', '\r']);
+            let t = t
+                .strip_prefix("\\\n")
+                .or_else(|| t.strip_prefix("\\\r\n"))
+                .unwrap_or(t);
+            let next = self.src.len() - t.len();
+            if next <= at {
+                return at;
+            }
+            at = next;
+        }
     }
 
     /// The text from the first to the last of `stmts`.
@@ -988,6 +1173,38 @@ impl Walk<'_, '_> {
     }
 }
 
+/// The duration word of a wrapper that bounds the wait when it sets no limit (Ruling 155): GNU
+/// timeout reads `0` in any spelling (`00`, `0s`, `0.0`), `inf` and `infinity` as none. A
+/// duration the guard cannot read, or that is no number, is taken as a limit.
+fn no_limit(w: &programs::Wrapped) -> Option<&Word> {
+    if !flag(w.row, BOUNDS) {
+        return None;
+    }
+    let word = w.operands.first()?;
+    let text = literal(word)?;
+    let suffixes = strings(w.row, DURATION_SUFFIXES);
+    let number = suffixes
+        .iter()
+        .find_map(|s| text.strip_suffix(s))
+        .unwrap_or(&text);
+    let value: f64 = number.parse().ok()?;
+    (value == 0.0 || value.is_infinite()).then_some(word)
+}
+
+/// The wrapper bounds the wait: a `bounds_wait` row with a duration that sets a limit.
+fn limits(w: &programs::Wrapped) -> bool {
+    flag(w.row, BOUNDS) && no_limit(w).is_none()
+}
+
+/// A wrapper of `c`, at any place in its chain, bounds what `c` runs, a follow and a wait loop
+/// alike: `timeout 60 tail -f log`, `nohup timeout 60 tail -f log`,
+/// `sudo timeout 60 bash -c '<loop>'`, `timeout 0 timeout 600 bash -c '<loop>'`. A chain whose
+/// every `timeout` sets no limit (`timeout 0 bash -c '<loop>'`) bounds nothing. It bounds no
+/// substitution in the words of `c` (`Walk::command`).
+fn wrapper_bound(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
+    programs::wrapper_chain(c, shell, os).iter().any(limits)
+}
+
 fn flag(p: &Program, key: &str) -> bool {
     p.extra.get(key).and_then(|v| v.as_bool()) == Some(true)
 }
@@ -1302,6 +1519,22 @@ fn assigns(before: &str, after: &str, sets: &[&str]) -> bool {
         })
     });
     set || step || each
+}
+
+/// Bash text without the blanks and line continuations around it.
+fn trim_code(s: &str) -> &str {
+    let mut t = s.trim_start();
+    loop {
+        let u = t.trim_end_matches([' ', '\t']);
+        let u = u
+            .strip_suffix("\\\n")
+            .or_else(|| u.strip_suffix("\\\r\n"))
+            .unwrap_or(u);
+        if u.len() == t.len() {
+            return t;
+        }
+        t = u;
+    }
 }
 
 /// The extent of a command's text: its name, words and redirect targets (the Bash lowering gives

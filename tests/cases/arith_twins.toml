@@ -1,0 +1,1300 @@
+# Twin rows (Ruling 161): a command substitution inside arithmetic reads like the same
+# substitution outside it, and a name arithmetic reads like the same name read as text. Each row's
+# `command` holds the substitution or the name in one arithmetic context of the Bash parser
+# (`$(( ))`, `(( ))`, `let`, `[[ -eq ]]`, a `${a[i]}` subscript, `${s:o:l}`, `${!x}`, a
+# `declare -i` name, `for (( ; ; ))`); `twin` holds the same command or read outside arithmetic.
+# `level` and `rules` are the twin's verdict. `tests/delete.rs` runs both texts against its fixture
+# (cwd FX_REPO, where `rm -rf build` reads ok), and asserts the two give the same rule ids. The
+# inner commands: a known command, an unknown tool, a relative delete, a delete of a system folder
+# (still judged inside arithmetic), `date +%s`; a name set by `read`; a positional parameter.
+
+[[row]]
+id = "twin-dollar-git-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( $(git rev-list --count HEAD) )); rm -rf build"
+twin = "echo $(git rev-list --count HEAD); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-tool-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( $(mytool) )); rm -rf build"
+twin = "echo $(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-rm-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( $(rm -rf x) )); rm -rf build"
+twin = "echo $(rm -rf x); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-etc-bash"
+os = "windows"
+shell = "bash"
+command = "echo $(( $(rm -rf /etc) ))"
+twin = "echo $(rm -rf /etc)"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-dollar-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "echo $(( $(rm -rf /etc) ))"
+twin = "echo $(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-cmd-git-bash"
+os = "any"
+shell = "bash"
+command = "(( $(git rev-list --count HEAD) > 0 )); rm -rf build"
+twin = "[[ $(git rev-list --count HEAD) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-tool-bash"
+os = "any"
+shell = "bash"
+command = "(( $(mytool) > 0 )); rm -rf build"
+twin = "[[ $(mytool) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-rm-bash"
+os = "any"
+shell = "bash"
+command = "(( $(rm -rf x) > 0 )); rm -rf build"
+twin = "[[ $(rm -rf x) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-etc-bash"
+os = "windows"
+shell = "bash"
+command = "(( $(rm -rf /etc) > 0 ))"
+twin = "[[ $(rm -rf /etc) == 0 ]]"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-cmd-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "(( $(rm -rf /etc) > 0 ))"
+twin = "[[ $(rm -rf /etc) == 0 ]]"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-let-git-bash"
+os = "any"
+shell = "bash"
+command = "let \"n = $(git rev-list --count HEAD)\"; rm -rf build"
+twin = "n=\"$(git rev-list --count HEAD)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-let-tool-bash"
+os = "any"
+shell = "bash"
+command = "let \"n = $(mytool)\"; rm -rf build"
+twin = "n=\"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-let-rm-bash"
+os = "any"
+shell = "bash"
+command = "let \"n = $(rm -rf x)\"; rm -rf build"
+twin = "n=\"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-let-etc-bash"
+os = "windows"
+shell = "bash"
+command = "let \"n = $(rm -rf /etc)\""
+twin = "n=\"$(rm -rf /etc)\""
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-let-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "let \"n = $(rm -rf /etc)\""
+twin = "n=\"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-test-git-bash"
+os = "any"
+shell = "bash"
+command = "[[ $(git rev-list --count HEAD) -eq 0 ]]; rm -rf build"
+twin = "[[ $(git rev-list --count HEAD) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-test-tool-bash"
+os = "any"
+shell = "bash"
+command = "[[ $(mytool) -eq 0 ]]; rm -rf build"
+twin = "[[ $(mytool) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-test-rm-bash"
+os = "any"
+shell = "bash"
+command = "[[ $(rm -rf x) -eq 0 ]]; rm -rf build"
+twin = "[[ $(rm -rf x) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-test-etc-bash"
+os = "windows"
+shell = "bash"
+command = "[[ $(rm -rf /etc) -eq 0 ]]"
+twin = "[[ $(rm -rf /etc) == 0 ]]"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-test-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "[[ $(rm -rf /etc) -eq 0 ]]"
+twin = "[[ $(rm -rf /etc) == 0 ]]"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-subscript-git-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${a[$(git rev-list --count HEAD)]}\"; rm -rf build"
+twin = "echo \"$(git rev-list --count HEAD)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-subscript-tool-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${a[$(mytool)]}\"; rm -rf build"
+twin = "echo \"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-subscript-rm-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${a[$(rm -rf x)]}\"; rm -rf build"
+twin = "echo \"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-subscript-etc-bash"
+os = "windows"
+shell = "bash"
+command = "echo \"${a[$(rm -rf /etc)]}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-subscript-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "echo \"${a[$(rm -rf /etc)]}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-substring-git-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${s:$(git rev-list --count HEAD):1}\"; rm -rf build"
+twin = "echo \"$(git rev-list --count HEAD)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-substring-tool-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${s:$(mytool):1}\"; rm -rf build"
+twin = "echo \"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-substring-rm-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${s:$(rm -rf x):1}\"; rm -rf build"
+twin = "echo \"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-substring-etc-bash"
+os = "windows"
+shell = "bash"
+command = "echo \"${s:$(rm -rf /etc):1}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-substring-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "echo \"${s:$(rm -rf /etc):1}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-indirect-git-bash"
+os = "any"
+shell = "bash"
+command = "x=$(git rev-list --count HEAD); echo \"${!x}\"; rm -rf build"
+twin = "x=$(git rev-list --count HEAD); echo \"$x\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-indirect-tool-bash"
+os = "any"
+shell = "bash"
+command = "x=$(mytool); echo \"${!x}\"; rm -rf build"
+twin = "x=$(mytool); echo \"$x\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-indirect-rm-bash"
+os = "any"
+shell = "bash"
+command = "x=$(rm -rf x); echo \"${!x}\"; rm -rf build"
+twin = "x=$(rm -rf x); echo \"$x\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-indirect-etc-bash"
+os = "windows"
+shell = "bash"
+command = "x=$(rm -rf /etc); echo \"${!x}\""
+twin = "x=$(rm -rf /etc); echo \"$x\""
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-indirect-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "x=$(rm -rf /etc); echo \"${!x}\""
+twin = "x=$(rm -rf /etc); echo \"$x\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-declare-git-bash"
+os = "any"
+shell = "bash"
+command = "declare -i n; n=$(git rev-list --count HEAD); rm -rf build"
+twin = "declare n; n=$(git rev-list --count HEAD); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-declare-tool-bash"
+os = "any"
+shell = "bash"
+command = "declare -i n; n=$(mytool); rm -rf build"
+twin = "declare n; n=$(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-declare-rm-bash"
+os = "any"
+shell = "bash"
+command = "declare -i n; n=$(rm -rf x); rm -rf build"
+twin = "declare n; n=$(rm -rf x); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-declare-etc-bash"
+os = "windows"
+shell = "bash"
+command = "declare -i n; n=$(rm -rf /etc)"
+twin = "declare n; n=$(rm -rf /etc)"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-declare-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "declare -i n; n=$(rm -rf /etc)"
+twin = "declare n; n=$(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-for-git-bash"
+os = "any"
+shell = "bash"
+command = "for (( i = $(git rev-list --count HEAD); i < 3; i++ )); do :; done; rm -rf build"
+twin = "for i in $(git rev-list --count HEAD); do :; done; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-for-tool-bash"
+os = "any"
+shell = "bash"
+command = "for (( i = $(mytool); i < 3; i++ )); do :; done; rm -rf build"
+twin = "for i in $(mytool); do :; done; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-for-rm-bash"
+os = "any"
+shell = "bash"
+command = "for (( i = $(rm -rf x); i < 3; i++ )); do :; done; rm -rf build"
+twin = "for i in $(rm -rf x); do :; done; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-for-etc-bash"
+os = "windows"
+shell = "bash"
+command = "for (( i = $(rm -rf /etc); i < 3; i++ )); do :; done"
+twin = "for i in $(rm -rf /etc); do :; done"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-for-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "for (( i = $(rm -rf /etc); i < 3; i++ )); do :; done"
+twin = "for i in $(rm -rf /etc); do :; done"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-dollar-date-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( $(date +%s) )); rm -rf build"
+twin = "echo $(date +%s); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-date-bash"
+os = "any"
+shell = "bash"
+command = "(( $(date +%s) > 0 )); rm -rf build"
+twin = "[[ $(date +%s) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; echo $(( n + 1 )); rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-cmd-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; (( n > 0 )); rm -rf build"
+twin = "read n; [[ $n == 0 ]]; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-let-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; let \"m = n\"; rm -rf build"
+twin = "read n; m=\"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-test-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; [[ n -eq 0 ]]; rm -rf build"
+twin = "read n; [[ $n == 0 ]]; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-subscript-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; echo \"${a[n]}\"; rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-substring-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; echo \"${s:n:1}\"; rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-indirect-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; echo \"${!n}\"; rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-declare-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; declare -i m; m=$n; rm -rf build"
+twin = "read n; declare m; m=$n; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-for-read-bash"
+os = "any"
+shell = "bash"
+command = "read n; for (( i = 0; i < n; i++ )); do :; done; rm -rf build"
+twin = "read n; for i in $n; do :; done; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-dollar-positional-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( $1 )); rm -rf build"
+twin = "echo \"$1\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-positional-bash"
+os = "any"
+shell = "bash"
+command = "n=$1; (( n > 0 )); rm -rf build"
+twin = "n=$1; [[ $n == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( $(git rev-list --count HEAD) )); rm -rf build"
+twin = "echo $(git rev-list --count HEAD); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( $(mytool) )); rm -rf build"
+twin = "echo $(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( $(rm -rf x) )); rm -rf build"
+twin = "echo $(rm -rf x); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( $(rm -rf /etc) ))"
+twin = "echo $(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-cmd-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( $(git rev-list --count HEAD) > 0 )); rm -rf build"
+twin = "[[ $(git rev-list --count HEAD) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( $(mytool) > 0 )); rm -rf build"
+twin = "[[ $(mytool) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( $(rm -rf x) > 0 )); rm -rf build"
+twin = "[[ $(rm -rf x) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( $(rm -rf /etc) > 0 ))"
+twin = "[[ $(rm -rf /etc) == 0 ]]"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-let-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "let \"n = $(git rev-list --count HEAD)\"; rm -rf build"
+twin = "n=\"$(git rev-list --count HEAD)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-let-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "let \"n = $(mytool)\"; rm -rf build"
+twin = "n=\"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-let-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "let \"n = $(rm -rf x)\"; rm -rf build"
+twin = "n=\"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-let-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "let \"n = $(rm -rf /etc)\""
+twin = "n=\"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-test-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "[[ $(git rev-list --count HEAD) -eq 0 ]]; rm -rf build"
+twin = "[[ $(git rev-list --count HEAD) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-test-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "[[ $(mytool) -eq 0 ]]; rm -rf build"
+twin = "[[ $(mytool) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-test-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "[[ $(rm -rf x) -eq 0 ]]; rm -rf build"
+twin = "[[ $(rm -rf x) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-test-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "[[ $(rm -rf /etc) -eq 0 ]]"
+twin = "[[ $(rm -rf /etc) == 0 ]]"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-subscript-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${a[$(git rev-list --count HEAD)]}\"; rm -rf build"
+twin = "echo \"$(git rev-list --count HEAD)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-subscript-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${a[$(mytool)]}\"; rm -rf build"
+twin = "echo \"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-subscript-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${a[$(rm -rf x)]}\"; rm -rf build"
+twin = "echo \"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-subscript-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${a[$(rm -rf /etc)]}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-substring-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${s:$(git rev-list --count HEAD):1}\"; rm -rf build"
+twin = "echo \"$(git rev-list --count HEAD)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-substring-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${s:$(mytool):1}\"; rm -rf build"
+twin = "echo \"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-substring-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${s:$(rm -rf x):1}\"; rm -rf build"
+twin = "echo \"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-substring-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${s:$(rm -rf /etc):1}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-indirect-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "x=$(git rev-list --count HEAD); echo \"${!x}\"; rm -rf build"
+twin = "x=$(git rev-list --count HEAD); echo \"$x\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-indirect-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "x=$(mytool); echo \"${!x}\"; rm -rf build"
+twin = "x=$(mytool); echo \"$x\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-indirect-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "x=$(rm -rf x); echo \"${!x}\"; rm -rf build"
+twin = "x=$(rm -rf x); echo \"$x\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-indirect-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "x=$(rm -rf /etc); echo \"${!x}\""
+twin = "x=$(rm -rf /etc); echo \"$x\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-declare-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "declare -i n; n=$(git rev-list --count HEAD); rm -rf build"
+twin = "declare n; n=$(git rev-list --count HEAD); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-declare-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "declare -i n; n=$(mytool); rm -rf build"
+twin = "declare n; n=$(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-declare-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "declare -i n; n=$(rm -rf x); rm -rf build"
+twin = "declare n; n=$(rm -rf x); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-declare-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "declare -i n; n=$(rm -rf /etc)"
+twin = "declare n; n=$(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-for-git-gb"
+os = "windows"
+shell = "gitbash"
+command = "for (( i = $(git rev-list --count HEAD); i < 3; i++ )); do :; done; rm -rf build"
+twin = "for i in $(git rev-list --count HEAD); do :; done; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-for-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "for (( i = $(mytool); i < 3; i++ )); do :; done; rm -rf build"
+twin = "for i in $(mytool); do :; done; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-for-rm-gb"
+os = "windows"
+shell = "gitbash"
+command = "for (( i = $(rm -rf x); i < 3; i++ )); do :; done; rm -rf build"
+twin = "for i in $(rm -rf x); do :; done; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-for-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "for (( i = $(rm -rf /etc); i < 3; i++ )); do :; done"
+twin = "for i in $(rm -rf /etc); do :; done"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-dollar-date-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( $(date +%s) )); rm -rf build"
+twin = "echo $(date +%s); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-date-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( $(date +%s) > 0 )); rm -rf build"
+twin = "[[ $(date +%s) == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; echo $(( n + 1 )); rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-cmd-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; (( n > 0 )); rm -rf build"
+twin = "read n; [[ $n == 0 ]]; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-let-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; let \"m = n\"; rm -rf build"
+twin = "read n; m=\"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-test-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; [[ n -eq 0 ]]; rm -rf build"
+twin = "read n; [[ $n == 0 ]]; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-subscript-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; echo \"${a[n]}\"; rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-substring-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; echo \"${s:n:1}\"; rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-indirect-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; echo \"${!n}\"; rm -rf build"
+twin = "read n; echo \"$n\"; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-declare-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; declare -i m; m=$n; rm -rf build"
+twin = "read n; declare m; m=$n; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-for-read-gb"
+os = "windows"
+shell = "gitbash"
+command = "read n; for (( i = 0; i < n; i++ )); do :; done; rm -rf build"
+twin = "read n; for i in $n; do :; done; rm -rf build"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "twin-dollar-positional-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( $1 )); rm -rf build"
+twin = "echo \"$1\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-positional-gb"
+os = "windows"
+shell = "gitbash"
+command = "n=$1; (( n > 0 )); rm -rf build"
+twin = "n=$1; [[ $n == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+
+# More contexts: `$[ ]`, an array assignment's subscript (`a[$(…)]=1`, `a=([$(…)]=1)`), a
+# backtick substitution in `$(( ))` and `(( ))`, a `${#a[…]}` subscript.
+
+[[row]]
+id = "twin-bracket-tool-bash"
+os = "any"
+shell = "bash"
+command = "echo $[ $(mytool) ]; rm -rf build"
+twin = "echo $(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-bracket-rm-bash"
+os = "any"
+shell = "bash"
+command = "echo $[ $(rm -rf x) ]; rm -rf build"
+twin = "echo $(rm -rf x); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-bracket-etc-bash"
+os = "windows"
+shell = "bash"
+command = "echo $[ $(rm -rf /etc) ]"
+twin = "echo $(rm -rf /etc)"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-bracket-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "echo $[ $(rm -rf /etc) ]"
+twin = "echo $(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-bracket-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $[ $(mytool) ]; rm -rf build"
+twin = "echo $(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-bracket-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $[ $(rm -rf /etc) ]"
+twin = "echo $(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-assign-subscript-tool-bash"
+os = "any"
+shell = "bash"
+command = "a[$(mytool)]=1; rm -rf build"
+twin = "a=$(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-assign-subscript-rm-bash"
+os = "any"
+shell = "bash"
+command = "a[$(rm -rf x)]=1; rm -rf build"
+twin = "a=$(rm -rf x); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-assign-subscript-etc-bash"
+os = "windows"
+shell = "bash"
+command = "a[$(rm -rf /etc)]=1"
+twin = "a=$(rm -rf /etc)"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-assign-subscript-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "a[$(rm -rf /etc)]=1"
+twin = "a=$(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-assign-subscript-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "a[$(mytool)]=1; rm -rf build"
+twin = "a=$(mytool); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-assign-subscript-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "a[$(rm -rf /etc)]=1"
+twin = "a=$(rm -rf /etc)"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-compound-subscript-tool-bash"
+os = "any"
+shell = "bash"
+command = "a=([$(mytool)]=1); rm -rf build"
+twin = "a=($(mytool)); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-compound-subscript-rm-bash"
+os = "any"
+shell = "bash"
+command = "a=([$(rm -rf x)]=1); rm -rf build"
+twin = "a=($(rm -rf x)); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-compound-subscript-etc-bash"
+os = "windows"
+shell = "bash"
+command = "a=([$(rm -rf /etc)]=1)"
+twin = "a=($(rm -rf /etc))"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-compound-subscript-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "a=([$(rm -rf /etc)]=1)"
+twin = "a=($(rm -rf /etc))"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-compound-subscript-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "a=([$(mytool)]=1); rm -rf build"
+twin = "a=($(mytool)); rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-compound-subscript-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "a=([$(rm -rf /etc)]=1)"
+twin = "a=($(rm -rf /etc))"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-dollar-backtick-tool-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( `mytool` )); rm -rf build"
+twin = "echo `mytool`; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-backtick-rm-bash"
+os = "any"
+shell = "bash"
+command = "echo $(( `rm -rf x` )); rm -rf build"
+twin = "echo `rm -rf x`; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-backtick-etc-bash"
+os = "windows"
+shell = "bash"
+command = "echo $(( `rm -rf /etc` ))"
+twin = "echo `rm -rf /etc`"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-dollar-backtick-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "echo $(( `rm -rf /etc` ))"
+twin = "echo `rm -rf /etc`"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-dollar-backtick-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( `mytool` )); rm -rf build"
+twin = "echo `mytool`; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-dollar-backtick-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo $(( `rm -rf /etc` ))"
+twin = "echo `rm -rf /etc`"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-cmd-backtick-tool-bash"
+os = "any"
+shell = "bash"
+command = "(( `mytool` > 0 )); rm -rf build"
+twin = "[[ `mytool` == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-backtick-rm-bash"
+os = "any"
+shell = "bash"
+command = "(( `rm -rf x` > 0 )); rm -rf build"
+twin = "[[ `rm -rf x` == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-backtick-etc-bash"
+os = "windows"
+shell = "bash"
+command = "(( `rm -rf /etc` > 0 ))"
+twin = "[[ `rm -rf /etc` == 0 ]]"
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-cmd-backtick-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "(( `rm -rf /etc` > 0 ))"
+twin = "[[ `rm -rf /etc` == 0 ]]"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-cmd-backtick-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( `mytool` > 0 )); rm -rf build"
+twin = "[[ `mytool` == 0 ]]; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-cmd-backtick-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "(( `rm -rf /etc` > 0 ))"
+twin = "[[ `rm -rf /etc` == 0 ]]"
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-length-subscript-tool-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${#a[$(mytool)]}\"; rm -rf build"
+twin = "echo \"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-length-subscript-rm-bash"
+os = "any"
+shell = "bash"
+command = "echo \"${#a[$(rm -rf x)]}\"; rm -rf build"
+twin = "echo \"$(rm -rf x)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-length-subscript-etc-bash"
+os = "windows"
+shell = "bash"
+command = "echo \"${#a[$(rm -rf /etc)]}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "warn"
+rules = ["delete-unknown-location"]
+
+[[row]]
+id = "twin-length-subscript-etc-bash-posix"
+os = "posix"
+shell = "bash"
+command = "echo \"${#a[$(rm -rf /etc)]}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]
+
+[[row]]
+id = "twin-length-subscript-tool-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${#a[$(mytool)]}\"; rm -rf build"
+twin = "echo \"$(mytool)\"; rm -rf build"
+level = "ok"
+rules = []
+
+[[row]]
+id = "twin-length-subscript-etc-gb"
+os = "windows"
+shell = "gitbash"
+command = "echo \"${#a[$(rm -rf /etc)]}\""
+twin = "echo \"$(rm -rf /etc)\""
+level = "critical"
+rules = ["delete-critical"]

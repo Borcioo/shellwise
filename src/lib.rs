@@ -215,6 +215,7 @@ fn length_stage(
             cfg,
             fs: &fs,
             deadline,
+            memo: Default::default(),
         };
         let mut out = Vec::new();
         for rule in rules::length_rules() {
@@ -404,6 +405,7 @@ fn run_rules(
         cfg,
         fs: &fs,
         deadline,
+        memo: Default::default(),
     };
     let mut findings = Vec::new();
     for rule in rules::all() {
@@ -691,8 +693,8 @@ mod tests {
 
     #[test]
     fn incomplete_quotes_only_a_short_one_line_hit() {
-        // A hit may be an unreadable region or the whole text (a spent budget): it is not quoted
-        // when long or multi-line, so the reason stays one short line.
+        // A hit may span a long or multi-line command (a nested body): it is not quoted then, so
+        // the reason stays one short line.
         let long = format!("{} #", "env -S ".repeat(100));
         let all = |c: &str| {
             Some(Span {
@@ -900,6 +902,8 @@ mod tests {
                 "ls; rm x",
                 "git status && rm -rf x",
                 "Remove-Item -Recurse x",
+                // delete text fed into a shell behind a wrapper
+                "sudo -u root printf 'rm -rf x' | bash",
             ],
         );
         assert!(wrong.is_empty(), "not danger: {wrong:?}");

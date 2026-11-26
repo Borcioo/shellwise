@@ -1,8 +1,12 @@
 //! Rules run over the IR of one command.
 
+use std::cell::OnceCell;
+
 use crate::config::Config;
 use crate::fs::SharedFs;
-use crate::ir::Script;
+use crate::fs::assigned::Assigned;
+use crate::fs::resolve::{self, Alias, Location};
+use crate::ir::{EnvView, Script};
 use crate::level::Finding;
 use crate::parse::ParseError;
 use crate::{CheckInput, Deadline, Origin};
@@ -31,6 +35,33 @@ pub struct Ctx<'a> {
     /// Shared so a bounded call can hand it to a worker thread that may outlive the check.
     pub fs: &'a SharedFs,
     pub deadline: &'a Deadline,
+    /// What the delete and git rules both read of `input` and `script`; empty in a new `Ctx`.
+    pub memo: Memo,
+}
+
+/// Values a rule computes from its `Ctx`'s input and script alone, kept for the next rule on the
+/// same `Ctx`. Nothing in them reads the file system or the deadline.
+#[derive(Default)]
+pub struct Memo {
+    /// The environment with the command's assignments marked, and the names with several values
+    /// (`delete::Scene::new`).
+    pub(crate) assigned: OnceCell<(EnvView, Vec<Assigned>)>,
+    /// The location before the first statement, the script and text read, no disk in use
+    /// (`delete::Scene::location`).
+    pub(crate) location: OnceCell<Location>,
+    /// `script_aliases` of the script in its shell's dialect (`Ctx::aliases`).
+    pub(crate) aliases: OnceCell<Vec<Alias>>,
+}
+
+impl Ctx<'_> {
+    /// The aliases this Ctx's script defines, read in the dialect of `input.shell`
+    /// (`resolve::script_aliases`), built on the first call. A `Memo` belongs to one `Ctx`, so
+    /// the table is keyed by its script and shell.
+    pub(crate) fn aliases(&self) -> &[Alias] {
+        self.memo
+            .aliases
+            .get_or_init(|| resolve::script_aliases(self.script, delete::is_pwsh(self.input.shell)))
+    }
 }
 
 /// Which texts a rule checks.

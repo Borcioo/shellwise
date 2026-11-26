@@ -447,11 +447,71 @@ fn cwd(row: &Row) -> Option<PathBuf> {
     }
 }
 
+/// `command` with each `GEN_<kind>_<n>` written out as the statements `tests/cases/delete.toml`
+/// describes before its alias cap and bound rows, joined by `; `.
+fn generated(command: &str) -> String {
+    let mut out = command.to_string();
+    while let Some(at) = out.find("GEN_") {
+        let rest = &out[at + 4..];
+        // `<KIND>_<n>`: the kind is upper case and `_`, the count follows its last `_`.
+        let head: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase() || *c == '_')
+            .collect();
+        let kind = head
+            .strip_suffix('_')
+            .unwrap_or_else(|| panic!("{command}: GEN_ without a kind"))
+            .to_string();
+        let digits: String = rest[head.len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let n: usize = digits
+            .parse()
+            .unwrap_or_else(|_| panic!("{command}: GEN_{kind} without a count"));
+        let digits_at = head.len();
+        let statements: Vec<String> = match kind.as_str() {
+            "CHAIN" => (0..n)
+                .map(|i| {
+                    let value = if i + 1 == n {
+                        "Remove-Item".to_string()
+                    } else {
+                        format!("a{:03}", i + 1)
+                    };
+                    format!("Set-Alias a{i:03} {value}")
+                })
+                .collect(),
+            "REDEFINE" => (0..n)
+                .map(|i| {
+                    if i + 1 == n {
+                        "Set-Alias zz Remove-Item".to_string()
+                    } else {
+                        format!("Set-Alias zz Get-A{i:03}")
+                    }
+                })
+                .collect(),
+            "DISTINCT" => (0..n)
+                .map(|i| format!("Set-Alias a{i:03} Remove-Item"))
+                .collect(),
+            "CALLS" => (0..n)
+                .map(|i| format!("zz FX_REPO\\build\\x{i:03} -Recurse -Force"))
+                .collect(),
+            "DEFINER_CALLS" => (0..n)
+                .map(|i| format!("sa b{i:03} Get-ChildItem"))
+                .collect(),
+            k => panic!("{command}: unknown GEN_ kind {k}"),
+        };
+        let token_len = 4 + digits_at + digits.len();
+        out.replace_range(at..at + token_len, &statements.join("; "));
+    }
+    out
+}
+
 fn verdict(row: &Row) -> Verdict {
     let fx = fixture();
     let shell = row.shell();
     let os = Os::host();
-    let command = fx.substitute(&row.command, row.is_bash());
+    let command = fx.substitute(&generated(&row.command), row.is_bash());
     let home = fx.at("home").to_string_lossy().into_owned();
     let temp = fx.at("allowed").to_string_lossy().into_owned();
     let env = env_view(
@@ -513,6 +573,22 @@ fn run_file(name: &str) {
 }
 
 #[test]
+fn generated_statements_are_the_ones_the_header_describes() {
+    assert_eq!(
+        generated("GEN_CHAIN_3; a000 x"),
+        "Set-Alias a000 a001; Set-Alias a001 a002; Set-Alias a002 Remove-Item; a000 x"
+    );
+    assert_eq!(
+        generated("GEN_REDEFINE_2; GEN_DISTINCT_1"),
+        "Set-Alias zz Get-A000; Set-Alias zz Remove-Item; Set-Alias a000 Remove-Item"
+    );
+    assert_eq!(
+        generated("GEN_CALLS_1; GEN_DEFINER_CALLS_1"),
+        "zz FX_REPO\\build\\x000 -Recurse -Force; sa b000 Get-ChildItem"
+    );
+}
+
+#[test]
 fn delete_rows() {
     run_file("delete.toml");
 }
@@ -520,6 +596,45 @@ fn delete_rows() {
 #[test]
 fn git_rows() {
     run_file("git.toml");
+}
+
+#[test]
+fn arith_twin_rows() {
+    run_file("arith_twins.toml");
+}
+
+/// Ruling 161: arithmetic around a substitution or a name changes no verdict. Each row's command
+/// gives the rule ids of its plain twin, in the same fixture cwd.
+#[test]
+fn arithmetic_reads_like_its_plain_twin() {
+    let _fx = fixture();
+    let rows = case_loader::rows("arith_twins.toml");
+    let ids =
+        |row: &Row| -> Vec<&'static str> { verdict(row).findings.iter().map(|f| f.rule).collect() };
+    let mut wrong = Vec::new();
+    for row in &rows {
+        let twin = row
+            .twin
+            .clone()
+            .unwrap_or_else(|| panic!("{}: no twin", row.id));
+        let plain = Row {
+            command: twin,
+            twin: None,
+            ..row.clone()
+        };
+        let (got, want) = (ids(row), ids(&plain));
+        if got != want {
+            wrong.push(format!("{}: {got:?} (its twin {want:?})", row.id));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} rows differ from their twin:\n{}",
+        wrong.len(),
+        rows.len(),
+        wrong.join("\n")
+    );
+    eprintln!("arith_twins.toml: {} twins read alike", rows.len());
 }
 
 /// Rows ported from the baseline guard's tests/test_rules.py, per rule, as git.toml's header records

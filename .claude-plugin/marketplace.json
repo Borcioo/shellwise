@@ -1,0 +1,15 @@
+{
+  "name": "shellwise",
+  "description": "shellwise: a command guard and lint for the shell commands AI coding agents write",
+  "owner": {
+    "name": "shellwise contributors",
+    "url": "https://github.com/Borcioo/shellwise"
+  },
+  "plugins": [
+    {
+      "name": "shellwise",
+      "source": "./plugins/shellwise",
+      "description": "Checks every Bash and PowerShell command before it runs, with the shellwise binary on PATH"
+    }
+  ]
+}

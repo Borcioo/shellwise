@@ -1,0 +1,13 @@
+{
+  "name": "shellwise",
+  "version": "0.2.0",
+  "description": "Checks every Bash and PowerShell command before it runs, with the shellwise binary on PATH",
+  "author": {
+    "name": "shellwise contributors",
+    "url": "https://github.com/Borcioo/shellwise"
+  },
+  "homepage": "https://github.com/Borcioo/shellwise",
+  "repository": "https://github.com/Borcioo/shellwise",
+  "license": "GPL-3.0-or-later",
+  "keywords": ["shell", "bash", "powershell", "guard", "lint"]
+}

@@ -46,7 +46,7 @@ pub fn parse(src: &str, dialect: Shell, os: Os) -> Result<Script, ParseError> {
     {
         return Ok(Script::default());
     }
-    let out = parse_lossy(src, dialect, os);
+    let out = on_parse_thread(src, dialect, os, false);
     if let Some(e) = out.tree_error {
         return Err(e);
     }
@@ -73,6 +73,12 @@ pub struct Lossy {
 /// basis for a verdict: `parse` refuses every input where this reports an error.
 #[doc(hidden)]
 pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
+    on_parse_thread(src, dialect, os, true)
+}
+
+/// `parse_lossy` on the big-stack thread; `tree_commands` is counted only when `count` asks for
+/// it (`parse` reads no count).
+fn on_parse_thread(src: &str, dialect: Shell, os: Os, count: bool) -> Lossy {
     let whole = Span {
         start: 0,
         end: src.len(),
@@ -93,7 +99,7 @@ pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
             if crate::rules::testhooks::active("parse-panic") {
                 panic!("testhook: panic in the PowerShell parser");
             }
-            lossy_on_this_thread(&owned, dialect, os)
+            lossy_on_this_thread(&owned, dialect, os, count)
         });
     let joined = match run {
         Ok(handle) => handle.join().ok(),
@@ -105,7 +111,7 @@ pub fn parse_lossy(src: &str, dialect: Shell, os: Os) -> Lossy {
     })
 }
 
-fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
+fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os, count: bool) -> Lossy {
     let whole = Span {
         start: 0,
         end: src.len(),
@@ -153,7 +159,11 @@ fn lossy_on_this_thread(src: &str, dialect: Shell, os: Os) -> Lossy {
         script,
         tree_error,
         lower_error,
-        tree_commands: count_kind(root, "command"),
+        tree_commands: if count {
+            count_kind(root, "command")
+        } else {
+            0
+        },
     }
 }
 

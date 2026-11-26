@@ -34,7 +34,7 @@ use serde::de::DeserializeOwned;
 
 use super::{Ctx, Rule};
 use crate::fs::assigned::{Assigned, resolve_assigned};
-use crate::fs::resolve::{self, DeleteBy, Location, SwitchState, Target, UnknownKind};
+use crate::fs::resolve::{self, AliasRun, DeleteBy, Location, SwitchState, Target, UnknownKind};
 use crate::fs::walk::{self, WalkResult, is_within};
 use crate::fs::{TimedOut, bounded};
 use crate::ir::{
@@ -149,15 +149,66 @@ impl Rule for DeleteRule {
         let shell = ctx.input.shell;
         let os = ctx.input.os;
         let command = ctx.input.command;
-        // Cheap first pass: no file system, no location, unless some command may delete.
+        // A call of an alias the command defined before it is also read as what it runs.
+        let aliases = resolve::DefinedAliases::of(ctx.script, command, shell, os, || ctx.aliases());
+        // Code the guard does not read, its text also read with each alias it calls written as
+        // the alias's value (Ruling 153): the texts the raw scan reads, and whether an alias in
+        // it has more values than the guard follows.
+        let unread_texts = |c: &SimpleCommand| {
+            let (more, capped) = aliases.texts(c, command);
+            let own = command.get(c.span.start..c.span.end).unwrap_or_default();
+            (
+                std::iter::once(own.to_string())
+                    .chain(more)
+                    .collect::<Vec<_>>(),
+                capped,
+            )
+        };
+        // A raw-scan hit on a table row or a .NET `Delete()` call; a region the scan cannot read
+        // (an encoded or too-deep body) is no destructive match (Ruling 106(a)).
+        let scan_hits = |texts: &[String]| texts.iter().any(|t| !scan::parsed_hits(t).is_empty());
+        let unread_hit = |c: &SimpleCommand| {
+            let (texts, capped) = unread_texts(c);
+            capped || scan_hits(&texts)
+        };
+        // Cheap first pass: no file system, no location, unless some command may delete. A call
+        // that may run any alias (`AliasRun::Unread`) is judged without the location.
+        let mut runs_unread = false;
         if !any_node(ctx.script, &mut |n| match n {
-            Node::Cmd { cmd, .. } => match read_call(cmd, false, shell, os) {
-                Read::Unread => unread_hits(cmd, command),
-                Read::Call(call, prog) => in_family(&call, prog, shell, os),
-                Read::Plain => false,
-            },
+            Node::Cmd { cmd, .. } => {
+                (match read_call(cmd, false, shell, os) {
+                    Read::Unread => unread_hit(cmd),
+                    Read::Call(call, prog) => in_family(&call, prog, shell, os),
+                    Read::Plain => false,
+                }) || aliases.runs(cmd).iter().any(|r| match r {
+                    AliasRun::Read(run) => match read_call(run, false, shell, os) {
+                        Read::Call(call, prog) => in_family(&call, prog, shell, os),
+                        Read::Unread => unread_hit(cmd),
+                        Read::Plain => false,
+                    },
+                    AliasRun::Unread => {
+                        runs_unread = true;
+                        false
+                    }
+                })
+            }
             Node::Method(m) => method_row(m).is_some(),
         }) {
+            if runs_unread {
+                // `unread_alias` reads no variable: the scene's environment is not marked.
+                let mut scene = Scene::unmarked(ctx);
+                any_node(ctx.script, &mut |n| {
+                    if let Node::Cmd { cmd, piped } = n
+                        && aliases
+                            .runs(cmd)
+                            .iter()
+                            .any(|r| matches!(r, AliasRun::Unread))
+                    {
+                        out.extend(scene.unread_alias(cmd, piped));
+                    }
+                    false
+                });
+            }
             return;
         }
         let mut scene = Scene::new(ctx);
@@ -165,13 +216,46 @@ impl Rule for DeleteRule {
         let mut loc = scene.location();
         walk_script(ctx.script, &mut loc, &env, &mut |node, loc| {
             let found = match node {
-                Node::Cmd { cmd, piped } => match read_call(cmd, piped, shell, os) {
-                    Read::Unread if unread_hits(cmd, command) => Some(scene.opaque(cmd)),
-                    Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
-                        scene.judge_call(&call, prog, loc)
+                Node::Cmd { cmd, piped } => {
+                    // The raw scan of `cmd`'s texts; past the cap, the call may run anything.
+                    let opaque = |scene: &mut Scene<'_>| {
+                        let (texts, capped) = unread_texts(cmd);
+                        let mut found = None;
+                        // One scan per text: a readable hit is what `scan_hits` matches, and
+                        // `opaque_in` reads the same hits.
+                        for t in &texts {
+                            let hits = scan::parsed_hits(t);
+                            if !hits.is_empty() {
+                                found = max_finding(found, Some(scene.opaque_in(cmd, t, hits)));
+                            }
+                        }
+                        if capped {
+                            found = max_finding(found, scene.unread_alias(cmd, piped));
+                        }
+                        found
+                    };
+                    let mut found = match read_call(cmd, piped, shell, os) {
+                        Read::Unread => opaque(&mut scene),
+                        Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
+                            scene.judge_call(&call, prog, loc)
+                        }
+                        _ => None,
+                    };
+                    for run in aliases.runs(cmd) {
+                        let more = match &run {
+                            AliasRun::Read(r) => match read_call(r, piped, shell, os) {
+                                Read::Call(call, prog) if in_family(&call, prog, shell, os) => {
+                                    scene.judge_call(&call, prog, loc)
+                                }
+                                Read::Unread => opaque(&mut scene),
+                                _ => None,
+                            },
+                            AliasRun::Unread => scene.unread_alias(cmd, piped),
+                        };
+                        found = max_finding(found, more);
                     }
-                    _ => None,
-                },
+                    found
+                }
                 Node::Method(m) => scene.judge_method(m, loc),
             };
             out.extend(found);
@@ -283,15 +367,6 @@ pub(crate) fn read_call(c: &SimpleCommand, piped: bool, shell: Shell, os: Os) ->
         }),
         prog,
     )
-}
-
-/// The text of `c` names a destructive command: a raw-scan hit on a table row or a .NET
-/// `Delete()` call in its own span. A region the scan cannot read (an encoded or too-deep body)
-/// is no destructive match (Ruling 106(a)).
-fn unread_hits(c: &SimpleCommand, command: &str) -> bool {
-    command
-        .get(c.span.start..c.span.end)
-        .is_some_and(|t| scan::destructive_row(t).is_some())
 }
 
 /// The words a destructive hit acts on: those after its command's name, up to the end of that
@@ -657,13 +732,36 @@ pub(crate) struct How {
 
 impl<'a> Scene<'a> {
     pub fn new(ctx: &'a Ctx<'a>) -> Scene<'a> {
-        let mut env = ctx.input.env.clone();
-        let input = ctx.input;
-        let multi = resolve_assigned(&mut env, ctx.script, input.command, input.shell, input.os);
+        let (env, multi) = ctx
+            .memo
+            .assigned
+            .get_or_init(|| {
+                let mut env = ctx.input.env.clone();
+                let input = ctx.input;
+                let multi = resolve_assigned(
+                    &mut env,
+                    ctx.script,
+                    input.command,
+                    input.shell,
+                    input.os,
+                    ctx.aliases(),
+                );
+                (env, multi)
+            })
+            .clone();
         Scene {
-            ctx,
             env,
             multi,
+            ..Scene::unmarked(ctx)
+        }
+    }
+
+    /// A scene whose environment is the hook's own, no assignment of the command read.
+    fn unmarked(ctx: &'a Ctx<'a>) -> Scene<'a> {
+        Scene {
+            ctx,
+            env: ctx.input.env.clone(),
+            multi: Vec::new(),
             // Read before any marking: a command that assigns `HOME` does not move the home
             // folder critical paths are compared with.
             home: ctx.input.env.home().map(PathBuf::from),
@@ -732,9 +830,18 @@ impl<'a> Scene<'a> {
 
     pub fn location(&self) -> Location {
         let input = self.ctx.input;
-        let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
-        loc.read_script(self.ctx.script);
-        loc.read_text(input.command);
+        let mut loc = self
+            .ctx
+            .memo
+            .location
+            .get_or_init(|| {
+                let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
+                // The script read with the table the other readers use.
+                loc.read_script_with(self.ctx.script, self.ctx.aliases().to_vec());
+                loc.read_text(input.command);
+                loc
+            })
+            .clone();
         loc.use_disk(self.ctx.fs, self.ctx.deadline);
         loc
     }
@@ -1279,15 +1386,16 @@ impl<'a> Scene<'a> {
 
     /// The finding for code the guard does not read whose text names a destructive command:
     /// danger when its words hold a literal protected location (Ruling 122 (b)), else warn.
-    fn opaque(&mut self, c: &SimpleCommand) -> Finding {
+    /// `text` is the text of `c`, or that text with an alias it calls written as its value;
+    /// `hits` are `scan::parsed_hits` of `text`.
+    fn opaque_in(&mut self, c: &SimpleCommand, text: &str, hits: Vec<scan::Hit>) -> Finding {
         let command = self.ctx.input.command;
-        let text = command.get(c.span.start..c.span.end).unwrap_or_default();
-        let shown: String = text.chars().take(80).collect();
+        let own = command.get(c.span.start..c.span.end).unwrap_or_default();
+        let shown: String = own.chars().take(80).collect();
         // Only the words of the destructive commands themselves: a `cd` to the repo root
         // elsewhere in the body names no target.
-        let words: Vec<String> = scan::hits(scan::table(), text)
+        let words: Vec<String> = hits
             .into_iter()
-            .filter(|h| h.kind != scan::Kind::Unreadable)
             .filter_map(|h| Some((h.kind, text.get(h.span.start..h.span.end)?)))
             .flat_map(|(kind, t)| target_words(t, kind))
             .map(str::to_string)
@@ -1315,6 +1423,50 @@ impl<'a> Scene<'a> {
                 c.span,
             ),
         }
+    }
+
+    /// A call that may run any command through an alias: one whose value the guard cannot read
+    /// (`Set-Alias zz $x; zz C:\Windows`), one read more ways than the guard follows, any call
+    /// past the bound (Ruling 153). It may be a delete, so it warns on a target that spells a
+    /// protected location (a raw word, or the value of a `-Name:value` word), on a target the
+    /// guard cannot read (a word that is not one literal) and on one the pipeline feeds it.
+    fn unread_alias(&mut self, c: &SimpleCommand, piped: bool) -> Option<Finding> {
+        let text = self
+            .ctx
+            .input
+            .command
+            .get(c.span.start..c.span.end)
+            .unwrap_or_default();
+        let shown: String = text.chars().take(80).collect();
+        let lead = "it may run a command through an alias the guard cannot read";
+        let words: Vec<String> = raw_words(text)
+            .skip(1)
+            .flat_map(|w| {
+                // `-Path:C:\Windows` names its value too.
+                let value = w
+                    .strip_prefix('-')
+                    .and_then(|r| r.split_once(':'))
+                    .map(|(_, v)| v.to_string());
+                std::iter::once(w.to_string()).chain(value)
+            })
+            .collect();
+        if let Some((p, reason)) = words.iter().find_map(|w| self.protected_word(w)) {
+            let why = format!("{lead}, on `{p}`, the {reason}");
+            return Some(self.dynamic(c.span, &shown, &why));
+        }
+        let why = if piped {
+            format!("{lead}, on what the pipeline feeds it")
+        } else {
+            let w = c.args.iter().find(|w| literal(w).is_none())?;
+            let t = self
+                .ctx
+                .input
+                .command
+                .get(w.span.start..w.span.end)
+                .unwrap_or_default();
+            format!("{lead}, on `{t}`, a target the guard cannot read")
+        };
+        Some(self.dynamic(c.span, &shown, &why))
     }
 
     /// A raw word that spells a protected location literally: an absolute path, `~` or `$HOME`
@@ -1967,6 +2119,21 @@ mod tests {
         fs: &SharedFs,
         ms: u64,
     ) -> Vec<(&'static str, Level)> {
+        levels_with(shell, command, vars, cwd, protected, fs, ms, true)
+    }
+
+    /// `levels_in`, the git rule on the delete rule's `Ctx` when `shared`, else on a new one.
+    #[allow(clippy::too_many_arguments)]
+    fn levels_with(
+        shell: Shell,
+        command: &str,
+        vars: &[(&str, &str)],
+        cwd: Option<&str>,
+        protected: &[&str],
+        fs: &SharedFs,
+        ms: u64,
+        shared: bool,
+    ) -> Vec<(&'static str, Level)> {
         let os = Os::Windows;
         let script = match shell {
             Shell::Bash(profile) => crate::parse::bash::parse(command, profile).unwrap(),
@@ -1997,10 +2164,15 @@ mod tests {
             cfg: &cfg,
             fs,
             deadline: &deadline,
+            memo: Default::default(),
         };
         let mut out = Vec::new();
         DeleteRule.check(&ctx, &mut out);
-        crate::rules::git::GitRule.check(&ctx, &mut out);
+        let fresh = Ctx {
+            memo: Default::default(),
+            ..ctx
+        };
+        crate::rules::git::GitRule.check(if shared { &ctx } else { &fresh }, &mut out);
         out.iter().map(|f| (f.rule, f.level)).collect()
     }
 
@@ -2262,5 +2434,165 @@ mod tests {
         let took = start.elapsed();
         assert!(took < Duration::from_secs(3), "the check took {took:?}");
         assert_eq!(got, [DELETE_OUTSIDE_PROJECT]);
+    }
+
+    /// The delete and git rules on one `Ctx` read what each reads on its own past the deadline:
+    /// each keeps its time-out reading (the delete's danger, the worktree removal's warn).
+    #[test]
+    fn rules_sharing_a_ctx_each_keep_their_time_out_reading() {
+        let fs: SharedFs = ShortNames::shared(false);
+        let command = "Remove-Item -Recurse -Force keep; git worktree remove keep";
+        let env = vars(LONG_TEMP, HOME);
+        let run = |shared| {
+            levels_with(
+                Shell::Pwsh,
+                command,
+                &env,
+                Some(LONG_REPO),
+                &[],
+                &fs,
+                0,
+                shared,
+            )
+        };
+        let alone = run(false);
+        assert_eq!(
+            alone,
+            [(WALK_TIMEOUT, Level::Danger), (WALK_TIMEOUT, Level::Warn)]
+        );
+        assert_eq!(run(true), alone);
+    }
+
+    /// A tree where every folder exists and none holds a `.git`: the project is the cwd.
+    struct Folders;
+
+    impl Fs for Folders {
+        fn lstat(&self, p: &Path) -> io::Result<Meta> {
+            if p.file_name().is_some_and(|n| n == ".git") {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+            Ok(Meta {
+                is_dir: true,
+                is_file: false,
+                is_symlink: false,
+            })
+        }
+        fn read_dir(&self, _p: &Path) -> io::Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        fn link_target(&self, _p: &Path) -> io::Result<Option<PathBuf>> {
+            Ok(None)
+        }
+    }
+
+    /// Analyses one after another on one thread each read their own command's assignments,
+    /// aliases and cwd.
+    #[test]
+    fn each_analysis_reads_its_own_assignments_aliases_and_cwd() {
+        let fs: SharedFs = Arc::new(Folders);
+        let rows: [(&str, &str, &[&str]); 5] = [
+            (
+                r"$d = 'C:\Windows'; Remove-Item -Recurse -Force $d",
+                LONG_REPO,
+                &[DELETE_CRITICAL],
+            ),
+            (
+                "$d = 'build'; Remove-Item -Recurse -Force $d",
+                LONG_REPO,
+                &[],
+            ),
+            (
+                r"Remove-Item -Recurse -Force Windows",
+                r"C:\",
+                &[DELETE_CRITICAL],
+            ),
+            // An alias of a location cmdlet leaves the location unknown (Ruling 156); without
+            // the definition `zz` is a program that stays where it is.
+            (
+                r"Set-Alias zz Set-Location; zz C:\Windows; Remove-Item -Recurse -Force System32",
+                LONG_REPO,
+                &[DELETE_UNKNOWN_LOCATION],
+            ),
+            (
+                r"zz C:\Windows; Remove-Item -Recurse -Force System32",
+                LONG_REPO,
+                &[],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (command, cwd, want) in rows {
+            let got = rules_of(command, LONG_TEMP, Some(cwd), &fs, 5000);
+            if got != want {
+                wrong.push(format!("{command} in {cwd}: {got:?} (want {want:?})"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Analyses of one text one after another on one thread each read the aliases in their own
+    /// shell's dialect: in PowerShell `Import-Alias` may define `zz` as anything, which may assign
+    /// `$d`; in Git Bash it is a program, and 40 values of the Bash alias `zz` leave `d=/` in
+    /// sight.
+    #[test]
+    fn each_analysis_reads_the_aliases_of_its_own_dialect() {
+        let fs: SharedFs = Arc::new(Folders);
+        let defs: Vec<String> = (1..=40).map(|i| format!("alias zz='echo {i}'")).collect();
+        let command = format!(
+            "{}; Import-Alias x; d=/; zz; rm -rf \"$d\"",
+            defs.join("; ")
+        );
+        let bash = Shell::Bash(crate::BashProfile::GitBash);
+        let rows = [
+            (Shell::Pwsh, &[DYNAMIC_TARGET][..]),
+            (bash, &[DELETE_CRITICAL][..]),
+            (Shell::Pwsh, &[DYNAMIC_TARGET][..]),
+        ];
+        let mut wrong = Vec::new();
+        for (i, (shell, want)) in rows.into_iter().enumerate() {
+            let env = vars(LONG_TEMP, HOME);
+            let got = rules_in(shell, &command, &env, Some(LONG_REPO), &[], &fs, 5000);
+            if got != want {
+                wrong.push(format!(
+                    "analysis {i} in {shell:?}: {got:?} (want {want:?})"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Git Bash defines no alias through a PowerShell alias cmdlet: `Import-Alias` is a program
+    /// there and leaves the location where it is.
+    #[test]
+    fn a_pwsh_alias_cmdlet_moves_no_bash_location() {
+        let fs: SharedFs = Arc::new(Folders);
+        let got = rules_in(
+            Shell::Bash(crate::BashProfile::GitBash),
+            "Import-Alias x; rm -rf build",
+            &vars(LONG_TEMP, HOME),
+            Some(LONG_REPO),
+            &[],
+            &fs,
+            5000,
+        );
+        assert_eq!(got, Vec::<&str>::new());
+    }
+
+    /// The git rule starts from where the command starts, not from where the delete rule's walk
+    /// of the same command ended.
+    #[test]
+    fn the_git_rule_starts_where_the_command_starts() {
+        let fs: SharedFs = Arc::new(Folders);
+        // From `C:\Home`, `u` is the home folder; `Stop` makes the location change certain.
+        let command = "$ErrorActionPreference = 'Stop'; Remove-Item -Recurse -Force build; Set-Location u; git worktree remove .";
+        let got = levels_in(
+            Shell::Pwsh,
+            command,
+            &vars(LONG_TEMP, HOME),
+            Some(r"C:\Home"),
+            &[],
+            &fs,
+            5000,
+        );
+        assert_eq!(got, [(DELETE_CRITICAL, Level::Critical)]);
     }
 }

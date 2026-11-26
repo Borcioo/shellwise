@@ -86,6 +86,16 @@ fix = "correct the syntax at column"
 oracle = "refuses"
 
 [[row]]
+id = "pwsh-other-kind-with-a-delete-fed-behind-sudo-is-danger"
+os = "any"
+shell = "pwsh"
+command = "sudo -u root printf 'rm -rf x' | bash; )"
+level = "danger"
+rules = ["parse-error-destructive"]
+fix = "correct the syntax at column"
+oracle = "refuses"
+
+[[row]]
 id = "pwsh-a-comment-inside-a-subexpression-is-no-unclosed-quote"
 os = "any"
 shell = "pwsh"
@@ -1044,6 +1054,28 @@ shell = "bash"
 command = "if true; then cat setup.sh | bash"
 level = "warn"
 rules = ["parse-error"]
+oracle = "refuses"
+
+# Static delete text fed into a shell behind a wrapper reads as without it: the scan passes over
+# a reading of the producer it cannot read (`root printf …`, `5 printf …`).
+[[row]]
+id = "bash-other-kind-with-a-delete-fed-behind-sudo-is-danger"
+os = "any"
+shell = "bash"
+command = "sudo -u root printf 'rm -rf x' | bash; )"
+level = "danger"
+rules = ["parse-error-destructive"]
+fix = "correct the syntax at"
+oracle = "refuses"
+
+[[row]]
+id = "bash-other-kind-with-a-delete-fed-behind-timeout-is-danger"
+os = "any"
+shell = "bash"
+command = "timeout 5 printf 'rm -rf x' | bash; )"
+level = "danger"
+rules = ["parse-error-destructive"]
+fix = "correct the syntax at"
 oracle = "refuses"
 
 [[row]]

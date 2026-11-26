@@ -55,19 +55,62 @@ text is named in the reason.
 
 ## Install
 
+```
+# macOS and Linux
+curl -fsSL https://raw.githubusercontent.com/Borcioo/shellwise/main/install.sh | sh
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/Borcioo/shellwise/main/install.ps1 | iex
+```
+
+Each downloads the release for your system, checks it against the release's `SHA256SUMS` and puts
+`shellwise` in `~/.local/bin`, or `%LOCALAPPDATA%\Programs\shellwise` on Windows, where it also
+adds the folder to your user `PATH`. Elsewhere it prints the line to add when the folder is not on
+`PATH`.
+
+Claude Code: install the plugin, which checks every Bash and PowerShell command before it runs:
+
+```sh
+claude plugin marketplace add Borcioo/shellwise
+claude plugin install shellwise@shellwise
+```
+
+Any other agent: run `shellwise agent-setup` and paste the output to your agent. It finds its
+host's hook that runs before a shell command, registers shellwise there and proves the wiring.
+
+Update with `shellwise update`. The binary never updates itself; when a newer release exists,
+the plugin adds one line to the session at its start, so the agent sees it and can tell you. To uninstall, delete the binary and remove the hook
+entry or the plugin. To switch shellwise off, set `SHELLWISE=off`.
+
+Status: these lines work from the first release that contains them (v0.1.1 has no musl builds,
+no `update`, `agent-setup` or `hook generic`, and no plugin on the default branch). Tested live:
+Claude Code and Codex CLI; the other hosts in the setup text come from their documentation.
+
+### Other ways
+
 Download the archive for your system from the
 [latest release](https://github.com/Borcioo/shellwise/releases/latest), unpack it and put
 `shellwise` (`shellwise.exe` on Windows) somewhere stable. Each archive comes with a `.sha256`
-file.
+file and a line in `SHA256SUMS`. On Linux the install scripts pick the static musl build, which
+also runs on older distributions. `SHELLWISE_INSTALL_DIR` and `SHELLWISE_VERSION` make them use
+another folder or version.
 
 | System | Archive |
 |---|---|
 | Windows (x64) | `shellwise-v<version>-x86_64-pc-windows-msvc.zip` |
 | Linux (x64) | `shellwise-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux (x64, static) | `shellwise-v<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux (arm64, static) | `shellwise-v<version>-aarch64-unknown-linux-musl.tar.gz` |
 | macOS (Apple silicon) | `shellwise-v<version>-aarch64-apple-darwin.tar.gz` |
 | macOS (Intel) | `shellwise-v<version>-x86_64-apple-darwin.tar.gz` |
 
-The macOS builds are compiled in CI but not tested there yet.
+On macOS, CI tests the install scripts and `shellwise update` only; the rest of the suite runs on
+Windows and Linux.
+
+With a Rust toolchain:
+
+```
+cargo install --git https://github.com/Borcioo/shellwise
+```
 
 Or build from source; `rustup` installs the toolchain `rust-toolchain.toml` pins:
 
@@ -77,12 +120,14 @@ cd shellwise
 cargo build --release
 ```
 
-The built binary is `target/release/shellwise` (`shellwise.exe` on Windows). It needs no service, no
-network and no interpreter.
+The built binary is `target/release/shellwise` (`shellwise.exe` on Windows). Checking a command
+needs no service, no network and no interpreter; only `shellwise update` reaches the network, and
+it runs the install script through `sh` or PowerShell.
 
 ### Claude Code hook
 
-Add a `PreToolUse` hook to your user `settings.json`, with the full path of the binary:
+Without the plugin, add a `PreToolUse` hook to your user `settings.json`, with the full path of
+the binary:
 
 ```json
 {
@@ -107,6 +152,8 @@ macOS, `$XDG_CONFIG_HOME` or `~/.config` elsewhere):
 hook_timeout_ms = 5000
 ```
 
+The plugin uses a 10 second timeout instead, because it cannot write your config file.
+
 To switch it off, set the environment variable `SHELLWISE=off`, or remove the hook entry.
 
 ## Use
@@ -116,6 +163,9 @@ shellwise check --shell pwsh|powershell5|bash|gitbash [--cwd DIR] [--json] [-- C
 shellwise lint FILE            # a .ps1, .sh or .bash script
 shellwise explain RULE-ID
 shellwise hook claude-code     # the event on stdin, the host's reply on stdout
+shellwise hook generic [--shell pwsh|powershell5|bash|gitbash]
+shellwise update [--check|--notify]
+shellwise agent-setup          # the setup text for your agent
 ```
 
 `check` without `-- COMMAND` reads the command from stdin. Exit codes: 0 ok/warn, 1 break,
@@ -124,6 +174,21 @@ shellwise hook claude-code     # the event on stdin, the host's reply on stdout
 
 `lint` exits 0 for clean or warn, 1 for break or worse, 64 when it refuses the file, 74 when it
 cannot read it.
+
+`hook generic` serves hosts that block a command on exit code 2. It reads the event on stdin and
+exits 0 to let the command run (a `warn` note goes to stderr) or 2 to refuse it, with the findings
+and their `Fix:` lines on stderr. Without `--shell`, a tool name of `PowerShell` in the event
+means `pwsh`; otherwise it is `pwsh` on Windows and `bash` elsewhere. A usage error exits 0 with a
+line on stderr, so a mistyped hook entry never blocks the shell tool.
+
+`update` replaces the binary in its own folder with the latest release (or `SHELLWISE_VERSION`),
+through the install script built into it; exit 0 updated or already current, 1 refused (a folder
+it cannot write, a failed download or checksum). `--check` prints `installed <a>, latest <b>` and
+exits 0 when they match, 1 when a newer release exists, 2 when the latest version cannot be read.
+`--notify` prints one line when a newer release exists, checks at most once a day, returns within
+3 seconds and always exits 0. `update` is the only command that uses the network.
+
+`agent-setup` prints the setup text built into the binary.
 
 A repository may carry a `.shellwise.toml` at its root; it can only raise levels, never lower them.
 
@@ -159,21 +224,13 @@ Known gap: `lint` on a whole script is slower than its target of 50 ms per 500 l
 ## Limits
 
 - Interactive programs (an editor, `git rebase -i`) are not flagged yet.
-- Bash: a name without the integer attribute assigned exactly one run-time expansion and nothing
-  else (`n=$(cmd)`, `n=$1`) counts as clean when arithmetic evaluates it, so a `$(…)` that such a
-  value carries in an array subscript is not seen: the value is command output or an argument at
-  run time.
-- Bash: command output that arithmetic reads directly (`(( $(cmd) ))`, `$(( $(cmd) ))`,
-  `[[ $(cmd) -eq 1 ]]`, `${s:$(cmd)}`, `${a[$(cmd)]}`, `a[$(cmd)]=1`, `a=([$(cmd)]=1)`,
-  `unset "a[$(cmd)]"`, `[[ -v a[$(cmd)] ]]`, `exec {a[$(cmd)]}>f`, `declare -i n; n=$(cmd)`) makes
-  the command opaque,
-  unless the command is `date +%s`, `date +%s%N`, `id -u` or `wc -l < FILE` with a literal path,
-  written with spaces (a tab between the words of a `$(…)` counts as one; other tabs make the
-  command opaque), and the script defines no function of that name or `command_not_found_handle`,
-  writes (also by `{NAME}>f` or `coproc NAME`), declares or unsets none of `PATH`,
-  `BASH_ALIASES`, `BASH_CMDS` and `EXECIGNORE`, and runs no `hash`, `alias`, `enable`, `source`,
-  `.` or command whose name is not static. A `PATH`, `EXECIGNORE` or function inherited from the
-  environment that finds another such command is not seen.
+- Bash: arithmetic reads a `$(…)` written inside it like the same `$(…)` outside it, except two
+  that bash still runs: one in single quotes inside `(( ))`, `$(( ))` or `$[ ]`
+  (`(( '$(cmd)' > 0 ))`, `$[ '$(cmd)' ]`) and one that only a variable's value carries in an array subscript (`x='a[$(cmd)]'; (( x ))`)
+  are not read. One written in a static subscript that bash evaluates (`let 'a[$(cmd)]'`,
+  `declare -i n; n='a[$(cmd)]'`) is, when the integer name is declared earlier in the text than
+  the assignment (an assignment in a function written before the `declare -i` that precedes its
+  call is not seen).
 - `CDPATH` set by a shell profile the hook cannot see is not modelled.
 
 ## Develop

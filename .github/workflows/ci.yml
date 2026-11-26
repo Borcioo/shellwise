@@ -30,7 +30,16 @@ jobs:
       - run: cargo --version
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --features testhooks -- -D warnings
+      - run: shellcheck install.sh
+        if: runner.os == 'Linux'
       - run: cargo test --features testhooks
+
+  install-scripts:
+    name: install scripts (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --features testhooks --test install_scripts --test update
 
   build:
     name: build (${{ matrix.target }})
@@ -54,10 +63,48 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             bin: shellwise
+          # Static builds; the toolchain step points cc at musl-gcc for the C grammar.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: shellwise
+          - os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-musl
+            bin: shellwise
     steps:
       - uses: actions/checkout@v4
       - run: rustup target add ${{ matrix.target }}
+      - name: Install the musl C toolchain
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          command -v musl-gcc aarch64-linux-musl-gcc x86_64-linux-musl-gcc shasum || true
+          echo "CC_$(echo '${{ matrix.target }}' | tr - _)=musl-gcc" >> "$GITHUB_ENV"
       - run: cargo build --release --locked --target ${{ matrix.target }}
+      # Each musl row's runner is native for its target, so the binary runs here.
+      - name: Run the musl binary
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/shellwise"
+          "$bin" --version
+          proof="$RUNNER_TEMP/proof-bash.txt"
+          printf '%s' "echo 'abc" > "$proof"
+          code=0
+          cat "$proof" | "$bin" check --shell bash || code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "shellwise check exited $code on the proof command; expected 1" >&2
+            exit 1
+          fi
+      - name: Show the binary
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          ls -l "$bin"
+          if command -v file > /dev/null; then file "$bin"; fi
+          # ldd exits 1 on a static binary ("not a dynamic executable").
+          if [ "$RUNNER_OS" = Linux ]; then ldd "$bin" || true; fi
       - uses: actions/upload-artifact@v4
         with:
           name: shellwise-${{ matrix.target }}

@@ -859,6 +859,1731 @@ command = "timeout 600 bash -c 'until grep -q done run.log; do sleep 15; done'"
 level = "ok"
 rules = []
 
+# GNU `timeout` with a duration of `0` (in any spelling), `inf` or `infinity` sets no limit, so
+# a loop under it is as unbounded as without it; a duration the guard cannot read (a variable)
+# is taken as a limit.
+[[row]]
+id = "wl-bash-timeout-0-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-0s-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0s bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-inf-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-infinity-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout infinity bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-0-after-option-k-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 5 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-0-after-option-signal-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --signal=KILL 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-infinity-after-option-s-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -s KILL infinity bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-600-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 600 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-1m-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1m bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-0-5-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.5 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-kill-after-0-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 0 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-variable-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout \"$T\" bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-variable-defaulting-to-0-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout \"${T:-0}\" bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-0-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-0s-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0s bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-inf-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout inf bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-infinity-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout infinity bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-0-after-option-k-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout -k 5 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-0-after-option-signal-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout --signal=KILL 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-infinity-after-option-s-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout -s KILL infinity bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-600-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 600 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-1m-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 1m bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-0-5-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0.5 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-kill-after-0-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout -k 0 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-variable-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout \"$T\" bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-variable-defaulting-to-0-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout \"${T:-0}\" bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+# A `timeout` with a limit anywhere in the loop command's wrapper chain bounds the loop, as it
+# bounds a follow (`nohup timeout 60 tail -f log`): `sudo timeout 60 bash -c '<loop>'` and
+# `timeout 0 timeout 600 bash -c '<loop>'` run under a 60 s and a 600 s limit. A chain whose
+# every `timeout` sets no limit, or one with no `timeout`, leaves the loop unbounded.
+
+[[row]]
+id = "wl-bash-sudo-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-env-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "env A=1 timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-nice-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nice timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-nice-n-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nice -n 10 timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-nohup-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-0-timeout-600-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 600 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-600-timeout-0-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 600 timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-0-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-nohup-timeout-inf-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout inf bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-timeout-0-timeout-0-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-sudo-alone-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-env-alone-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "env A=1 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-nice-alone-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nice bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-nice-n-alone-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nice -n 10 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-nohup-alone-around-a-loop-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-timeout-0-timeout-600-around-a-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 600 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-600-timeout-0-around-a-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 600 timeout 0 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-env-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "env A=1 timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-nice-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nice timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-nice-n-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nice -n 10 timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-nohup-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-0-timeout-600-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 600 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-600-timeout-0-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 600 timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-0-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-nohup-timeout-inf-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup timeout inf bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-timeout-0-timeout-0-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 0 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-sudo-alone-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-env-alone-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "env A=1 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-nice-alone-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "nice bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-nice-n-alone-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "nice -n 10 bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-nohup-alone-around-a-loop-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup bash -c 'while true; do sleep 1; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-gitbash-timeout-0-timeout-600-around-a-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 600 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-timeout-600-timeout-0-around-a-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 600 timeout 0 tail -f log"
+level = "ok"
+rules = []
+
+# A follow in a child shell reads the bound of the command that starts the shell the same way.
+
+[[row]]
+id = "fu-bash-sudo-timeout-60-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-nohup-timeout-60-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-env-timeout-60-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "env A=1 timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-0-timeout-600-around-a-child-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 600 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-sudo-timeout-0-around-a-child-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-timeout-0-timeout-0-around-a-child-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-sudo-timeout-60-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-nohup-timeout-60-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-env-timeout-60-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "env A=1 timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-timeout-0-timeout-600-around-a-child-follow-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 600 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-sudo-timeout-0-around-a-child-follow-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-timeout-0-timeout-0-around-a-child-follow-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+# A `timeout` that runs no command bounds nothing: the substitution in its words runs in the
+# calling shell.
+
+[[row]]
+id = "wl-bash-loop-in-the-words-of-a-timeout-that-runs-nothing-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-words-of-a-timeout-that-runs-nothing-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# A loop or a follow the calling shell runs while it expands the words of a wrapped command
+# (a substitution in an argument, a wrapper's option value, the duration, a redirect, an
+# assignment, a `-c` body built by a substitution) runs before `timeout` starts: no wrapper
+# bounds it, behind another wrapper or bare.
+
+[[row]]
+id = "wl-bash-loop-in-an-argument-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 echo \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-an-argument-of-env-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "env A=1 timeout 60 echo \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-an-argument-of-nice-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nice timeout 60 cp \"$(while true; do sleep 1; done)\" y"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-the-sudo-user-before-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo -u \"$(while true; do sleep 1; done)\" timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-the-nice-value-before-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nice -n \"$(while true; do sleep 1; done)\" timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-the-duration-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout \"$(while true; do sleep 1; done)\" true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-building-the-body-of-sudo-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-a-redirect-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat < <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-a-process-substitution-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-an-assignment-before-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "X=\"$(while true; do sleep 1; done)\" sudo timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-backticks-in-an-argument-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 echo `while true; do sleep 1; done`"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-an-argument-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 echo \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-backticks-in-an-argument-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 echo `while true; do sleep 1; done`"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-a-process-substitution-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-a-redirect-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat < <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-an-assignment-before-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "X=\"$(while true; do sleep 1; done)\" timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-the-name-timeout-runs-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-the-duration-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout \"$(while true; do sleep 1; done)\" true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-building-the-body-of-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-an-argument-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 echo \"$(tail -f log)\""
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-a-process-substitution-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat <(tail -f log)"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-the-duration-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout \"$(tail -f log)\" true"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-an-argument-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 echo \"$(tail -f log)\""
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-a-process-substitution-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat <(tail -f log)"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-an-argument-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 echo \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-an-argument-of-env-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "env A=1 timeout 60 echo \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-an-argument-of-nice-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "nice timeout 60 cp \"$(while true; do sleep 1; done)\" y"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-sudo-user-before-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo -u \"$(while true; do sleep 1; done)\" timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-nice-value-before-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "nice -n \"$(while true; do sleep 1; done)\" timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-duration-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout \"$(while true; do sleep 1; done)\" true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-building-the-body-of-sudo-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-a-redirect-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat < <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-a-process-substitution-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-an-assignment-before-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "X=\"$(while true; do sleep 1; done)\" sudo timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-backticks-in-an-argument-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 echo `while true; do sleep 1; done`"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-an-argument-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 echo \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-backticks-in-an-argument-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 echo `while true; do sleep 1; done`"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-a-process-substitution-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-a-redirect-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat < <(while true; do sleep 1; done)"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-an-assignment-before-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "X=\"$(while true; do sleep 1; done)\" timeout 60 true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-name-timeout-runs-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-the-duration-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout \"$(while true; do sleep 1; done)\" true"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-building-the-body-of-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c \"$(while true; do sleep 1; done)\""
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-an-argument-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 echo \"$(tail -f log)\""
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-a-process-substitution-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat <(tail -f log)"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-the-duration-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout \"$(tail -f log)\" true"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-an-argument-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 echo \"$(tail -f log)\""
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-a-process-substitution-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat <(tail -f log)"
+level = "warn"
+rules = ["follow-unbounded"]
+
+# What the wrapped command runs stays bounded: a substitution that is itself bounded, and one
+# the bounded child shell expands.
+
+[[row]]
+id = "wl-bash-bounded-loop-in-an-argument-of-sudo-timeout-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 echo \"$(timeout 5 bash -c 'while true; do sleep 1; done')\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-loop-in-a-substitution-inside-the-bounded-body-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'echo \"$(while true; do sleep 1; done)\"'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-around-a-loop-in-a-substitution-of-the-body-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'echo \"$(while true; do sleep 1; done)\"'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-bounded-loop-in-an-argument-of-sudo-timeout-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 echo \"$(timeout 5 bash -c 'while true; do sleep 1; done')\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-loop-in-a-substitution-inside-the-bounded-body-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'echo \"$(while true; do sleep 1; done)\"'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-around-a-loop-in-a-substitution-of-the-body-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'echo \"$(while true; do sleep 1; done)\"'"
+level = "ok"
+rules = []
+
+# A loop or a follow the bounded child shell sends to the background reads bounded, behind a
+# wrapper as bare: a known miss, since the shell may end once it has started the job, and
+# `timeout` with it, while the job runs on. `& wait` keeps the shell, so the bound holds there.
+# Backgrounding the `timeout` itself keeps its bound.
+
+[[row]]
+id = "wl-bash-backgrounded-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-nohup-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-block-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c '{ while true; do sleep 1; done; } &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-nohup-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-loop-and-wait-in-timeout-bash-c-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done & wait'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-nohup-timeout-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 600 bash -c 'while true; do sleep 1; done' &"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-backgrounded-follow-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'tail -f log &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-backgrounded-follow-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'tail -f log &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-nohup-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-block-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c '{ while true; do sleep 1; done; } &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-nohup-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'nohup bash -c \"while true; do sleep 1; done\" &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-loop-and-wait-in-timeout-bash-c-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done & wait'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-nohup-timeout-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup timeout 600 bash -c 'while true; do sleep 1; done' &"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-backgrounded-follow-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'tail -f log &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-backgrounded-follow-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'tail -f log &'"
+level = "ok"
+rules = []
+
+# The way a loop is usually sent to the background, its output sent away first: a known miss
+# too. `&&` and `&>` send nothing to the background: the bound holds.
+
+[[row]]
+id = "wl-bash-backgrounded-redirected-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-redirected-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-subshell-loop-and-a-command-in-timeout-bash-c-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '(while true; do sleep 1; done) && echo up'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-group-loop-with-its-output-sent-away-in-timeout-bash-c-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '{ while true; do sleep 1; done; } &>/dev/null'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-redirected-loop-in-sudo-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-redirected-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done >/dev/null 2>&1 &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-subshell-loop-and-a-command-in-timeout-bash-c-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '(while true; do sleep 1; done) && echo up'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-group-loop-with-its-output-sent-away-in-timeout-bash-c-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '{ while true; do sleep 1; done; } &>/dev/null'"
+level = "ok"
+rules = []
+
+# More wrapper chains around a `timeout` with a limit: each bounds the loop it runs.
+
+[[row]]
+id = "wl-bash-sudo-u-timeout-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo -u u timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-e-timeout-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo -E timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-env-i-timeout-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "env -i timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-nohup-timeout-600-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 600 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-0-sudo-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 sudo timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-s-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout -s KILL 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-k-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout -k 5 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-variable-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout \"$T\" bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-5m-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 5m bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-command-timeout-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "command timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-exec-timeout-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "exec timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-around-an-sh-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 sh -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-env-bash-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 env bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-around-an-until-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'until false; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-sudo-timeout-around-a-list-with-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 bash -c 'true; while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-timeout-60-around-a-loop-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-u-timeout-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo -u u timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-e-timeout-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo -E timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-env-i-timeout-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "env -i timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-nohup-timeout-600-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "nohup timeout 600 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-0-sudo-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 0 sudo timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-s-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout -s KILL 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-k-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout -k 5 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-variable-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout \"$T\" bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-5m-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 5m bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-command-timeout-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "command timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-exec-timeout-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "exec timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-around-an-sh-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 sh -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-env-bash-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 env bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-around-an-until-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'until false; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-sudo-timeout-around-a-list-with-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 bash -c 'true; while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-timeout-60-around-a-loop-is-a-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done'"
+level = "ok"
+rules = []
+
+# An expanding here-document is expanded by the calling shell too; a quoted one runs nothing.
+
+[[row]]
+id = "wl-bash-loop-in-a-here-document-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat <<EOF\n$(tail -f log)\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-text-in-a-quoted-here-document-of-timeout-runs-nothing"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat <<'EOF'\n$(while true; do sleep 1; done)\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-loop-in-a-here-document-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat <<EOF\n$(tail -f log)\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-text-in-a-quoted-here-document-of-timeout-runs-nothing"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat <<'EOF'\n$(while true; do sleep 1; done)\nEOF"
+level = "ok"
+rules = []
+
+# A group, a subshell or an `if` the bounded body sends to the background, and a job started
+# before a command that ends first, read bounded as well: known misses.
+
+[[row]]
+id = "fu-bash-backgrounded-group-follow-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '{ tail -f log; } &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-backgrounded-subshell-follow-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '( tail -f log ) &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '{ nohup bash -c \"while true; do sleep 1; done\"; } &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-subshell-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '( while true; do sleep 1; done ) &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-if-loop-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'if true; then while true; do sleep 1; done; fi &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-backgrounded-if-follow-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'if true; then tail -f log; fi &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-backgrounded-case-follow-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'case x in x) tail -f log;; esac &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-a-known-miss"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done & sleep 1'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-backgrounded-group-follow-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '{ tail -f log; } &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-backgrounded-subshell-follow-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '( tail -f log ) &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '{ nohup bash -c \"while true; do sleep 1; done\"; } &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-subshell-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '( while true; do sleep 1; done ) &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-if-loop-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'if true; then while true; do sleep 1; done; fi &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-backgrounded-if-follow-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'if true; then tail -f log; fi &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-gitbash-backgrounded-case-follow-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'case x in x) tail -f log;; esac &'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-a-known-miss"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done & sleep 1'"
+level = "ok"
+rules = []
+
+# A substitution in the words of `Start-Job` runs in the calling shell, before the job.
+[[row]]
+id = "fu-ps-follow-in-the-words-of-a-job-with-a-timeout-is-no-bound"
+os = "any"
+shell = "pwsh"
+command = "$j = Start-Job -Name \"$(Get-Content log.txt -Wait)\" { 1 }; Wait-Job $j -Timeout 30"
+level = "warn"
+rules = ["follow-unbounded"]
+
 [[row]]
 id = "wl-bash-counter-guard"
 os = "any"
@@ -1791,6 +3516,283 @@ id = "wl-bash-read-with-timeout-in-the-condition-is-ok"
 os = "any"
 shell = "bash"
 command = 'while read -t 5 line; do echo "$line"; done'
+level = "ok"
+rules = []
+
+# --- A count polled in arithmetic, in `let` or in an arithmetic `[[ ]]` test (`-gt`, `-ne`) ---
+# Arithmetic reads a `$(…)` like the same `$(…)` outside it, so such a loop with nothing that
+# bounds it breaks like its `[ ]` twin. A counter or a clock in the condition, or `timeout`
+# around the loop, bounds it; a throttle that waits on a job (`wait -n`) does not poll.
+
+[[row]]
+id = "wl-bash-a-count-polled-in-arithmetic"
+os = "any"
+shell = "bash"
+command = 'while (( $(pgrep -c worker) > 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-count-polled-in-arithmetic-until-it-is-zero"
+os = "any"
+shell = "bash"
+command = 'until (( $(pgrep -c worker) == 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-count-polled-in-a-test-comparison"
+os = "any"
+shell = "bash"
+command = 'while [[ $(pgrep -c worker) -gt 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-count-polled-in-a-test-not-equal"
+os = "any"
+shell = "bash"
+command = 'while [[ $(pgrep -c worker) -ne 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-count-polled-in-let"
+os = "any"
+shell = "bash"
+command = 'while let "$(pgrep -c worker) > 0"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-job-throttle-polled-in-arithmetic"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-counter-in-arithmetic-is-ok"
+os = "any"
+shell = "bash"
+command = 'n=0; while (( $(pgrep -c worker) > 0 && n++ < 60 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-counter-in-an-until-is-ok"
+os = "any"
+shell = "bash"
+command = 'n=0; until (( $(pgrep -c worker) == 0 || n++ >= 60 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-counter-in-a-test-is-ok"
+os = "any"
+shell = "bash"
+command = 'n=0; while [[ $(pgrep -c worker) -gt 0 && $n -lt 60 ]]; do n=$((n+1)); sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-with-a-counter-is-ok"
+os = "any"
+shell = "bash"
+command = 'n=0; while (( $(jobs -rp | wc -l) >= 4 && n++ < 600 )); do sleep 0.1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-seconds-deadline-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(pgrep -c worker) > 0 && SECONDS < 600 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-seconds-deadline-in-an-until-is-ok"
+os = "any"
+shell = "bash"
+command = 'until (( $(pgrep -c worker) == 0 || SECONDS >= 600 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-seconds-deadline-in-a-test-is-ok"
+os = "any"
+shell = "bash"
+command = 'while [[ $(pgrep -c worker) -gt 0 && $SECONDS -lt 600 ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-date-deadline-is-ok"
+os = "any"
+shell = "bash"
+command = 'end=$(( $(date +%s) + 600 )); while (( $(pgrep -c worker) > 0 && $(date +%s) < end )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-date-deadline-in-an-until-is-ok"
+os = "any"
+shell = "bash"
+command = 'end=$(( $(date +%s) + 600 )); until (( $(pgrep -c worker) == 0 || $(date +%s) >= end )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-with-a-date-deadline-in-a-test-is-ok"
+os = "any"
+shell = "bash"
+command = 'end=$(( $(date +%s) + 600 )); while [[ $(pgrep -c worker) -gt 0 && $(date +%s) -lt $end ]]; do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-under-timeout-is-ok"
+os = "any"
+shell = "bash"
+command = "timeout 600 bash -c 'while (( $(pgrep -c worker) > 0 )); do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-in-an-until-under-timeout-is-ok"
+os = "any"
+shell = "bash"
+command = "timeout 600 bash -c 'until (( $(pgrep -c worker) == 0 )); do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-polled-count-in-a-test-under-timeout-is-ok"
+os = "any"
+shell = "bash"
+command = "timeout 600 bash -c 'while [[ $(pgrep -c worker) -gt 0 ]]; do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-under-timeout-is-ok"
+os = "any"
+shell = "bash"
+command = "timeout 600 bash -c 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-a-job-throttle-that-waits-on-a-job-is-ok"
+os = "any"
+shell = "bash"
+command = 'while (( $(jobs -rp | wc -l) >= 4 )); do wait -n; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-arithmetic"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(pgrep -c worker) > 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-arithmetic-until-it-is-zero"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(pgrep -c worker) == 0 )); do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-a-test-comparison"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(pgrep -c worker) -gt 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-a-test-not-equal"
+os = "windows"
+shell = "gitbash"
+command = 'while [[ $(pgrep -c worker) -ne 0 ]]; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-count-polled-in-let"
+os = "windows"
+shell = "gitbash"
+command = 'while let "$(pgrep -c worker) > 0"; do sleep 1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-job-throttle-polled-in-arithmetic"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done'
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-a-polled-count-with-a-counter-in-arithmetic-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'n=0; while (( $(pgrep -c worker) > 0 && n++ < 60 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-polled-count-with-a-seconds-deadline-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(pgrep -c worker) > 0 && SECONDS < 600 )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-polled-count-with-a-date-deadline-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'end=$(( $(date +%s) + 600 )); while (( $(pgrep -c worker) > 0 && $(date +%s) < end )); do sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-polled-count-under-timeout-is-ok"
+os = "windows"
+shell = "gitbash"
+command = "timeout 600 bash -c 'while (( $(pgrep -c worker) > 0 )); do sleep 1; done'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-job-throttle-that-waits-on-a-job-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'while (( $(jobs -rp | wc -l) >= 4 )); do wait -n; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-polled-count-with-a-counter-in-a-test-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'n=0; while [[ $(pgrep -c worker) -gt 0 && $n -lt 60 ]]; do n=$((n+1)); sleep 1; done'
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-a-polled-count-with-a-seconds-deadline-in-an-until-is-ok"
+os = "windows"
+shell = "gitbash"
+command = 'until (( $(pgrep -c worker) == 0 || SECONDS >= 600 )); do sleep 1; done'
 level = "ok"
 rules = []
 
@@ -2798,7 +4800,7 @@ shell = "bash"
 command = "if [ -f log ]; then tail -f log; fi"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-function-is-a-sentence"
@@ -2807,7 +4809,7 @@ shell = "bash"
 command = "f() { tail -f log; }; f"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-loop-is-a-sentence"
@@ -2816,7 +4818,7 @@ shell = "bash"
 command = "for f in a b; do tail -f run.log; done"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-substitution-is-a-sentence"
@@ -2825,7 +4827,7 @@ shell = "bash"
 command = "x=$(tail -f log | grep -m1 ready)"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 [[row]]
 id = "fu-bash-fix-in-a-child-shell-is-a-sentence"
@@ -2834,7 +4836,7 @@ shell = "bash"
 command = "bash -c 'tail -f run.log | grep -m1 done'"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs in a child shell)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
 
 # A follow that feeds a loop (`tail -f log | while read`, Ruling 134) is replaced in place: the
 # loop ends with the follow's input.
@@ -2854,7 +4856,7 @@ shell = "bash"
 command = "( tail -f app.log )"
 level = "warn"
 rules = ["follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
 
 # One follow that cannot be rewritten makes the other's Fix a sentence too: a pasted command
 # would still follow without end.
@@ -2865,7 +4867,924 @@ shell = "bash"
 command = "tail -f a.log; for f in a b; do tail -f b.log; done"
 level = "warn"
 rules = ["follow-unbounded", "follow-unbounded"]
-fix = "rewrite each follow as `timeout 60 <command>` in place (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+# The bound goes right before the command's name: an assignment or a redirect before it stays in
+# front (`timeout 60 LC_ALL=C tail` fails, 127: timeout runs `LC_ALL=C` as a program).
+[[row]]
+id = "fu-bash-fix-of-a-plain-follow"
+os = "any"
+shell = "bash"
+command = "tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C tail -f log | grep ready"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 tail -f log | grep ready"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-of-a-substitution"
+os = "any"
+shell = "bash"
+command = "FOO=$(date) tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "FOO=$(date) timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-two-assignments"
+os = "any"
+shell = "bash"
+command = "A=1 B=2 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A=1 B=2 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-with-a-blank"
+os = "any"
+shell = "bash"
+command = "A='x y' tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A='x y' timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-in-a-later-stage"
+os = "any"
+shell = "bash"
+command = "echo x | LC_ALL=C tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "echo x | LC_ALL=C timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-cd"
+os = "any"
+shell = "bash"
+command = "cd x && tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "cd x && timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-cd-and-an-assignment"
+os = "any"
+shell = "bash"
+command = "cd x && LC_ALL=C tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "cd x && LC_ALL=C timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-a-leading-redirect"
+os = "any"
+shell = "bash"
+command = "2>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "2>&1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-an-assignment-and-a-redirect"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C 2>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C 2>&1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-of-watch-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 watch ls"
+
+[[row]]
+id = "fu-bash-fix-of-kubectl-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-fix-after-time"
+os = "any"
+shell = "bash"
+command = "time tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "time timeout 60 tail -f log"
+
+# A wrapper the bound was shown to run (`timeout 3 nohup tail -f quiet.log` ends at 3 s, 124) stays
+# inside it; any other wrapper gets the sentence: `command` and `exec` are shell builtins, which
+# timeout cannot run (127), and `sudo` was not shown to work. Every wrapper of the chain counts.
+[[row]]
+id = "fu-bash-fix-around-nohup"
+os = "any"
+shell = "bash"
+command = "nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env"
+os = "any"
+shell = "bash"
+command = "env X=1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 env X=1 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-nice"
+os = "any"
+shell = "bash"
+command = "nice tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nice tail -f log"
+
+[[row]]
+id = "fu-bash-fix-of-watch-around-nohup"
+os = "any"
+shell = "bash"
+command = "nohup watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup watch ls"
+
+[[row]]
+id = "fu-bash-fix-of-kubectl-around-nohup"
+os = "any"
+shell = "bash"
+command = "nohup kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-fix-of-docker-around-env"
+os = "any"
+shell = "bash"
+command = "env X=1 docker logs -f app"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 env X=1 docker logs -f app"
+
+[[row]]
+id = "fu-bash-fix-around-nohup-after-an-assignment"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "LC_ALL=C timeout 60 nohup tail -f log"
+
+[[row]]
+id = "fu-bash-fix-under-exec-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "exec tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `exec timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-exec-with-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "exec 3>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `exec 3>&1 timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-command-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `command timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-command-p-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "command -p tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `command -p timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-command-after-an-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `LC_ALL=C command timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# `builtin tail` runs no follow at all (bash: "builtin: tail: not a shell builtin", 1); the
+# finding stays, and the sentence says so and names the bounded program without `builtin`.
+[[row]]
+id = "fu-bash-fix-under-builtin-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "builtin tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Bash has no `tail` builtin, so `builtin tail` fails and follows nothing: drop `builtin` and bound the program: `timeout 60 tail -f log` (no command is built: the follow runs under a wrapper that runs only shell builtins)"
+
+[[row]]
+id = "fu-bash-fix-under-builtin-inside-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C nohup builtin tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Bash has no `tail` builtin, so `builtin tail` fails and follows nothing: drop `builtin` and bound the program: `LC_ALL=C nohup timeout 60 tail -f log` (no command is built: the follow runs under a wrapper that runs only shell builtins)"
+
+# `builtin` fails only in front of what is no shell builtin: `builtin command tail -f quiet.log`
+# follows (124 under `timeout 8`), `builtin nohup tail` fails as `builtin tail` does.
+[[row]]
+id = "fu-bash-fix-under-builtin-and-command-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "builtin command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `builtin command timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-builtin-of-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "builtin nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "Bash has no `nohup` builtin, so `builtin nohup` fails and follows nothing: drop `builtin` and bound the program: `nohup timeout 60 tail -f log` (no command is built: the follow runs under a wrapper that runs only shell builtins)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-inside-env-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "env X=1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `env X=1 sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# The chain case of `follow_fix_wrappers`: a listed wrapper in front of an unlisted one.
+[[row]]
+id = "fu-bash-fix-under-sudo-inside-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "nohup sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `nohup sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# A leading redirect stays in front of the form, with the assignments around it.
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "2>&1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `2>&1 sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-redirect-and-an-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "2>&1 A=1 sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `2>&1 A=1 sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-an-assignment-and-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "A=1 >o.txt sudo tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `A=1 >o.txt sudo timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-and-a-redirect-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x 2>&1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/x 2>&1 tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# A first wrapper spelled other than its row's name (quoted) is not read as listed.
+[[row]]
+id = "fu-bash-fix-under-a-quoted-wrapper-is-a-sentence"
+os = "any"
+shell = "bash"
+command = '"nohup" tail -f log'
+level = "warn"
+rules = ["follow-unbounded"]
+fix = 'put `timeout 60` after the wrappers, right before the program: `"nohup" timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)'
+
+[[row]]
+id = "fu-bash-fix-around-nice-inside-nohup"
+os = "any"
+shell = "bash"
+command = "nohup nice tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup nice tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env-inside-nohup"
+os = "any"
+shell = "bash"
+command = "nohup env X=1 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup env X=1 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-beside-a-follow-under-exec-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "LC_ALL=C tail -f a.log; exec tail -f b.log"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `exec timeout 60 tail -f b.log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+# Each Bash follow row's own sentence names its program.
+[[row]]
+id = "fu-bash-fix-of-watch-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then watch ls; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 watch ls` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-of-kubectl-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then kubectl logs -f pod; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 kubectl logs -f pod` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+[[row]]
+id = "fu-bash-fix-of-docker-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then docker logs -f app; fi"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 docker logs -f app` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+# Two follow programs share one sentence: the first reason's follow gives it.
+[[row]]
+id = "fu-bash-fix-of-two-programs-in-an-if-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "if true; then tail -f log; watch ls; fi"
+level = "warn"
+rules = ["follow-unbounded", "follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs inside another statement or an expression: an `if`, a function, a loop, a block, an assignment or a substitution)"
+
+# A bound after the wrappers and prefixes in front of the follow program bounds it, as
+# `timeout 60 tail -f log` does (`nohup timeout 8 tail -f quiet.log` ends at 8 s, 124).
+[[row]]
+id = "fu-bash-bound-after-command"
+os = "any"
+shell = "bash"
+command = "command timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-exec"
+os = "any"
+shell = "bash"
+command = "exec timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-sudo"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-sudo-with-a-user"
+os = "any"
+shell = "bash"
+command = "sudo -u x timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nohup"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-env"
+os = "any"
+shell = "bash"
+command = "env X=1 timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nice"
+os = "any"
+shell = "bash"
+command = "nice -n 5 timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-an-assignment-and-command"
+os = "any"
+shell = "bash"
+command = "A=1 command timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nohup-and-sudo"
+os = "any"
+shell = "bash"
+command = "nohup sudo timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-bound-after-nohup-of-watch"
+os = "any"
+shell = "bash"
+command = "nohup timeout 60 watch ls"
+level = "ok"
+rules = []
+
+# Ruling 155: a duration of 0 in any spelling, `inf` or `infinity` is no limit to GNU timeout, so
+# it bounds no follow; the Fix puts the bound's duration in its place. Options before the
+# duration are skipped to find it. A duration the guard cannot read stays a bound.
+[[row]]
+id = "fu-bash-timeout-0-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-00-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 00 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0s-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0s tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0m-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0m tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-0-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-inf-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-infinity-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout infinity tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-nohup-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "nohup timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0s-after-env-is-no-bound"
+os = "any"
+shell = "bash"
+command = "env X=1 timeout 0s tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "env X=1 timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-00-after-sudo-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 00 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "sudo timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-k-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 5 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -k 5 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-s-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -s KILL 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -s KILL 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-signal-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --signal=KILL 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --signal=KILL 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-kill-after-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --kill-after=5 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --kill-after=5 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-foreground-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --foreground 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --foreground 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-preserve-status-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout --preserve-status 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout --preserve-status 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-after-option-v-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout -v 0 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout -v 60 tail -f log"
+
+[[row]]
+id = "fu-bash-timeout-0-of-watch-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 watch ls"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 watch ls"
+
+[[row]]
+id = "fu-bash-timeout-0-of-kubectl-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0 kubectl logs -f pod"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 kubectl logs -f pod"
+
+[[row]]
+id = "fu-bash-timeout-inf-of-docker-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout inf docker logs -f app"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 docker logs -f app"
+
+[[row]]
+id = "fu-bash-timeout-0-beside-a-bounded-follow-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 5 tail -f a.log; timeout 0 tail -f b.log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 5 tail -f a.log; timeout 60 tail -f b.log"
+
+[[row]]
+id = "fu-bash-timeout-0-around-a-child-shell-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "timeout 0 bash -c 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
+
+# Controls: a positive duration, a kill-after of 0 before one, and a duration the guard cannot read.
+[[row]]
+id = "fu-bash-timeout-1-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-0-5-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 0.5 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-1d-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 1d tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-60-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-kill-after-0-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout -k 0 60 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-variable-is-a-bound"
+os = "any"
+shell = "bash"
+command = 'timeout "$T" tail -f log'
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-arithmetic-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout $((60*5)) tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-1-after-nohup-is-a-bound"
+os = "any"
+shell = "bash"
+command = "nohup timeout 1 tail -f log"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-child-shell-60-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'tail -f log'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-timeout-with-no-duration-keeps-its-verdict"
+os = "any"
+shell = "bash"
+command = "timeout tail -f log"
+level = "ok"
+rules = []
+
+# Controls: a bound elsewhere bounds nothing, and a `timeout` that is an argument is no wrapper.
+[[row]]
+id = "fu-bash-bound-in-another-statement-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup tail -f log; timeout 60 true"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup tail -f log; timeout 60 true"
+
+[[row]]
+id = "fu-bash-bound-word-after-the-program-is-no-bound"
+os = "any"
+shell = "bash"
+command = "nohup tail -f timeout"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup tail -f timeout"
+
+[[row]]
+id = "fu-bash-bound-after-nice-with-a-value-control"
+os = "any"
+shell = "bash"
+command = "nice -n 5 tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nice -n 5 tail -f log"
+
+# A line continuation before the program name stays: the bound goes on the program's own line.
+[[row]]
+id = "fu-bash-fix-after-a-continued-assignment"
+os = "any"
+shell = "bash"
+command = "A=1 \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A=1 \\\n timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-two-continued-assignments"
+os = "any"
+shell = "bash"
+command = "A=1 \\\n  B=2 \\\n tail -f log | grep x"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "A=1 \\\n  B=2 \\\n timeout 60 tail -f log | grep x"
+
+[[row]]
+id = "fu-bash-fix-around-a-continued-wrapper"
+os = "any"
+shell = "bash"
+command = "nohup \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 nohup \\\n tail -f log"
+
+# An assignment to `PATH` in front of the follow sets where the bound is looked up too
+# (`PATH=/tmp/si timeout 60 tail -f log`: "timeout: command not found", 127): the sentence sets it
+# after the bound. Another assignment, or `PATH` set by `env` after the bound, keeps the command.
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/tmp/si tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/tmp/si tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-around-nohup-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "A=1 PATH=/x nohup tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `nohup timeout 60 env A=1 PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+[[row]]
+id = "fu-bash-fix-after-a-path-assignment-under-command-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x command tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `command timeout 60 env PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# A line continuation stays in a sentence's form too: before the program, and in front of a
+# `PATH` assignment that moves behind the bound.
+[[row]]
+id = "fu-bash-fix-under-sudo-after-a-continuation-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo \\\n timeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-under-sudo-after-an-unindented-continuation-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "sudo \\\ntail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` after the wrappers, right before the program: `sudo \\\ntimeout 60 tail -f log` (no command is built: the follow runs under a wrapper the bound was not shown to run, or under a shell builtin it cannot run)"
+
+[[row]]
+id = "fu-bash-fix-after-a-continued-path-assignment-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "PATH=/x \\\n tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` in front and set the assignments after it: `timeout 60 env PATH=/x tail -f log` (no command is built: an assignment in front of the follow sets where the bound itself is looked up)"
+
+# An append keeps the old directories in front: the bound is found as before.
+[[row]]
+id = "fu-bash-fix-after-a-path-append-control"
+os = "any"
+shell = "bash"
+command = "PATH+=:/x tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "PATH+=:/x timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-after-another-assignment-control"
+os = "any"
+shell = "bash"
+command = "MYPATH=/x tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "MYPATH=/x timeout 60 tail -f log"
+
+[[row]]
+id = "fu-bash-fix-around-env-setting-path-control"
+os = "any"
+shell = "bash"
+command = "env PATH=/x tail -f log"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "timeout 60 env PATH=/x tail -f log"
 
 [[row]]
 id = "fu-ps-fix-in-an-if-is-a-sentence"
