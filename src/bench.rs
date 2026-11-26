@@ -1061,6 +1061,7 @@ impl TimedRules {
                 cfg,
                 fs: &t.fs,
                 deadline: &deadline,
+                memo: Default::default(),
             };
             t.time(&ctx, tool, pass);
         }
@@ -1087,6 +1088,7 @@ impl TimedRules {
                 cfg,
                 fs: &t.fs,
                 deadline: &deadline,
+                memo: Default::default(),
             };
             let ids = t.time(&ctx, tool, pass);
             let id = t.rule.id();
