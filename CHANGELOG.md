@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- Bash and Git Bash: a destructive `bash -c`, `sh -c`, `zsh -c`, `eval` or `pwsh -Command` body,
+  or a script given as `<(…)`, followed by a redirect or here-string (`bash -c '…' 2>&1`,
+  `> log`, `2>&1 | tail -5`, or one between the words) now reads as the same body without it,
+  instead of ok.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

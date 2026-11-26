@@ -2,9 +2,10 @@
 
 A command whose code the guard does not read: an opaque command name, a shell or eval body
 (`bash -c '…'`, `pwsh -Command "…"`, `eval`), a wrapper past the nesting limit, or a wrapper with
-an option the program table does not model. It is a finding only when its raw text names a
-command that deletes or discards data (Ruling 91a): an unknown tool, or such a command with no
-delete in it, is ok.
+an option the program table does not model. It is a finding only when its raw text (in Bash its name
+and arguments, whatever redirect stands before, between or after them, a redirect target not read)
+names a command that deletes or discards data (Ruling 91a): an unknown tool, or such a command
+with no delete in it, is ok.
 
 Level `danger` when a word the delete acts on (after the delete command's name, matched as the
 scan matches it: with a folder, a module or `.exe` (`/usr/bin/rm`, `rm.exe`,
@@ -44,3 +45,9 @@ cmd //c "rmdir node_modules"
 bash -c "$script_text"
 timeout 60 newtool -x
 ```
+
+## Limits
+
+- A redirect before `time` makes `time` a program rather than Bash's keyword, and the guard does
+  not read what that program runs: `2>/dev/null time bash -c 'rm -rf ~'` is ok, while
+  `time bash -c 'rm -rf ~' 2>/dev/null` is danger.

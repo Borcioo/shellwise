@@ -3214,6 +3214,353 @@ command = "powershell.exe -NoProfile -Command \"cd build; Remove-Item -Recurse F
 level = "danger"
 rules = ["opaque-destructive"]
 
+# A child shell's body behind a redirect reads as the bare form: the scan covers the command from
+# its name to its last word, whatever redirect sits before, between or after them (the Bash
+# lowering gives a command with a later redirect the span of its name alone). A redirect target
+# is no word of the body: it neither fires nor reaches the target words.
+[[row]]
+id = "bash-c-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-redirect-to-log"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' > log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-stderr-to-null"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' 2>/dev/null"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-append"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' >> log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-both-streams"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' &> log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-redirect-to-variable"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' > \"$log\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-several-redirects"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' > log 2>&1 2>/dev/null"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-behind-dup-stderr-into-tail"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' 2>&1 | tail -5"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-into-tee"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' | tee log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-redirect-before-the-name"
+os = "any"
+shell = "bash"
+command = "2>/dev/null bash -c 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-redirect-between-the-words"
+os = "any"
+shell = "bash"
+command = "bash 2>&1 -c 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-redirect-between-option-and-body"
+os = "any"
+shell = "bash"
+command = "bash -c 2>&1 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "sudo-bash-c-home-redirect-between-shell-and-option"
+os = "any"
+shell = "bash"
+command = "sudo bash 2>&1 -c 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-with-a-here-string"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' <<< x"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-home-with-a-heredoc"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf ~' <<'EOF'\nhi\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "sh-c-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "sh -c 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "zsh-c-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "zsh -c 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "eval-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "eval 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-pwsh-command-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "pwsh -Command 'Remove-Item -Recurse -Force ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "sudo-bash-c-home-behind-redirect-to-log"
+os = "any"
+shell = "bash"
+command = "sudo bash -c 'rm -rf ~' > log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "env-bash-c-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "env A=1 bash -c 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "nohup-bash-c-home-behind-redirect-to-log"
+os = "any"
+shell = "bash"
+command = "nohup bash -c 'rm -rf ~' > log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "timeout-bash-c-home-behind-dup-stderr-into-tail"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'rm -rf ~' 2>&1 | tail -5"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "time-bash-c-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "time bash -c 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-c-home-behind-dup-stderr"
+os = "windows"
+shell = "gitbash"
+command = "bash -c 'rm -rf ~' 2>&1"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-sudo-bash-c-home-behind-redirect-to-log"
+os = "windows"
+shell = "gitbash"
+command = "sudo bash -c 'rm -rf ~' > log"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-eval-home-behind-dup-stderr-into-tail"
+os = "windows"
+shell = "gitbash"
+command = "eval 'rm -rf ~' 2>&1 | tail -5"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A delete of a relative folder warns as its bare form does, the home folder in a redirect target
+# (after the body or between the words) included.
+[[row]]
+id = "bash-c-relative-delete-behind-redirect-to-home"
+os = "any"
+shell = "bash"
+command = "bash -c 'rm -rf build' > ~/log"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-relative-delete-redirect-to-home-between-the-words"
+os = "any"
+shell = "bash"
+command = "bash > ~/log -c 'rm -rf build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+# A harmless body stays ok behind the same redirects, and a redirect target alone is no delete.
+[[row]]
+id = "bash-c-harmless-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "bash -c 'echo hi' 2>&1 | tail -5"
+level = "ok"
+rules = []
+
+[[row]]
+id = "bash-c-harmless-behind-redirect-to-etc"
+os = "any"
+shell = "bash"
+command = "bash -c 'echo hi' > /etc/x"
+level = "ok"
+rules = []
+
+[[row]]
+id = "echo-behind-redirect-to-home"
+os = "any"
+shell = "bash"
+command = "echo hi > ~/notes.txt"
+level = "ok"
+rules = []
+
+# Known miss, another cause: a redirect before `time` makes it a program, not bash's keyword, and
+# the table has no `time` row, so the call reads as a plain command.
+[[row]]
+id = "known-miss-redirect-before-time-program"
+os = "any"
+shell = "bash"
+command = "2>/dev/null time bash -c 'rm -rf ~'"
+level = "ok"
+rules = []
+
+# A process substitution as the script keeps its operator behind any redirect: it reads as the
+# bare form (`bash-procsub-home`), never as a harmless subshell.
+[[row]]
+id = "bash-procsub-home"
+os = "any"
+shell = "bash"
+command = "bash <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-stderr-to-null-before-the-name"
+os = "any"
+shell = "bash"
+command = "2>/dev/null bash <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-redirect-to-log-before-the-name"
+os = "any"
+shell = "bash"
+command = "> log bash <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-behind-redirect-to-log"
+os = "any"
+shell = "bash"
+command = "bash <(echo 'rm -rf ~') > log"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "bash <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-redirect-between-the-words"
+os = "any"
+shell = "bash"
+command = "bash 2>&1 <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-second-argument-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "bash -x <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "sudo-bash-procsub-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "sudo bash <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-procsub-home-behind-dup-stderr"
+os = "windows"
+shell = "gitbash"
+command = "bash <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
 # ---------------------------------------------------------------- Ruling 122 item 2: resolver gaps
 
 # A literal assigned earlier in the same command, and a loop over a literal list, resolve.
