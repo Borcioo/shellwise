@@ -332,28 +332,35 @@ impl Walk<'_, '_> {
     }
 
     /// Statement `i` of `s` runs in the background: a trailing `&`. The lowering keeps it on a
-    /// pipeline, on the join of the statement after another statement, and for a last loop or
-    /// `if` only in the text after it, past the `}` or `)` of groups it closes.
+    /// pipeline, on the join of the statement after another statement, and for a last loop, `if`
+    /// or group only in the text after it, past the words that close the statements around it
+    /// (`; } &`, `; fi &`). An `if` has the span of its keyword: its text ends with its last
+    /// branch.
     fn backgrounded(&self, s: &Script, i: usize) -> bool {
         let end = match &s.stmts[i] {
             Stmt::Pipeline(p) => return p.chain == Some(ChainOp::Background),
             _ if i + 1 < s.stmts.len() => return s.join(i + 1) == Some(ChainOp::Background),
-            Stmt::Loop { span, .. } | Stmt::Cond { span, .. } => span.end,
-            Stmt::Func { .. } | Stmt::Block(_) => return false,
+            Stmt::Loop { span, .. } => span.end,
+            Stmt::Cond { branches, span } => branches
+                .iter()
+                .filter_map(|b| range(&b.stmts))
+                .map(|r| r.end)
+                .fold(span.end, usize::max),
+            Stmt::Block(b) => match range(&b.stmts) {
+                Some(r) => r.end,
+                None => return false,
+            },
+            Stmt::Func { .. } => return false,
         };
-        let mut t = self.src.get(end..).unwrap_or("");
+        let blank = [' ', '\t', '\n', '\r'];
+        let mut t = self.src.get(end..).unwrap_or("").trim_start_matches(blank);
         loop {
-            t = t.trim_start_matches([' ', '\t', '\n', '\r']);
-            let closes = |r: &str| {
-                r.trim_start_matches([' ', '\t', '\n', '\r'])
-                    .starts_with(['}', ')'])
-            };
-            if let Some(r) = t.strip_prefix(';').filter(|r| closes(r)) {
-                t = r;
-            } else if let Some(r) = t.strip_prefix(['}', ')']) {
-                t = r;
-            } else {
-                return t.starts_with('&') && !t.starts_with("&&") && !t.starts_with("&>");
+            let after_semi = t.strip_prefix(';').map(|r| r.trim_start_matches(blank));
+            match past_closer(after_semi.unwrap_or(t)) {
+                Some(r) => t = r.trim_start_matches(blank),
+                None => {
+                    return t.starts_with('&') && !t.starts_with("&&") && !t.starts_with("&>");
+                }
             }
         }
     }
@@ -1345,6 +1352,15 @@ fn waits_on_job_with_timeout(c: &SimpleCommand, shell: Shell, os: Os) -> bool {
         let when = strings(p, JOB_TIMEOUT_WHEN);
         let args: Vec<String> = c.args.iter().filter_map(literal).collect();
         !when.is_empty() && has_opt(&args, &when, !matches!(shell, Shell::Bash(_)))
+    })
+}
+
+/// The Bash text `t` after the word at its start that closes a group, a subshell or an `if`
+/// (`}`, `)`, `fi`); `None` when no such word starts it.
+fn past_closer(t: &str) -> Option<&str> {
+    ["}", ")", "fi"].iter().find_map(|w| {
+        t.strip_prefix(w)
+            .filter(|r| w.len() == 1 || !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
     })
 }
 

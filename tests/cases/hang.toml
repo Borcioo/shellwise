@@ -2328,6 +2328,212 @@ command = "timeout 60 bash -c 'while true; do sleep 1; done'"
 level = "ok"
 rules = []
 
+# An expanding here-document is expanded by the calling shell too; a quoted one runs nothing.
+
+[[row]]
+id = "wl-bash-loop-in-a-here-document-of-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-follow-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "any"
+shell = "bash"
+command = "sudo timeout 60 cat <<EOF\n$(tail -f log)\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-bash-loop-text-in-a-quoted-here-document-of-timeout-runs-nothing"
+os = "any"
+shell = "bash"
+command = "timeout 60 cat <<'EOF'\n$(while true; do sleep 1; done)\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-gitbash-loop-in-a-here-document-of-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat <<EOF\n$(while true; do sleep 1; done)\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-gitbash-follow-in-a-here-document-of-sudo-timeout-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "sudo timeout 60 cat <<EOF\n$(tail -f log)\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-gitbash-loop-text-in-a-quoted-here-document-of-timeout-runs-nothing"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 cat <<'EOF'\n$(while true; do sleep 1; done)\nEOF"
+level = "ok"
+rules = []
+
+# A group, a subshell or an `if` the bounded body sends to the background, and a job started
+# before a command that ends first, run on without a limit as well.
+
+[[row]]
+id = "fu-bash-backgrounded-group-follow-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '{ tail -f log; } &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-backgrounded-subshell-follow-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '( tail -f log ) &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-bash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '{ nohup bash -c \"while true; do sleep 1; done\"; } &'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-backgrounded-subshell-loop-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c '( while true; do sleep 1; done ) &'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-backgrounded-if-loop-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'if true; then while true; do sleep 1; done; fi &'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-backgrounded-if-follow-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'if true; then tail -f log; fi &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-backgrounded-case-follow-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'case x in x) tail -f log;; esac &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-bash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-no-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done & sleep 1'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-gitbash-backgrounded-group-follow-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '{ tail -f log; } &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-backgrounded-subshell-follow-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '( tail -f log ) &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-gitbash-backgrounded-group-nohup-loop-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '{ nohup bash -c \"while true; do sleep 1; done\"; } &'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-backgrounded-subshell-loop-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c '( while true; do sleep 1; done ) &'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-gitbash-backgrounded-if-loop-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'if true; then while true; do sleep 1; done; fi &'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-gitbash-backgrounded-if-follow-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'if true; then tail -f log; fi &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-gitbash-backgrounded-case-follow-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'case x in x) tail -f log;; esac &'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-gitbash-backgrounded-loop-before-a-short-command-in-timeout-bash-c-is-no-bound"
+os = "windows"
+shell = "gitbash"
+command = "timeout 60 bash -c 'while true; do sleep 1; done & sleep 1'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+# A substitution in the words of `Start-Job` runs in the calling shell, before the job.
+[[row]]
+id = "fu-ps-follow-in-the-words-of-a-job-with-a-timeout-is-no-bound"
+os = "any"
+shell = "pwsh"
+command = "$j = Start-Job -Name \"$(Get-Content log.txt -Wait)\" { 1 }; Wait-Job $j -Timeout 30"
+level = "warn"
+rules = ["follow-unbounded"]
+
 [[row]]
 id = "wl-bash-counter-guard"
 os = "any"

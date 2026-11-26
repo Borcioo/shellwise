@@ -51,18 +51,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   `follow-unbounded`. A chain whose every `timeout` sets no limit (`sudo timeout 0 …`,
   `timeout 0 timeout 0 …`) still blocks. A `timeout` bounds only what it runs, not the words the
   calling shell expands before it starts, bare or behind a wrapper: a loop in a substitution in
-  an argument, an option value, the duration, a redirect or an assignment
+  an argument, an option value, the duration, a redirect, a here-document or an assignment
   (`timeout 60 echo "$(while true; do sleep 1; done)"`, `sudo -u "$(…)" timeout 60 …`,
   `timeout 60 cat <(…)`, `X="$(…)" timeout 60 …`, `timeout 60 bash -c "$(…)"`) now blocks, and a
-  follow there warns. So does a loop or a follow the child shell sends to the background
-  (`timeout 60 bash -c '<loop> &'`): the shell ends once it has started it, and `timeout` with it.
+  follow there warns, as one in the words of a PowerShell `Start-Job` that is waited for with a
+  timeout (`Start-Job -Name "$(Get-Content log -Wait)" { … }`). So does a loop or a follow the child shell sends to the background
+  (`timeout 60 bash -c '<loop> &'`, also in a group, a subshell or an `if`): the shell may end
+  once it has started it, and `timeout` with it. A body that waits for the job
+  (`timeout 60 bash -c '<loop> & wait'`) is bounded, but it blocks too.
 - A command that does not parse for a reason other than an unclosed quote (an unclosed quote
   already blocks, with the wrapper or without it), or whose analysis cannot finish, and pipes
   static delete text into a shell behind a wrapper (`sudo -u root printf 'rm -rf x' | bash`,
   `timeout 5 printf …`) now reads `danger` (`parse-error-destructive`, `analysis-incomplete`), as
-  it already did without the wrapper, instead of a warn. Static text that is only an argument of another command there
-  also reads `danger` (`sudo cat f printf 'rm -rf x' | bash`). A command that parses reads as
-  before.
+  it already did without the wrapper, instead of a warn. Static text that is only an argument of
+  another command there also reads `danger` (`sudo cat f printf 'rm -rf x' | bash`). A command
+  that parses reads as before.
 - A PowerShell delete through an alias the same command defines before it
   (`Set-Alias zz Remove-Item; zz C:\Windows -Recurse`, `Set-Alias -Name zz -Value Remove-Item;
   zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet
