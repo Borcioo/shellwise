@@ -44,6 +44,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   counts as a bound on a wait loop it runs, as it already did not on a follow: GNU `timeout`
   then sets no limit (`timeout 0 bash -c 'while true; do sleep 1; done'` now blocks). A duration the guard cannot
   read (`timeout "$T"`, `timeout "${T:-0}"`) still counts as a limit.
+- `wait-loop-unbounded`: a `timeout` with a limit behind another wrapper now bounds the wait loop
+  it runs, as it already bounded a follow: `sudo timeout 60 bash -c '<loop>'`, `env A=1 timeout 60
+  …`, `nice timeout 60 …`, `nohup timeout 600 …` and `timeout 0 timeout 600 …` no longer block,
+  and a follow in that child shell (`sudo timeout 60 bash -c 'tail -f log'`) no longer warns
+  `follow-unbounded`. A chain whose every `timeout` sets no limit (`sudo timeout 0 …`,
+  `timeout 0 timeout 0 …`) still blocks. A `timeout` bounds only what it runs, not the words the
+  calling shell expands before it starts, bare or behind a wrapper: a loop in a substitution in
+  an argument, an option value, the duration, a redirect, a here-document or an assignment
+  (`timeout 60 echo "$(while true; do sleep 1; done)"`, `sudo -u "$(…)" timeout 60 …`,
+  `timeout 60 cat <(…)`, `X="$(…)" timeout 60 …`, `timeout 60 bash -c "$(…)"`) now blocks, and a
+  follow there warns, as one in the words of a PowerShell `Start-Job` that is waited for with a
+  timeout (`Start-Job -Name "$(Get-Content log -Wait)" { … }`). Known miss: a loop or a follow
+  the child shell sends to the background still reads bounded, now behind a wrapper as well
+  (`sudo timeout 60 bash -c '<loop> &'`), as its bare twin (`timeout 60 bash -c '<loop> &'`) did.
+- A command that does not parse for a reason other than an unclosed quote (an unclosed quote
+  already blocks, with the wrapper or without it), or whose analysis cannot finish, and pipes
+  static delete text into a shell behind a wrapper (`sudo -u root printf 'rm -rf x' | bash`,
+  `timeout 5 printf …`) now reads `danger` (`parse-error-destructive`, `analysis-incomplete`), as
+  it already did without the wrapper, instead of a warn. Static text that is only an argument of
+  another command there also reads `danger` (`sudo cat f printf 'rm -rf x' | bash`). A command
+  that parses reads as before.
 - A PowerShell delete through an alias the same command defines before it
   (`Set-Alias zz Remove-Item; zz C:\Windows -Recurse`, `Set-Alias -Name zz -Value Remove-Item;
   zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet
