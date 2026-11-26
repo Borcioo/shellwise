@@ -140,6 +140,8 @@ pub enum Redirect {
     /// A here-document. An expanding body (unquoted delimiter) holds its `$(…)` as `Subst`
     /// parts; a quoted delimiter gives one literal part.
     Heredoc {
+        /// The descriptor it feeds as written (`3` of `3<<EOF`); empty for stdin.
+        fd: String,
         body: Word,
         expands: bool,
         span: Span,
