@@ -49,6 +49,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   …`, `nice timeout 60 …`, `nohup timeout 600 …` and `timeout 0 timeout 600 …` no longer block. A
   chain whose every `timeout` sets no limit (`sudo timeout 0 …`, `timeout 0 timeout 0 …`) still
   blocks.
+- A command that does not parse, or whose analysis cannot finish, and pipes static delete text
+  into a shell behind a wrapper (`sudo -u root printf 'rm -rf x' | bash`, `timeout 5 printf …`)
+  now reads `danger` (`parse-error-destructive`, `analysis-incomplete`), as it already did without
+  the wrapper, instead of a warn. Static text that is only an argument of another command there
+  also reads `danger` (`sudo cat f printf 'rm -rf x' | bash`). A command that parses reads as
+  before.
 - A PowerShell delete through an alias the same command defines before it
   (`Set-Alias zz Remove-Item; zz C:\Windows -Recurse`, `Set-Alias -Name zz -Value Remove-Item;
   zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet

@@ -151,6 +151,9 @@ mod hooks {
     use std::time::Duration;
 
     const DESTRUCTIVE: &str = "Get-Date; rm -rf x";
+    /// Delete text fed into a shell behind a wrapper: the scan passes over the producer's first
+    /// reading (`root printf …`).
+    const FED: &str = "sudo -u root printf 'rm -rf x' | bash";
     const PLAIN: &str = "Get-Date";
     /// A read-only command the removed harmless grammar used to clear.
     const READ_ONLY: &str = "git status";
@@ -176,6 +179,7 @@ mod hooks {
     #[test]
     fn worker_that_ends_without_a_result_fails_closed() {
         assert_failclosed_danger(&hook("dead-worker", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
+        assert_failclosed_danger(&hook("dead-worker", FED), FED, "rm -rf x");
         assert_incomplete_warn(&hook("dead-worker", PLAIN));
         assert_incomplete_warn(&hook("dead-worker", READ_ONLY));
     }
@@ -183,6 +187,7 @@ mod hooks {
     #[test]
     fn worker_that_cannot_start_fails_closed() {
         assert_failclosed_danger(&hook("spawn-fail", DESTRUCTIVE), DESTRUCTIVE, "rm -rf x");
+        assert_failclosed_danger(&hook("spawn-fail", FED), FED, "rm -rf x");
         assert_incomplete_warn(&hook("spawn-fail", PLAIN));
         assert_incomplete_warn(&hook("spawn-fail", READ_ONLY));
     }

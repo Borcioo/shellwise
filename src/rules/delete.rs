@@ -166,7 +166,7 @@ impl Rule for DeleteRule {
         };
         // A raw-scan hit on a table row or a .NET `Delete()` call; a region the scan cannot read
         // (an encoded or too-deep body) is no destructive match (Ruling 106(a)).
-        let scan_hits = |texts: &[String]| texts.iter().any(|t| scan::destructive_row(t).is_some());
+        let scan_hits = |texts: &[String]| texts.iter().any(|t| !scan::parsed_hits(t).is_empty());
         let unread_hit = |c: &SimpleCommand| {
             let (texts, capped) = unread_texts(c);
             capped || scan_hits(&texts)
@@ -224,7 +224,7 @@ impl Rule for DeleteRule {
                         // One scan per text: a readable hit is what `scan_hits` matches, and
                         // `opaque_in` reads the same hits.
                         for t in &texts {
-                            let hits = scan::hits(scan::table(), t);
+                            let hits = scan::parsed_hits(t);
                             if !hits.is_empty() {
                                 found = max_finding(found, Some(scene.opaque_in(cmd, t, hits)));
                             }
@@ -1387,7 +1387,7 @@ impl<'a> Scene<'a> {
     /// The finding for code the guard does not read whose text names a destructive command:
     /// danger when its words hold a literal protected location (Ruling 122 (b)), else warn.
     /// `text` is the text of `c`, or that text with an alias it calls written as its value;
-    /// `hits` are `scan::hits` of `text`.
+    /// `hits` are `scan::parsed_hits` of `text`.
     fn opaque_in(&mut self, c: &SimpleCommand, text: &str, hits: Vec<scan::Hit>) -> Finding {
         let command = self.ctx.input.command;
         let own = command.get(c.span.start..c.span.end).unwrap_or_default();

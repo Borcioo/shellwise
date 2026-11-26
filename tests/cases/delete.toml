@@ -1002,6 +1002,43 @@ command = "bash -c 'rm -rf build && make'"
 level = "warn"
 rules = ["opaque-destructive"]
 
+# In a command that parses, the raw scan of a body the guard does not read stops at the first
+# reading of a piped producer it cannot read (`root printf …`): only after a parse error does it
+# read the later ones. The twin with no wrapper is read.
+[[row]]
+id = "bash-c-with-a-delete-fed-into-a-shell-is-warn"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf 'rm -rf x' | bash\""
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-c-with-a-delete-fed-behind-sudo-stops-at-the-unread-reading"
+os = "any"
+shell = "bash"
+command = "bash -c \"sudo -u root printf 'rm -rf x' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "eval-with-a-delete-text-argument-fed-behind-sudo-stops-at-the-unread-reading"
+os = "any"
+shell = "bash"
+command = "eval \"sudo cat f printf 'rm -rf x' | bash\""
+level = "ok"
+rules = []
+
+# A delete elsewhere in the command makes the guard judge every command: the body is still read
+# up to the unread reading.
+[[row]]
+id = "bash-c-fed-behind-sudo-after-a-delete-stops-at-the-unread-reading"
+os = "any"
+shell = "bash"
+command = "rm -rf build; bash -c \"sudo -u root printf 'rm -rf x' | bash\""
+level = "ok"
+rules = []
+
 [[row]]
 id = "gb-echo-of-a-delete"
 os = "windows"
