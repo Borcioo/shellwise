@@ -225,7 +225,7 @@ impl Rule for DeleteRule {
                         // `opaque_in` reads the same hits.
                         for t in &texts {
                             let hits = scan::hits(scan::table(), t);
-                            if hits.iter().any(|h| h.kind != scan::Kind::Unreadable) {
+                            if !hits.is_empty() {
                                 found = max_finding(found, Some(scene.opaque_in(cmd, t, hits)));
                             }
                         }
@@ -1396,7 +1396,6 @@ impl<'a> Scene<'a> {
         // elsewhere in the body names no target.
         let words: Vec<String> = hits
             .into_iter()
-            .filter(|h| h.kind != scan::Kind::Unreadable)
             .filter_map(|h| Some((h.kind, text.get(h.span.start..h.span.end)?)))
             .flat_map(|(kind, t)| target_words(t, kind))
             .map(str::to_string)
