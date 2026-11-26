@@ -9,6 +9,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 - `shellwise lint` is faster on long files (a 500-line PowerShell script about a third faster, a
   500-line Bash script about a sixth); its output is unchanged.
+- Bash arithmetic reads like the text around it: a `$(…)` inside `$(( ))`, `(( ))`, `let`,
+  `[[ -eq ]]`, a `${a[…]}` subscript, `${s:o:l}`, `for (( ))` or a value assigned to a
+  `declare -i` name reads like the same `$(…)` outside arithmetic, and a name set by `read` like
+  the same name read as text. Arithmetic no longer makes a later relative delete an unknown
+  location (`echo $(( $(git rev-list --count HEAD) )); rm -rf build` and
+  `read n; (( n > 0 )); rm -rf build` no longer warn `delete-unknown-location`), and a substitution
+  inside arithmetic no longer warns `opaque-destructive`: its command is judged on its own, as
+  outside arithmetic. A `$(…)` that only a variable's value holds in a subscript
+  (`x='a[$(cmd)]'; (( x ))`) is no longer marked. In a script file, a `read` or an `eval`
+  anywhere no longer makes the whole file unreadable for arithmetic: `lint` now judges the
+  counter loops and deletes it skipped (more `wait-loop-unbounded`, `delete-empty-expansion` on
+  `d=x rm -rf "$d/"`, fewer `opaque-destructive`), and a long Bash file lints about a third
+  faster. No rule id changed.
 
 ### Fixed
 
@@ -24,8 +37,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   zz .git -Recurse`, also inside `& { }` or an `Invoke-Expression` string) is judged as the cmdlet
   the alias names; an alias the guard cannot read, or one read more ways than it follows, warns
   `dynamic-target` on a protected, unreadable or piped target.
-- Bash and Git Bash: a PowerShell alias cmdlet in the command (`Import-Alias x`) is a program
-  there and no longer makes the delete guard read every variable as one the command may set: with
+- Bash and Git Bash: a PowerShell alias cmdlet in the command (`Import-Alias x`, `ipal x`) or an
+  argument holding the text `alias:` (`grep -r alias: .`, a commit message) is a program or plain
+  text there and no longer makes the delete guard read every variable as one the command may set: with
   32 or more values of one Bash alias, `d=/; rm -rf "$d"` is `critical` again instead of a
   `dynamic-target` warn, and a relative folder through a variable reads as written in place.
 
