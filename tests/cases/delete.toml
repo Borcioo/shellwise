@@ -3487,6 +3487,80 @@ command = "2>/dev/null time bash -c 'rm -rf ~'"
 level = "ok"
 rules = []
 
+# A process substitution as the script keeps its operator behind any redirect: it reads as the
+# bare form (`bash-procsub-home`), never as a harmless subshell.
+[[row]]
+id = "bash-procsub-home"
+os = "any"
+shell = "bash"
+command = "bash <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-stderr-to-null-before-the-name"
+os = "any"
+shell = "bash"
+command = "2>/dev/null bash <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-redirect-to-log-before-the-name"
+os = "any"
+shell = "bash"
+command = "> log bash <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-behind-redirect-to-log"
+os = "any"
+shell = "bash"
+command = "bash <(echo 'rm -rf ~') > log"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "bash <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-redirect-between-the-words"
+os = "any"
+shell = "bash"
+command = "bash 2>&1 <(echo 'rm -rf ~')"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "bash-procsub-home-second-argument-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "bash -x <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "sudo-bash-procsub-home-behind-dup-stderr"
+os = "any"
+shell = "bash"
+command = "sudo bash <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "gb-bash-procsub-home-behind-dup-stderr"
+os = "windows"
+shell = "gitbash"
+command = "bash <(echo 'rm -rf ~') 2>&1"
+level = "warn"
+rules = ["opaque-destructive"]
+
 # ---------------------------------------------------------------- Ruling 122 item 2: resolver gaps
 
 # A literal assigned earlier in the same command, and a loop over a literal list, resolve.

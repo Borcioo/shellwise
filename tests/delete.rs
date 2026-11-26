@@ -638,9 +638,9 @@ fn arithmetic_reads_like_its_plain_twin() {
 }
 
 /// A child shell's body reads the same behind any redirect or pipe as bare: every carrier the
-/// delete rule reads, wrappers before it, times every redirect form, for a body that deletes the
-/// home folder (danger), one that deletes a relative folder (warn) and a harmless one (ok), with
-/// the bare form's messages.
+/// delete rule reads, wrappers before it, the body as a quoted word or a process substitution,
+/// times every redirect form, for a body that deletes the home folder, one that deletes a
+/// relative folder and a harmless one, with the bare form's messages.
 #[test]
 fn a_child_body_behind_a_redirect_reads_as_the_bare_form() {
     let _fx = fixture();
@@ -662,18 +662,32 @@ fn a_child_body_behind_a_redirect_reads_as_the_bare_form() {
         ),
         ("Write-Output hi", "ok", ""),
     ];
-    // The carrier's words before the body, the word the body follows last.
-    let carriers: [(&str, bool); 10] = [
-        ("bash -c", false),
-        ("sh -c", false),
-        ("zsh -c", false),
-        ("eval", false),
-        ("pwsh -Command", true),
-        ("sudo bash -c", false),
-        ("env A=1 bash -c", false),
-        ("nohup bash -c", false),
-        ("timeout 60 bash -c", false),
-        ("time bash -c", false),
+    // The carrier's words before the body, the word that holds the body (`{b}`), and whether
+    // the body is PowerShell. A quoted word is read at the bare levels of BASH and PWSH; a
+    // process substitution is a script operand, read as its bare form, which is never ok for
+    // the home folder.
+    const QUOTED: &str = "'{b}'";
+    const FED: &str = "<(echo '{b}')";
+    let carriers: [(&str, &str, bool); 19] = [
+        ("bash -c", QUOTED, false),
+        ("sh -c", QUOTED, false),
+        ("zsh -c", QUOTED, false),
+        ("eval", QUOTED, false),
+        ("pwsh -Command", QUOTED, true),
+        ("sudo bash -c", QUOTED, false),
+        ("env A=1 bash -c", QUOTED, false),
+        ("nohup bash -c", QUOTED, false),
+        ("timeout 60 bash -c", QUOTED, false),
+        ("time bash -c", QUOTED, false),
+        ("bash", FED, false),
+        ("sh", FED, false),
+        ("zsh", FED, false),
+        ("bash -x", FED, false),
+        ("sudo bash", FED, false),
+        ("env A=1 bash", FED, false),
+        ("nohup bash", FED, false),
+        ("timeout 60 bash", FED, false),
+        ("time bash", FED, false),
     ];
     let after = [
         " 2>&1",
@@ -715,12 +729,18 @@ fn a_child_body_behind_a_redirect_reads_as_the_bare_form() {
     let mut wrong = Vec::new();
     let mut cells = 0;
     for &shell in shells {
-        for (carrier, pwsh) in carriers {
+        for (carrier, word, pwsh) in carriers {
             for (body, level, rule) in if pwsh { PWSH } else { BASH } {
-                let bare = format!("{carrier} '{body}'");
+                let word = word.replace("{b}", body);
+                let bare = format!("{carrier} {word}");
                 let want = read(shell, bare.clone());
                 let want_ids: Vec<&str> = [rule].into_iter().filter(|r| !r.is_empty()).collect();
-                if (want.0.as_str(), want.1.clone()) != (level, want_ids) {
+                let bare_wrong = if word.starts_with('<') {
+                    body.contains('~') && want.0 == "ok"
+                } else {
+                    (want.0.as_str(), want.1.clone()) != (level, want_ids)
+                };
+                if bare_wrong {
                     wrong.push(format!("[{shell}] bare {bare:?}: {} {:?}", want.0, want.1));
                 }
                 let mut forms: Vec<String> = after.iter().map(|a| format!("{bare}{a}")).collect();
@@ -729,12 +749,13 @@ fn a_child_body_behind_a_redirect_reads_as_the_bare_form() {
                 for at in 1..=words.len() {
                     let (head, tail) = words.split_at(at);
                     let tail = tail.iter().map(|w| format!(" {w}")).collect::<String>();
-                    forms.push(format!("{} 2>&1{tail} '{body}'", head.join(" ")));
+                    forms.push(format!("{} 2>&1{tail} {word}", head.join(" ")));
                 }
                 // Known miss of another cause: a redirect before `time` makes it a program
                 // (delete.toml `known-miss-redirect-before-time-program`).
                 if !carrier.starts_with("time ") {
                     forms.push(format!("2>/dev/null {bare}"));
+                    forms.push(format!("> log {bare}"));
                 }
                 for text in forms {
                     cells += 1;

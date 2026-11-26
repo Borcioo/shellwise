@@ -45,3 +45,9 @@ cmd //c "rmdir node_modules"
 bash -c "$script_text"
 timeout 60 newtool -x
 ```
+
+## Limits
+
+- A redirect before `time` makes `time` a program rather than Bash's keyword, and the guard does
+  not read what that program runs: `2>/dev/null time bash -c 'rm -rf ~'` is ok, while
+  `time bash -c 'rm -rf ~' 2>/dev/null` is danger.
