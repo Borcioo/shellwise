@@ -529,10 +529,27 @@ fn an_install_dir_with_a_space_and_a_non_ascii_letter_works() {
         assert_success(&out);
         f.assert_holds(&fake_binary(LATEST, host_target()), &out, i.name);
         assert!(runs(&f.installed()), "{}: the binary runs", i.name);
-        let shown = f.installed().to_string_lossy().into_owned();
+        // The script prints the path it installed to; a short 8.3 temp folder (GitHub's Windows
+        // runners) may come back in its long spelling, so the file is compared by identity and
+        // the install folder's own name as text.
+        let prefix = format!("Installed shellwise {LATEST} at ");
+        let printed = out
+            .stdout
+            .lines()
+            .find_map(|l| l.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{}: no {prefix:?} line\n{}", i.name, out.context()));
+        let printed = Path::new(printed);
         assert!(
-            out.stdout.contains(&shown),
-            "{}: stdout names {shown:?}\n{}",
+            printed.ends_with(Path::new(&dir_name).join(bin_name())),
+            "{}: {printed:?} ends with {dir_name:?}\n{}",
+            i.name,
+            out.context()
+        );
+        let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        assert_eq!(
+            same(printed),
+            same(&f.installed()),
+            "{}: the printed path is the installed file\n{}",
             i.name,
             out.context()
         );

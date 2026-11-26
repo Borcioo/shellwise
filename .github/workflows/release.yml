@@ -43,11 +43,24 @@ jobs:
           # Cross-compiled on the Apple silicon runner.
           - os: macos-latest
             target: x86_64-apple-darwin
+          # Static builds; the toolchain step points cc at musl-gcc for the C grammar.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v4
       - run: rustup target add ${{ matrix.target }}
+      - name: Install the musl C toolchain
+        if: contains(matrix.target, 'musl')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          command -v musl-gcc aarch64-linux-musl-gcc x86_64-linux-musl-gcc shasum || true
+          echo "CC_$(echo '${{ matrix.target }}' | tr - _)=musl-gcc" >> "$GITHUB_ENV"
       - run: cargo test --features testhooks
-        if: runner.os != 'macOS'
+        if: runner.os != 'macOS' && !contains(matrix.target, 'musl')
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package
         shell: bash
@@ -84,7 +97,9 @@ jobs:
           merge-multiple: true
       - name: Write the combined checksum file
         shell: bash
-        run: cd dist && sha256sum shellwise-*.zip shellwise-*.tar.gz > SHA256SUMS
+        run: |
+          cp install.sh install.ps1 dist/
+          cd dist && sha256sum shellwise-*.zip shellwise-*.tar.gz install.sh install.ps1 > SHA256SUMS
       - name: Create the release
         shell: bash
         env:
