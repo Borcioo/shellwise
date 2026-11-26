@@ -5393,6 +5393,7 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
             &mut assigned,
             &script(vec![stmt(assigner.clone(), seq)]),
             "",
+            bash,
         );
         expect(
             resolve(&temp, &base, &assigned),
@@ -5403,7 +5404,12 @@ fn a_wrapper_in_front_of_a_command_is_read_through() {
     // A wrapper with nothing to run assigns nothing.
     let mut plain = env.clone();
     let alone = lits("command", &[]);
-    mark_assigned(&mut plain, &script(vec![stmt(alone.clone(), seq)]), "");
+    mark_assigned(
+        &mut plain,
+        &script(vec![stmt(alone.clone(), seq)]),
+        "",
+        bash,
+    );
     expect(
         resolve(&temp, &base, &plain),
         &paths(&[r"C:\Profiles\u\AppData\Local\Temp"]),
@@ -5541,6 +5547,7 @@ fn bash_cd_without_an_argument_goes_home() {
         &mut assigned,
         &script(vec![stmt(assign("HOME", "/x"), None)]),
         "",
+        shell,
     );
     let mut loc = base.clone();
     loc.after(&stmt(lits("cd", &[]), Some(ChainOp::And)), &assigned);
@@ -5632,6 +5639,7 @@ fn bash_cd_to_a_relative_name_is_unknown_when_cdpath_may_be_set() {
         &mut plain,
         &script(vec![stmt(assign("CDPATH", "/x"), None)]),
         "",
+        shell,
     );
     assert_eq!(after_cd(&plain, "sub"), MAY_BE_CRITICAL);
 }
@@ -6405,7 +6413,7 @@ fn a_name_assigned_anywhere_in_the_command_is_dynamic() {
             matches!(resolve(&w, &loc, &env), Target::Paths(_)),
             "{name}: control"
         );
-        mark_assigned(&mut env, &s, "");
+        mark_assigned(&mut env, &s, "", shell);
         assert_eq!(resolve(&w, &loc, &env), Target::Dynamic(w.span), "{name}");
     }
 }
@@ -6420,7 +6428,7 @@ fn a_loop_variable_named_in_the_loop_text_is_dynamic() {
         head: LoopHead::Items,
     }]);
     let (loc, mut env) = win(bash);
-    mark_assigned(&mut env, &s, text);
+    mark_assigned(&mut env, &s, text, bash);
     assert_eq!(
         resolve(&var("HOME"), &loc, &env),
         Target::Dynamic(var("HOME").span)
@@ -6429,7 +6437,12 @@ fn a_loop_variable_named_in_the_loop_text_is_dynamic() {
     assert_eq!(resolve(&tilde, &loc, &env), Target::Dynamic(tilde.span));
     // A loop that names no resolvable variable changes nothing.
     let (loc, mut env) = win(bash);
-    mark_assigned(&mut env, &s, "for f in a; do :; done; rm -rf \"$HOME\"");
+    mark_assigned(
+        &mut env,
+        &s,
+        "for f in a; do :; done; rm -rf \"$HOME\"",
+        bash,
+    );
     assert_eq!(
         resolve(&var("HOME"), &loc, &env),
         paths(&[r"C:\Profiles\u"])
@@ -6440,7 +6453,12 @@ fn a_loop_variable_named_in_the_loop_text_is_dynamic() {
 fn an_assigned_pwd_no_longer_follows_the_location() {
     let bash = Shell::Bash(BashProfile::GitBash);
     let (loc, mut env) = win(bash);
-    mark_assigned(&mut env, &script(vec![stmt(assign("PWD", "/"), None)]), "");
+    mark_assigned(
+        &mut env,
+        &script(vec![stmt(assign("PWD", "/"), None)]),
+        "",
+        bash,
+    );
     let w = var("PWD");
     assert_eq!(resolve(&w, &loc, &env), Target::Dynamic(w.span));
 }
@@ -8717,7 +8735,7 @@ fn a_script_alias_is_read_as_the_command_it_names() {
     ];
     for (label, shell, before, name, dynamic) in env_rows {
         let (loc, mut env) = win(shell);
-        mark_assigned(&mut env, &script(before), "");
+        mark_assigned(&mut env, &script(before), "", shell);
         let w = var(name);
         let got = resolve(&w, &loc, &env);
         let want = if dynamic {

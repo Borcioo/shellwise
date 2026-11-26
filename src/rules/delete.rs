@@ -150,8 +150,7 @@ impl Rule for DeleteRule {
         let os = ctx.input.os;
         let command = ctx.input.command;
         // A call of an alias the command defined before it is also read as what it runs.
-        let aliases =
-            resolve::DefinedAliases::of(ctx.script, command, shell, os, || ctx.pwsh_aliases());
+        let aliases = resolve::DefinedAliases::of(ctx.script, command, shell, os, || ctx.aliases());
         // Code the guard does not read, its text also read with each alias it calls written as
         // the alias's value (Ruling 153): the texts the raw scan reads, and whether an alias in
         // it has more values than the guard follows.
@@ -745,7 +744,7 @@ impl<'a> Scene<'a> {
                     input.command,
                     input.shell,
                     input.os,
-                    ctx.pwsh_aliases(),
+                    ctx.aliases(),
                 );
                 (env, multi)
             })
@@ -837,12 +836,8 @@ impl<'a> Scene<'a> {
             .location
             .get_or_init(|| {
                 let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
-                // A pwsh shell reads the script with the table the other readers use.
-                if is_pwsh(input.shell) {
-                    loc.read_script_with(self.ctx.script, self.ctx.pwsh_aliases().to_vec());
-                } else {
-                    loc.read_script(self.ctx.script);
-                }
+                // The script read with the table the other readers use.
+                loc.read_script_with(self.ctx.script, self.ctx.aliases().to_vec());
                 loc.read_text(input.command);
                 loc
             })
@@ -2530,6 +2525,37 @@ mod tests {
             let got = rules_of(command, LONG_TEMP, Some(cwd), &fs, 5000);
             if got != want {
                 wrong.push(format!("{command} in {cwd}: {got:?} (want {want:?})"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Analyses of one text one after another on one thread each read the aliases in their own
+    /// shell's dialect: in PowerShell `Import-Alias` may define `zz` as anything, which may assign
+    /// `$d`; in Git Bash it is a program, and 40 values of the Bash alias `zz` leave `d=/` in
+    /// sight.
+    #[test]
+    fn each_analysis_reads_the_aliases_of_its_own_dialect() {
+        let fs: SharedFs = Arc::new(Folders);
+        let defs: Vec<String> = (1..=40).map(|i| format!("alias zz='echo {i}'")).collect();
+        let command = format!(
+            "{}; Import-Alias x; d=/; zz; rm -rf \"$d\"",
+            defs.join("; ")
+        );
+        let bash = Shell::Bash(crate::BashProfile::GitBash);
+        let rows = [
+            (Shell::Pwsh, &[DYNAMIC_TARGET][..]),
+            (bash, &[DELETE_CRITICAL][..]),
+            (Shell::Pwsh, &[DYNAMIC_TARGET][..]),
+        ];
+        let mut wrong = Vec::new();
+        for (i, (shell, want)) in rows.into_iter().enumerate() {
+            let env = vars(LONG_TEMP, HOME);
+            let got = rules_in(shell, &command, &env, Some(LONG_REPO), &[], &fs, 5000);
+            if got != want {
+                wrong.push(format!(
+                    "analysis {i} in {shell:?}: {got:?} (want {want:?})"
+                ));
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
