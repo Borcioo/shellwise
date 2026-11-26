@@ -111,12 +111,24 @@ name = "printf"
 shells = ["bash"]
 escapes = "always"
 value_options = ["-v"]
+feeds = "format"
 
 [[program]]
 name = "echo"
 shells = ["bash"]
 escapes = "option"
 escape_options = ["-e"]
+feeds = "words"
+
+[[program]]
+name = "cat"
+shells = ["bash"]
+feeds = "stdin"
+
+[[program]]
+name = "write-output"
+shells = ["pwsh"]
+feeds = "one"
 
 # --- Native Windows programs that take Linux paths, which Git Bash rewrites (bash-msys-path-mangle) ---
 
@@ -471,6 +483,11 @@ dry_run = ["/L"]
 # stdin_program_params on PowerShell: parameters (any unambiguous prefix) whose value is the
 #                      program, `-` for stdin (`-Command -`, `-File -`)
 # stdin_encoded_params on PowerShell: parameters whose value is an encoded program
+# feeds                on a producer before the shell in a pipeline: what it writes the guard can
+#                      read: "words" (its arguments joined by blanks, the first no option),
+#                      "format" (one format with no `%` and no `\`), "stdin" (its own heredoc,
+#                      with no operand but `-`), "one" (one argument). A word that
+#                      holds `$`, a backtick, `\` or `%` is never read.
 
 [[program]]
 name = "bash"

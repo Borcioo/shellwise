@@ -1,5 +1,6 @@
 //! The program a local shell reads on its stdin when the command fixes that text: the shell's own
-//! heredoc or here-string. The delete rule's raw scan and the wait-loop and follow walks read it
+//! heredoc or here-string, or what a literal producer before it in the pipeline writes
+//! (`echo '…' | bash`, `'…' | pwsh -Command -`). The delete rule's raw scan and the wait-loop and follow walks read it
 //! as they read the same shell's `-c` / `-Command` body, so the two forms read alike. A shell
 //! that runs a script, a `-c` body or a file on stdin reads its stdin as data, and a shell on
 //! another machine or in a container (`ssh host bash`, `docker exec -i c bash`) is no local shell:
@@ -9,7 +10,8 @@ use crate::Os;
 use crate::Shell;
 use crate::ir::{Elem, Quote, Redirect, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::programs::{self, Kind, Program};
-use crate::rules::delete::literal;
+use crate::rules::delete::{self, literal};
+use crate::scan;
 
 /// The `extra` keys of a shell row this reader reads (`data/programs.toml`).
 const LOOP_BODY: &str = "loop_body";
@@ -17,6 +19,12 @@ const STDIN_VALUE_OPTIONS: &str = "stdin_value_options";
 const STDIN_POSITIONAL: &str = "stdin_positional";
 const STDIN_PROGRAM_PARAMS: &str = "stdin_program_params";
 const STDIN_ENCODED_PARAMS: &str = "stdin_encoded_params";
+/// The `extra` key of a producer row and its values (`data/programs.toml`).
+const FEEDS: &str = "feeds";
+const FEEDS_WORDS: &str = "words";
+const FEEDS_FORMAT: &str = "format";
+const FEEDS_STDIN: &str = "stdin";
+const FEEDS_ONE: &str = "one";
 /// Paths that name the process's own stdin, as a shell's script operand.
 const STDIN_PATHS: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
 
@@ -34,13 +42,17 @@ pub(crate) struct Fed {
 /// `src` the text the spans point into.
 pub(crate) fn body(
     c: &SimpleCommand,
-    _prev: Option<&Elem>,
+    prev: Option<&Elem>,
     src: &str,
     shell: Shell,
     os: Os,
 ) -> Option<Fed> {
-    // Cheap first: a command with no stdin of its own is read no further.
-    let stdin = c.redirects.iter().rev().find(|r| is_stdin(r))?;
+    // Cheap first: a command with no stdin of its own and no producer is read no further. Its
+    // own stdin redirect, the last one, comes after the pipe.
+    let stdin = c.redirects.iter().rev().find(|r| is_stdin(r));
+    if stdin.is_none() && prev.is_none() {
+        return None;
+    }
     let run = programs::strip_wrappers(c, shell, os);
     if run.opaque {
         return None;
@@ -61,13 +73,10 @@ pub(crate) fn body(
     if !reads {
         return None;
     }
-    let (word, text) = match stdin {
-        Redirect::Heredoc { body, .. } => (body, heredoc_text(body, src)),
-        Redirect::File { op, target, .. } if is_here_string(op) => {
-            (target, here_string_text(target, src))
-        }
-        // A file or a descriptor: text the guard does not have.
-        Redirect::File { .. } => return None,
+    let (text, script) = match (stdin, prev) {
+        (Some(r), _) => redirected(r, src)?,
+        (None, Some(p)) => produced(p, src, shell, os)?,
+        (None, None) => return None,
     };
     // The walks read a `-c` body only after options that take no value.
     let values = strings(row, STDIN_VALUE_OPTIONS);
@@ -76,9 +85,62 @@ pub(crate) fn body(
         .iter()
         .any(|w| literal(w).is_some_and(|a| values.contains(&a.as_str())));
     Some(Fed {
-        script: literal(word).filter(|_| !loops.is_empty() && plain),
+        script: script.filter(|_| !loops.is_empty() && plain),
         text,
     })
+}
+
+/// The text a stdin redirect feeds, and that text when every part of it is literal: a heredoc
+/// or a here-string. A file or a descriptor holds text the guard does not have.
+fn redirected(r: &Redirect, src: &str) -> Option<(String, Option<String>)> {
+    match r {
+        Redirect::Heredoc { body, .. } => Some((heredoc_text(body, src), literal(body))),
+        Redirect::File { op, target, .. } if is_here_string(op) => {
+            Some((here_string_text(target, src), literal(target)))
+        }
+        Redirect::File { .. } => None,
+    }
+}
+
+/// What a literal producer writes into the pipe, as `redirected` gives it, by its row's `feeds`;
+/// a PowerShell string or here-string writes itself. A word that the writer may still expand is
+/// no static text, and any other producer (a download, a file, a variable) is not read.
+fn produced(prev: &Elem, src: &str, shell: Shell, os: Os) -> Option<(String, Option<String>)> {
+    let fixed = |w: &Word| literal(w).filter(|t| !t.contains(scan::EXPANDS));
+    let p = match prev {
+        Elem::Expr(w) => return fixed(w).map(|t| (t.clone(), Some(t))),
+        Elem::Cmd(p) if !p.opaque => p,
+        _ => return None,
+    };
+    let name = match (&p.canonical, delete::is_pwsh(shell)) {
+        (Some(cmdlet), true) => cmdlet.to_lowercase(),
+        _ => literal(&p.name)?,
+    };
+    let row = programs::lookup(&name, shell, os)?;
+    let feeds = row.extra.get(FEEDS).and_then(|v| v.as_str())?;
+    if feeds == FEEDS_STDIN {
+        // `cat <<'EOF' | bash`: its own heredoc, nothing written to a file. (The raw scan reads a
+        // heredoc there and no here-string, so neither does this.)
+        let operands = p.args.iter().map(literal).collect::<Option<Vec<_>>>()?;
+        if !(operands.is_empty() || operands == ["-"]) || !p.redirects.iter().all(is_stdin) {
+            return None;
+        }
+        return match p.redirects.iter().rev().find(|r| is_stdin(r))? {
+            r @ Redirect::Heredoc { .. } => redirected(r, src),
+            Redirect::File { .. } => None,
+        };
+    }
+    // A redirect may send the output elsewhere.
+    if !p.redirects.is_empty() {
+        return None;
+    }
+    let args = p.args.iter().map(fixed).collect::<Option<Vec<_>>>()?;
+    let text = match (feeds, args.as_slice()) {
+        (FEEDS_WORDS, [first, ..]) if !first.starts_with('-') => args.join(" "),
+        (FEEDS_ONE | FEEDS_FORMAT, [one]) => one.clone(),
+        _ => return None,
+    };
+    Some((text.clone(), Some(text)))
 }
 
 /// A list of strings a row holds under `key`; empty when it holds none.

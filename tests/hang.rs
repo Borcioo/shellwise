@@ -177,13 +177,19 @@ fn a_body_fed_on_stdin_reads_as_its_c_twin() {
             case_loader::Lang::Bash => BASH[cell.body],
             case_loader::Lang::Pwsh => PWSH[cell.body],
         };
+        // A bash called by its bare name from PowerShell draws `ps-bare-bash` (warn) too.
+        let (level, rule) = match (cell.bare_bash, level) {
+            (true, "ok") => ("warn", "ps-bare-bash"),
+            _ => (level, rule),
+        };
         let want = twins
             .entry((cell.shell, cell.twin.clone()))
             .or_insert_with(|| {
                 let got = read(cell.shell, &cell.twin);
                 let held = got.0 == level
                     && (rule.is_empty() || got.1.contains(&rule))
-                    && (!rule.is_empty() || got.1.is_empty());
+                    && (!rule.is_empty() || got.1.is_empty())
+                    && (!cell.bare_bash || got.1.contains(&"ps-bare-bash"));
                 if !held {
                     wrong.push(format!(
                         "[{}] twin {:?}: {} {:?} (want {level} {rule})",

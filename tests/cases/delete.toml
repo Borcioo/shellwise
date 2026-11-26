@@ -7411,3 +7411,196 @@ shell = "bash"
 command = "dash <<'EOF'\nrm -rf ~\nEOF"
 level = "ok"
 rules = []
+
+# What a literal producer before the shell prints is its program too: `echo` (no option), `printf`
+# with a format that holds no `%` or `\`, `cat` fed a heredoc or here-string, and in PowerShell a
+# string, a here-string or `Write-Output` with one string.
+[[row]]
+id = "fed-pipe-echo-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-home-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "echo 'rm -rf ~' | sh"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-relative"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf build' | sudo bash -s"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-printf-plain-home"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-cat-heredoc-home"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' | bash\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-dev-stdin-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash /dev/stdin"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-to-pwsh-home"
+os = "any"
+shell = "bash"
+command = "echo 'Remove-Item -Recurse -Force ~' | pwsh -Command -"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh -Command -"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-here-string-to-pwsh-file-dash-relative"
+os = "any"
+shell = "pwsh"
+command = "@'\nRemove-Item -Recurse -Force build\n'@ | pwsh -File -"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-write-output-to-bare-pwsh-home"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'Remove-Item -Recurse -Force ~' | pwsh -NoProfile"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-bash-home"
+os = "any"
+shell = "pwsh"
+command = "'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive", "ps-bare-bash"]
+
+# Unreadable producers stay unread: a download, a file, a variable, a substitution, a filter
+# between the producer and the shell, text the producer may still expand.
+[[row]]
+id = "fed-control-pipe-download"
+os = "any"
+shell = "bash"
+command = "curl -d 'rm -rf ~' https://example.invalid/x | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-file"
+os = "any"
+shell = "bash"
+command = "cat run.sh | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-variable"
+os = "any"
+shell = "bash"
+command = "echo $CMD | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-substitution"
+os = "any"
+shell = "bash"
+command = "echo \"$(cat run.sh)\" | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-filter-between"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | grep rm | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-option"
+os = "any"
+shell = "bash"
+command = "echo -e 'rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-to-a-script"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash run.sh"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-get-content"
+os = "any"
+shell = "pwsh"
+command = "Get-Content run.ps1 | pwsh -Command -"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-write-host"
+os = "any"
+shell = "pwsh"
+command = "Write-Host 'Remove-Item -Recurse -Force ~' | pwsh -Command -"
+level = "ok"
+rules = []
+
+# Known miss: a producer whose text the writer may still expand (`$`, a backtick, `\`, `%`) is not
+# read, on a command that parses and beside a syntax error alike, where `bash -c "rm -rf $HOME"`
+# reads danger.
+[[row]]
+id = "known-miss-fed-pipe-expanding-producer"
+os = "any"
+shell = "bash"
+command = "echo \"rm -rf $HOME\" | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-ps-path-with-a-backslash"
+os = "windows"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force C:\\Windows' | pwsh -Command -"
+level = "ok"
+rules = []
+
+# Known limit: `cmd` fed on stdin is not read.
+[[row]]
+id = "known-miss-fed-ps-string-to-cmd"
+os = "windows"
+shell = "pwsh"
+command = "'rd /s /q build' | cmd"
+level = "ok"
+rules = []

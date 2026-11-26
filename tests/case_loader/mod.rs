@@ -177,7 +177,7 @@ const BASH_CARRIERS: [(&str, bool); 8] = [
 ];
 
 /// Forms that feed a Bash body (`{b}`) to a Bash carrier (`{c}`).
-const BASH_FORMS: [&str; 8] = [
+const BASH_FORMS: [&str; 13] = [
     "{c} <<'EOF'\n{b}\nEOF",
     "{c} <<EOF\n{b}\nEOF",
     "{c} <<-'EOF'\n\t{b}\n\tEOF",
@@ -186,6 +186,11 @@ const BASH_FORMS: [&str; 8] = [
     "{c} <<< \"{b}\"",
     "{c} -s <<'EOF'\n{b}\nEOF",
     "{c} -s -- arg <<'EOF'\n{b}\nEOF",
+    "echo '{b}' | {c}",
+    "echo '{b}' | {c} -s",
+    "cat <<'EOF' | {c}\n{b}\nEOF",
+    "printf '{b}' | {c}",
+    "echo '{b}' | {c} /dev/stdin",
 ];
 
 /// PowerShell carriers that read their stdin as the program, with their `-Command` twin's words.
@@ -200,7 +205,16 @@ const PWSH_CARRIERS: [(&str, &str); 7] = [
 ];
 
 /// Forms that feed a PowerShell body (`{b}`) to a PowerShell carrier (`{c}`) from Bash.
-const PWSH_FORMS_IN_BASH: [&str; 2] = ["{c} <<'EOF'\n{b}\nEOF", "{c} <<< '{b}'"];
+const PWSH_FORMS_IN_BASH: [&str; 3] =
+    ["{c} <<'EOF'\n{b}\nEOF", "{c} <<< '{b}'", "echo '{b}' | {c}"];
+
+/// Forms that feed a body (`{b}`) to a carrier (`{c}`) from PowerShell.
+const FORMS_IN_PWSH: [&str; 4] = [
+    "'{b}' | {c}",
+    "@'\n{b}\n'@ | {c}",
+    "Write-Output '{b}' | {c}",
+    "echo '{b}' | {c}",
+];
 
 /// The shells a Bash form runs in on this host.
 pub fn bash_shells() -> &'static [&'static str] {
@@ -245,6 +259,32 @@ pub fn fed_cells(bash_bodies: &[&str], pwsh_bodies: &[&str]) -> Vec<FedCell> {
                     });
                 }
             }
+        }
+    }
+    for form in FORMS_IN_PWSH {
+        for (carrier, twin) in PWSH_CARRIERS {
+            for (body, b) in pwsh_bodies.iter().enumerate() {
+                out.push(FedCell {
+                    shell: "pwsh",
+                    fed: form.replace("{c}", carrier).replace("{b}", b),
+                    twin: format!("{twin} '{b}'"),
+                    lang: Lang::Pwsh,
+                    body,
+                    bounded: false,
+                    bare_bash: false,
+                });
+            }
+        }
+        for (body, b) in bash_bodies.iter().enumerate() {
+            out.push(FedCell {
+                shell: "pwsh",
+                fed: form.replace("{c}", "bash").replace("{b}", b),
+                twin: format!("bash -c '{b}'"),
+                lang: Lang::Bash,
+                body,
+                bounded: false,
+                bare_bash: true,
+            });
         }
     }
     out

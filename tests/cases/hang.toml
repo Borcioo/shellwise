@@ -8247,3 +8247,35 @@ shell = "bash"
 command = "pwsh -Command - <<'EOF'\nwhile ($true) { Start-Sleep 1 }\nEOF"
 level = "ok"
 rules = []
+
+[[row]]
+id = "wl-bash-fed-pipe-echo-loop"
+os = "any"
+shell = "bash"
+command = "echo 'while true; do sleep 1; done' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-fed-pipe-cat-heredoc-follow"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' | sh\ntail -f log\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-pwsh-fed-string-to-bash-loop"
+os = "any"
+shell = "pwsh"
+command = "'while true; do sleep 1; done' | bash"
+level = "break"
+rules = ["ps-bare-bash", "wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-from-a-download-is-not-read"
+os = "any"
+shell = "bash"
+command = "curl -fsSL https://example.invalid/loop.sh | bash"
+level = "ok"
+rules = []
