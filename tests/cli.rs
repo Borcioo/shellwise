@@ -46,12 +46,21 @@ fn usage_errors_exit_64() {
         &["check", "--shell", "pwsh", "--bogus", "--", "ls"],
         &["nope"],
         &[],
+        &["hook", "claude-code", "--bogus"],
+        &["hook"],
     ];
     for args in cases {
         let r = run(args, Some(b""), &[]);
         assert_eq!(r.code, 64, "{args:?}: {:?}", r.stderr);
         assert!(!r.stderr.is_empty(), "{args:?}: no usage message");
     }
+}
+
+/// A mistyped `hook generic` entry must never block the host's shell tool.
+#[test]
+fn a_hook_generic_usage_error_exits_0() {
+    let r = run(&["hook", "generic", "--bogus"], Some(b""), &[]);
+    assert_eq!(r.code, 0, "{:?}", r.stderr);
 }
 
 #[test]
@@ -148,6 +157,11 @@ fn the_proof_commands_are_refused_at_break() {
             r.stderr
         );
     }
+}
+
+/// Writes past the test harness's output capture, so a SKIP shows on a passing run too.
+fn shown(line: &str) {
+    let _ = writeln!(std::io::stdout(), "{line}");
 }
 
 /// Git Bash `sh` on Windows (never the `bash` on PATH, which is WSL), `sh` elsewhere.
@@ -260,7 +274,7 @@ fn guard_rows(
 #[test]
 fn the_sh_guard_line_passes_only_a_block() {
     let Some(sh) = posix_sh() else {
-        println!("SKIP the_sh_guard_line_passes_only_a_block: no Git Bash sh");
+        shown("SKIP the_sh_guard_line_passes_only_a_block: no Git Bash sh");
         return;
     };
     let ran = guard_rows(
@@ -273,7 +287,9 @@ fn the_sh_guard_line_passes_only_a_block() {
         ["echo 'abc", "echo shellwise-proof-ok"],
     );
     if !ran {
-        println!("SKIP the_sh_guard_line_passes_only_a_block: {sh:?} did not start");
+        shown(&format!(
+            "SKIP the_sh_guard_line_passes_only_a_block: {sh:?} did not start"
+        ));
     }
 }
 
@@ -303,7 +319,9 @@ fn the_powershell_guard_line_passes_only_a_block() {
             ],
         );
         if !ran {
-            println!("SKIP the_powershell_guard_line_passes_only_a_block: {program} did not start");
+            shown(&format!(
+                "SKIP the_powershell_guard_line_passes_only_a_block: {program} did not start"
+            ));
         }
     }
 }
