@@ -150,7 +150,8 @@ impl Rule for DeleteRule {
         let os = ctx.input.os;
         let command = ctx.input.command;
         // A call of an alias the command defined before it is also read as what it runs.
-        let aliases = resolve::DefinedAliases::of(ctx.script, command, shell, os);
+        let aliases =
+            resolve::DefinedAliases::of(ctx.script, command, shell, os, || ctx.pwsh_aliases());
         // Code the guard does not read, its text also read with each alias it calls written as
         // the alias's value (Ruling 153): the texts the raw scan reads, and whether an alias in
         // it has more values than the guard follows.
@@ -733,8 +734,14 @@ impl<'a> Scene<'a> {
             .get_or_init(|| {
                 let mut env = ctx.input.env.clone();
                 let input = ctx.input;
-                let multi =
-                    resolve_assigned(&mut env, ctx.script, input.command, input.shell, input.os);
+                let multi = resolve_assigned(
+                    &mut env,
+                    ctx.script,
+                    input.command,
+                    input.shell,
+                    input.os,
+                    ctx.pwsh_aliases(),
+                );
                 (env, multi)
             })
             .clone();
@@ -825,7 +832,12 @@ impl<'a> Scene<'a> {
             .location
             .get_or_init(|| {
                 let mut loc = Location::new(input.shell, input.os, input.cwd.as_deref());
-                loc.read_script(self.ctx.script);
+                // A pwsh shell reads the script with the table the other readers use.
+                if is_pwsh(input.shell) {
+                    loc.read_script_with(self.ctx.script, self.ctx.pwsh_aliases().to_vec());
+                } else {
+                    loc.read_script(self.ctx.script);
+                }
                 loc.read_text(input.command);
                 loc
             })
@@ -2473,12 +2485,12 @@ mod tests {
         }
     }
 
-    /// Analyses one after another on one thread each read their own command's assignments and
-    /// their own cwd.
+    /// Analyses one after another on one thread each read their own command's assignments,
+    /// aliases and cwd.
     #[test]
-    fn each_analysis_reads_its_own_assignments_and_cwd() {
+    fn each_analysis_reads_its_own_assignments_aliases_and_cwd() {
         let fs: SharedFs = Arc::new(Folders);
-        let rows: [(&str, &str, &[&str]); 3] = [
+        let rows: [(&str, &str, &[&str]); 5] = [
             (
                 r"$d = 'C:\Windows'; Remove-Item -Recurse -Force $d",
                 LONG_REPO,
@@ -2494,6 +2506,18 @@ mod tests {
                 r"C:\",
                 &[DELETE_CRITICAL],
             ),
+            // An alias of a location cmdlet leaves the location unknown (Ruling 156); without
+            // the definition `zz` is a program that stays where it is.
+            (
+                r"Set-Alias zz Set-Location; zz C:\Windows; Remove-Item -Recurse -Force System32",
+                LONG_REPO,
+                &[DELETE_UNKNOWN_LOCATION],
+            ),
+            (
+                r"zz C:\Windows; Remove-Item -Recurse -Force System32",
+                LONG_REPO,
+                &[],
+            ),
         ];
         let mut wrong = Vec::new();
         for (command, cwd, want) in rows {
@@ -2503,6 +2527,23 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Git Bash defines no alias through a PowerShell alias cmdlet: `Import-Alias` is a program
+    /// there and leaves the location where it is.
+    #[test]
+    fn a_pwsh_alias_cmdlet_moves_no_bash_location() {
+        let fs: SharedFs = Arc::new(Folders);
+        let got = rules_in(
+            Shell::Bash(crate::BashProfile::GitBash),
+            "Import-Alias x; rm -rf build",
+            &vars(LONG_TEMP, HOME),
+            Some(LONG_REPO),
+            &[],
+            &fs,
+            5000,
+        );
+        assert_eq!(got, Vec::<&str>::new());
     }
 
     /// The git rule starts from where the command starts, not from where the delete rule's walk

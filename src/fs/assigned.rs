@@ -19,7 +19,7 @@
 //! A use where the name does not hold sees it dynamic, which the empty-expansion rule reads as
 //! empty.
 
-use super::resolve::{is_pwd, mark_assigned_except};
+use super::resolve::{Alias, is_pwd, mark_assigned_except};
 use crate::ir::{ChainOp, Elem, EnvView, Pipeline, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::level::Span;
 use crate::{Os, Shell};
@@ -82,13 +82,15 @@ const KEPT: [&str; 5] = ["home", "userprofile", "oldpwd", "cdpath", "ifs"];
 
 /// Mark what `script` assigns in `env` as `mark_assigned` does, except the names the command
 /// gives literal values: a name valid at every use with one value is set in `env`; the others
-/// that hold somewhere are returned (and stay dynamic in `env`).
+/// that hold somewhere are returned (and stay dynamic in `env`). `aliases`:
+/// `resolve::script_aliases(script, true)`.
 pub fn resolve_assigned(
     env: &mut EnvView,
     script: &Script,
     command: &str,
     shell: Shell,
     os: Os,
+    aliases: &[Alias],
 ) -> Vec<Assigned> {
     let pwsh = matches!(shell, Shell::Pwsh | Shell::Powershell5);
     let declares = |c: &SimpleCommand| assigns_operand(c, shell, os);
@@ -159,7 +161,7 @@ pub fn resolve_assigned(
             plain.push(c.span);
         }
     });
-    mark_assigned_except(&mut probe, script, command, &plain);
+    mark_assigned_except(&mut probe, script, command, &plain, aliases);
     // Top-level plain assignments of any value whose statement assigns nothing else: one a later
     // unconditional assignment replaces is skipped by the final marks (`X=$(pwd); X=/`). In
     // PowerShell an expression in the value runs in place and may assign other names.
@@ -264,7 +266,7 @@ pub fn resolve_assigned(
         env.set(&c.name, &c.values[0]);
     }
     let skip: Vec<Span> = skip.into_iter().chain(replaced).collect();
-    mark_assigned_except(env, script, command, &skip);
+    mark_assigned_except(env, script, command, &skip, aliases);
     for c in &naive {
         if !everywhere.contains(&key(&c.name)) {
             env.mark_dynamic(&c.name);

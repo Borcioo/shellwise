@@ -5,7 +5,7 @@ use std::cell::OnceCell;
 use crate::config::Config;
 use crate::fs::SharedFs;
 use crate::fs::assigned::Assigned;
-use crate::fs::resolve::Location;
+use crate::fs::resolve::{self, Alias, Location};
 use crate::ir::{EnvView, Script};
 use crate::level::Finding;
 use crate::parse::ParseError;
@@ -49,6 +49,18 @@ pub struct Memo {
     /// The location before the first statement, the script and text read, no disk in use
     /// (`delete::Scene::location`).
     pub(crate) location: OnceCell<Location>,
+    /// `script_aliases` of the script read as pwsh (`Ctx::pwsh_aliases`).
+    pub(crate) aliases: OnceCell<Vec<Alias>>,
+}
+
+impl Ctx<'_> {
+    /// The aliases this Ctx's script defines, read as pwsh (`resolve::script_aliases(script,
+    /// true)`), built on the first call.
+    pub(crate) fn pwsh_aliases(&self) -> &[Alias] {
+        self.memo
+            .aliases
+            .get_or_init(|| resolve::script_aliases(self.script, true))
+    }
 }
 
 /// Which texts a rule checks.

@@ -1333,7 +1333,11 @@ impl Location {
     /// no file system is no file only when every part of the command is in a small harmless set
     /// (`only_harmless`). Until then it may be a folder.
     pub fn read_script(&mut self, script: &Script) {
-        let aliases = script_aliases(script, is_pwsh(self.shell));
+        self.read_script_with(script, script_aliases(script, is_pwsh(self.shell)));
+    }
+
+    /// `read_script` with `aliases`, the `script_aliases` of `script` in this shell's dialect.
+    pub(crate) fn read_script_with(&mut self, script: &Script, aliases: Vec<Alias>) {
         self.names_fixed = only_harmless(script, self.shell, self.os);
         self.commands_read = all_read(script, self.shell);
         self.script_read = true;
@@ -2540,13 +2544,13 @@ fn bash_defined(c: &SimpleCommand) -> Vec<String> {
 
 /// An alias the script defines: its name, lowercased, and the words of one value it gives it,
 /// `None` when the hook cannot read the value. A name given several values has one entry each.
-type Alias = (String, Option<Vec<String>>);
+pub(crate) type Alias = (String, Option<Vec<String>>);
 
 /// The aliases `s` defines anywhere (`alias_defs`), also through a call of one of them
 /// (`Set-Alias sa Set-Alias; sa up Set-Location`). Each pass reads every node with the table so
 /// far and keeps every definition any pass found, so the table only grows; its values are words
 /// of the script's own text, so it stops. `pwsh`: the script may run in a pwsh dialect.
-fn script_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
+pub(crate) fn script_aliases(s: &Script, pwsh: bool) -> Vec<Alias> {
     let mut table: Vec<Alias> = Vec::new();
     loop {
         let mut next = table.clone();
@@ -3022,7 +3026,14 @@ fn alias_words() -> &'static [String] {
 
 impl DefinedAliases {
     /// `command` is the text `s` was parsed from: one that holds no `alias_words` defines none.
-    pub(crate) fn of(s: &Script, command: &str, shell: Shell, os: Os) -> DefinedAliases {
+    /// `table` gives `script_aliases(s, true)`, called only when it is needed.
+    pub(crate) fn of<'t>(
+        s: &Script,
+        command: &str,
+        shell: Shell,
+        os: Os,
+        table: impl FnOnce() -> &'t [Alias],
+    ) -> DefinedAliases {
         let mut defs: Vec<(usize, Alias)> = Vec::new();
         let mut unbounded_from = None;
         let spells_one = || {
@@ -3034,9 +3045,9 @@ impl DefinedAliases {
             if unbounded {
                 unbounded_from = direct.iter().map(|(at, _)| *at).min();
             } else {
-                let table = script_aliases(s, true);
+                let table = table();
                 if table.iter().any(|(n, _)| n != "*") {
-                    visit_script(s, &table, &mut |n| {
+                    visit_script(s, table, &mut |n| {
                         if let Node::Cmd(c) = n {
                             let named = alias_defs(c, true).into_iter().filter(|(n, _)| n != "*");
                             defs.extend(named.map(|a| (c.span.end, a)));
@@ -3709,14 +3720,21 @@ fn writer_switch_word(w: &Word) -> bool {
 /// loop variable (found by name in the loop's text in `command`); `source`, `eval`, an opaque
 /// command or a script call (PowerShell) may assign anything.
 pub fn mark_assigned(env: &mut EnvView, script: &Script, command: &str) {
-    mark_assigned_except(env, script, command, &[]);
+    // The dialect is not known here: read the script as pwsh too.
+    mark_assigned_except(env, script, command, &[], &script_aliases(script, true));
 }
 
 /// `mark_assigned`, except the assignments of the commands whose span is in `skip` (the literal
-/// assignments `assigned::resolve_assigned` reads itself).
-pub fn mark_assigned_except(env: &mut EnvView, script: &Script, command: &str, skip: &[Span]) {
-    // The dialect is not known here: read the script as pwsh too.
-    visit_script(script, &script_aliases(script, true), &mut |n| match n {
+/// assignments `assigned::resolve_assigned` reads itself). `aliases`: `script_aliases(script,
+/// true)`.
+pub fn mark_assigned_except(
+    env: &mut EnvView,
+    script: &Script,
+    command: &str,
+    skip: &[Span],
+    aliases: &[Alias],
+) {
+    visit_script(script, aliases, &mut |n| match n {
         Node::Cmd(c) if skip.contains(&c.span) => {}
         Node::Cmd(c) => mark_command(env, c),
         Node::Method(m) => {
