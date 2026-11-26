@@ -32,6 +32,51 @@
 - `shellwise update` run from a binary the install scripts did not place (a `cargo install` copy, a read-only folder): it must fail with one clear line and leave the binary alone. Test in task 3.
 - `update --notify` with no network, or a release host that never answers: no output, exit 0, back within 3 seconds. Test in task 3.
 
+## Amendments from the plan review
+
+These bind every task and replace the task text where they differ.
+
+**Task 1**
+- `src/main.rs` is its own crate: it cannot reach a `pub(crate)` item. `generic.rs` exports `pub fn unread_verdict(bytes: &[u8], reason: &str, deadline: &Deadline) -> Option<String>` (the rendered stderr text when the raw scan of the bytes gives `danger` or above, as `claude_code::malformed` decides it), built on a `pub(crate)` `scan_text`; `finding_text` becomes `pub(crate)` with unchanged output.
+- The usage-error rule lives only in the `Cli::try_parse` error branch and reads `std::env::args_os()` (never `args()`, which panics on non-Unicode arguments that `check` must keep accepting).
+- Every process test passes `--shell bash` or `--shell pwsh` explicitly and removes `DIR` from the child's environment.
+- Extra rows: `a_break_exits_2` (`--shell bash`, `echo 'abc` → exit 2, stderr `shellwise: break parse-error`); `an_analysis_panic_blocks` uses `rm -rf x` under `SHELLWISE_TESTHOOK=panic`, as `tests/failclosed.rs` does; `switched_off_exits_0_unread` feeds a cut destructive event (`{"command":"rm -rf x`), which exits 2 without the switch; `a_scan_with_no_answer_blocks` (a malformed event under the scan-sleep test hook `tests/failclosed.rs` uses → exit 2).
+- The open-stdin tests allow 5 s of wall time, as `tests/failclosed.rs` does.
+
+**Task 2**
+- The fake release is built without a new crate: `tar -czf` for `.tar.gz`, `Compress-Archive` for `.zip`, in `tests/common/release.rs`. Each archive holds the top-level folder `shellwise-v<version>-<target>/` with the binary inside, as `release.yml` packages it. The fake binary of each version is the test binary plus a trailing marker file next to it named `VERSION` holding the version; tests tell versions apart by reading the marker the script must not install and by the binary's byte length after appending one marker byte per version.
+- `SHELLWISE_TARGET` overrides target detection (documented as a test and troubleshooting variable); test row `an_unsupported_target_refuses` sets it to `riscv64-unknown-none` and expects exit 1 with the supported list on stderr.
+- Windows swap: after the new binary is in place, delete `shellwise.old` when it is not locked. The test asserts no `.old` and no `.new` remains (the test's old binary is not running).
+- Names: the temporary and old files are `shellwise.new` / `shellwise.old` on POSIX and `shellwise.exe.new` / `shellwise.exe.old` on Windows.
+- `install.ps1` must behave under `irm … | iex`: the whole body runs inside `& { … }` so `Set-StrictMode` and `$ErrorActionPreference` do not leak into the user's session, and a refusal is a `throw` (never `exit`, which would close the user's window); when run with `-File` the script ends with exit code 1 on a refusal. Test row `the_script_works_through_iex` pipes the file text into `pwsh -NoProfile -Command -` as `Get-Content -Raw <path> | Invoke-Expression`.
+- PATH on Windows: read the user value with `Registry::CurrentUser` `Environment` `GetValue('Path', '', 'DoNotExpandEnvironmentNames')` and write it back as `ExpandString`, so existing `%VAR%` entries stay unexpanded.
+- Both scripts bound every download (`curl --connect-timeout 10 --max-time 120`; `Invoke-WebRequest -TimeoutSec 120`); in `check` mode the bounds are 2 and 3 seconds.
+- The Windows PowerShell 5.1 test run passes `-ExecutionPolicy Bypass`; every test that starts PowerShell sets `POWERSHELL_TELEMETRY_OPTOUT=1` and reads output as UTF-8.
+
+**Task 3**
+- `notify_checks_at_most_once_a_day`: the newer fake release stays in place for the second run, which must print nothing.
+- On POSIX the script child is started in its own process group and the whole group is killed at the bound.
+- `update` refuses with one line when the running binary's folder is not writable; the Review Focus line about a `cargo install` copy means exactly that. The mode-555 test is skipped (printed SKIP) when the effective user is root.
+- `current_exe()` is used without the `\\?\` prefix on Windows.
+
+**Task 4**
+- The proof command is one shellwise refuses at `break` and that only prints a shell error if it runs unguarded: `echo 'abc` for bash (rule `parse-error`) and `Write-Output "$name: done"` for PowerShell (rule `ps-var-colon`). The test expects `shellwise check` exit code 1 for each and, through `hook generic`, exit code 2. The text tells the agent how to tell the two outcomes apart: a block shows a line starting `shellwise: break`, an unguarded run shows the shell's own syntax error. The text says to pass the command to `check` after `--` or on stdin without a trailing newline.
+- The host table's values come from the three files `install-research-codex-gemini-copilot.md`, `install-research-cursor-windsurf-cline.md`, `install-research-opencode-aider-zed-t3.md`, whose folder the task brief names (outside the repo); a value not in them is left out.
+- The contract-items test also checks `--json`.
+
+**Task 5**
+- The plugin's `PreToolUse` timeout is 10 seconds (the default `hook_timeout_ms` is 10000, so the analysis ends by itself at 8.5 s; the plugin cannot write the user's config). The `SessionStart` timeout stays 5.
+- The live proof builds its own stub from the method `docs/spikes.md` describes; no stub file is tracked in the repo. When the stub cannot be rebuilt within an hour of work, stop and report BLOCKED with what was tried.
+
+**Task 6**
+- No separate `install-scripts` job for Windows and Ubuntu (the `test` job already runs every test file there): add one `macos-latest` job that runs `cargo test --features testhooks --test install_scripts --test update`, and a `shellcheck install.sh` step in the Ubuntu `test` job.
+
+**Task 7** depends on task 5 (both edit `docs/spikes.md`). No live run on Cursor is planned: its row stays `from the host's documentation`.
+
+**Task 8** README order: the two one-liners, the plugin commands, `shellwise agent-setup`, `shellwise update`, then the alternatives.
+
+**Global:** the frozen `check` exit codes are 0, 1, 2, 3, 64 and 74. Test lines are expected to reach about 600.
+
 ---
 
 ### Task 1: `shellwise hook generic`

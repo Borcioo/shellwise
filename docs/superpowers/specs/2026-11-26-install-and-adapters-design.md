@@ -158,9 +158,9 @@ The text is written to an agent, in the imperative, and holds:
   plugin instead. Cursor's row says it already runs a Claude Code hook found in the user's Claude
   settings, so a second entry is added only when there is none.
 - The proof, in this order, so nothing runs unguarded: first `shellwise check` on the proof command
-  must exit 2; then the agent runs through its own shell tool a command that shellwise refuses and
-  that does nothing if it runs anyway (a recursive delete under an unset variable of a name that
-  does not exist even when the variable is empty); then one harmless command that must pass. The
+  must report `break`; then the agent runs through its own shell tool that same command, one
+  shellwise refuses and that only prints a shell error if it runs anyway (an unterminated quote for
+  bash, a `$name:` drive reference for PowerShell); then one harmless command that must pass. The
   agent reports what the host showed for each. A host that needs a hook approved by the user
   (Codex CLI) is named, with the step to take.
 - What to tell the user when the host has no such hook: shellwise cannot guard it; `shellwise check`
@@ -197,7 +197,8 @@ with stderr shown to the model.
 
 `.claude-plugin/marketplace.json` at the repo root and `plugins/shellwise/` with a plugin manifest
 and a `hooks/hooks.json` that registers `shellwise hook claude-code` for `Bash|PowerShell` with a
-5 second timeout, calling `shellwise` from `PATH`, and a session-start hook that runs
+10 second timeout (above the 8.5 seconds after which the analysis ends by itself with the default
+`hook_timeout_ms`), calling `shellwise` from `PATH`, and a session-start hook that runs
 `shellwise update --notify`. The plugin's own files are kept current by the host's marketplace
 update; the binary is updated by the user. The plugin ships no binary: when `shellwise` is
 not on `PATH` the hook fails open (measured in `docs/spikes.md`), and the plugin's README names the
