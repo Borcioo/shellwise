@@ -1,0 +1,48 @@
+/* Maps Starlight's theme variables to the shared tokens. The site is dark only. */
+:root,
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--sl-color-accent-low: #3b2c0d;
+	--sl-color-accent: var(--accent);
+	--sl-color-accent-high: #f7cf85;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: var(--text);
+	--sl-color-gray-2: var(--mid);
+	--sl-color-gray-3: var(--soft);
+	--sl-color-gray-4: #5d6876;
+	--sl-color-gray-5: var(--line);
+	--sl-color-gray-6: var(--bg2);
+	--sl-color-black: var(--bg);
+	--sl-color-text-invert: var(--ink);
+	--sl-color-bg-inline-code: #232a34;
+	--sl-font: var(--font-body);
+	--sl-font-mono: var(--font-mono);
+}
+
+h1,
+h2,
+h3,
+h4,
+.site-title {
+	font-family: var(--font-display);
+	letter-spacing: -0.01em;
+}
+
+.sl-markdown-content a {
+	color: var(--accent);
+}
+
+/* Wide tables scroll inside their own box instead of widening the page. */
+.sl-markdown-content table {
+	display: block;
+	overflow-x: auto;
+}
+
+.sl-markdown-content th {
+	color: var(--accent);
+}
+
+/* A rendered repository document carries its own title line; the layout already prints one. */
+.source-doc > h1:first-child {
+	display: none;
+}
