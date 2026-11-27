@@ -7666,10 +7666,67 @@ rules = []
 
 # A word the guard cannot read may be the script or not: the body is read, the stricter reading.
 [[row]]
-id = "fed-unreadable-script-word-heredoc-home"
+id = "fed-unquoted-expansion-word-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash $OPTS <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-unquoted-substitution-word-here-string-home"
+os = "any"
+shell = "bash"
+command = "bash $(opts) <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A script operand the guard cannot read is still the script: stdin is its data.
+[[row]]
+id = "fed-control-heredoc-quoted-variable-script"
 os = "any"
 shell = "bash"
 command = "bash \"$S\" <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-tilde-script"
+os = "any"
+shell = "bash"
+command = "bash ~/x.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-to-a-globbed-script"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash ./run*.sh"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-variable-file"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh $script"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-joined-file"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Join-Path $PSScriptRoot x.ps1)"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-ps-string-to-pwsh-splat-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh @opts"
 level = "danger"
 rules = ["opaque-destructive"]
 

@@ -10,7 +10,7 @@ use crate::Os;
 use crate::Shell;
 use crate::ir::{Elem, Quote, Redirect, Script, SimpleCommand, Stmt, Word, WordPart};
 use crate::programs::{self, Kind, Program};
-use crate::rules::delete::{self, literal};
+use crate::rules::delete::{self, leading_literal, literal};
 use crate::scan;
 
 /// The `extra` keys of a shell row this reader reads (`data/programs.toml`).
@@ -70,7 +70,7 @@ pub(crate) fn body(
     let plain = if !loops.is_empty() {
         bash_reads_stdin(&run.args, src, row, &loops)?
     } else if !program.is_empty() {
-        pwsh_reads_stdin(&run.args, row, &program).then_some(false)?
+        pwsh_reads_stdin(&run.args, src, row, &program).then_some(false)?
     } else {
         return None;
     };
@@ -186,13 +186,23 @@ fn is_here_string(op: &str) -> bool {
     op.trim_start_matches(|ch: char| ch.is_ascii_digit()) == "<<<"
 }
 
+/// A word that is, whole, one unquoted expansion (`$OPTS`, `$(opts)`, not a process
+/// substitution): it may expand to nothing or to options, so the guard cannot tell it from none.
+fn may_vanish(w: &Word, src: &str) -> bool {
+    w.quote == Quote::None
+        && matches!(w.parts.as_slice(), [WordPart::Var(_) | WordPart::Subst(_)])
+        && !src
+            .get(w.span.start..w.span.end)
+            .is_some_and(|t| t.starts_with("<(") || t.starts_with(">("))
+}
+
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
 /// operand. A short option stands alone or in a cluster (`-ec`). A letter that takes a value
 /// takes the next word and the letters after it still count (bash: `-ox pipefail`), or, where
 /// the row says so, takes the rest of its word, or the next word as the last letter (zsh:
 /// `-oerrexit`, `-eo errexit`). With `-s` the words after the options are positional parameters;
 /// without it the first is the script, which is stdin only as `/dev/stdin`. A word the guard
-/// cannot read is read as no script, the stricter reading, unless it is a process substitution.
+/// cannot read is the script, unless it may vanish or hold options (`may_vanish`, `-o$x`).
 /// `Some(plain)` when stdin is the
 /// program, `plain` when no option took a value (the walks read a `-c` body only then).
 fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> Option<bool> {
@@ -205,14 +215,12 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
             ch.next() == Some(sign) && ch.next() == Some(letter) && ch.next().is_none()
         })
     };
-    // Whether the first operand `w` leaves stdin the program: none, `/dev/stdin`, or a word the
-    // guard cannot read but a process substitution, which is the script (`bash <(…)`).
+    // Whether the first operand `w` leaves stdin the program: none, `/dev/stdin`, or an unquoted
+    // expansion standing alone, which may vanish (`$OPTS`). Any other word is the script.
     let no_script = |w: Option<&Word>| {
         w.is_none_or(|w| match literal(w) {
             Some(s) => STDIN_PATHS.contains(&s.as_str()),
-            None => !src
-                .get(w.span.start..w.span.end)
-                .is_some_and(|t| t.starts_with("<(") || t.starts_with(">(")),
+            None => may_vanish(w, src),
         })
     };
     // Bash takes the value of each value letter in a cluster from the next words and reads the
@@ -226,6 +234,13 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
         k += 1;
         let script = |w: Option<&Word>| stdin_flag || no_script(w);
         let Some(a) = literal(w) else {
+            // An unquoted expansion standing alone may vanish or hold options (`$OPTS`), and so
+            // may a word that starts as an option (`-o$x`): read on past it. Any other word
+            // (`~/x.sh`, `"$HOME/x.sh"`, `./run*.sh`, `<(…)`) is the script.
+            if may_vanish(w, src) || leading_literal(w).is_some_and(|l| l.starts_with(['-', '+'])) {
+                plain = false;
+                continue;
+            }
             return script(Some(w)).then_some(plain);
         };
         if a == "--" || a == "-" {
@@ -271,8 +286,8 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
 /// a lone `-`, or no command and no file at all. A command, a file or an encoded command is no
 /// stdin program, unless `-NoExit` comes before it: then stdin is read after it. A parameter is
 /// any unambiguous prefix of its name (`-ex` for `-ExecutionPolicy`). A word the guard cannot
-/// read is read as no command: the stricter reading.
-fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
+/// read is the file or the command, unless it is a splat.
+fn pwsh_reads_stdin(args: &[Word], src: &str, row: &Program, program: &[&str]) -> bool {
     let encoded = strings(row, STDIN_ENCODED_PARAMS);
     let switches = strings(row, STDIN_SWITCH_PARAMS);
     let after = strings(row, STDIN_AFTER_PARAMS);
@@ -286,7 +301,19 @@ fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
     let mut keeps = false;
     let mut k = 0;
     while let Some(w) = args.get(k) {
-        let Some(a) = literal(w) else { return true };
+        let Some(a) = literal(w) else {
+            // A splat (`@args`) may hold any parameters: read on past it. Any other word the
+            // guard cannot read (`$script`, `(Join-Path $PSScriptRoot x.ps1)`) is the file or
+            // the command.
+            if src
+                .get(w.span.start..w.span.end)
+                .is_some_and(|t| t.starts_with('@'))
+            {
+                k += 1;
+                continue;
+            }
+            return keeps;
+        };
         let lower = a.to_lowercase();
         let Some(p) = ["--", "-", "/", "\u{2013}", "\u{2014}", "\u{2015}"]
             .iter()
@@ -517,6 +544,21 @@ mod tests {
             "bash -o pipefail run.sh <<< 'rm -rf ~'",
             "bash <(echo hi) <<< 'rm -rf ~'",
             "bash -- <(echo hi) <<< 'rm -rf ~'",
+            "bash ~/x.sh <<< 'rm -rf ~'",
+            "bash ~deploy/x.sh <<< 'rm -rf ~'",
+            "bash ./run*.sh <<< 'rm -rf ~'",
+            "bash x{1,2}.sh <<< 'rm -rf ~'",
+            "bash \"$HOME/x.sh\" <<< 'rm -rf ~'",
+            "bash ${HOME}/x.sh <<< 'rm -rf ~'",
+            "bash $HOME/x.sh <<< 'rm -rf ~'",
+            "bash \"$(dirname \"$0\")/x.sh\" <<< 'rm -rf ~'",
+            "bash \"$script\" <<< 'rm -rf ~'",
+            "bash -- \"$script\" <<< 'rm -rf ~'",
+            "bash $OPTS x.sh <<< 'rm -rf ~'",
+            "sudo bash ~/bin/setup.sh <<< 'rm -rf ~'",
+            "bash -e ~/scripts/install.sh <<< 'rm -rf ~'",
+            "pwsh \"$script\" <<< 'rm -rf ~'",
+            "pwsh $script <<< 'rm -rf ~'",
             "bash -eo pipefail run.sh <<< 'rm -rf ~'",
             "bash -euo pipefail run.sh <<< 'rm -rf ~'",
             "bash -xO extglob run.sh <<< 'rm -rf ~'",
@@ -579,14 +621,16 @@ mod tests {
             "bash --norc --login <<< 'rm -rf ~'",
             "bash < run.sh <<< 'rm -rf ~'",
             "bash 0<<'EOF'\nrm -rf ~\nEOF",
-            "bash \"$S\" <<< 'rm -rf ~'",
-            "bash -- \"$S\" <<< 'rm -rf ~'",
+            "bash $OPTS <<< 'rm -rf ~'",
+            "bash $(opts) <<< 'rm -rf ~'",
+            "bash -- $S <<< 'rm -rf ~'",
+            "bash -o$X <<< 'rm -rf ~'",
+            "bash -s \"$script\" <<< 'rm -rf ~'",
             "pwsh -NoProfile -ExecutionPolicy Bypass -Command - <<< 'rm -rf ~'",
             "pwsh -ex Bypass <<< 'rm -rf ~'",
             "pwsh -ep Bypass -c - <<< 'rm -rf ~'",
             "pwsh -wo C:/x <<< 'rm -rf ~'",
             "pwsh -WorkingDir C:/x -Command - <<< 'rm -rf ~'",
-            "pwsh \"$S\" <<< 'rm -rf ~'",
             "pwsh -File - <<< 'rm -rf ~'",
             "pwsh -f - <<< 'rm -rf ~'",
             "pwsh - <<< 'rm -rf ~'",

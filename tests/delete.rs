@@ -1143,7 +1143,20 @@ fn a_body_fed_on_stdin_reads_as_its_c_twin() {
 #[test]
 fn stdin_that_is_data_is_not_read_as_code() {
     let _fx = fixture();
-    const CONSUMERS: [&str; 32] = [
+    const CONSUMERS: [&str; 44] = [
+        // A script operand the guard cannot read is still the script.
+        "bash ~/x.sh",
+        "bash ~deploy/x.sh",
+        "bash ./run*.sh",
+        "bash x{1,2}.sh",
+        "bash \"$HOME/x.sh\"",
+        "bash ${HOME}/x.sh",
+        "bash \"$(dirname \"$0\")/x.sh\"",
+        "bash \"$script\"",
+        "sudo bash ~/bin/setup.sh",
+        "bash -e ~/scripts/install.sh",
+        "zsh ~/x.zsh",
+        "sh $HOME/x.sh",
         "bash -euo pipefail run.sh",
         "pwsh -Exec Bypass -File run.ps1",
         "cat",
