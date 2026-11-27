@@ -22,14 +22,17 @@ it ran out of time. Level `warn` otherwise.
 A program a local shell reads on stdin is read as the same shell's `-c` body (`-Command` in
 PowerShell): its own heredoc or here-string (`bash <<'EOF'`, `sh -s <<< '…'`,
 `pwsh -Command - <<'EOF'`), or what a literal producer before it in the pipeline writes
-(`echo '…' | bash`, `printf '…' | sh`, `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`, in
-PowerShell `'…' | pwsh -Command -` and `Write-Output '…' | pwsh`), also behind `sudo`, `env`,
-`nohup`, `timeout` and `time`. The shell reads its options as the shell does: `bash -eo pipefail`,
+(`echo '…' | bash`, `echo -n '…' 2>/dev/null | bash`, `printf '…\n' | sh`,
+`printf '%s\n' '…' '…' | bash`, `cat <<'EOF' | bash`, in PowerShell `'…' | pwsh -Command -` and
+`Write-Output '…' | pwsh`), also behind `sudo`, `env`, `nohup` and `timeout`, and a heredoc or
+here-string behind `time`. Its targets are read as in that `-c` body: `${HOME}` and `$(pwd)/..`
+are protected there too. The shell reads its options as the shell does: `bash -eo pipefail`,
 `bash -ox pipefail` and `zsh -oerrexit` read stdin, `bash -s a b` too, and PowerShell with
-`-NoExit` reads it after its file or command; a script operand
-(`bash run.sh`, `zsh -O extglob`), a `-c` body or a heredoc on another descriptor (`bash 3<<EOF`)
-leaves stdin as data. An argument the guard cannot read (`bash "$S" <<'EOF'`) reads stdin as the
-program.
+`-NoExit` reads it after its file or command; a script operand (`bash run.sh`,
+`bash ~/x.sh`, `bash "$S"`, `zsh -O extglob`, `pwsh ./x.ps1`), a `-c` body or a heredoc on
+another descriptor (`bash 3<<EOF`) leaves stdin as data. A word that may expand to no argument or
+to several (`bash $OPTS`, `bash "$@"`, `pwsh $script`, `pwsh @args`, `pwsh (Join-Path $d x.ps1)`)
+leaves stdin the program.
 
 `Fix: run the delete as a plain command of its own so the guard can check it` (danger: `Fix: run
 the delete as a plain command of its own, or, if this is intended, run the same command again
@@ -68,8 +71,11 @@ ssh host bash <<< 'rm -rf build'
   not read what that program runs: `2>/dev/null time bash -c 'rm -rf ~'` is ok, while
   `time bash -c 'rm -rf ~' 2>/dev/null` is danger.
 - A program on stdin is not read when the guard does not have its text or the shell is not
-  local: a producer that may still expand (`echo "rm -rf $DIR" | bash`), reads a file or the
-  network (`cat setup.sh | bash`, `curl … | sh`), has a redirect, or is `printf` with a format
-  that is not `%s` / `%s\n`, or with more than one argument; a shell on another machine or in a
-  container (`ssh host bash`, `docker exec -i c bash`, `kubectl exec`, `wsl`); `cmd`; `dash` and
-  `ksh` called by those names.
+  local: a producer whose words may still expand (`echo "rm -rf $DIR" | bash`), that reads a
+  file or the network (`cat setup.sh | bash`, `curl … | sh`), redirects its stdout
+  (`echo … >out`, `2>&1`), or prints an escape other than `\n`, `\t` and `\\` (`echo -e '…\c'`,
+  `printf '…\x41'`); `printf` with a format other than `%s` (one argument) or `%s\n`; a filter
+  between the producer and the shell (`echo … | cat | bash`); a pipe into `time bash` (`time`
+  there is a program); a heredoc on a compound command (`{ bash; } <<'EOF'`); a shell on another
+  machine or in a container (`ssh host bash`, `docker exec -i c bash`, `kubectl exec`, `wsl`);
+  `cmd`; `dash` and `ksh` called by those names.

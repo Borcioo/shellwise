@@ -100,7 +100,9 @@ $j = Start-Job { Get-Content run.log -Wait }; $null = Wait-Job $j -Timeout 60; R
 - A follow a local `bash`, `sh` or `zsh` reads on stdin is read as its `bash -c '…'` twin: the
   shell's own heredoc or here-string (`bash <<< 'tail -f run.log'`) or a literal producer before it
   (`echo 'tail -f run.log' | bash`, `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`), also behind
-  `sudo`, `env` and `nohup`; under `timeout` it is ok. Not read: a body after an option that takes
-  a value (`bash -o pipefail <<'EOF'`), as its `-c` twin is not; a body that expands; a PowerShell
-  program on stdin; a script operand or a `-c` body beside it; a shell on another machine or in a
-  container.
+  `sudo`, `env` and `nohup`, after options that take no value (`bash -e`, `bash -s a b`); under
+  `timeout` it is ok. Not read: a body after an option that takes a value, alone or in a cluster
+  (`bash -o pipefail <<'EOF'`, `bash -eo pipefail`), as its `-c` twin is not, or glued to its
+  letter (`zsh -oerrexit <<'EOF'`), though its `-c` twin is read; a body that expands; a
+  PowerShell program on stdin; a script operand or a `-c` body beside it; a shell on another
+  machine or in a container.

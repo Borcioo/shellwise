@@ -137,7 +137,9 @@ $n = 0; do { Start-Sleep 5; $n++ } while ($n -lt 30 -and -not (Test-Path done.tx
 - A Bash loop a local `bash`, `sh` or `zsh` reads on stdin is read as its `bash -c '…'` twin: the
   shell's own heredoc or here-string (`bash <<'EOF'`, `sh -s <<< '…'`) or a literal producer
   before it (`echo '…' | bash`, `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`), also behind
-  `sudo`, `env`, `nohup` and `timeout`, when every part of it is literal. Not read: a body after
-  an option that takes a value (`bash -o pipefail <<'EOF'`), as its `-c` twin is not; a body that
-  expands (`bash <<EOF` holding `$x`); a PowerShell program on stdin; a script operand or a `-c`
-  body beside it, where stdin is data; a shell on another machine or in a container.
+  `sudo`, `env`, `nohup` and `timeout`, when every part of it is literal, after options that take
+  no value (`bash -e`, `sh -eu`, `bash -s a b`). Not read: a body after an option that takes a
+  value, alone or in a cluster (`bash -o pipefail <<'EOF'`, `bash -eo pipefail`), as its `-c`
+  twin is not, or glued to its letter (`zsh -oerrexit <<'EOF'`), though its `-c` twin is read; a
+  body that expands (`bash <<EOF` holding `$x`); a PowerShell program on stdin; a script operand
+  or a `-c` body beside it, where stdin is data; a shell on another machine or in a container.

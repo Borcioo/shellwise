@@ -7412,9 +7412,9 @@ command = "dash <<'EOF'\nrm -rf ~\nEOF"
 level = "ok"
 rules = []
 
-# What a literal producer before the shell prints is its program too: `echo` (no option), `printf`
-# with a format that holds no `%` or `\`, `cat` fed a heredoc or here-string, and in PowerShell a
-# string, a here-string or `Write-Output` with one string.
+# What a literal producer before the shell prints is its program too: `echo`, `printf` with a
+# format that holds no `%`, `cat` fed a heredoc (not a here-string), and in PowerShell a string, a
+# here-string or `Write-Output` with one string.
 [[row]]
 id = "fed-pipe-echo-home"
 os = "any"
