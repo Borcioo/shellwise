@@ -7958,6 +7958,16 @@ command = "printf 'cd /tmp\\n\\trm -rf ~\\n' | bash"
 level = "danger"
 rules = ["opaque-destructive"]
 
+# Known miss: a format with a `%` conversion and no argument prints the conversion empty; that is
+# not read.
+[[row]]
+id = "known-miss-fed-pipe-printf-format-with-a-conversion"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~%s\\n' | bash"
+level = "ok"
+rules = []
+
 # Known miss: a format escape other than those three is not read.
 [[row]]
 id = "known-miss-fed-pipe-printf-format-with-another-escape"
