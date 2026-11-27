@@ -12,18 +12,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   here-string (`bash <<'EOF'`, `sh -s <<< '…'`, `pwsh -Command - <<'EOF'`) or what a literal
   producer before it in the pipeline writes (`echo '…' | bash`, `echo -n '…' | bash`,
   `printf '…\n' | sh`, `printf '%s\n' '…' '…' | bash`, `cat <<'EOF' | bash`,
-  `'…' | pwsh -Command -`), also behind `sudo`, `env`, `nohup` and `timeout`, and a heredoc or
-  here-string behind `time`; its targets read as in that `-c` body (`${HOME}`, `$(pwd)/..`).
-  Options are read as the shell reads them (`bash -eo pipefail`, `bash -ox pipefail`,
-  `zsh -oerrexit`, `pwsh -ex Bypass`); a script operand (`bash ~/x.sh`, `bash "$S"`), a `-c`
-  body or a heredoc on another descriptor leaves stdin as data, and a word that may expand to no
-  argument (`bash $OPTS`, `pwsh $script`, `pwsh (Join-Path $d x.ps1)`) does not. Not read: a
-  producer that may still expand, reads a file, redirects its stdout or copies a descriptor
-  (`2>&1`), holds `$`, a backtick or `%` in a word, or prints another escape
-  than `\n`, `\t`, `\\`; a filter before the shell (`| cat | bash`); a pipe into `time bash`; a
-  heredoc on a compound command; `ssh`, `docker exec`, `kubectl exec`, `wsl`, `cmd`, `dash` and
-  `ksh` by those names; the loop and follow rules also skip a body after an option that takes a
-  value and a PowerShell program.
+  `'…' | pwsh -Command -`), also behind `sudo`, `env`, `nohup` and `timeout` or a wrapper option
+  the guard does not know (`sudo --weird bash`), and a heredoc or here-string behind `time`; its
+  targets read as in that `-c` body (`${HOME}`, `$(pwd)/..`). Options are read as the shell
+  reads them (`bash -eo pipefail`, `bash -ox pipefail`, `zsh -oerrexit`, `pwsh -ex Bypass`); a
+  script operand (`bash ~/x.sh`, `bash "$S"`), a PowerShell script block (`pwsh { Get-Date }`),
+  a `-c` body or a heredoc on another descriptor leaves stdin as data. A word that may expand to
+  no argument or to several (`bash $OPTS`, `bash "${@:2}"`, `pwsh $script`) is read past, after
+  `--` too (`bash -- $OPTS x.sh` runs the script), and so is a parenthesised PowerShell
+  expression (`pwsh (Join-Path $d x.ps1)`): the guard does not evaluate it, so it cannot tell
+  that it names a script. Not read: a producer that may still expand, reads a file, redirects its
+  stdout or copies a descriptor (`2>&1`), holds `$`, a backtick or `%` in a word, or prints
+  another escape than `\n`, `\t`, `\\`; `printf '%s'` inside a `-c` body or beside a syntax
+  error; a filter before the shell (`| cat | bash`); a pipe into `time bash`; a heredoc on a
+  compound command; `ssh`, `docker exec`, `kubectl exec`, `wsl`, `cmd`, `dash` and `ksh` by
+  those names; the loop and follow rules also skip a body after an option that takes a value,
+  after a word that may vanish or behind a wrapper option the guard does not know, and a
+  PowerShell program.
 
 ### Changed
 

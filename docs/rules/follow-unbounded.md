@@ -103,6 +103,8 @@ $j = Start-Job { Get-Content run.log -Wait }; $null = Wait-Job $j -Timeout 60; R
   `sudo`, `env` and `nohup`, after options that take no value (`bash -e`, `bash -s a b`); under
   `timeout` it is ok. Not read: a body after an option that takes a value, alone or in a cluster
   (`bash -o pipefail <<'EOF'`, `bash -eo pipefail`), as its `-c` twin is not, or glued to its
-  letter (`zsh -oerrexit <<'EOF'`), though its `-c` twin is read; a body that expands; a
+  letter (`zsh -oerrexit <<'EOF'`), though its `-c` twin is read; a body after a word that may
+  vanish (`bash $OPTS`, `bash -- $OPTS`) or behind a wrapper option the guard does not know
+  (`sudo --weird bash`), as its `-c` twin is not; a body that expands; a
   PowerShell program on stdin; a script operand or a `-c` body beside it; a shell on another
   machine or in a container.

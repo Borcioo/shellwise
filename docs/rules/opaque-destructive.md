@@ -24,15 +24,21 @@ PowerShell): its own heredoc or here-string (`bash <<'EOF'`, `sh -s <<< '…'`,
 `pwsh -Command - <<'EOF'`), or what a literal producer before it in the pipeline writes
 (`echo '…' | bash`, `echo -n '…' 2>/dev/null | bash`, `printf '…\n' | sh`,
 `printf '%s\n' '…' '…' | bash`, `cat <<'EOF' | bash`, in PowerShell `'…' | pwsh -Command -` and
-`Write-Output '…' | pwsh`), also behind `sudo`, `env`, `nohup` and `timeout`, and a heredoc or
-here-string behind `time`. Its targets are read as in that `-c` body: `${HOME}` and `$(pwd)/..`
+`Write-Output '…' | pwsh`), also behind `sudo`, `env`, `nohup` and `timeout`, behind a wrapper
+option the guard does not know (`sudo --weird bash <<'EOF'`, as `sudo --weird bash -c '…'` is
+read), and a heredoc or here-string behind `time`. Its targets are read as in that `-c` body: `${HOME}` and `$(pwd)/..`
 are protected there too. The shell reads its options as the shell does: `bash -eo pipefail`,
 `bash -ox pipefail` and `zsh -oerrexit` read stdin, `bash -s a b` too, and PowerShell with
 `-NoExit` reads it after its file or command; a script operand (`bash run.sh`,
-`bash ~/x.sh`, `bash "$S"`, `zsh -O extglob`, `pwsh ./x.ps1`), a `-c` body or a heredoc on
-another descriptor (`bash 3<<EOF`) leaves stdin as data. A word that may expand to no argument or
-to several (`bash $OPTS`, `bash "$@"`, `pwsh $script`, `pwsh @args`, `pwsh (Join-Path $d x.ps1)`)
-leaves stdin the program.
+`bash ~/x.sh`, `bash "$S"`, `bash "$*"`, `zsh -O extglob`, `pwsh ./x.ps1`), a PowerShell script
+block (`pwsh -NoProfile { Get-Date }`: it is the command, and the piped text its `$input`), a
+`-c` body or a heredoc on another descriptor (`bash 3<<EOF`) leaves stdin as data. A word that
+may expand to no argument or to several (`bash $OPTS`, `bash "$@"`, `bash "${@:2}"`,
+`bash "${a[@]:1}"`, `pwsh $script`, `pwsh @args`) is read past, before `--` or `-` and after
+them alike: `bash -- $OPTS x.sh` runs `x.sh`, while with no script after it
+(`bash -- $OPTS <<'EOF'`) stdin is the program. A parenthesised PowerShell expression
+(`pwsh (Join-Path $d x.ps1)`) is read past too: the guard does not evaluate expressions, so it
+cannot tell that one names a script.
 
 `Fix: run the delete as a plain command of its own so the guard can check it` (danger: `Fix: run
 the delete as a plain command of its own, or, if this is intended, run the same command again
@@ -75,7 +81,11 @@ ssh host bash <<< 'rm -rf build'
   file or the network (`cat setup.sh | bash`, `curl … | sh`), redirects its stdout or copies a
   descriptor (`echo … >out`, `echo … 2>&1`), holds `$`, a backtick or `%` in a word, single-quoted
   too (`echo '$X; …'`), or prints an escape other than `\n`, `\t` and `\\` (`echo -e '…\c'`,
-  `printf '…\x41'`); `printf` with a format other than `%s` (one argument) or `%s\n`; a filter
+  `printf '…\x41'`); `printf` with any format but three: one with no `%` (`printf 'rm -rf x\n'`),
+  `%s` with one argument and `%s\n` with one or more (each a line), so `printf '%d'`,
+  `printf '%s %s' a b` and `printf '%s' a b` are not read; inside a `-c` body and beside a syntax
+  error, `printf '%s'` and `printf '%s\n'` with an argument, a printf format with an escape and
+  `echo` options (`echo -n`) are not read either; a filter
   between the producer and the shell (`echo … | cat | bash`); a pipe into `time bash` (`time`
   there is a program); a heredoc on a compound command (`{ bash; } <<'EOF'`); a shell on another
   machine or in a container (`ssh host bash`, `docker exec -i c bash`, `kubectl exec`, `wsl`);
