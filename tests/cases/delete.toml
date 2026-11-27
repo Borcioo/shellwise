@@ -8683,3 +8683,61 @@ shell = "bash"
 command = "bash \"${x:-default.sh}\" <<< 'rm -rf ~'"
 level = "ok"
 rules = []
+
+# An indirect expansion may point at `@` or an array whatever follows the name: all but a `*` join
+# may spread.
+[[row]]
+id = "fed-here-string-indirect-name-with-an-offset-home"
+os = "any"
+shell = "bash"
+command = "bash \"${!name:1}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-indirect-name-with-a-pattern-home"
+os = "any"
+shell = "bash"
+command = "bash \"${!name#x}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-indirect-array-joined"
+os = "any"
+shell = "bash"
+command = "bash \"${!name[*]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-here-string-element-default-of-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"${a[0]:-\"$@\"}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-default-of-indirect-names-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-${!p@}}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-default-path-under-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-$HOME/run.sh}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-folder-variable-and-script"
+os = "any"
+shell = "bash"
+command = "bash \"${dir}/x.sh\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []

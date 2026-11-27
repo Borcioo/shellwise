@@ -255,24 +255,29 @@ fn may_vanish(w: &Word, src: &str, quoted_vanish: bool) -> bool {
 
 /// Whether a `${…}` expansion, written as `n` (its name and operators), is of every argument or
 /// every element of an array: `@`, `@:2`, `@#x`, `@:+x`, `a[@]`, `a[@]:1`, `a[@]/x/y`, `a[@]:-d`,
-/// `!a[@]` (the indices), `!p@` (the names starting `p`), `!name` (which may name `@` or `a[@]`),
-/// and a default or alternate word that holds them (`x:-"$@"`, `x:+"${a[@]}"`). In double quotes
-/// it gives one word per element, so none when there is none, and several, options among them,
-/// when there are. A count (`#a[@]`, `#@`), a `*` join (`*`, `a[*]`, `!p*`), one element (`a[0]`),
-/// a pattern that names `[@]` (`x#[@]`) and any other default (`x:-default.sh`) give one word.
+/// any indirect one but a `*` join (`!name`, `!name:1`, `!a[@]`, `!p@`: the guard cannot know what
+/// the name points at), and a default, alternate or assigned word that holds an `@` expansion
+/// (`x:-"$@"`, `a[0]:+"${b[@]}"`, `x-${!p@}`). In double quotes it gives one word per element, so
+/// none when there is none, and several, options among them, when there are. A count (`#a[@]`,
+/// `#@`), a `*` join (`*`, `a[*]`, `!p*`, `!a[*]`), one element (`a[0]`), a pattern that names
+/// `[@]` (`x#[@]`), any other default (`x:-default.sh`) and `$!` give one word.
 fn spreads(n: &str) -> bool {
-    let indirect = n.strip_prefix('!');
-    let n = indirect.unwrap_or(n);
-    let rest = n.trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_');
-    if rest.len() == n.len() {
-        return rest.starts_with('@');
+    let ident = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+    if let Some(name) = n.strip_prefix('!').filter(|m| !m.is_empty()) {
+        let rest = name.trim_start_matches(ident);
+        return !(rest.starts_with('*') || rest.starts_with("[*]"));
     }
+    let rest = n.trim_start_matches(ident);
+    if rest.len() == n.len() || rest.starts_with("[@]") {
+        return rest.starts_with('@') || rest.starts_with("[@]");
+    }
+    // After the name or a subscript (`a[0]`), the operator's word.
+    let rest = match rest.strip_prefix('[') {
+        Some(r) => r.split_once(']').map_or("", |(_, t)| t),
+        None => rest,
+    };
     let op = rest.strip_prefix(':').unwrap_or(rest);
-    let word_spreads =
-        op.starts_with(['-', '+', '=']) && ["$@", "${@", "[@]}"].iter().any(|s| op.contains(s));
-    rest.starts_with("[@]")
-        || word_spreads
-        || (indirect.is_some() && (rest.is_empty() || rest.starts_with('@')))
+    op.starts_with(['-', '+', '=']) && ["$@", "${@", "[@]", "@}"].iter().any(|s| op.contains(s))
 }
 
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
@@ -686,6 +691,9 @@ mod tests {
             "bash \"${p@Q}\" <<< 'rm -rf ~'",
             "bash \"${x:-default.sh}\" <<< 'rm -rf ~'",
             "bash \"${x:-$*}\" <<< 'rm -rf ~'",
+            "bash \"${x:-$HOME/run.sh}\" <<< 'rm -rf ~'",
+            "bash \"${!a[*]}\" <<< 'rm -rf ~'",
+            "bash \"$!\" <<< 'rm -rf ~'",
         ] {
             assert_eq!(texts(src), Vec::<String>::new(), "{src:?}");
         }
@@ -763,6 +771,8 @@ mod tests {
             "bash \"${x:+\"${a[@]}\"}\" <<< 'rm -rf ~'",
             "bash \"${x:=\"${@:2}\"}\" <<< 'rm -rf ~'",
             "bash \"${!name}\" <<< 'rm -rf ~'",
+            "bash \"${!name#x}\" <<< 'rm -rf ~'",
+            "bash \"${a[0]-\"${b[@]}\"}\" <<< 'rm -rf ~'",
             "sudo --weird bash <<< 'rm -rf ~'",
             "env --weird zsh -s <<< 'rm -rf ~'",
         ] {
