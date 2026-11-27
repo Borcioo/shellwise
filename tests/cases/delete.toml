@@ -8649,3 +8649,37 @@ shell = "bash"
 command = "sudo --weird x bash <<< 'rm -rf ~'"
 level = "ok"
 rules = []
+
+# A default or alternate word that holds every argument or element gives them as words, options
+# among them; `${!name}` may name `@` or `a[@]` and give no word.
+[[row]]
+id = "fed-here-string-default-of-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-\"$@\"}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-alternate-of-an-array-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:+\"${a[@]}\"}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-indirect-name-home"
+os = "any"
+shell = "bash"
+command = "bash \"${!name}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-default-script-name"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-default.sh}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []

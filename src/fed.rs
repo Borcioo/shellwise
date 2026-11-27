@@ -255,10 +255,11 @@ fn may_vanish(w: &Word, src: &str, quoted_vanish: bool) -> bool {
 
 /// Whether a `${…}` expansion, written as `n` (its name and operators), is of every argument or
 /// every element of an array: `@`, `@:2`, `@#x`, `@:+x`, `a[@]`, `a[@]:1`, `a[@]/x/y`, `a[@]:-d`,
-/// `!a[@]` (the indices), `!p@` (the names starting `p`). In double quotes it gives one word per
-/// element, so none when there is none, and several, options among them, when there are. A count
-/// (`#a[@]`, `#@`), a `*` join (`*`, `a[*]`, `!p*`), one element (`a[0]`) and a pattern that
-/// names `[@]` (`x#[@]`) give one word.
+/// `!a[@]` (the indices), `!p@` (the names starting `p`), `!name` (which may name `@` or `a[@]`),
+/// and a default or alternate word that holds them (`x:-"$@"`, `x:+"${a[@]}"`). In double quotes
+/// it gives one word per element, so none when there is none, and several, options among them,
+/// when there are. A count (`#a[@]`, `#@`), a `*` join (`*`, `a[*]`, `!p*`), one element (`a[0]`),
+/// a pattern that names `[@]` (`x#[@]`) and any other default (`x:-default.sh`) give one word.
 fn spreads(n: &str) -> bool {
     let indirect = n.strip_prefix('!');
     let n = indirect.unwrap_or(n);
@@ -266,7 +267,12 @@ fn spreads(n: &str) -> bool {
     if rest.len() == n.len() {
         return rest.starts_with('@');
     }
-    rest.starts_with("[@]") || (indirect.is_some() && rest.starts_with('@'))
+    let op = rest.strip_prefix(':').unwrap_or(rest);
+    let word_spreads =
+        op.starts_with(['-', '+', '=']) && ["$@", "${@", "[@]}"].iter().any(|s| op.contains(s));
+    rest.starts_with("[@]")
+        || word_spreads
+        || (indirect.is_some() && (rest.is_empty() || rest.starts_with('@')))
 }
 
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
@@ -678,6 +684,8 @@ mod tests {
             "bash \"${a[0]}\" <<< 'rm -rf ~'",
             "bash \"${x#[@]}\" <<< 'rm -rf ~'",
             "bash \"${p@Q}\" <<< 'rm -rf ~'",
+            "bash \"${x:-default.sh}\" <<< 'rm -rf ~'",
+            "bash \"${x:-$*}\" <<< 'rm -rf ~'",
         ] {
             assert_eq!(texts(src), Vec::<String>::new(), "{src:?}");
         }
@@ -750,6 +758,11 @@ mod tests {
             "bash \"${!p@}\" <<< 'rm -rf ~'",
             "bash \"${@:+x}\" <<< 'rm -rf ~'",
             "bash \"${a[@]:-d}\" <<< 'rm -rf ~'",
+            "bash \"${x:-\"$@\"}\" <<< 'rm -rf ~'",
+            "bash \"${x-$@}\" <<< 'rm -rf ~'",
+            "bash \"${x:+\"${a[@]}\"}\" <<< 'rm -rf ~'",
+            "bash \"${x:=\"${@:2}\"}\" <<< 'rm -rf ~'",
+            "bash \"${!name}\" <<< 'rm -rf ~'",
             "sudo --weird bash <<< 'rm -rf ~'",
             "env --weird zsh -s <<< 'rm -rf ~'",
         ] {
