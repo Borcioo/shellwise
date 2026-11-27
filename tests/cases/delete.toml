@@ -7673,6 +7673,81 @@ command = "bash $OPTS <<'EOF'\nrm -rf ~\nEOF"
 level = "danger"
 rules = ["opaque-destructive"]
 
+# A body on stdin names its targets as its `-c` twin does: a braced or substituted protected
+# location counts there too.
+[[row]]
+id = "fed-heredoc-quoted-braced-home"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ${HOME}\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-unquoted-parent-of-pwd"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf $(pwd)/..\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-braced-home"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf ${HOME}\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-sh-braced-home"
+os = "any"
+shell = "bash"
+command = "sh <<'EOF'\nrm -rf ${HOME}/\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-zsh-parent-of-pwd"
+os = "any"
+shell = "bash"
+command = "zsh <<< 'rm -rf $(pwd)/..'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-sudo-braced-home"
+os = "any"
+shell = "bash"
+command = "sudo bash <<'EOF'\nrm -rf ${HOME}\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-env-braced-home"
+os = "any"
+shell = "bash"
+command = "env bash <<< 'rm -rf ${HOME}'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-positional-braced-home"
+os = "any"
+shell = "bash"
+command = "bash -s -- a b <<'EOF'\nrm -rf ${HOME}\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A target under the protected location is no protected location, fed or not.
+[[row]]
+id = "fed-control-heredoc-braced-home-subfolder"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ${HOME}/build\nEOF"
+level = "warn"
+rules = ["opaque-destructive"]
+
 [[row]]
 id = "fed-unquoted-substitution-word-here-string-home"
 os = "any"
