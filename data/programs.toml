@@ -492,12 +492,7 @@ dry_run = ["/L"]
 # stdin_after_params   on PowerShell: switches after which stdin is read once the command or the
 #                      file has run (`-NoExit`)
 # stdin_drops_empty_arguments  on PowerShell: an empty quoted argument is dropped, so a quoted
-#                      expansion with no literal text may vanish (Windows PowerShell `"$x"`)
-# stdin_path_commands  on PowerShell, as the shell the command line is in: commands that return
-#                      one path, so `(Join-Path $PSScriptRoot x.ps1)` with a literal argument that
-#                      is no parameter is the script; any other parenthesised or `@(…)` word may
-#                      vanish or spread
-# feeds                on a producer before the shell in a pipeline: what it writes the guard can
+#                      expansion with no literal text may vanish (Windows PowerShell `"$x"`)# feeds                on a producer before the shell in a pipeline: what it writes the guard can
 #                      read: "words" (its arguments joined by blanks, the first no option),
 #                      "format" (one format with no `%` and no `\`, or `%s` or `%s\n` and one
 #                      argument), "stdin" (its own heredoc, with no operand but `-`), "one" (one
@@ -537,7 +532,6 @@ lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
 stdin_program_params = ["-Command", "-CommandWithArgs", "-cwa", "-File"]
 stdin_encoded_params = ["-EncodedCommand", "-ec"]
 stdin_after_params = ["-NoExit"]
-stdin_path_commands = ["Join-Path", "Resolve-Path"]
 stdin_switch_params = ["-Interactive", "-Login", "-NoExit", "-NoLogo", "-NoProfile", "-NonInteractive", "-NoProfileLoadTime", "-MTA", "-STA", "-ServerMode", "-SSHServerMode", "-SocketServerMode", "-NamedPipeServerMode", "-Help"]
 
 [[program]]
@@ -549,7 +543,6 @@ stdin_program_params = ["-Command", "-File"]
 stdin_encoded_params = ["-EncodedCommand", "-ec"]
 stdin_drops_empty_arguments = true
 stdin_after_params = ["-NoExit"]
-stdin_path_commands = ["Join-Path", "Resolve-Path"]
 stdin_switch_params = ["-NoExit", "-NoLogo", "-NoProfile", "-NonInteractive", "-MTA", "-STA", "-Help"]
 
 # cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit). pwsh

@@ -24,7 +24,6 @@ const STDIN_ENCODED_PARAMS: &str = "stdin_encoded_params";
 const STDIN_SWITCH_PARAMS: &str = "stdin_switch_params";
 const STDIN_AFTER_PARAMS: &str = "stdin_after_params";
 const STDIN_DROPS_EMPTY: &str = "stdin_drops_empty_arguments";
-const STDIN_PATH_COMMANDS: &str = "stdin_path_commands";
 /// The `extra` key of a producer row and its values (`data/programs.toml`).
 const FEEDS: &str = "feeds";
 const FEEDS_WORDS: &str = "words";
@@ -67,21 +66,12 @@ pub(crate) fn body(
     let row = programs::lookup(&name, shell, os).filter(|p| p.is(Kind::Shell))?;
     let loops = strings(row, LOOP_BODY);
     let program = strings(row, STDIN_PROGRAM_PARAMS);
-    // The commands the outer PowerShell runs in a parenthesised word to name one path.
-    let outer = match shell {
-        Shell::Pwsh => programs::lookup("pwsh", shell, os),
-        Shell::Powershell5 => programs::lookup("powershell", shell, os),
-        Shell::Bash(_) => None,
-    };
-    let paths = outer
-        .map(|r| strings(r, STDIN_PATH_COMMANDS))
-        .unwrap_or_default();
     // A Bash-family shell reads a `-c` body; PowerShell names its program parameters; any other
     // shell (`cmd`) is not read.
     let plain = if !loops.is_empty() {
-        bash_reads_stdin(&run.args, src, &paths, row, &loops)?
+        bash_reads_stdin(&run.args, src, row, &loops)?
     } else if !program.is_empty() {
-        pwsh_reads_stdin(&run.args, src, &paths, row, &program).then_some(false)?
+        pwsh_reads_stdin(&run.args, src, row, &program).then_some(false)?
     } else {
         return None;
     };
@@ -181,23 +171,22 @@ fn is_here_string(op: &str) -> bool {
 
 /// A word that may expand to no argument at all or to several, options among them, so the guard
 /// cannot tell it from none: every part an unquoted expansion (`$OPTS`, `$A$B`, `$(opts)`,
-/// PowerShell `$script`, `@args`, `@(…)`, `$x.Path`, `(Get-Script)`), or a quoted all-arguments
-/// expansion (`"$@"`, `"${x[@]}"`); with `quoted_vanish` (Windows PowerShell drops an empty
-/// argument) any quoted expansion with no literal text. A word with literal or tilde text, any
-/// other quoted expansion, a process substitution and a PowerShell expression that runs one of
-/// `paths` on a literal path (`(Join-Path $PSScriptRoot x.ps1)`) are one argument: the script.
-/// `paths` is empty for a command line that is no PowerShell.
-fn may_vanish(w: &Word, src: &str, quoted_vanish: bool, paths: &[&str]) -> bool {
-    let text = src.get(w.span.start..w.span.end).unwrap_or("");
-    let expansion = |p: &WordPart| match p {
-        WordPart::Var(_) => true,
-        WordPart::Subst(s) | WordPart::Block(s) => {
-            text.starts_with('@') || !returns_one_path(s, paths)
-        }
-        _ => false,
+/// PowerShell `$script`, `@args`, `@(…)`, `$x.Path`, `(Join-Path $d x.ps1)`), or a quoted
+/// all-arguments expansion (`"$@"`, `"${x[@]}"`); with `quoted_vanish` (Windows PowerShell drops
+/// an empty argument) any quoted expansion with no literal text. A word with literal or tilde text
+/// outside any expression, any other quoted expansion and a process substitution are one argument:
+/// the script.
+fn may_vanish(w: &Word, src: &str, quoted_vanish: bool) -> bool {
+    let expansion = |p: &WordPart| {
+        matches!(
+            p,
+            WordPart::Var(_) | WordPart::Subst(_) | WordPart::Block(_)
+        )
     };
     let all_expansions = !w.parts.is_empty() && w.parts.iter().all(expansion);
-    let procsub = text.starts_with("<(") || text.starts_with(">(");
+    let procsub = src
+        .get(w.span.start..w.span.end)
+        .is_some_and(|t| t.starts_with("<(") || t.starts_with(">("));
     match w.quote {
         _ if procsub => false,
         Quote::None => all_expansions,
@@ -209,24 +198,6 @@ fn may_vanish(w: &Word, src: &str, quoted_vanish: bool, paths: &[&str]) -> bool 
     }
 }
 
-/// Whether a substitution is one call of a command in `paths` (one path out of the path it is
-/// given) with a literal argument that is no parameter (`Join-Path $PSScriptRoot x.ps1`).
-fn returns_one_path(s: &Script, paths: &[&str]) -> bool {
-    let [Stmt::Pipeline(p)] = s.stmts.as_slice() else {
-        return false;
-    };
-    let [Elem::Cmd(c)] = p.elems.as_slice() else {
-        return false;
-    };
-    let name = c.canonical.clone().or_else(|| literal(&c.name));
-    name.is_some_and(|n| paths.iter().any(|p| p.eq_ignore_ascii_case(&n)))
-        && c.args.iter().any(|a| {
-            a.parts.iter().any(|p| matches!(p, WordPart::Literal(_)))
-                && !leading_literal(a)
-                    .is_some_and(|l| l.starts_with(['-', '\u{2013}', '\u{2014}', '\u{2015}']))
-        })
-}
-
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
 /// operand. A short option stands alone or in a cluster (`-ec`). A letter that takes a value
 /// takes the next word and the letters after it still count (bash: `-ox pipefail`), or, where
@@ -236,13 +207,7 @@ fn returns_one_path(s: &Script, paths: &[&str]) -> bool {
 /// cannot read is the script, unless it may vanish or hold options (`may_vanish`, `-o$x`).
 /// `Some(plain)` when stdin is the
 /// program, `plain` when no option took a value (the walks read a `-c` body only then).
-fn bash_reads_stdin(
-    args: &[Word],
-    src: &str,
-    paths: &[&str],
-    row: &Program,
-    loops: &[&str],
-) -> Option<bool> {
+fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> Option<bool> {
     let values = strings(row, STDIN_VALUE_OPTIONS);
     let positional = strings(row, STDIN_POSITIONAL);
     // `sign` and `letter` spell one of the short options in `list` (`-o`, `+O`).
@@ -257,7 +222,7 @@ fn bash_reads_stdin(
     let no_script = |w: Option<&Word>| {
         w.is_none_or(|w| match literal(w) {
             Some(s) => STDIN_PATHS.contains(&s.as_str()),
-            None => may_vanish(w, src, false, paths),
+            None => may_vanish(w, src, false),
         })
     };
     // Bash takes the value of each value letter in a cluster from the next words and reads the
@@ -274,7 +239,7 @@ fn bash_reads_stdin(
             // A word that may vanish or hold options (`$OPTS`, `"$@"`), and one that starts as
             // an option (`-o$x`): read on past it. Any other word (`~/x.sh`, `"$HOME/x.sh"`,
             // `./run*.sh`, `<(…)`) is the script.
-            if may_vanish(w, src, false, paths)
+            if may_vanish(w, src, false)
                 || leading_literal(w).is_some_and(|l| l.starts_with(['-', '+']))
             {
                 plain = false;
@@ -326,13 +291,7 @@ fn bash_reads_stdin(
 /// stdin program, unless `-NoExit` comes before it: then stdin is read after it. A parameter is
 /// any unambiguous prefix of its name (`-ex` for `-ExecutionPolicy`). A word the guard cannot
 /// read is the file or the command, unless it is a splat.
-fn pwsh_reads_stdin(
-    args: &[Word],
-    src: &str,
-    paths: &[&str],
-    row: &Program,
-    program: &[&str],
-) -> bool {
+fn pwsh_reads_stdin(args: &[Word], src: &str, row: &Program, program: &[&str]) -> bool {
     let encoded = strings(row, STDIN_ENCODED_PARAMS);
     let switches = strings(row, STDIN_SWITCH_PARAMS);
     let after = strings(row, STDIN_AFTER_PARAMS);
@@ -347,11 +306,10 @@ fn pwsh_reads_stdin(
     let mut k = 0;
     while let Some(w) = args.get(k) {
         let Some(a) = literal(w) else {
-            // A word that may vanish or spread (`$script`, `@args`, `(Get-Script)`) may hold any
-            // parameters: read on past it. Any other word the guard cannot read
-            // (`./x.ps1`-like text, `"$script"`, `(Join-Path $PSScriptRoot x.ps1)`) is the file
-            // or the command.
-            if may_vanish(w, src, row.extra.contains_key(STDIN_DROPS_EMPTY), paths) {
+            // A word that may vanish or spread (`$script`, `@args`, `(Join-Path $d x.ps1)`) may
+            // hold any parameters: read on past it. Any other word the guard cannot read
+            // (`$PSScriptRoot/x.ps1`, `"$script"`) is the file or the command.
+            if may_vanish(w, src, row.extra.contains_key(STDIN_DROPS_EMPTY)) {
                 k += 1;
                 continue;
             }
