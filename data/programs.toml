@@ -487,6 +487,10 @@ dry_run = ["/L"]
 # stdin_program_params on PowerShell: parameters (any unambiguous prefix) whose value is the
 #                      program, `-` for stdin (`-Command -`, `-File -`)
 # stdin_encoded_params on PowerShell: parameters whose value is an encoded program
+# stdin_switch_params  on PowerShell: switches; a prefix one shares with a value parameter is the
+#                      switch (pwsh `-i` is `-Interactive`)
+# stdin_after_params   on PowerShell: switches after which stdin is read once the command or the
+#                      file has run (`-NoExit`)
 # feeds                on a producer before the shell in a pipeline: what it writes the guard can
 #                      read: "words" (its arguments joined by blanks, the first no option),
 #                      "format" (one format with no `%` and no `\`, or `%s` or `%s\n` and one
@@ -526,6 +530,8 @@ value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
 stdin_program_params = ["-Command", "-CommandWithArgs", "-cwa", "-File"]
 stdin_encoded_params = ["-EncodedCommand", "-ec"]
+stdin_after_params = ["-NoExit"]
+stdin_switch_params = ["-Interactive", "-Login", "-NoExit", "-NoLogo", "-NoProfile", "-NonInteractive", "-NoProfileLoadTime", "-MTA", "-STA", "-ServerMode", "-SSHServerMode", "-SocketServerMode", "-NamedPipeServerMode", "-Help"]
 
 [[program]]
 name = "powershell"
@@ -534,6 +540,8 @@ value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
 stdin_program_params = ["-Command", "-File"]
 stdin_encoded_params = ["-EncodedCommand", "-ec"]
+stdin_after_params = ["-NoExit"]
+stdin_switch_params = ["-NoExit", "-NoLogo", "-NoProfile", "-NonInteractive", "-MTA", "-STA", "-Help"]
 
 # cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit). pwsh
 # starts it as "C:\WINDOWS\system32\cmd.exe" (29 characters with the quotes) in place of the typed

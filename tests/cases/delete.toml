@@ -7887,7 +7887,7 @@ rules = []
 id = "known-miss-fed-pipe-echo-with-an-option"
 os = "any"
 shell = "bash"
-command = "echo -n 'rm -rf ~' | bash"
+command = "echo -n 'echo hi; rm -rf ~' | bash"
 level = "ok"
 rules = []
 
@@ -7960,3 +7960,39 @@ shell = "bash"
 command = "printf '%s\\n' 'rm -rf ~/a\\b' | bash\n; )"
 level = "warn"
 rules = ["parse-error"]
+
+# A PowerShell prefix a switch shares with a value parameter is the switch: `-i` is
+# `-Interactive`, so `run.ps1` is the file and stdin is data.
+[[row]]
+id = "fed-control-here-string-pwsh-switch-prefix-then-a-file"
+os = "any"
+shell = "bash"
+command = "pwsh -i run.ps1 <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-time-home"
+os = "any"
+shell = "bash"
+command = "time bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: `time` after a pipe is the program, not the keyword, and is not read through.
+[[row]]
+id = "known-miss-fed-pipe-echo-to-time-bash"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | time bash"
+level = "ok"
+rules = []
+
+# PowerShell with `-NoExit` runs the file or the command and then reads stdin as commands.
+[[row]]
+id = "fed-here-string-pwsh-no-exit-after-a-file-home"
+os = "any"
+shell = "bash"
+command = "pwsh -NoExit -File run.ps1 <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]

@@ -21,6 +21,8 @@ const STDIN_CLUSTER_VALUE: &str = "stdin_value_in_cluster";
 const CLUSTER_VALUE_REST: &str = "rest";
 const STDIN_PROGRAM_PARAMS: &str = "stdin_program_params";
 const STDIN_ENCODED_PARAMS: &str = "stdin_encoded_params";
+const STDIN_SWITCH_PARAMS: &str = "stdin_switch_params";
+const STDIN_AFTER_PARAMS: &str = "stdin_after_params";
 /// The `extra` key of a producer row and its values (`data/programs.toml`).
 const FEEDS: &str = "feeds";
 const FEEDS_WORDS: &str = "words";
@@ -267,16 +269,21 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
 
 /// Whether PowerShell with these arguments runs its stdin as the program: `-Command -`, `-File -`,
 /// a lone `-`, or no command and no file at all. A command, a file or an encoded command is no
-/// stdin program. A parameter is any unambiguous prefix of its name (`-ex` for
-/// `-ExecutionPolicy`). A word the guard cannot read is read as no command: the stricter reading.
+/// stdin program, unless `-NoExit` comes before it: then stdin is read after it. A parameter is
+/// any unambiguous prefix of its name (`-ex` for `-ExecutionPolicy`). A word the guard cannot
+/// read is read as no command: the stricter reading.
 fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
     let encoded = strings(row, STDIN_ENCODED_PARAMS);
+    let switches = strings(row, STDIN_SWITCH_PARAMS);
+    let after = strings(row, STDIN_AFTER_PARAMS);
     let values: Vec<&str> = row.value_options.iter().map(String::as_str).collect();
     // `p` (lowercase, no dash) spells one of the parameters.
     let spells = |list: &[&str], p: &str| {
         list.iter()
             .any(|n| n.trim_start_matches('-').to_lowercase().starts_with(p))
     };
+    // `-NoExit` reads stdin after the command or the file too.
+    let mut keeps = false;
     let mut k = 0;
     while let Some(w) = args.get(k) {
         let Some(a) = literal(w) else { return true };
@@ -286,19 +293,26 @@ fn pwsh_reads_stdin(args: &[Word], row: &Program, program: &[&str]) -> bool {
             .find_map(|d| lower.strip_prefix(d))
         else {
             // A positional: the file or the command.
-            return false;
+            return keeps;
         };
         if p.is_empty() {
-            return a == "-";
+            return keeps || a == "-";
         }
         let next_is_dash = || args.get(k + 1).and_then(literal).as_deref() == Some("-");
         if spells(program, p) {
-            return next_is_dash();
+            return keeps || next_is_dash();
         }
         if spells(&encoded, p) {
-            return false;
+            return keeps;
         }
-        k += if spells(&values, p) { 2 } else { 1 };
+        keeps |= spells(&after, p);
+        // A prefix a switch shares with a value parameter is the switch (`-i` is `-Interactive`,
+        // not `-InputFormat`); a value parameter's own alias stays the value parameter.
+        let value = values
+            .iter()
+            .any(|n| n.trim_start_matches('-').eq_ignore_ascii_case(p))
+            || (spells(&values, p) && !spells(&switches, p));
+        k += if value { 2 } else { 1 };
     }
     true
 }
@@ -526,6 +540,8 @@ mod tests {
             "pwsh -NoProfile run.ps1 <<< 'Remove-Item -Recurse x'",
             "pwsh -ex Bypass run.ps1 <<< 'Remove-Item -Recurse x'",
             "pwsh -wo C:/x run.ps1 <<< 'Remove-Item -Recurse x'",
+            "pwsh -i run.ps1 <<< 'Remove-Item -Recurse x'",
+            "pwsh -in run.ps1 <<< 'Remove-Item -Recurse x'",
             "sudo --weird x bash <<< 'rm -rf ~'",
         ] {
             assert_eq!(texts(src), Vec::<String>::new(), "{src:?}");
@@ -576,6 +592,11 @@ mod tests {
             "pwsh - <<< 'rm -rf ~'",
             "powershell -NoProfile <<< 'rm -rf ~'",
             "powershell -wo C:/x <<< 'rm -rf ~'",
+            "pwsh -i <<< 'rm -rf ~'",
+            "pwsh -if Text <<< 'rm -rf ~'",
+            "pwsh -NoExit -File run.ps1 <<< 'rm -rf ~'",
+            "pwsh -noe run.ps1 <<< 'rm -rf ~'",
+            "powershell -NoExit -Command Get-Date <<< 'rm -rf ~'",
         ] {
             let got = texts(src);
             let got: Vec<&str> = got.iter().map(|t| t.trim_end()).collect();
