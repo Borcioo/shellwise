@@ -30,6 +30,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   PowerShell's `-wd` / `-WorkingDirectory` take the next word as their value, so in
   `powershell -wd C:\x -File run-gate.ps1 | Select-Object -First 5` the file is the configured
   gate and the truncation warns.
+- `will-hang`: a heredoc or here-string on another descriptor (`read x 3<<'EOF'`) gives `read`
+  no input, so it waits on the terminal as a bare `read` does; one on descriptor 0 still feeds
+  it.
 - `wait-loop-unbounded`: a Bash loop whose whole condition is one test comparing the count of the
   shell's own background jobs with a literal integer or one variable
   (`while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`, and the `[ ]`, `test`, `[[ ]]`

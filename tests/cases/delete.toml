@@ -7553,11 +7553,13 @@ command = "echo 'rm -rf ~' | grep rm | bash"
 level = "ok"
 rules = []
 
+# Known miss: Bash `echo` prints an option it does not take (`-x`) as a word, and the program then
+# runs on past it; that is not read.
 [[row]]
-id = "fed-control-pipe-echo-option"
+id = "known-miss-fed-pipe-echo-with-an-unknown-option"
 os = "any"
 shell = "bash"
-command = "echo -x 'rm -rf ~' | bash"
+command = "echo -x 'echo hi; rm -rf ~' | bash"
 level = "ok"
 rules = []
 
@@ -7697,6 +7699,31 @@ os = "any"
 shell = "bash"
 command = "bash <<< \"rm -rf ${HOME}\""
 level = "danger"
+rules = ["opaque-destructive"]
+
+# A here-string of mixed quoting reaches the shell as its value, as its `-c` twin does.
+[[row]]
+id = "fed-here-string-mixed-quotes-home"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf \"~\"\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-single-then-double-quotes-home"
+os = "any"
+shell = "bash"
+command = "bash <<< 'rm -rf '\"~\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-mixed-quotes-relative"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf \"$HOME/x\"\""
+level = "warn"
 rules = ["opaque-destructive"]
 
 [[row]]
@@ -8258,6 +8285,41 @@ level = "danger"
 rules = ["opaque-destructive", "opaque-destructive"]
 
 # Known miss: beside a syntax error a printf argument holding `\` is not read either.
+# Known miss: inside a `-c` body and in a command that does not parse, the raw scan reads a
+# producer's words as written: `echo` options, rendered escapes and one line per `printf`
+# argument are not read there.
+[[row]]
+id = "known-miss-fed-pipe-echo-without-newline-in-a-c-body"
+os = "any"
+shell = "bash"
+command = "bash -c \"echo -n 'rm -rf ~' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-pipe-echo-without-newline-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "echo -n 'rm -rf ~' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "known-miss-fed-pipe-printf-line-per-argument-in-a-c-body"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s\\n' 'cd /tmp' 'rm -rf ~' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-pipe-printf-format-with-escapes-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~\\n' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
 [[row]]
 id = "known-miss-fed-pipe-printf-line-argument-with-a-backslash-beside-a-syntax-error"
 os = "any"

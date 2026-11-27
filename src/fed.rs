@@ -462,7 +462,9 @@ fn here_string_text(w: &Word, src: &str) -> String {
     let q = match w.quote {
         Quote::Single => '\'',
         Quote::Double => '"',
-        _ => return text.to_string(),
+        // Quote removal joins the parts: the shell gets the word's value.
+        Quote::Mixed => return rendered(w),
+        Quote::None => return text.to_string(),
     };
     text.strip_prefix(q)
         .and_then(|t| t.strip_suffix(q))
