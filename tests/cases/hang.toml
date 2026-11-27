@@ -8313,3 +8313,20 @@ shell = "bash"
 command = "cat <<'EOF' 3<<'X' | bash\ntail -f log\nEOF\nhello\nX"
 level = "warn"
 rules = ["follow-unbounded"]
+
+# A heredoc on another descriptor gives `read` no stdin; one on descriptor 0 does.
+[[row]]
+id = "wh-bash-read-with-a-heredoc-on-another-descriptor"
+os = "any"
+shell = "bash"
+command = "read x 3<<'EOF'\nhi\nEOF"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "wh-bash-read-with-a-heredoc-on-descriptor-zero"
+os = "any"
+shell = "bash"
+command = "read x 0<<'EOF'\nhi\nEOF"
+level = "ok"
+rules = []

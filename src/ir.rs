@@ -148,6 +148,27 @@ pub enum Redirect {
     },
 }
 
+impl Redirect {
+    /// The descriptor the redirect names as written (`2` of `2>&1`, `3` of `3<<EOF`; empty for
+    /// the operator's own) and, for a file redirect, the operator after it.
+    pub fn fd_op(&self) -> (&str, &str) {
+        match self {
+            Redirect::Heredoc { fd, .. } => (fd, "<<"),
+            Redirect::File { op, .. } => {
+                let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
+                (&op[..op.len() - rest.len()], rest)
+            }
+        }
+    }
+
+    /// Whether the redirect gives the command a new stdin: a file, a copied descriptor, a
+    /// here-string or a here-document on descriptor 0 (`3<<EOF` and `3< f` feed descriptor 3).
+    pub fn replaces_stdin(&self) -> bool {
+        let (fd, op) = self.fd_op();
+        op.starts_with('<') && matches!(fd, "" | "0")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word {
     pub parts: Vec<WordPart>,

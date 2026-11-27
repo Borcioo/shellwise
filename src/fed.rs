@@ -53,7 +53,7 @@ pub(crate) fn body(
 ) -> Option<Fed> {
     // Cheap first: a command with no stdin of its own and no producer is read no further. Its
     // own stdin redirect, the last one, comes after the pipe.
-    let stdin = c.redirects.iter().rev().find(|r| is_stdin(r));
+    let stdin = c.redirects.iter().rev().find(|r| r.replaces_stdin());
     if stdin.is_none() && prev.is_none() {
         return None;
     }
@@ -120,7 +120,7 @@ fn produced(prev: &Elem, src: &str, shell: Shell, os: Os) -> Option<(String, Opt
         if !(operands.is_empty() || operands == ["-"]) || p.redirects.iter().any(moves_output) {
             return None;
         }
-        return match p.redirects.iter().rev().find(|r| is_stdin(r))? {
+        return match p.redirects.iter().rev().find(|r| r.replaces_stdin())? {
             r @ Redirect::Heredoc { .. } => redirected(r, src),
             Redirect::File { .. } => None,
         };
@@ -155,31 +155,13 @@ fn strings<'a>(row: &'a Program, key: &str) -> Vec<&'a str> {
         .unwrap_or_default()
 }
 
-/// An input redirect of descriptor 0: a heredoc, a here-string, a file (`<`, `0<`, `<&`); `3<<EOF`
-/// feeds descriptor 3.
-fn is_stdin(r: &Redirect) -> bool {
-    match r {
-        Redirect::Heredoc { fd, .. } => matches!(fd.as_str(), "" | "0"),
-        Redirect::File { op, .. } => {
-            let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
-            let fd = &op[..op.len() - rest.len()];
-            rest.starts_with('<') && matches!(fd, "" | "0")
-        }
-    }
-}
-
 /// A redirect that may change what a producer writes on stdout: its stdout to a file or a copied
 /// descriptor (`>out`, `&>out`, `>&2`, `2>&1`). A heredoc or a file on another descriptor
 /// (`3<<X`, `2>/dev/null`) does not, and stdin's last redirect is read on its own.
 fn moves_output(r: &Redirect) -> bool {
-    match r {
-        Redirect::Heredoc { .. } => false,
-        Redirect::File { op, .. } => {
-            let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
-            let fd = &op[..op.len() - rest.len()];
-            rest.contains('&') || (rest.contains('>') && matches!(fd, "" | "1"))
-        }
-    }
+    let (fd, op) = r.fd_op();
+    matches!(r, Redirect::File { .. })
+        && (op.contains('&') || (op.contains('>') && matches!(fd, "" | "1")))
 }
 
 fn is_here_string(op: &str) -> bool {
