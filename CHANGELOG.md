@@ -26,6 +26,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Changed
 
+- `gate-truncated-pipeline` and the other rules that read a `powershell` call: Windows
+  PowerShell's `-wd` / `-WorkingDirectory` take the next word as their value, so in
+  `powershell -wd C:\x -File run-gate.ps1 | Select-Object -First 5` the file is the configured
+  gate and the truncation warns.
 - `wait-loop-unbounded`: a Bash loop whose whole condition is one test comparing the count of the
   shell's own background jobs with a literal integer or one variable
   (`while (( $(jobs -rp | wc -l) >= 4 )); do sleep 0.1; done`, and the `[ ]`, `test`, `[[ ]]`
