@@ -1041,6 +1041,271 @@ fn a_child_body_behind_an_assignment_reads_as_the_bare_form() {
     eprintln!("{cells} child bodies behind an assignment read as their bare form");
 }
 
+/// A local shell fed its program on stdin reads as its `-c` twin: every carrier and form of
+/// `case_loader::fed_cells`, for a body that deletes the home folder, one that deletes a relative
+/// folder and a harmless one: level, rule ids and messages but for the quoted command. Each twin is
+/// first held to the level the body asks for, so a twin that reads nothing cannot pass for one.
+#[test]
+fn a_body_fed_on_stdin_reads_as_its_c_twin() {
+    let _fx = fixture();
+    const OD: &str = "opaque-destructive";
+    // Each body with the level and rule its twin draws.
+    const BASH: [(&str, &str, &str); 3] = [
+        ("rm -rf ~", "danger", OD),
+        ("rm -rf build", "warn", OD),
+        ("echo hi", "ok", ""),
+    ];
+    const PWSH: [(&str, &str, &str); 3] = [
+        ("Remove-Item -Recurse -Force ~", "danger", OD),
+        ("Remove-Item -Recurse -Force build", "warn", OD),
+        ("Write-Output hi", "ok", ""),
+    ];
+    let read = |shell: &str, command: &str| {
+        let row = Row {
+            id: command.to_string(),
+            os: "any".to_string(),
+            shell: shell.to_string(),
+            command: command.to_string(),
+            level: String::new(),
+            rules: Vec::new(),
+            fix: None,
+            fix_exact: None,
+            oracle: None,
+            config: None,
+            twin: None,
+        };
+        let v = verdict(&row);
+        let (level, ids, messages) = case_loader::reading(&v);
+        (level, ids, messages)
+    };
+    let bodies = |v: &[(&'static str, &str, &str)]| v.iter().map(|b| b.0).collect::<Vec<_>>();
+    let cells = case_loader::fed_cells(&bodies(&BASH), &bodies(&PWSH));
+    let mut wrong = Vec::new();
+    let mut twins = std::collections::BTreeMap::new();
+    for cell in &cells {
+        let (_, level, rule) = match cell.lang {
+            case_loader::Lang::Bash => BASH[cell.body],
+            case_loader::Lang::Pwsh => PWSH[cell.body],
+        };
+        // A bash called by its bare name from PowerShell draws `ps-bare-bash` (warn) too.
+        let (level, rule) = match (cell.bare_bash, level) {
+            (true, "ok") => ("warn", "ps-bare-bash"),
+            _ => (level, rule),
+        };
+        let want = twins
+            .entry((cell.shell, cell.twin.clone()))
+            .or_insert_with(|| {
+                let got = read(cell.shell, &cell.twin);
+                let held = got.0 == level
+                    && (rule.is_empty() || got.1.contains(&rule))
+                    && (!rule.is_empty() || got.1.is_empty())
+                    && (!cell.bare_bash || got.1.contains(&"ps-bare-bash"));
+                if !held {
+                    wrong.push(format!(
+                        "[{}] twin {:?}: {} {:?} (want {level} {rule})",
+                        cell.shell, cell.twin, got.0, got.1
+                    ));
+                }
+                got
+            })
+            .clone();
+        let got = read(cell.shell, &cell.fed);
+        if got != want {
+            wrong.push(format!(
+                "[{}] {:?}: {} {:?} (twin {:?}: {} {:?})",
+                cell.shell, cell.fed, got.0, got.1, cell.twin, want.0, want.1
+            ));
+        }
+        // Beside a syntax error the raw scan reads the whole text: it finds every delete the
+        // parsed path reads, so a parse error never lowers the verdict. Known miss: the raw scan
+        // does not read `printf '%s'` / `printf '%s\n'` with an argument (delete.toml
+        // `known-miss-fed-pipe-printf-line-beside-a-syntax-error`).
+        let printf_argument = cell.fed.starts_with("printf '%s");
+        if rule == OD && !printf_argument && shellwise::scan::destructive_row(&cell.fed).is_none() {
+            wrong.push(format!("[{}] {:?}: no raw-scan hit", cell.shell, cell.fed));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} cells differ:\n{}",
+        wrong.len(),
+        cells.len(),
+        wrong.join("\n")
+    );
+    eprintln!(
+        "{} stdin-fed bodies read as their {} -c twins",
+        cells.len(),
+        twins.len()
+    );
+}
+
+/// Stdin that is data stays data: a command that is no local shell reading its stdin as the
+/// program (a program that is no shell, a shell given a script or a `-c` body, a shell on another
+/// machine or in a container) reads the same whatever its stdin holds. Each form with a body that
+/// deletes the home folder, an unbounded loop or follow reads as with a harmless body.
+#[test]
+fn stdin_that_is_data_is_not_read_as_code() {
+    let _fx = fixture();
+    const CONSUMERS: [&str; 57] = [
+        // A script operand the guard cannot read is still the script.
+        "bash ~/x.sh",
+        // After `--` or `-` a word that may vanish is read past, as before them.
+        "bash -- $OPTS x.sh",
+        "bash - $OPTS x.sh",
+        "bash -- \"$@\" x.sh",
+        "sh -- $A $B x.sh",
+        // An expansion that always gives one word: a count, all arguments joined, one element.
+        "bash \"${#a[@]}\"",
+        "bash \"${a[*]}\"",
+        "bash \"${x#[@]}\"",
+        // Behind a wrapper option the table does not list: a shell given a script, or no shell.
+        "sudo --weird bash ~/x.sh",
+        "sudo --weird bash script.sh",
+        "nice --x bash script.sh",
+        "sudo --weird psql",
+        "env --weird python -",
+        "sudo --weird bash -c 'cat'",
+        "bash ~deploy/x.sh",
+        "bash ./run*.sh",
+        "bash x{1,2}.sh",
+        "bash \"$HOME/x.sh\"",
+        "bash ${HOME}/x.sh",
+        "bash \"$(dirname \"$0\")/x.sh\"",
+        "bash \"$script\"",
+        "sudo bash ~/bin/setup.sh",
+        "bash -e ~/scripts/install.sh",
+        "zsh ~/x.zsh",
+        "sh $HOME/x.sh",
+        "bash -euo pipefail run.sh",
+        "pwsh -Exec Bypass -File run.ps1",
+        "cat",
+        "cat > out.txt",
+        "tee out.txt",
+        "psql",
+        "mysql -u root db",
+        "sqlite3 app.db",
+        "python -",
+        "python3 -",
+        "node",
+        "ruby",
+        "jq .",
+        "grep x",
+        "xargs echo",
+        "git commit -F -",
+        "git apply",
+        "patch -p1",
+        "ssh host",
+        "ssh host bash",
+        "ssh host 'bash -s'",
+        "ssh host sh -s",
+        "docker exec -i c bash",
+        "docker exec -i c sh -s",
+        "kubectl exec -i p -- bash",
+        "wsl bash",
+        "wsl",
+        "bash script.sh",
+        "bash -c 'cat'",
+        "sh -c 'cat > out.txt'",
+        "bash <(echo hi)",
+        "bash -x script.sh",
+    ];
+    const FORMS: [&str; 4] = [
+        "{c} <<'EOF'\n{b}\nEOF",
+        "{c} <<EOF\n{b}\nEOF",
+        "{c} <<< '{b}'",
+        "echo '{b}' | {c}",
+    ];
+    const BODIES: [&str; 3] = ["rm -rf ~", "while true; do sleep 1; done", "tail -f log"];
+    let read = |shell: &str, command: &str| {
+        let row = Row {
+            id: command.to_string(),
+            os: "any".to_string(),
+            shell: shell.to_string(),
+            command: command.to_string(),
+            level: String::new(),
+            rules: Vec::new(),
+            fix: None,
+            fix_exact: None,
+            oracle: None,
+            config: None,
+            twin: None,
+        };
+        let v = verdict(&row);
+        let (level, ids, messages) = case_loader::reading(&v);
+        (level, ids, messages)
+    };
+    let mut wrong = Vec::new();
+    let mut cells = 0;
+    for &shell in case_loader::bash_shells() {
+        for c in CONSUMERS {
+            for form in FORMS {
+                let harmless = read(shell, &form.replace("{c}", c).replace("{b}", "echo hi"));
+                for b in BODIES {
+                    cells += 1;
+                    let text = form.replace("{c}", c).replace("{b}", b);
+                    let got = read(shell, &text);
+                    if got != harmless {
+                        wrong.push(format!(
+                            "[{shell}] {text:?}: {} {:?} (harmless {} {:?})",
+                            got.0, got.1, harmless.0, harmless.1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // From PowerShell: a script block is the command to run and a quoted expansion is the file
+    // (pwsh 7), so the piped text is data.
+    const PS_CONSUMERS: [&str; 7] = [
+        "pwsh { Get-Date }",
+        "pwsh -NoProfile { Get-Date }",
+        "pwsh -nop {Get-Date}",
+        "pwsh -ExecutionPolicy Bypass { Get-Date }",
+        "powershell -NoProfile -NonInteractive { Get-Date }",
+        "pwsh \"$script\"",
+        "pwsh -File run.ps1",
+    ];
+    const PS_FORMS: [&str; 3] = [
+        "'{b}' | {c}",
+        "@'\n{b}\n'@ | {c}",
+        "Write-Output '{b}' | {c}",
+    ];
+    const PS_BODIES: [&str; 2] = ["Remove-Item -Recurse -Force ~", "rm -rf ~"];
+    let ps_shells: &[&str] = if cfg!(windows) {
+        &["pwsh", "powershell5"]
+    } else {
+        &["pwsh"]
+    };
+    for &shell in ps_shells {
+        for c in PS_CONSUMERS {
+            for form in PS_FORMS {
+                let harmless = read(
+                    shell,
+                    &form.replace("{c}", c).replace("{b}", "Write-Output hi"),
+                );
+                for b in PS_BODIES {
+                    cells += 1;
+                    let text = form.replace("{c}", c).replace("{b}", b);
+                    let got = read(shell, &text);
+                    if got != harmless {
+                        wrong.push(format!(
+                            "[{shell}] {text:?}: {} {:?} (harmless {} {:?})",
+                            got.0, got.1, harmless.0, harmless.1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {cells} cells differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    eprintln!("{cells} stdin bodies that are data read as a harmless one");
+}
+
 /// Rows ported from the baseline guard's tests/test_rules.py, per rule, as git.toml's header records
 /// them (every OS counted).
 const PORTED: [(&str, usize); 3] = [

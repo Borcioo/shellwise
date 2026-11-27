@@ -111,12 +111,24 @@ name = "printf"
 shells = ["bash"]
 escapes = "always"
 value_options = ["-v"]
+feeds = "format"
 
 [[program]]
 name = "echo"
 shells = ["bash"]
 escapes = "option"
 escape_options = ["-e"]
+feeds = "words"
+
+[[program]]
+name = "cat"
+shells = ["bash"]
+feeds = "stdin"
+
+[[program]]
+name = "write-output"
+shells = ["pwsh"]
+feeds = "one"
 
 # --- Native Windows programs that take Linux paths, which Git Bash rewrites (bash-msys-path-mangle) ---
 
@@ -464,34 +476,77 @@ slash_options = true
 dry_run = ["/L"]
 
 # --- Code the guard does not read: danger only with a raw destructive match (opaque-destructive) ---
+# The program a local shell reads on stdin (src/fed.rs) is read as its `-c` body:
+# stdin_value_options  on a Bash-family shell: options whose value is the next word (`-o pipefail`)
+# stdin_positional     on a Bash-family shell: with one of these the words after the options are
+#                      arguments, and the program comes on stdin (`bash -s -- a b`)
+# stdin_value_in_cluster  where a short value option inside a cluster finds its value: "next"
+#                      (the next word, and the letters after it still count: bash `-ox pipefail`)
+#                      or "rest" (the rest of the word, or the next word as the last letter: zsh
+#                      `-oerrexit`, `-eo errexit`)
+# stdin_program_params on PowerShell: parameters (any unambiguous prefix) whose value is the
+#                      program, `-` for stdin (`-Command -`, `-File -`)
+# stdin_encoded_params on PowerShell: parameters whose value is an encoded program
+# stdin_switch_params  on PowerShell: switches; a prefix one shares with a value parameter is the
+#                      switch (pwsh `-i` is `-Interactive`)
+# stdin_after_params   on PowerShell: switches after which stdin is read once the command or the
+#                      file has run (`-NoExit`)
+# stdin_drops_empty_arguments  on PowerShell: an empty quoted argument is dropped, so a quoted
+#                      expansion with no literal text may vanish (Windows PowerShell `"$x"`)
+# feeds                on a producer before the shell in a pipeline: what it writes the guard can
+#                      read: "words" (its arguments joined by blanks, the first no option; in Bash
+#                      after `-n`, `-e`, `-E` letters, and with `-e` the escapes below rendered),
+#                      "format" (one format with no `%` whose only escapes are `\n`, `\t` and
+#                      `\\`, rendered; `%s` and one argument; `%s\n` and each argument a line),
+#                      "stdin" (its own heredoc, with no operand but `-`), "one" (one argument).
+#                      Any other word that holds `$`, a backtick, `\` or `%` is never read. A
+#                      producer whose stdout is redirected is not read.
 
 [[program]]
 name = "bash"
 shells = ["bash"]
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_in_cluster = "next"
+stdin_positional = ["-s"]
 
 [[program]]
 name = "sh"
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_in_cluster = "next"
+stdin_positional = ["-s"]
 
 [[program]]
 name = "zsh"
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "--emulate"]
+stdin_value_in_cluster = "rest"
+stdin_positional = ["-s"]
 
 [[program]]
 name = "pwsh"
 kind = ["shell"]
 value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-SettingsFile", "-WindowStyle", "-w", "-CustomPipeName", "-EncodedCommand", "-e", "-ec", "-Version", "-v"]
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+stdin_program_params = ["-Command", "-CommandWithArgs", "-cwa", "-File"]
+stdin_encoded_params = ["-EncodedCommand", "-ec"]
+stdin_after_params = ["-NoExit"]
+stdin_switch_params = ["-Interactive", "-Login", "-NoExit", "-NoLogo", "-NoProfile", "-NonInteractive", "-NoProfileLoadTime", "-MTA", "-STA", "-ServerMode", "-SSHServerMode", "-SocketServerMode", "-NamedPipeServerMode", "-Help"]
 
 [[program]]
 name = "powershell"
 kind = ["shell"]
-value_options = ["-ExecutionPolicy", "-ep", "-ex", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
+value_options = ["-ExecutionPolicy", "-ep", "-ex", "-WorkingDirectory", "-wd", "-OutputFormat", "-of", "-o", "-InputFormat", "-inf", "-if", "-ConfigurationName", "-config", "-WindowStyle", "-w", "-EncodedCommand", "-e", "-ec", "-Version", "-v", "-PSConsoleFile"]
 lint = { script_flags = ["-File", "-f"], command_flags = ["-Command", "-c"] }
+stdin_program_params = ["-Command", "-File"]
+stdin_encoded_params = ["-EncodedCommand", "-ec"]
+stdin_drops_empty_arguments = true
+stdin_after_params = ["-NoExit"]
+stdin_switch_params = ["-NoExit", "-NoLogo", "-NoProfile", "-NonInteractive", "-MTA", "-STA", "-Help"]
 
 # cmd.exe: its whole command line is capped at 8191 characters (Task 31 reads line_limit). pwsh
 # starts it as "C:\WINDOWS\system32\cmd.exe" (29 characters with the quotes) in place of the typed
@@ -641,6 +696,9 @@ name = "bash"
 shells = ["pwsh"]
 kind = ["shell"]
 loop_body = ["-c"]
+stdin_value_options = ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]
+stdin_value_in_cluster = "next"
+stdin_positional = ["-s"]
 fix ="& \"$env:ProgramFiles\\Git\\bin\\bash.exe\""
 lint = { tags = ["wsl-bash"] }
 

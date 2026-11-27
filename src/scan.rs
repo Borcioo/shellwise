@@ -810,7 +810,7 @@ fn command_reads_stdin(words: &[Tok], b: &Budget) -> bool {
 }
 
 /// What a writer may still expand in its text: `$`, a backtick, a backslash or a printf `%` escape.
-const EXPANDS: [char; 4] = ['$', '`', '\\', '%'];
+pub(crate) const EXPANDS: [char; 4] = ['$', '`', '\\', '%'];
 
 /// For each start in a segment's words, whether the words from there to the end hold one that is
 /// not quoted, and one with text the writer may still expand.

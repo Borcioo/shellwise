@@ -143,6 +143,90 @@ fn the_form_a_bash_follow_sentence_names_reads_ok() {
     eprintln!("hang.toml: {checked} follow sentence forms read ok");
 }
 
+/// A local shell fed its program on stdin reads as its `-c` twin for the wait-loop and follow
+/// rules: every carrier and form of `case_loader::fed_cells`, for an unbounded loop, an unbounded
+/// follow and a harmless body. Each twin is first held to the level the body asks for (none under
+/// `timeout 60`); a PowerShell body is read for deletes only, so its loop and follow twins read ok.
+#[test]
+fn a_body_fed_on_stdin_reads_as_its_c_twin() {
+    const WL: &str = "wait-loop-unbounded";
+    const FU: &str = "follow-unbounded";
+    const BASH: [(&str, &str, &str); 3] = [
+        ("while true; do sleep 1; done", "break", WL),
+        ("tail -f log", "warn", FU),
+        ("echo hi", "ok", ""),
+    ];
+    const PWSH: [(&str, &str, &str); 3] = [
+        ("while ($true) { Start-Sleep 1 }", "ok", ""),
+        ("Get-Content log -Wait", "ok", ""),
+        ("Write-Output hi", "ok", ""),
+    ];
+    let bodies = |v: &[(&'static str, &str, &str)]| v.iter().map(|b| b.0).collect::<Vec<_>>();
+    let cells = case_loader::fed_cells(&bodies(&BASH), &bodies(&PWSH));
+    let read =
+        |shell: &str, command: &str| case_loader::reading(&case_loader::verdict_of(shell, command));
+    let mut wrong = Vec::new();
+    let mut twins = std::collections::BTreeMap::new();
+    for cell in &cells {
+        let (_, level, rule) = match cell.lang {
+            case_loader::Lang::Bash if cell.bounded => (BASH[cell.body].0, "ok", ""),
+            // Known miss of the twin: a `-c` body after an option that takes a value
+            // (`bash -o pipefail -c '…'`) is not read for loops and follows; the fed form reads
+            // as that twin.
+            case_loader::Lang::Bash if cell.twin.contains(" -o ") => (BASH[cell.body].0, "ok", ""),
+            // Known miss of the twin: behind a wrapper option the table does not list
+            // (`sudo --weird bash -c '…'`) the shell name is a guess and its `-c` body is not read
+            // for loops and follows; the fed form reads as that twin.
+            case_loader::Lang::Bash if cell.twin.contains("--weird") => {
+                (BASH[cell.body].0, "ok", "")
+            }
+            case_loader::Lang::Bash => BASH[cell.body],
+            case_loader::Lang::Pwsh => PWSH[cell.body],
+        };
+        // A bash called by its bare name from PowerShell draws `ps-bare-bash` (warn) too.
+        let (level, rule) = match (cell.bare_bash, level) {
+            (true, "ok") => ("warn", "ps-bare-bash"),
+            _ => (level, rule),
+        };
+        let want = twins
+            .entry((cell.shell, cell.twin.clone()))
+            .or_insert_with(|| {
+                let got = read(cell.shell, &cell.twin);
+                let held = got.0 == level
+                    && (rule.is_empty() || got.1.contains(&rule))
+                    && (!rule.is_empty() || got.1.is_empty())
+                    && (!cell.bare_bash || got.1.contains(&"ps-bare-bash"));
+                if !held {
+                    wrong.push(format!(
+                        "[{}] twin {:?}: {} {:?} (want {level} {rule})",
+                        cell.shell, cell.twin, got.0, got.1
+                    ));
+                }
+                got
+            })
+            .clone();
+        let got = read(cell.shell, &cell.fed);
+        if got != want {
+            wrong.push(format!(
+                "[{}] {:?}: {} {:?} (twin {:?}: {} {:?})",
+                cell.shell, cell.fed, got.0, got.1, cell.twin, want.0, want.1
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} cells differ:\n{}",
+        wrong.len(),
+        cells.len(),
+        wrong.join("\n")
+    );
+    eprintln!(
+        "{} stdin-fed bodies read as their {} -c twins",
+        cells.len(),
+        twins.len()
+    );
+}
+
 /// A script file may run in a terminal, where a prompt is answered: the rule reads command lines
 /// only. The same text as a command line is the control.
 #[test]

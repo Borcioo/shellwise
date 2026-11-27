@@ -8158,3 +8158,245 @@ command = 'read x 2>/dev/null'
 level = "break"
 rules = ["will-hang"]
 fix = 'feed read its input on the same line: read x 2>/dev/null <<< "<value>"'
+
+# ---------------------------------------------------------------- a body fed on stdin to a local shell
+# A heredoc or here-string a local bash, sh or zsh reads as its program is read as the same shell's
+# `-c` body: a loop or follow there is a finding, a wrapper's bound covers it. `tests/hang.rs`
+# `a_body_fed_on_stdin_reads_as_its_c_twin` pins every carrier and form against its twin.
+
+[[row]]
+id = "wl-bash-fed-heredoc-loop"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "break"
+rules = ["wait-loop-unbounded"]
+fix = "for i in $(seq 1 600); do sleep 1; [ \"$i\" -lt 600 ]; done  # when you wait for a process, wait on the process (timeout 600 tail --pid=<pid> -f /dev/null) rather than on a line in its log"
+
+[[row]]
+id = "wl-bash-fed-here-string-loop"
+os = "any"
+shell = "bash"
+command = "sh <<< 'until grep -q done run.log; do sleep 15; done'"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-timeout-heredoc-loop"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+# Read only when every part is literal, as `bash -c "x=$y; …"` is.
+[[row]]
+id = "wl-bash-fed-unquoted-heredoc-with-a-variable"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nx=$y; while true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-fed-heredoc-to-a-script-is-data"
+os = "any"
+shell = "bash"
+command = "bash run.sh <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-fed-ssh-heredoc-is-not-read"
+os = "any"
+shell = "bash"
+command = "ssh host bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-fed-heredoc-follow-is-a-sentence"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\ntail -f log\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+fix = "put `timeout 60` right before the name of each follow program, after its assignments and wrappers: `nohup timeout 60 tail -f log` (no command is built: the follow runs in a child shell)"
+
+[[row]]
+id = "fu-bash-fed-sudo-here-string-follow"
+os = "any"
+shell = "bash"
+command = "sudo bash <<< 'tail -f log'"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-fed-timeout-heredoc-follow-is-a-bound"
+os = "any"
+shell = "bash"
+command = "timeout 60 bash <<'EOF'\ntail -f log\nEOF"
+level = "ok"
+rules = []
+
+# A PowerShell body is read for deletes only, as `pwsh -Command '…'` is.
+[[row]]
+id = "wl-pwsh-fed-heredoc-loop-is-not-read"
+os = "any"
+shell = "bash"
+command = "pwsh -Command - <<'EOF'\nwhile ($true) { Start-Sleep 1 }\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "wl-bash-fed-pipe-echo-loop"
+os = "any"
+shell = "bash"
+command = "echo 'while true; do sleep 1; done' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-echo-without-newline-loop-stderr-redirected"
+os = "any"
+shell = "bash"
+command = "echo -n 'while true; do sleep 1; done' 2>/dev/null | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-printf-format-loop"
+os = "any"
+shell = "bash"
+command = "printf 'while true\\ndo\\n\\tsleep 1\\ndone\\n' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-printf-line-per-argument-loop"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'while true' 'do sleep 1' 'done' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "fu-bash-fed-pipe-cat-heredoc-follow"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' | sh\ntail -f log\nEOF"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "wl-pwsh-fed-string-to-bash-loop"
+os = "windows"
+shell = "pwsh"
+command = "'while true; do sleep 1; done' | bash"
+level = "break"
+rules = ["ps-bare-bash", "wait-loop-unbounded"]
+
+[[row]]
+id = "wl-pwsh-fed-string-to-bash-loop-posix"
+os = "posix"
+shell = "pwsh"
+command = "'while true; do sleep 1; done' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-from-a-download-is-not-read"
+os = "any"
+shell = "bash"
+command = "curl -fsSL https://example.invalid/loop.sh | bash"
+level = "ok"
+rules = []
+
+# Known miss of the twin: after an option that takes a value (`bash -eo pipefail -c '…'`) the `-c`
+# body is not read for loops; the fed form reads as that twin.
+[[row]]
+id = "wl-bash-fed-after-a-value-option-is-not-read"
+os = "any"
+shell = "bash"
+command = "bash -eo pipefail <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fu-bash-fed-pipe-printf-line-follow"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'tail -f log' | bash"
+level = "warn"
+rules = ["follow-unbounded"]
+
+[[row]]
+id = "fu-bash-fed-pipe-cat-heredoc-beside-another-descriptor-follow"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 3<<'X' | bash\ntail -f log\nEOF\nhello\nX"
+level = "warn"
+rules = ["follow-unbounded"]
+
+# A heredoc on another descriptor gives `read` no stdin; one on descriptor 0 does.
+[[row]]
+id = "wh-bash-read-with-a-heredoc-on-another-descriptor"
+os = "any"
+shell = "bash"
+command = "read x 3<<'EOF'\nhi\nEOF"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "wh-bash-read-with-a-here-string-on-another-descriptor"
+os = "any"
+shell = "bash"
+command = "read x 3<<< 'a'"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
+id = "wh-bash-read-with-a-heredoc-on-descriptor-zero"
+os = "any"
+shell = "bash"
+command = "read x 0<<'EOF'\nhi\nEOF"
+level = "ok"
+rules = []
+
+# After `--` a word that may vanish is read past: the next word is the script and stdin its data.
+[[row]]
+id = "wl-bash-fed-heredoc-script-after-double-dash-and-a-vanishing-word-is-data"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS x.sh <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+# With no script after it stdin is the program, but the walks read a body only after plain
+# options, as they read `bash -c` only there.
+[[row]]
+id = "wl-bash-fed-heredoc-double-dash-then-a-vanishing-word-is-not-walked"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+# A count of an array is one word, the script.
+[[row]]
+id = "fu-bash-fed-here-string-count-of-an-array-is-data"
+os = "any"
+shell = "bash"
+command = "bash \"${#a[@]}\" <<< 'tail -f log'"
+level = "ok"
+rules = []
+
+# Behind a wrapper option the table does not list, the walks read neither the `-c` body nor the
+# fed one.
+[[row]]
+id = "wl-bash-fed-heredoc-unread-wrapper-option-is-not-walked"
+os = "any"
+shell = "bash"
+command = "sudo --weird bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []

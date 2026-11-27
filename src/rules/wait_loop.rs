@@ -12,12 +12,14 @@
 //! its body, compares a clock or a counter (a variable whose new value reads its old one); or when
 //! the loop runs under a wrapper that bounds its wait (`timeout 600 bash -c '…'`): in what the
 //! wrapper runs, not in the words the calling shell expands before it starts (`timeout 60 echo
-//! "$(…)"`). A loop with no wait whose condition
+//! "$(…)"`). A child shell's program is read whether it comes as `-c '…'` or on stdin
+//! (`bash <<'EOF'`, `fed`). A loop with no wait whose condition
 //! can fail (`while read line`) is no wait loop. A loop whose body runs a command the guard cannot
 //! read (a dynamic name, `eval`) is not judged: that command may end it. PowerShell keeps no
 //! `break` in the IR, so its guards are the `if` statements whose text holds an exit word.
 
 use super::{Ctx, Rule};
+use crate::fed;
 use crate::ir::{
     ChainOp, Elem, LoopHead, MethodCall, Pipeline, Redirect, Script, SimpleCommand, Stmt, Word,
     WordPart,
@@ -307,9 +309,9 @@ impl Walk<'_, '_> {
         if self.mode == Mode::Follow {
             self.follows(p, bounded);
         }
-        for elem in &p.elems {
+        for (k, elem) in p.elems.iter().enumerate() {
             match elem {
-                Elem::Cmd(c) => self.command(c, bounded),
+                Elem::Cmd(c) => self.command(c, k.checked_sub(1).map(|j| &p.elems[j]), bounded),
                 Elem::Method(m) => m.args.iter().for_each(|w| self.word(w, bounded, bounded)),
                 Elem::Expr(w) => self.word(w, bounded, bounded),
             }
@@ -328,7 +330,8 @@ impl Walk<'_, '_> {
         }
     }
 
-    fn command(&mut self, c: &SimpleCommand, bounded: bool) {
+    /// `prev`: the pipeline element before `c`, which may feed it its program.
+    fn command(&mut self, c: &SimpleCommand, prev: Option<&Elem>, bounded: bool) {
         let (shell, os) = (self.shell, self.os);
         // A wrapper bounds what it runs: the wrapped command and the body it executes (a child
         // shell's `-c` body, a script block). The calling shell expands the command's words
@@ -358,7 +361,10 @@ impl Walk<'_, '_> {
         }
         if self.depth < MAX_DEPTH {
             let inner = programs::strip_wrappers(c, shell, os);
-            if let Some(body) = child_body(&inner, shell, os) {
+            // A `-c` body, or the program the shell reads on stdin (`bash <<'EOF'`).
+            let body = child_body(&inner, shell, os)
+                .or_else(|| fed::body(c, prev, self.src, shell, os).and_then(|f| f.script));
+            if let Some(body) = body {
                 self.child(&body, c.span, runs);
             }
         }

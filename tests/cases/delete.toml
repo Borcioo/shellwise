@@ -7130,3 +7130,1614 @@ shell = "pwsh"
 command = "Set-Alias zz Get-A001; Set-Alias zz Get-A002; Set-Alias zz Get-A003; Set-Alias zz Get-A004; Set-Alias zz Get-A005; Set-Alias zz Get-A006; Set-Alias zz Get-A007; Set-Alias zz Get-A008; Set-Alias zz Get-A009; Set-Alias zz Get-A010; Set-Alias zz Get-A011; Set-Alias zz Get-A012; Set-Alias zz Get-A013; Set-Alias zz Get-A014; Set-Alias zz Get-A015; Set-Alias zz Get-A016; Set-Alias zz Get-A017; Set-Alias zz Get-A018; Set-Alias zz Get-A019; Set-Alias zz Get-A020; Set-Alias zz Get-A021; Set-Alias zz Get-A022; Set-Alias zz Get-A023; Set-Alias zz Get-A024; Set-Alias zz Get-A025; Set-Alias zz Get-A026; Set-Alias zz Get-A027; Set-Alias zz Get-A028; Set-Alias zz Get-A029; Set-Alias zz Get-A030; Set-Alias zz Get-A031; Set-Alias zz Get-A032; Import-Alias x; $d = 'C:\\Windows'; zz; Remove-Item -Recurse -Force $d"
 level = "warn"
 rules = ["dynamic-target"]
+
+# ---------------------------------------------------------------- a body fed on stdin to a local shell
+# A heredoc or here-string a local bash, sh, zsh or PowerShell reads as its program is read as the
+# same shell's `-c` / `-Command` body: danger with a literal protected location, else warn.
+# `tests/delete.rs` `a_body_fed_on_stdin_reads_as_its_c_twin` pins every carrier and form against
+# its twin; these rows name the shapes.
+
+[[row]]
+id = "fed-heredoc-quoted-home"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-quoted-home-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-unquoted-home"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# An unquoted body reads as `bash -c "…"` with the same expansions: `$HOME` spells the home folder.
+[[row]]
+id = "fed-heredoc-unquoted-home-variable"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf $HOME\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-unquoted-unknown-variable"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf $D\nEOF"
+level = "warn"
+rules = ["opaque-destructive"]
+
+# The calling shell runs the substitution while it expands the body: judged there too, as
+# `bash -c "echo $(rm -rf ~)"` is.
+[[row]]
+id = "fed-heredoc-unquoted-substitution-home"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\necho $(rm -rf ~)\nEOF"
+level = "critical"
+rules = ["opaque-destructive", "delete-critical"]
+
+[[row]]
+id = "fed-heredoc-tabs-home"
+os = "any"
+shell = "bash"
+command = "bash <<-'EOF'\n\trm -rf ~\n\tEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-home"
+os = "any"
+shell = "bash"
+command = "bash <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-relative"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf build\""
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-sudo-heredoc-home"
+os = "any"
+shell = "bash"
+command = "sudo bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-sh-heredoc-home"
+os = "any"
+shell = "bash"
+command = "sh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-zsh-heredoc-home"
+os = "any"
+shell = "bash"
+command = "zsh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-sh-s-with-operands-heredoc-home"
+os = "any"
+shell = "bash"
+command = "sh -s -- arg <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-bash-option-value-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash -o pipefail <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-in-a-substitution-home"
+os = "any"
+shell = "bash"
+command = "out=$(bash <<'EOF'\nrm -rf ~\nEOF\n)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# The last stdin redirect wins: the heredoc after a file is the program.
+[[row]]
+id = "fed-heredoc-after-a-file-home"
+os = "any"
+shell = "bash"
+command = "bash < run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pwsh-command-dash-heredoc-home"
+os = "any"
+shell = "bash"
+command = "pwsh -Command - <<'EOF'\nRemove-Item -Recurse -Force ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pwsh-file-dash-here-string-relative"
+os = "any"
+shell = "bash"
+command = "pwsh -File - <<< 'Remove-Item -Recurse -Force build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-harmless"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\necho hi\nEOF"
+level = "ok"
+rules = []
+
+# A body that does not parse is read as text, as `bash -c 'echo a; )'` is.
+[[row]]
+id = "fed-heredoc-body-that-does-not-parse"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\necho a; )\nEOF"
+level = "ok"
+rules = []
+
+# After a syntax error the whole text is scanned, the heredoc body included.
+[[row]]
+id = "fed-heredoc-home-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ~\nEOF\n; )"
+level = "danger"
+rules = ["parse-error-destructive"]
+
+# Stdin that is data: a `-c` body or a script runs, the heredoc is its input.
+[[row]]
+id = "fed-control-c-body-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "bash -c 'echo hi' <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-script-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "bash script.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-process-substitution-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "bash <(echo hi) <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pwsh-file-with-a-heredoc-of-data"
+os = "any"
+shell = "bash"
+command = "pwsh -File run.ps1 <<'EOF'\nRemove-Item -Recurse -Force ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-file-after-the-heredoc"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF' < run.sh\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-cat-heredoc"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-cat-heredoc-to-a-file"
+os = "any"
+shell = "bash"
+command = "cat > setup.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# Known limit: a body run on another machine or in a container is not read, on stdin or as an
+# argument (`ssh host bash -c '…'` reads ok too).
+[[row]]
+id = "known-miss-fed-ssh-heredoc"
+os = "any"
+shell = "bash"
+command = "ssh host bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-docker-exec-heredoc"
+os = "any"
+shell = "bash"
+command = "docker exec -i c bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-kubectl-exec-heredoc"
+os = "any"
+shell = "bash"
+command = "kubectl exec -i p -- bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-wsl-heredoc"
+os = "any"
+shell = "bash"
+command = "wsl bash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# Known miss, another cause: `dash` and `ksh` have no shell row, so `dash -c 'rm -rf ~'` reads ok
+# too; the fed form reads as that twin.
+[[row]]
+id = "known-miss-fed-dash-heredoc"
+os = "any"
+shell = "bash"
+command = "dash <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# What a literal producer before the shell prints is its program too: `echo`, `printf` with a
+# format that holds no `%`, `cat` fed a heredoc (not a here-string), and in PowerShell a string, a
+# here-string or `Write-Output` with one string.
+[[row]]
+id = "fed-pipe-echo-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-home-gitbash"
+os = "windows"
+shell = "gitbash"
+command = "echo 'rm -rf ~' | sh"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-relative"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf build' | sudo bash -s"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-printf-plain-home"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-cat-heredoc-home"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' | bash\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-dev-stdin-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash /dev/stdin"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-to-pwsh-home"
+os = "any"
+shell = "bash"
+command = "echo 'Remove-Item -Recurse -Force ~' | pwsh -Command -"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh -Command -"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-here-string-to-pwsh-file-dash-relative"
+os = "any"
+shell = "pwsh"
+command = "@'\nRemove-Item -Recurse -Force build\n'@ | pwsh -File -"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-write-output-to-bare-pwsh-home"
+os = "any"
+shell = "pwsh"
+command = "Write-Output 'Remove-Item -Recurse -Force ~' | pwsh -NoProfile"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-bash-home"
+os = "windows"
+shell = "pwsh"
+command = "'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive", "ps-bare-bash"]
+
+[[row]]
+id = "fed-ps-string-to-bash-home-posix"
+os = "posix"
+shell = "pwsh"
+command = "'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Unreadable producers stay unread: a download, a file, a variable, a substitution, a filter
+# between the producer and the shell, text the producer may still expand.
+[[row]]
+id = "fed-control-pipe-download"
+os = "any"
+shell = "bash"
+command = "curl -d 'rm -rf ~' https://example.invalid/x | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-file"
+os = "any"
+shell = "bash"
+command = "cat run.sh | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-variable"
+os = "any"
+shell = "bash"
+command = "echo $CMD | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-substitution"
+os = "any"
+shell = "bash"
+command = "echo \"$(cat run.sh)\" | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-filter-between"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | grep rm | bash"
+level = "ok"
+rules = []
+
+# Known miss: Bash `echo` prints an option it does not take (`-x`) as a word, and the program then
+# runs on past it; that is not read.
+[[row]]
+id = "known-miss-fed-pipe-echo-with-an-unknown-option"
+os = "any"
+shell = "bash"
+command = "echo -x 'echo hi; rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-to-a-script"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash run.sh"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-get-content"
+os = "any"
+shell = "pwsh"
+command = "Get-Content run.ps1 | pwsh -Command -"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-write-host"
+os = "any"
+shell = "pwsh"
+command = "Write-Host 'Remove-Item -Recurse -Force ~' | pwsh -Command -"
+level = "ok"
+rules = []
+
+# Known miss: a producer whose text the writer may still expand (`$`, a backtick, `\`, `%`) is not
+# read, on a command that parses and beside a syntax error alike, where `bash -c "rm -rf $HOME"`
+# reads danger.
+[[row]]
+id = "known-miss-fed-pipe-expanding-producer"
+os = "any"
+shell = "bash"
+command = "echo \"rm -rf $HOME\" | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-ps-path-with-a-backslash"
+os = "windows"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force C:\\Windows' | pwsh -Command -"
+level = "ok"
+rules = []
+
+# Known limit: `cmd` fed on stdin is not read.
+[[row]]
+id = "known-miss-fed-ps-string-to-cmd"
+os = "windows"
+shell = "pwsh"
+command = "'rd /s /q build' | cmd"
+level = "ok"
+rules = []
+
+# Options are read as the shell reads them: a value option ends a cluster and takes the next word
+# (`-eo pipefail`); a PowerShell parameter is any unambiguous prefix of its name (`-Exec`).
+[[row]]
+id = "fed-bash-cluster-with-a-value-option-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash -euo pipefail <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-cluster-with-a-value-option-then-a-script"
+os = "any"
+shell = "bash"
+command = "bash -euo pipefail run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-pwsh-parameter-prefix-here-string-home"
+os = "any"
+shell = "bash"
+command = "pwsh -Exec Bypass -Command - <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-pwsh-parameter-prefix-then-a-file"
+os = "any"
+shell = "bash"
+command = "pwsh -Exec Bypass run.ps1 <<< 'Remove-Item -Recurse -Force ~'"
+level = "ok"
+rules = []
+
+# A heredoc on another descriptor is no program, and a later redirect of stdin replaces it.
+[[row]]
+id = "fed-control-heredoc-on-descriptor-3"
+os = "any"
+shell = "bash"
+command = "bash 3<<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-stdin-replaced-after-the-heredoc"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF' 0</dev/null\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# A word the guard cannot read may be the script or not: the body is read, the stricter reading.
+[[row]]
+id = "fed-unquoted-expansion-word-heredoc-home"
+os = "any"
+shell = "bash"
+command = "bash $OPTS <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A body on stdin names its targets as its `-c` twin does: a braced or substituted protected
+# location counts there too.
+[[row]]
+id = "fed-heredoc-quoted-braced-home"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ${HOME}\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-unquoted-parent-of-pwd"
+os = "any"
+shell = "bash"
+command = "bash <<EOF\nrm -rf $(pwd)/..\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-braced-home"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf ${HOME}\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A here-string of mixed quoting reaches the shell as its value, as its `-c` twin does.
+[[row]]
+id = "fed-here-string-mixed-quotes-home"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf \"~\"\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-single-then-double-quotes-home"
+os = "any"
+shell = "bash"
+command = "bash <<< 'rm -rf '\"~\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-mixed-quotes-relative"
+os = "any"
+shell = "bash"
+command = "bash <<< \"rm -rf \"$HOME/x\"\""
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-sh-braced-home"
+os = "any"
+shell = "bash"
+command = "sh <<'EOF'\nrm -rf ${HOME}/\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-zsh-parent-of-pwd"
+os = "any"
+shell = "bash"
+command = "zsh <<< 'rm -rf $(pwd)/..'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-sudo-braced-home"
+os = "any"
+shell = "bash"
+command = "sudo bash <<'EOF'\nrm -rf ${HOME}\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-env-braced-home"
+os = "any"
+shell = "bash"
+command = "env bash <<< 'rm -rf ${HOME}'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-positional-braced-home"
+os = "any"
+shell = "bash"
+command = "bash -s -- a b <<'EOF'\nrm -rf ${HOME}\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A target under the protected location is no protected location, fed or not.
+[[row]]
+id = "fed-control-heredoc-braced-home-subfolder"
+os = "any"
+shell = "bash"
+command = "bash <<'EOF'\nrm -rf ${HOME}/build\nEOF"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-unquoted-substitution-word-here-string-home"
+os = "any"
+shell = "bash"
+command = "bash $(opts) <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A script operand the guard cannot read is still the script: stdin is its data.
+[[row]]
+id = "fed-control-heredoc-quoted-variable-script"
+os = "any"
+shell = "bash"
+command = "bash \"$S\" <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-tilde-script"
+os = "any"
+shell = "bash"
+command = "bash ~/x.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-to-a-globbed-script"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash ./run*.sh"
+level = "ok"
+rules = []
+
+# A bare variable PowerShell drops when it is null and spreads when it is an array: it may
+# vanish, so stdin may be the program.
+[[row]]
+id = "fed-ps-string-to-pwsh-variable-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh $script"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-call-without-literal-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Get-Script)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-path-under-a-variable"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh $PSScriptRoot/x.ps1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-quoted-variable"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh \"$script\""
+level = "ok"
+rules = []
+
+# Windows PowerShell drops an empty quoted argument: a quoted expansion may vanish there.
+[[row]]
+id = "fed-ps-string-to-windows-powershell-quoted-variable-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | powershell \"$script\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-quoted-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"$@\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-glob-script"
+os = "any"
+shell = "bash"
+command = "bash *.sh <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+# Any expression word may return no value or several, options among them, whatever it runs: a
+# path command (it may resolve a glob to many paths), an array expression, a subexpression.
+[[row]]
+id = "fed-ps-string-to-pwsh-joined-file-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Join-Path $PSScriptRoot x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-resolved-file-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Resolve-Path ./x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-windows-powershell-subexpression-home"
+os = "windows"
+shell = "powershell5"
+command = "'Remove-Item -Recurse -Force ~' | powershell $(Join-Path $PSScriptRoot x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-array-expression-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh @(Join-Path $PSScriptRoot x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-joined-parameter-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Join-Path $PSScriptRoot -Resolve)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-other-call-with-literal-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Get-Script x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-splat-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh @opts"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# `printf '%s\n' '…'` and `printf '%s' '…'` with one argument print that argument: read as it,
+# on a command that parses and beside a syntax error alike.
+[[row]]
+id = "fed-pipe-printf-line-home"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-printf-string-relative"
+os = "any"
+shell = "bash"
+command = "printf '%s' 'rm -rf build' | sh"
+level = "warn"
+rules = ["opaque-destructive"]
+
+# Known miss: beside a syntax error and inside a `-c` body the raw scan reads no `printf '%s'` or
+# `printf '%s\n'` argument, wherever it is piped: reading it there would also read it before a
+# shell given a script, a shell on another machine (`| wsl bash`) and `bash -c "… | bash x.sh"`.
+[[row]]
+id = "known-miss-fed-pipe-printf-line-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "known-miss-fed-pipe-printf-string-in-a-c-body"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s' 'rm -rf ~' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-c-body-pipe-printf-line-to-a-script"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s\\n' 'rm -rf ~' | bash script.sh\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-c-body-pipe-printf-string-to-wsl"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s' 'rm -rf ~' | wsl bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-printf-string-to-a-script-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf '%s' 'rm -rf ~' | bash script.sh; done"
+level = "warn"
+rules = ["parse-error"]
+
+# Known over-read: inside a `-c` body the raw scan reads an `echo` before any local shell as its
+# program, a script operand included.
+[[row]]
+id = "known-over-read-fed-c-body-pipe-echo-to-a-script"
+os = "any"
+shell = "bash"
+command = "bash -c \"echo 'rm -rf ~' | bash script.sh\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-pipe-printf-other-format"
+os = "any"
+shell = "bash"
+command = "printf '%d\\n' 5 | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-printf-variable"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' \"$CMD\" | bash"
+level = "ok"
+rules = []
+
+# A line format runs once per argument: each argument is a line of the body.
+[[row]]
+id = "fed-pipe-printf-line-per-argument-home"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'cd /tmp' 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A format with no `%` prints itself, its `\n`, `\t` and `\\` escapes rendered.
+[[row]]
+id = "fed-pipe-printf-format-with-escapes-home"
+os = "any"
+shell = "bash"
+command = "printf 'cd /tmp\\n\\trm -rf ~\\n' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: a format with a `%` conversion and no argument prints the conversion empty; that is
+# not read.
+[[row]]
+id = "known-miss-fed-pipe-printf-format-with-a-conversion"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~%s\\n' | bash"
+level = "ok"
+rules = []
+
+# Known miss: a format escape other than those three is not read.
+[[row]]
+id = "known-miss-fed-pipe-printf-format-with-another-escape"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~\\x41\\n' | bash"
+level = "ok"
+rules = []
+
+# A redirect of another descriptor leaves what the producer writes on stdout as it is.
+[[row]]
+id = "fed-pipe-echo-with-stderr-redirected-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' 2>/dev/null | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: a producer that copies a descriptor (`2>&1`) is not read, though here stdout still
+# carries the text.
+[[row]]
+id = "known-miss-fed-pipe-echo-with-stderr-copied-to-stdout"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' 2>&1 | bash"
+level = "ok"
+rules = []
+
+# Known miss: an `echo` word holding `$`, a backtick, `\` or `%` is not read, single-quoted too.
+[[row]]
+id = "known-miss-fed-pipe-echo-single-quoted-dollar"
+os = "any"
+shell = "bash"
+command = "echo '$X; rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+# Bash takes the value of each value letter in a cluster from the next word and reads the letters
+# after it; zsh takes the rest of the word.
+[[row]]
+id = "fed-here-string-cluster-value-then-letter-home"
+os = "any"
+shell = "bash"
+command = "bash -ox errexit <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-cluster-value-then-s-home"
+os = "any"
+shell = "bash"
+command = "bash -os errexit run.sh <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-two-value-letters-home"
+os = "any"
+shell = "bash"
+command = "bash -oo errexit xtrace <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-two-value-letters-then-a-script"
+os = "any"
+shell = "bash"
+command = "bash -oo errexit xtrace run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-value-letter-then-c"
+os = "any"
+shell = "bash"
+command = "bash -oc errexit 'echo hi' <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-zsh-value-in-the-word-home"
+os = "any"
+shell = "bash"
+command = "zsh -oerrexit <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-zsh-value-in-the-word-then-a-script"
+os = "any"
+shell = "bash"
+command = "zsh -oerrexit run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-zsh-emulate-home"
+os = "any"
+shell = "bash"
+command = "zsh --emulate sh <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-zsh-emulate-then-a-script"
+os = "any"
+shell = "bash"
+command = "zsh --emulate sh run.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# zsh's -O is a flag: the word after it is the script.
+[[row]]
+id = "fed-control-heredoc-zsh-capital-o-then-a-script"
+os = "any"
+shell = "bash"
+command = "zsh -O extglob <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# `cat` writes its fd-0 heredoc whatever other descriptors it is given; a redirect of its output,
+# a file on its stdin or a duplicated descriptor leaves the text unread.
+[[row]]
+id = "fed-pipe-cat-heredoc-beside-another-descriptor-home"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 3<<'X' | bash\nrm -rf ~\nEOF\nhello\nX"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-cat-heredoc-after-another-descriptor-home"
+os = "any"
+shell = "bash"
+command = "cat 3<<'X' <<'EOF' | bash\nhello\nX\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-cat-heredoc-stderr-to-a-file-home"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 2>/dev/null | bash\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-pipe-cat-heredoc-output-to-a-file"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' >out.txt | bash\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-cat-heredoc-descriptor-copied"
+os = "any"
+shell = "bash"
+command = "cat <<'EOF' 0<&3 | bash\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-cat-heredoc-on-another-descriptor-only"
+os = "any"
+shell = "bash"
+command = "cat 3<<'X' | bash\nrm -rf ~\nX"
+level = "ok"
+rules = []
+
+# What a producer writes is read only when the guard has its exact text.
+[[row]]
+id = "fed-control-pipe-cat-file-beside-a-heredoc"
+os = "any"
+shell = "bash"
+command = "cat notes.txt <<'EOF' | bash\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-to-a-file"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' >out.txt | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-printf-number-format"
+os = "any"
+shell = "bash"
+command = "printf '%d\\n' 'rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+# `echo -n` drops the last newline only; `-e` renders `\n`, `\t` and `\\`, and any other escape is
+# not read.
+[[row]]
+id = "fed-pipe-echo-without-newline-home"
+os = "any"
+shell = "bash"
+command = "echo -n 'echo hi; rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-with-escapes-home"
+os = "any"
+shell = "bash"
+command = "echo -ne 'cd /tmp\\nrm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: an escape other than those three (`\c` ends the text) is not read.
+[[row]]
+id = "known-miss-fed-pipe-echo-with-another-escape"
+os = "any"
+shell = "bash"
+command = "echo -e 'rm -rf ~\\c' | bash"
+level = "ok"
+rules = []
+
+# A later `-E` turns the escapes off again: the backslash stays, and that is not read.
+[[row]]
+id = "fed-control-pipe-echo-with-escapes-turned-off-again"
+os = "any"
+shell = "bash"
+command = "echo -eE 'cd /tmp\\nrm -rf ~' | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-with-a-backslash-and-no-option"
+os = "any"
+shell = "bash"
+command = "echo 'cd /tmp\\nrm -rf ~' | bash"
+level = "ok"
+rules = []
+
+# Known miss: a printf argument holding `$`, a backtick, `\` or `%` is not read, as the producer
+# text the scan of a command that does not parse reads.
+[[row]]
+id = "known-miss-fed-pipe-printf-line-argument-with-a-backslash"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~/a\\b' | bash"
+level = "ok"
+rules = []
+
+# Known miss: a here-string on `cat` is not read, as the scan of a command that does not parse
+# does not read it.
+[[row]]
+id = "known-miss-fed-pipe-cat-here-string"
+os = "any"
+shell = "bash"
+command = "cat <<< 'rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-after-a-plus-option-home"
+os = "any"
+shell = "bash"
+command = "bash +o errexit <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A fed shell inside a loop, a condition or a function, and each fed shell with its own body.
+[[row]]
+id = "fed-here-string-in-a-loop-home"
+os = "any"
+shell = "bash"
+command = "for i in 1; do bash <<< 'rm -rf ~'; done"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-in-a-condition-home"
+os = "any"
+shell = "bash"
+command = "if true; then bash <<< 'rm -rf ~'; fi"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-in-a-function-home"
+os = "any"
+shell = "bash"
+command = "f() { bash <<< 'rm -rf ~'; }"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-two-shells-each-its-body"
+os = "any"
+shell = "bash"
+command = "bash <<< 'rm -rf build'; bash <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive", "opaque-destructive"]
+
+# Known miss: beside a syntax error a printf argument holding `\` is not read either.
+# Known miss: inside a `-c` body and in a command that does not parse, the raw scan reads a
+# producer's words as written: `echo` options, rendered escapes and one line per `printf`
+# argument are not read there.
+[[row]]
+id = "known-miss-fed-pipe-echo-without-newline-in-a-c-body"
+os = "any"
+shell = "bash"
+command = "bash -c \"echo -n 'rm -rf ~' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-pipe-echo-without-newline-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "echo -n 'rm -rf ~' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "known-miss-fed-pipe-printf-line-per-argument-in-a-c-body"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s\\n' 'cd /tmp' 'rm -rf ~' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "known-miss-fed-pipe-printf-format-with-escapes-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~\\n' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "known-miss-fed-pipe-printf-line-argument-with-a-backslash-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~/a\\b' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
+# A PowerShell prefix a switch shares with a value parameter is the switch: `-i` is
+# `-Interactive`, so `run.ps1` is the file and stdin is data.
+[[row]]
+id = "fed-control-here-string-pwsh-switch-prefix-then-a-file"
+os = "any"
+shell = "bash"
+command = "pwsh -i run.ps1 <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-time-home"
+os = "any"
+shell = "bash"
+command = "time bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: `time` after a pipe is the program, not the keyword, and is not read through.
+[[row]]
+id = "known-miss-fed-pipe-echo-to-time-bash"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | time bash"
+level = "ok"
+rules = []
+
+# PowerShell with `-NoExit` runs the file or the command and then reads stdin as commands.
+[[row]]
+id = "fed-here-string-pwsh-no-exit-after-a-file-home"
+os = "any"
+shell = "bash"
+command = "pwsh -NoExit -File run.ps1 <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Windows PowerShell drops an empty quoted argument, so a quoted expansion may vanish there and
+# stdin may be the program; pwsh 7 keeps it as the file.
+[[row]]
+id = "fed-here-string-windows-powershell-quoted-variable-home"
+os = "any"
+shell = "bash"
+command = "powershell \"$script\" <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-pwsh-quoted-variable"
+os = "any"
+shell = "bash"
+command = "pwsh \"$script\" <<< 'Remove-Item -Recurse -Force ~'"
+level = "ok"
+rules = []
+
+# A script block is the command PowerShell runs: the piped text is its `$input`, data.
+[[row]]
+id = "fed-control-ps-string-to-pwsh-script-block"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh { Get-Date }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-switch-then-script-block"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh -NoProfile {Get-Date}"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-here-string-to-windows-powershell-script-block"
+os = "any"
+shell = "pwsh"
+command = "@'\nRemove-Item -Recurse -Force ~\n'@ | powershell -NoProfile { Get-Date }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-windows-powershell-string-to-pwsh-script-block"
+os = "windows"
+shell = "powershell5"
+command = "Write-Output 'Remove-Item -Recurse -Force ~' | pwsh -ExecutionPolicy Bypass { Get-Date }"
+level = "ok"
+rules = []
+
+# `-NoExit` reads stdin after the command, a script block too.
+[[row]]
+id = "fed-ps-string-to-pwsh-no-exit-then-script-block-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh -NoExit { Get-Date }"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A delete inside the block is read as in any script block.
+[[row]]
+id = "fed-ps-string-to-pwsh-script-block-that-deletes-home"
+os = "any"
+shell = "pwsh"
+command = "'x' | pwsh { Remove-Item -Recurse -Force ~ }"
+level = "critical"
+rules = ["opaque-destructive", "delete-critical"]
+
+# After `--` or `-` a word that may vanish is read past, as before them: the first word that
+# cannot vanish is the script; with none, stdin is the program.
+[[row]]
+id = "fed-control-heredoc-script-after-double-dash-and-a-vanishing-word"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS x.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-script-after-single-dash-and-a-vanishing-word"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash - $OPTS x.sh"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-script-after-double-dash-and-all-arguments"
+os = "any"
+shell = "bash"
+command = "sh -- \"$@\" x.sh <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-double-dash-then-only-a-vanishing-word-home"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A sliced or transformed expansion of all arguments or of an array may give no word.
+[[row]]
+id = "fed-here-string-sliced-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"${@:2}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-sliced-array-home"
+os = "any"
+shell = "bash"
+command = "bash \"${a[@]:1}\" <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-alternate-of-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash \"${@:+x}\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+# With a default it gives a word when empty, and every element when set, options among them.
+[[row]]
+id = "fed-here-string-array-with-a-default-home"
+os = "any"
+shell = "bash"
+command = "bash \"${a[@]:-run.sh}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A count, all arguments joined, and one element are one word: the script.
+[[row]]
+id = "fed-control-here-string-count-of-an-array"
+os = "any"
+shell = "bash"
+command = "bash \"${#a[@]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-joined-array"
+os = "any"
+shell = "bash"
+command = "bash \"${a[*]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-pattern-that-names-an-array"
+os = "any"
+shell = "bash"
+command = "bash \"${x#[@]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+# Behind a wrapper option the table does not list the command is a guess; a guessed local shell
+# reads its stdin as its `-c` twin's body is read.
+[[row]]
+id = "fed-heredoc-unread-wrapper-option-home"
+os = "any"
+shell = "bash"
+command = "sudo --weird bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-unread-wrapper-option-env-relative"
+os = "any"
+shell = "bash"
+command = "env --weird sh <<< 'rm -rf build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-unread-wrapper-option-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | nice --x zsh"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-unread-wrapper-option-pwsh-home"
+os = "any"
+shell = "bash"
+command = "sudo --weird pwsh -Command - <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-unread-wrapper-option-shell-with-a-script"
+os = "any"
+shell = "bash"
+command = "sudo --weird bash ~/x.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-unread-wrapper-option-no-shell"
+os = "any"
+shell = "bash"
+command = "sudo --weird psql <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-unread-wrapper-option-python-on-stdin"
+os = "any"
+shell = "bash"
+command = "env --weird python - <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# Known miss: the guessed name is no shell, though the option may take it as its value and run
+# the shell after it; the `-c` twin is read.
+[[row]]
+id = "known-miss-fed-here-string-unread-wrapper-option-value-before-a-shell"
+os = "any"
+shell = "bash"
+command = "sudo --weird x bash <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+# A default or alternate word that holds every argument or element gives them as words, options
+# among them; `${!name}` may name `@` or `a[@]` and give no word.
+[[row]]
+id = "fed-here-string-default-of-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-\"$@\"}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-alternate-of-an-array-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:+\"${a[@]}\"}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-indirect-name-home"
+os = "any"
+shell = "bash"
+command = "bash \"${!name}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-default-script-name"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-default.sh}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+# An indirect expansion may point at `@` or an array whatever follows the name: all but a `*` join
+# may spread.
+[[row]]
+id = "fed-here-string-indirect-name-with-an-offset-home"
+os = "any"
+shell = "bash"
+command = "bash \"${!name:1}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-indirect-name-with-a-pattern-home"
+os = "any"
+shell = "bash"
+command = "bash \"${!name#x}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-indirect-array-joined"
+os = "any"
+shell = "bash"
+command = "bash \"${!name[*]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-here-string-element-default-of-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"${a[0]:-\"$@\"}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-default-of-indirect-names-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-${!p@}}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-default-path-under-home"
+os = "any"
+shell = "bash"
+command = "bash \"${x:-$HOME/run.sh}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-folder-variable-and-script"
+os = "any"
+shell = "bash"
+command = "bash \"${dir}/x.sh\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []

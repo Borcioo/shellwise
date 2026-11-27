@@ -1257,7 +1257,7 @@ impl Lower {
                     span,
                 }
             }
-            R::HereDocument(_, h) => {
+            R::HereDocument(n, h) => {
                 let doc = &h.doc;
                 let body_span = doc.loc.as_ref().map_or(span, |l| t.span(l));
                 let body = if h.requires_expansion {
@@ -1283,6 +1283,7 @@ impl Lower {
                     }
                 };
                 Redirect::Heredoc {
+                    fd: fd(n),
                     body,
                     expands: h.requires_expansion,
                     span,

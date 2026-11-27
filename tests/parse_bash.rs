@@ -357,6 +357,23 @@ fn heredoc_body_expands_only_with_an_unquoted_delimiter() {
     assert_eq!(names(&s), ["cat", "git", "rm"]);
 }
 
+/// A heredoc keeps the descriptor it feeds: stdin when none is written.
+#[test]
+fn a_heredoc_keeps_its_descriptor() {
+    for (src, want) in [
+        ("bash <<EOF\nhi\nEOF", ""),
+        ("bash 0<<EOF\nhi\nEOF", "0"),
+        ("bash 3<<'EOF' run.sh\nhi\nEOF", "3"),
+        ("cat 9<<-EOF\n\thi\n\tEOF", "9"),
+    ] {
+        let s = ok(src);
+        match &commands(&s)[0].redirects[..] {
+            [Redirect::Heredoc { fd, .. }] => assert_eq!(fd, want, "{src}"),
+            other => panic!("{src}: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn hidden_commands_inside_words_are_found() {
     let cases: &[(&str, &[&str])] = &[

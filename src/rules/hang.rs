@@ -352,12 +352,5 @@ fn has_option(p: &Program, args: &[String], options: &[&str]) -> bool {
 /// The command reads its stdin from a file, a duplicated descriptor, a here-string or a
 /// here-document: an input redirect with no descriptor or descriptor 0 (`3< f` feeds fd 3).
 fn has_input(c: &SimpleCommand) -> bool {
-    c.redirects.iter().any(|r| match r {
-        Redirect::File { op, .. } => {
-            let rest = op.trim_start_matches(|ch: char| ch.is_ascii_digit());
-            let fd = &op[..op.len() - rest.len()];
-            rest.starts_with('<') && matches!(fd, "" | "0")
-        }
-        Redirect::Heredoc { .. } => true,
-    })
+    c.redirects.iter().any(Redirect::replaces_stdin)
 }

@@ -5,11 +5,11 @@
 # Ported rows: the baseline guard rows of tests/test_rules.py for the nine installed PowerShell rules
 # and ps-unix-command (deny rows per rule there: bat-metachar 16, cli-inline-prose 11,
 # gate-truncated-pipeline 17, ps-bad-parameter 9, ps-bare-bash 12, ps-dotnet-relative-path 18,
-# ps-git-commit-stdin 4, ps-native-nonewline 7, ps-unix-command 4, stale-write-var 51). Rows that
-# build their command at run time (a Herd path, a defined test variable, a junction) or that need
-# a configured gate command are not portable here and are left out; the rest keep the baseline
-# guard's text where it is synthetic. Quote and backtick characters outside ASCII are written as \u
-# escapes.
+# ps-git-commit-stdin 4, ps-native-nonewline 7, ps-unix-command 4, stale-write-var 51). Every
+# command here is fixed text: none is built at run time (a Herd path, a defined test variable, a
+# junction). Rows keep the baseline guard's text where it is synthetic. A row that needs a
+# configured gate command names it in `config`. Quote and backtick characters outside ASCII are
+# written as \u escapes.
 
 # --- bat-metachar (break, Windows): cmd.exe re-parses a .bat launcher's arguments ---
 
@@ -130,6 +130,27 @@ fix = "starts by its own path"
 oracle = "accepts"
 
 # --- gate-truncated-pipeline (break): a tee'd run piped into a truncator ---
+
+# Windows PowerShell takes the next word as the value of `-wd` / `-WorkingDirectory`, so the file
+# after it is the configured gate.
+[[row]]
+id = "gate-windows-powershell-file-after-a-working-directory"
+os = "any"
+shell = "pwsh"
+command = "powershell -wd C:\\x -File run-gate.ps1 | Select-Object -First 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+config = "gate_commands = ['run-gate*']\n"
+oracle = "accepts"
+
+[[row]]
+id = "gate-windows-powershell-file-after-a-working-directory-no-gate-configured"
+os = "any"
+shell = "pwsh"
+command = "powershell -wd C:\\x -File run-gate.ps1 | Select-Object -First 5"
+level = "ok"
+rules = []
+oracle = "accepts"
 
 [[row]]
 id = "gate-tee-then-select-first"
