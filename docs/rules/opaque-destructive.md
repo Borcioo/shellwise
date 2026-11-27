@@ -72,8 +72,9 @@ ssh host bash <<< 'rm -rf build'
   `time bash -c 'rm -rf ~' 2>/dev/null` is danger.
 - A program on stdin is not read when the guard does not have its text or the shell is not
   local: a producer whose words may still expand (`echo "rm -rf $DIR" | bash`), that reads a
-  file or the network (`cat setup.sh | bash`, `curl … | sh`), redirects its stdout
-  (`echo … >out`, `2>&1`), or prints an escape other than `\n`, `\t` and `\\` (`echo -e '…\c'`,
+  file or the network (`cat setup.sh | bash`, `curl … | sh`), redirects its stdout or copies a
+  descriptor (`echo … >out`, `echo … 2>&1`), holds `$`, a backtick or `%` in a word, single-quoted
+  too (`echo '$X; …'`), or prints an escape other than `\n`, `\t` and `\\` (`echo -e '…\c'`,
   `printf '…\x41'`); `printf` with a format other than `%s` (one argument) or `%s\n`; a filter
   between the producer and the shell (`echo … | cat | bash`); a pipe into `time bash` (`time`
   there is a program); a heredoc on a compound command (`{ bash; } <<'EOF'`); a shell on another

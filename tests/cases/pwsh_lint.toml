@@ -7,8 +7,8 @@
 # gate-truncated-pipeline 17, ps-bad-parameter 9, ps-bare-bash 12, ps-dotnet-relative-path 18,
 # ps-git-commit-stdin 4, ps-native-nonewline 7, ps-unix-command 4, stale-write-var 51). Rows that
 # build their command at run time (a Herd path, a defined test variable, a junction) or that need
-# a configured gate command are not portable here and are left out; the rest keep the baseline
-# guard's text where it is synthetic. Quote and backtick characters outside ASCII are written as \u
+# a configured gate command were not ported; the rest keep the baseline guard's text where it is
+# synthetic. A row that needs a configured gate command names it in `config`. Quote and backtick characters outside ASCII are written as \u
 # escapes.
 
 # --- bat-metachar (break, Windows): cmd.exe re-parses a .bat launcher's arguments ---

@@ -8348,6 +8348,14 @@ level = "break"
 rules = ["will-hang"]
 
 [[row]]
+id = "wh-bash-read-with-a-here-string-on-another-descriptor"
+os = "any"
+shell = "bash"
+command = "read x 3<<< 'a'"
+level = "break"
+rules = ["will-hang"]
+
+[[row]]
 id = "wh-bash-read-with-a-heredoc-on-descriptor-zero"
 os = "any"
 shell = "bash"

@@ -18,7 +18,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   `zsh -oerrexit`, `pwsh -ex Bypass`); a script operand (`bash ~/x.sh`, `bash "$S"`), a `-c`
   body or a heredoc on another descriptor leaves stdin as data, and a word that may expand to no
   argument (`bash $OPTS`, `pwsh $script`, `pwsh (Join-Path $d x.ps1)`) does not. Not read: a
-  producer that may still expand, reads a file, redirects its stdout or prints another escape
+  producer that may still expand, reads a file, redirects its stdout or copies a descriptor
+  (`2>&1`), holds `$`, a backtick or `%` in a word, or prints another escape
   than `\n`, `\t`, `\\`; a filter before the shell (`| cat | bash`); a pipe into `time bash`; a
   heredoc on a compound command; `ssh`, `docker exec`, `kubectl exec`, `wsl`, `cmd`, `dash` and
   `ksh` by those names; the loop and follow rules also skip a body after an option that takes a

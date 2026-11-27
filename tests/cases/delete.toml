@@ -8013,11 +8013,22 @@ command = "echo 'rm -rf ~' 2>/dev/null | bash"
 level = "danger"
 rules = ["opaque-destructive"]
 
+# Known miss: a producer that copies a descriptor (`2>&1`) is not read, though here stdout still
+# carries the text.
 [[row]]
-id = "fed-control-pipe-echo-with-stderr-copied-to-stdout"
+id = "known-miss-fed-pipe-echo-with-stderr-copied-to-stdout"
 os = "any"
 shell = "bash"
 command = "echo 'rm -rf ~' 2>&1 | bash"
+level = "ok"
+rules = []
+
+# Known miss: an `echo` word holding `$`, a backtick, `\` or `%` is not read, single-quoted too.
+[[row]]
+id = "known-miss-fed-pipe-echo-single-quoted-dollar"
+os = "any"
+shell = "bash"
+command = "echo '$X; rm -rf ~' | bash"
 level = "ok"
 rules = []
 
