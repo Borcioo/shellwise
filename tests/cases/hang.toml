@@ -8257,6 +8257,30 @@ level = "break"
 rules = ["wait-loop-unbounded"]
 
 [[row]]
+id = "wl-bash-fed-pipe-echo-without-newline-loop-stderr-redirected"
+os = "any"
+shell = "bash"
+command = "echo -n 'while true; do sleep 1; done' 2>/dev/null | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-printf-format-loop"
+os = "any"
+shell = "bash"
+command = "printf 'while true\\ndo\\n\\tsleep 1\\ndone\\n' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
+id = "wl-bash-fed-pipe-printf-line-per-argument-loop"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'while true' 'do sleep 1' 'done' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
+
+[[row]]
 id = "fu-bash-fed-pipe-cat-heredoc-follow"
 os = "any"
 shell = "bash"

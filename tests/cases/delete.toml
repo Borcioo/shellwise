@@ -7557,7 +7557,7 @@ rules = []
 id = "fed-control-pipe-echo-option"
 os = "any"
 shell = "bash"
-command = "echo -e 'rm -rf ~' | bash"
+command = "echo -x 'rm -rf ~' | bash"
 level = "ok"
 rules = []
 
@@ -7940,12 +7940,47 @@ command = "printf '%s\\n' \"$CMD\" | bash"
 level = "ok"
 rules = []
 
-# Known miss: with more than one argument the format runs once per argument; that is not read.
+# A line format runs once per argument: each argument is a line of the body.
 [[row]]
-id = "known-miss-fed-pipe-printf-two-arguments"
+id = "fed-pipe-printf-line-per-argument-home"
 os = "any"
 shell = "bash"
 command = "printf '%s\\n' 'cd /tmp' 'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A format with no `%` prints itself, its `\n`, `\t` and `\\` escapes rendered.
+[[row]]
+id = "fed-pipe-printf-format-with-escapes-home"
+os = "any"
+shell = "bash"
+command = "printf 'cd /tmp\\n\\trm -rf ~\\n' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: a format escape other than those three is not read.
+[[row]]
+id = "known-miss-fed-pipe-printf-format-with-another-escape"
+os = "any"
+shell = "bash"
+command = "printf 'rm -rf ~\\x41\\n' | bash"
+level = "ok"
+rules = []
+
+# A redirect of another descriptor leaves what the producer writes on stdout as it is.
+[[row]]
+id = "fed-pipe-echo-with-stderr-redirected-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' 2>/dev/null | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-pipe-echo-with-stderr-copied-to-stdout"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' 2>&1 | bash"
 level = "ok"
 rules = []
 
@@ -8107,12 +8142,38 @@ command = "printf '%d\\n' 'rm -rf ~' | bash"
 level = "ok"
 rules = []
 
-# Known miss: `echo` with an option may rewrite its text (`-e`); not read.
+# `echo -n` drops the last newline only; `-e` renders `\n`, `\t` and `\\`, and any other escape is
+# not read.
 [[row]]
-id = "known-miss-fed-pipe-echo-with-an-option"
+id = "fed-pipe-echo-without-newline-home"
 os = "any"
 shell = "bash"
 command = "echo -n 'echo hi; rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-with-escapes-home"
+os = "any"
+shell = "bash"
+command = "echo -ne 'cd /tmp\\nrm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# Known miss: an escape other than those three (`\c` ends the text) is not read.
+[[row]]
+id = "known-miss-fed-pipe-echo-with-another-escape"
+os = "any"
+shell = "bash"
+command = "echo -e 'rm -rf ~\\c' | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-with-a-backslash-and-no-option"
+os = "any"
+shell = "bash"
+command = "echo 'cd /tmp\\nrm -rf ~' | bash"
 level = "ok"
 rules = []
 

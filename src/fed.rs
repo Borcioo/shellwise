@@ -126,25 +126,83 @@ fn produced(prev: &Elem, src: &str, shell: Shell, os: Os) -> Option<(String, Opt
             Redirect::File { .. } => None,
         };
     }
-    // A redirect may send the output elsewhere.
-    if !p.redirects.is_empty() {
+    // A redirect of stdout may send the output elsewhere; one of another descriptor does not.
+    if p.redirects.iter().any(moves_output) {
         return None;
     }
-    if let (FEEDS_FORMAT, [format, arg]) = (feeds, p.args.as_slice()) {
-        let format = literal(format)?;
-        return scan::PRINTF_ARG_FORMATS
-            .contains(&format.as_str())
-            .then(|| fixed(arg))
-            .flatten()
-            .map(|t| (t.clone(), Some(t)));
-    }
-    let args = p.args.iter().map(fixed).collect::<Option<Vec<_>>>()?;
-    let text = match (feeds, args.as_slice()) {
-        (FEEDS_WORDS, [first, ..]) if !first.starts_with('-') => args.join(" "),
-        (FEEDS_ONE | FEEDS_FORMAT, [one]) => one.clone(),
+    // `printf '%s\n' a b` prints each argument as a line; `printf 'a\n'` its format, rendered.
+    let text = match (feeds, p.args.as_slice()) {
+        (FEEDS_FORMAT, [format]) => unescaped(&literal(format)?)?,
+        (FEEDS_FORMAT, [format, args @ ..]) => {
+            let format = literal(format)?;
+            let args = args.iter().map(fixed).collect::<Option<Vec<_>>>()?;
+            match (format.as_str(), args.as_slice()) {
+                (f, [one]) if scan::PRINTF_ARG_FORMATS.contains(&f) => one.clone(),
+                (f, _) if f == scan::PRINTF_ARG_FORMATS[1] => args.join("\n"),
+                _ => return None,
+            }
+        }
+        (FEEDS_WORDS, args) => echoed(args, delete::is_pwsh(shell))?,
+        (FEEDS_ONE, [one]) => fixed(one)?,
         _ => return None,
     };
     Some((text.clone(), Some(text)))
+}
+
+/// What `echo` prints for these words: joined by blanks. In Bash its leading `-n`, `-e`, `-E`
+/// letters are options, and with `-e` the words are `unescaped`; any other leading `-` word is
+/// not read.
+fn echoed(args: &[Word], pwsh: bool) -> Option<String> {
+    let mut escapes = false;
+    let mut k = 0;
+    while !pwsh && let Some(o) = args.get(k).and_then(literal) {
+        let letters = o.strip_prefix('-').filter(|l| !l.is_empty());
+        if !letters.is_some_and(|l| l.chars().all(|ch| matches!(ch, 'n' | 'e' | 'E'))) {
+            break;
+        }
+        for ch in o.chars() {
+            escapes = match ch {
+                'e' => true,
+                'E' => false,
+                _ => escapes,
+            };
+        }
+        k += 1;
+    }
+    let words = args[k..]
+        .iter()
+        .map(|w| match escapes {
+            true => unescaped(&literal(w)?),
+            false => literal(w).filter(|t| !t.contains(scan::EXPANDS)),
+        })
+        .collect::<Option<Vec<_>>>()?;
+    match words.first() {
+        Some(first) if !first.starts_with('-') => Some(words.join(" ")),
+        _ => None,
+    }
+}
+
+/// `t` with its `\n`, `\t` and `\\` escapes written out; `None` when it holds any other escape or
+/// a `$`, a backtick or a `%`.
+fn unescaped(t: &str) -> Option<String> {
+    if t.contains(['$', '`', '%']) {
+        return None;
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut chars = t.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        out.push(match chars.next()? {
+            'n' => '\n',
+            't' => '\t',
+            '\\' => '\\',
+            _ => return None,
+        });
+    }
+    Some(out)
 }
 
 /// A list of strings a row holds under `key`; empty when it holds none.

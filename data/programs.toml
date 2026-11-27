@@ -493,11 +493,13 @@ dry_run = ["/L"]
 #                      file has run (`-NoExit`)
 # stdin_drops_empty_arguments  on PowerShell: an empty quoted argument is dropped, so a quoted
 #                      expansion with no literal text may vanish (Windows PowerShell `"$x"`)# feeds                on a producer before the shell in a pipeline: what it writes the guard can
-#                      read: "words" (its arguments joined by blanks, the first no option),
-#                      "format" (one format with no `%` and no `\`, or `%s` or `%s\n` and one
-#                      argument), "stdin" (its own heredoc, with no operand but `-`), "one" (one
-#                      argument). Any other word that holds `$`, a backtick, `\` or `%` is never
-#                      read.
+#                      read: "words" (its arguments joined by blanks, the first no option; in Bash
+#                      after `-n`, `-e`, `-E` letters, and with `-e` the escapes below rendered),
+#                      "format" (one format with no `%` whose only escapes are `\n`, `\t` and
+#                      `\\`, rendered; `%s` and one argument; `%s\n` and each argument a line),
+#                      "stdin" (its own heredoc, with no operand but `-`), "one" (one argument).
+#                      Any other word that holds `$`, a backtick, `\` or `%` is never read. A
+#                      producer whose stdout is redirected is not read.
 
 [[program]]
 name = "bash"
