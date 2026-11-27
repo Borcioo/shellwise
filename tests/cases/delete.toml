@@ -7706,11 +7706,62 @@ command = "echo 'rm -rf ~' | bash ./run*.sh"
 level = "ok"
 rules = []
 
+# A bare variable PowerShell drops when it is null and spreads when it is an array: it may
+# vanish, so stdin may be the program.
 [[row]]
-id = "fed-control-ps-string-to-pwsh-variable-file"
+id = "fed-ps-string-to-pwsh-variable-home"
 os = "any"
 shell = "pwsh"
 command = "'Remove-Item -Recurse -Force ~' | pwsh $script"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-ps-string-to-pwsh-call-without-literal-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Get-Script)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-path-under-a-variable"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh $PSScriptRoot/x.ps1"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-quoted-variable"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh \"$script\""
+level = "ok"
+rules = []
+
+# Windows PowerShell drops an empty quoted argument: a quoted expansion may vanish there.
+[[row]]
+id = "fed-ps-string-to-windows-powershell-quoted-variable-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | powershell \"$script\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-quoted-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"$@\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-glob-script"
+os = "any"
+shell = "bash"
+command = "bash *.sh <<< 'rm -rf ~'"
 level = "ok"
 rules = []
 

@@ -23,6 +23,7 @@ const STDIN_PROGRAM_PARAMS: &str = "stdin_program_params";
 const STDIN_ENCODED_PARAMS: &str = "stdin_encoded_params";
 const STDIN_SWITCH_PARAMS: &str = "stdin_switch_params";
 const STDIN_AFTER_PARAMS: &str = "stdin_after_params";
+const STDIN_DROPS_EMPTY: &str = "stdin_drops_empty_arguments";
 /// The `extra` key of a producer row and its values (`data/programs.toml`).
 const FEEDS: &str = "feeds";
 const FEEDS_WORDS: &str = "words";
@@ -68,9 +69,9 @@ pub(crate) fn body(
     // A Bash-family shell reads a `-c` body; PowerShell names its program parameters; any other
     // shell (`cmd`) is not read.
     let plain = if !loops.is_empty() {
-        bash_reads_stdin(&run.args, src, row, &loops)?
+        bash_reads_stdin(&run.args, src, delete::is_pwsh(shell), row, &loops)?
     } else if !program.is_empty() {
-        pwsh_reads_stdin(&run.args, src, row, &program).then_some(false)?
+        pwsh_reads_stdin(&run.args, src, delete::is_pwsh(shell), row, &program).then_some(false)?
     } else {
         return None;
     };
@@ -168,14 +169,46 @@ fn is_here_string(op: &str) -> bool {
     op.trim_start_matches(|ch: char| ch.is_ascii_digit()) == "<<<"
 }
 
-/// A word that is, whole, one unquoted expansion (`$OPTS`, `$(opts)`, not a process
-/// substitution): it may expand to nothing or to options, so the guard cannot tell it from none.
-fn may_vanish(w: &Word, src: &str) -> bool {
-    w.quote == Quote::None
-        && matches!(w.parts.as_slice(), [WordPart::Var(_) | WordPart::Subst(_)])
-        && !src
-            .get(w.span.start..w.span.end)
-            .is_some_and(|t| t.starts_with("<(") || t.starts_with(">("))
+/// A word that may expand to no argument at all or to several, options among them, so the guard
+/// cannot tell it from none: every part an unquoted expansion (`$OPTS`, `$A$B`, `$(opts)`,
+/// PowerShell `$script`, `@args`, `$x.Path`, `(Get-Script)`), or a quoted all-arguments expansion
+/// (`"$@"`, `"${x[@]}"`); with `quoted_vanish` (Windows PowerShell drops an empty argument) any
+/// quoted expansion with no literal text. A word with literal or tilde text, any other quoted
+/// expansion, a process substitution and a PowerShell parenthesised expression that holds a literal
+/// argument (`(Join-Path $PSScriptRoot x.ps1)`) are one argument: the script.
+fn may_vanish(w: &Word, src: &str, pwsh: bool, quoted_vanish: bool) -> bool {
+    let expansion = |p: &WordPart| match p {
+        WordPart::Var(_) => true,
+        WordPart::Subst(s) | WordPart::Block(s) => !(pwsh && holds_literal_argument(s)),
+        _ => false,
+    };
+    let all_expansions = !w.parts.is_empty() && w.parts.iter().all(expansion);
+    let procsub = src
+        .get(w.span.start..w.span.end)
+        .is_some_and(|t| t.starts_with("<(") || t.starts_with(">("));
+    match w.quote {
+        _ if procsub => false,
+        Quote::None => all_expansions,
+        Quote::Double if quoted_vanish => all_expansions,
+        Quote::Double => {
+            matches!(w.parts.as_slice(), [WordPart::Var(n)] if n == "@" || n.ends_with("[@]"))
+        }
+        _ => false,
+    }
+}
+
+/// Whether a substitution runs a command with a literal argument (`Join-Path $PSScriptRoot x.ps1`).
+fn holds_literal_argument(s: &Script) -> bool {
+    s.stmts.iter().any(|st| match st {
+        Stmt::Pipeline(p) => p.elems.iter().any(|e| match e {
+            Elem::Cmd(c) => c
+                .args
+                .iter()
+                .any(|a| a.parts.iter().any(|p| matches!(p, WordPart::Literal(_)))),
+            _ => false,
+        }),
+        _ => false,
+    })
 }
 
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
@@ -187,7 +220,13 @@ fn may_vanish(w: &Word, src: &str) -> bool {
 /// cannot read is the script, unless it may vanish or hold options (`may_vanish`, `-o$x`).
 /// `Some(plain)` when stdin is the
 /// program, `plain` when no option took a value (the walks read a `-c` body only then).
-fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> Option<bool> {
+fn bash_reads_stdin(
+    args: &[Word],
+    src: &str,
+    pwsh: bool,
+    row: &Program,
+    loops: &[&str],
+) -> Option<bool> {
     let values = strings(row, STDIN_VALUE_OPTIONS);
     let positional = strings(row, STDIN_POSITIONAL);
     // `sign` and `letter` spell one of the short options in `list` (`-o`, `+O`).
@@ -202,7 +241,7 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
     let no_script = |w: Option<&Word>| {
         w.is_none_or(|w| match literal(w) {
             Some(s) => STDIN_PATHS.contains(&s.as_str()),
-            None => may_vanish(w, src),
+            None => may_vanish(w, src, pwsh, false),
         })
     };
     // Bash takes the value of each value letter in a cluster from the next words and reads the
@@ -216,10 +255,12 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
         k += 1;
         let script = |w: Option<&Word>| stdin_flag || no_script(w);
         let Some(a) = literal(w) else {
-            // An unquoted expansion standing alone may vanish or hold options (`$OPTS`), and so
-            // may a word that starts as an option (`-o$x`): read on past it. Any other word
-            // (`~/x.sh`, `"$HOME/x.sh"`, `./run*.sh`, `<(…)`) is the script.
-            if may_vanish(w, src) || leading_literal(w).is_some_and(|l| l.starts_with(['-', '+'])) {
+            // A word that may vanish or hold options (`$OPTS`, `"$@"`), and one that starts as
+            // an option (`-o$x`): read on past it. Any other word (`~/x.sh`, `"$HOME/x.sh"`,
+            // `./run*.sh`, `<(…)`) is the script.
+            if may_vanish(w, src, pwsh, false)
+                || leading_literal(w).is_some_and(|l| l.starts_with(['-', '+']))
+            {
                 plain = false;
                 continue;
             }
@@ -269,7 +310,7 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
 /// stdin program, unless `-NoExit` comes before it: then stdin is read after it. A parameter is
 /// any unambiguous prefix of its name (`-ex` for `-ExecutionPolicy`). A word the guard cannot
 /// read is the file or the command, unless it is a splat.
-fn pwsh_reads_stdin(args: &[Word], src: &str, row: &Program, program: &[&str]) -> bool {
+fn pwsh_reads_stdin(args: &[Word], src: &str, pwsh: bool, row: &Program, program: &[&str]) -> bool {
     let encoded = strings(row, STDIN_ENCODED_PARAMS);
     let switches = strings(row, STDIN_SWITCH_PARAMS);
     let after = strings(row, STDIN_AFTER_PARAMS);
@@ -284,13 +325,11 @@ fn pwsh_reads_stdin(args: &[Word], src: &str, row: &Program, program: &[&str]) -
     let mut k = 0;
     while let Some(w) = args.get(k) {
         let Some(a) = literal(w) else {
-            // A splat (`@args`) may hold any parameters: read on past it. Any other word the
-            // guard cannot read (`$script`, `(Join-Path $PSScriptRoot x.ps1)`) is the file or
-            // the command.
-            if src
-                .get(w.span.start..w.span.end)
-                .is_some_and(|t| t.starts_with('@'))
-            {
+            // A word that may vanish or spread (`$script`, `@args`, `(Get-Script)`) may hold any
+            // parameters: read on past it. Any other word the guard cannot read
+            // (`./x.ps1`-like text, `"$script"`, `(Join-Path $PSScriptRoot x.ps1)`) is the file
+            // or the command.
+            if may_vanish(w, src, pwsh, row.extra.contains_key(STDIN_DROPS_EMPTY)) {
                 k += 1;
                 continue;
             }
@@ -540,7 +579,9 @@ mod tests {
             "sudo bash ~/bin/setup.sh <<< 'rm -rf ~'",
             "bash -e ~/scripts/install.sh <<< 'rm -rf ~'",
             "pwsh \"$script\" <<< 'rm -rf ~'",
-            "pwsh $script <<< 'rm -rf ~'",
+            "bash *.sh <<< 'rm -rf ~'",
+            "bash \"$*\" <<< 'rm -rf ~'",
+            "bash \"$(opts)\" <<< 'rm -rf ~'",
             "bash -eo pipefail run.sh <<< 'rm -rf ~'",
             "bash -euo pipefail run.sh <<< 'rm -rf ~'",
             "bash -xO extglob run.sh <<< 'rm -rf ~'",
@@ -605,6 +646,11 @@ mod tests {
             "bash 0<<'EOF'\nrm -rf ~\nEOF",
             "bash $OPTS <<< 'rm -rf ~'",
             "bash $(opts) <<< 'rm -rf ~'",
+            "bash $A$B <<< 'rm -rf ~'",
+            "bash \"$@\" <<< 'rm -rf ~'",
+            "bash ${arr[@]} <<< 'rm -rf ~'",
+            "bash \"${arr[@]}\" <<< 'rm -rf ~'",
+            "pwsh $script <<< 'rm -rf ~'",
             "bash -- $S <<< 'rm -rf ~'",
             "bash -o$X <<< 'rm -rf ~'",
             "bash -s \"$script\" <<< 'rm -rf ~'",
