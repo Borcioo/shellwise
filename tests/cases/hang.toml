@@ -8362,3 +8362,41 @@ shell = "bash"
 command = "read x 0<<'EOF'\nhi\nEOF"
 level = "ok"
 rules = []
+
+# After `--` a word that may vanish is read past: the next word is the script and stdin its data.
+[[row]]
+id = "wl-bash-fed-heredoc-script-after-double-dash-and-a-vanishing-word-is-data"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS x.sh <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+# With no script after it stdin is the program, but the walks read a body only after plain
+# options, as they read `bash -c` only there.
+[[row]]
+id = "wl-bash-fed-heredoc-double-dash-then-a-vanishing-word-is-not-walked"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []
+
+# A count of an array is one word, the script.
+[[row]]
+id = "fu-bash-fed-here-string-count-of-an-array-is-data"
+os = "any"
+shell = "bash"
+command = "bash \"${#a[@]}\" <<< 'tail -f log'"
+level = "ok"
+rules = []
+
+# Behind a wrapper option the table does not list, the walks read neither the `-c` body nor the
+# fed one.
+[[row]]
+id = "wl-bash-fed-heredoc-unread-wrapper-option-is-not-walked"
+os = "any"
+shell = "bash"
+command = "sudo --weird bash <<'EOF'\nwhile true; do sleep 1; done\nEOF"
+level = "ok"
+rules = []

@@ -7943,13 +7943,58 @@ command = "printf '%s' 'rm -rf build' | sh"
 level = "warn"
 rules = ["opaque-destructive"]
 
+# Known miss: beside a syntax error and inside a `-c` body the raw scan reads no `printf '%s'` or
+# `printf '%s\n'` argument, wherever it is piped: reading it there would also read it before a
+# shell given a script, a shell on another machine (`| wsl bash`) and `bash -c "… | bash x.sh"`.
 [[row]]
-id = "fed-pipe-printf-line-home-beside-a-syntax-error"
+id = "known-miss-fed-pipe-printf-line-beside-a-syntax-error"
 os = "any"
 shell = "bash"
 command = "printf '%s\\n' 'rm -rf ~' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
+
+[[row]]
+id = "known-miss-fed-pipe-printf-string-in-a-c-body"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s' 'rm -rf ~' | bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-c-body-pipe-printf-line-to-a-script"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s\\n' 'rm -rf ~' | bash script.sh\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-c-body-pipe-printf-string-to-wsl"
+os = "any"
+shell = "bash"
+command = "bash -c \"printf '%s' 'rm -rf ~' | wsl bash\""
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-printf-string-to-a-script-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf '%s' 'rm -rf ~' | bash script.sh; done"
+level = "warn"
+rules = ["parse-error"]
+
+# Known over-read: inside a `-c` body the raw scan reads an `echo` before any local shell as its
+# program, a script operand included.
+[[row]]
+id = "known-over-read-fed-c-body-pipe-echo-to-a-script"
+os = "any"
+shell = "bash"
+command = "bash -c \"echo 'rm -rf ~' | bash script.sh\""
 level = "danger"
-rules = ["parse-error-destructive"]
+rules = ["opaque-destructive"]
 
 [[row]]
 id = "fed-control-pipe-printf-other-format"
@@ -8374,3 +8419,233 @@ shell = "bash"
 command = "pwsh -NoExit -File run.ps1 <<< 'Remove-Item -Recurse -Force ~'"
 level = "danger"
 rules = ["opaque-destructive"]
+
+# Windows PowerShell drops an empty quoted argument, so a quoted expansion may vanish there and
+# stdin may be the program; pwsh 7 keeps it as the file.
+[[row]]
+id = "fed-here-string-windows-powershell-quoted-variable-home"
+os = "any"
+shell = "bash"
+command = "powershell \"$script\" <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-here-string-pwsh-quoted-variable"
+os = "any"
+shell = "bash"
+command = "pwsh \"$script\" <<< 'Remove-Item -Recurse -Force ~'"
+level = "ok"
+rules = []
+
+# A script block is the command PowerShell runs: the piped text is its `$input`, data.
+[[row]]
+id = "fed-control-ps-string-to-pwsh-script-block"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh { Get-Date }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-string-to-pwsh-switch-then-script-block"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh -NoProfile {Get-Date}"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-ps-here-string-to-windows-powershell-script-block"
+os = "any"
+shell = "pwsh"
+command = "@'\nRemove-Item -Recurse -Force ~\n'@ | powershell -NoProfile { Get-Date }"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-windows-powershell-string-to-pwsh-script-block"
+os = "windows"
+shell = "powershell5"
+command = "Write-Output 'Remove-Item -Recurse -Force ~' | pwsh -ExecutionPolicy Bypass { Get-Date }"
+level = "ok"
+rules = []
+
+# `-NoExit` reads stdin after the command, a script block too.
+[[row]]
+id = "fed-ps-string-to-pwsh-no-exit-then-script-block-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh -NoExit { Get-Date }"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A delete inside the block is read as in any script block.
+[[row]]
+id = "fed-ps-string-to-pwsh-script-block-that-deletes-home"
+os = "any"
+shell = "pwsh"
+command = "'x' | pwsh { Remove-Item -Recurse -Force ~ }"
+level = "critical"
+rules = ["opaque-destructive", "delete-critical"]
+
+# After `--` or `-` a word that may vanish is read past, as before them: the first word that
+# cannot vanish is the script; with none, stdin is the program.
+[[row]]
+id = "fed-control-heredoc-script-after-double-dash-and-a-vanishing-word"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS x.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-script-after-single-dash-and-a-vanishing-word"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash - $OPTS x.sh"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-script-after-double-dash-and-all-arguments"
+os = "any"
+shell = "bash"
+command = "sh -- \"$@\" x.sh <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-double-dash-then-only-a-vanishing-word-home"
+os = "any"
+shell = "bash"
+command = "bash -- $OPTS <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A sliced or transformed expansion of all arguments or of an array may give no word.
+[[row]]
+id = "fed-here-string-sliced-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "bash \"${@:2}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-heredoc-sliced-array-home"
+os = "any"
+shell = "bash"
+command = "bash \"${a[@]:1}\" <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-alternate-of-all-arguments-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | bash \"${@:+x}\""
+level = "danger"
+rules = ["opaque-destructive"]
+
+# With a default it gives a word when empty, and every element when set, options among them.
+[[row]]
+id = "fed-here-string-array-with-a-default-home"
+os = "any"
+shell = "bash"
+command = "bash \"${a[@]:-run.sh}\" <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A count, all arguments joined, and one element are one word: the script.
+[[row]]
+id = "fed-control-here-string-count-of-an-array"
+os = "any"
+shell = "bash"
+command = "bash \"${#a[@]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-joined-array"
+os = "any"
+shell = "bash"
+command = "bash \"${a[*]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-here-string-pattern-that-names-an-array"
+os = "any"
+shell = "bash"
+command = "bash \"${x#[@]}\" <<< 'rm -rf ~'"
+level = "ok"
+rules = []
+
+# Behind a wrapper option the table does not list the command is a guess; a guessed local shell
+# reads its stdin as its `-c` twin's body is read.
+[[row]]
+id = "fed-heredoc-unread-wrapper-option-home"
+os = "any"
+shell = "bash"
+command = "sudo --weird bash <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-unread-wrapper-option-env-relative"
+os = "any"
+shell = "bash"
+command = "env --weird sh <<< 'rm -rf build'"
+level = "warn"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-pipe-echo-unread-wrapper-option-home"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' | nice --x zsh"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-unread-wrapper-option-pwsh-home"
+os = "any"
+shell = "bash"
+command = "sudo --weird pwsh -Command - <<< 'Remove-Item -Recurse -Force ~'"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-control-heredoc-unread-wrapper-option-shell-with-a-script"
+os = "any"
+shell = "bash"
+command = "sudo --weird bash ~/x.sh <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-unread-wrapper-option-no-shell"
+os = "any"
+shell = "bash"
+command = "sudo --weird psql <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-heredoc-unread-wrapper-option-python-on-stdin"
+os = "any"
+shell = "bash"
+command = "env --weird python - <<'EOF'\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+# Known miss: the guessed name is no shell, though the option may take it as its value and run
+# the shell after it; the `-c` twin is read.
+[[row]]
+id = "known-miss-fed-here-string-unread-wrapper-option-value-before-a-shell"
+os = "any"
+shell = "bash"
+command = "sudo --weird x bash <<< 'rm -rf ~'"
+level = "ok"
+rules = []

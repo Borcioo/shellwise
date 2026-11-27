@@ -30,6 +30,8 @@ const FEEDS_WORDS: &str = "words";
 const FEEDS_FORMAT: &str = "format";
 const FEEDS_STDIN: &str = "stdin";
 const FEEDS_ONE: &str = "one";
+/// printf formats that print their one argument as it is (`printf '%s\n' '…'`).
+const PRINTF_ARG_FORMATS: [&str; 2] = ["%s", "%s\\n"];
 /// Paths that name the process's own stdin, as a shell's script operand.
 const STDIN_PATHS: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
 
@@ -59,9 +61,10 @@ pub(crate) fn body(
         return None;
     }
     let run = programs::strip_wrappers(c, shell, os);
-    if run.opaque {
-        return None;
-    }
+    // Behind a wrapper option the table does not list the name is a guess (`sudo --weird bash`):
+    // a guessed shell's body is read as its `-c` twin's text is scanned, and not walked, as that
+    // twin's is not.
+    let guessed = run.opaque;
     let name = literal(&run.name).unwrap_or_else(|| run.typed.clone());
     let row = programs::lookup(&name, shell, os).filter(|p| p.is(Kind::Shell))?;
     let loops = strings(row, LOOP_BODY);
@@ -81,7 +84,7 @@ pub(crate) fn body(
         (None, None) => return None,
     };
     Some(Fed {
-        script: script.filter(|_| plain),
+        script: script.filter(|_| plain && !guessed),
         text,
     })
 }
@@ -137,8 +140,8 @@ fn produced(prev: &Elem, src: &str, shell: Shell, os: Os) -> Option<(String, Opt
             let format = literal(format)?;
             let args = args.iter().map(fixed).collect::<Option<Vec<_>>>()?;
             match (format.as_str(), args.as_slice()) {
-                (f, [one]) if scan::PRINTF_ARG_FORMATS.contains(&f) => one.clone(),
-                (f, _) if f == scan::PRINTF_ARG_FORMATS[1] => args.join("\n"),
+                (f, [one]) if PRINTF_ARG_FORMATS.contains(&f) => one.clone(),
+                (f, _) if f == PRINTF_ARG_FORMATS[1] => args.join("\n"),
                 _ => return None,
             }
         }
@@ -229,18 +232,14 @@ fn is_here_string(op: &str) -> bool {
 
 /// A word that may expand to no argument at all or to several, options among them, so the guard
 /// cannot tell it from none: every part an unquoted expansion (`$OPTS`, `$A$B`, `$(opts)`,
-/// PowerShell `$script`, `@args`, `@(…)`, `$x.Path`, `(Join-Path $d x.ps1)`), or a quoted
-/// all-arguments expansion (`"$@"`, `"${x[@]}"`); with `quoted_vanish` (Windows PowerShell drops
-/// an empty argument) any quoted expansion with no literal text. A word with literal or tilde text
-/// outside any expression, any other quoted expansion and a process substitution are one argument:
-/// the script.
+/// `${@:2}`, PowerShell `$script`, `@args`, `@(…)`, `$x.Path`, `(Join-Path $d x.ps1)`), or a
+/// quoted expansion of every argument or element (`"$@"`, `"${x[@]}"`, `"${@:2}"`, `spreads`);
+/// with `quoted_vanish` (Windows PowerShell drops an empty argument) any quoted expansion with no
+/// literal text. A word with literal or tilde text outside any expression, any other quoted
+/// expansion (`"$*"`, `"${#x[@]}"`), a PowerShell script block (the command to run) and a process
+/// substitution are one argument: the script.
 fn may_vanish(w: &Word, src: &str, quoted_vanish: bool) -> bool {
-    let expansion = |p: &WordPart| {
-        matches!(
-            p,
-            WordPart::Var(_) | WordPart::Subst(_) | WordPart::Block(_)
-        )
-    };
+    let expansion = |p: &WordPart| matches!(p, WordPart::Var(_) | WordPart::Subst(_));
     let all_expansions = !w.parts.is_empty() && w.parts.iter().all(expansion);
     let procsub = src
         .get(w.span.start..w.span.end)
@@ -249,11 +248,25 @@ fn may_vanish(w: &Word, src: &str, quoted_vanish: bool) -> bool {
         _ if procsub => false,
         Quote::None => all_expansions,
         Quote::Double if quoted_vanish => all_expansions,
-        Quote::Double => {
-            matches!(w.parts.as_slice(), [WordPart::Var(n)] if n == "@" || n.ends_with("[@]"))
-        }
+        Quote::Double => matches!(w.parts.as_slice(), [WordPart::Var(n)] if spreads(n)),
         _ => false,
     }
+}
+
+/// Whether a `${…}` expansion, written as `n` (its name and operators), is of every argument or
+/// every element of an array: `@`, `@:2`, `@#x`, `@:+x`, `a[@]`, `a[@]:1`, `a[@]/x/y`, `a[@]:-d`,
+/// `!a[@]` (the indices), `!p@` (the names starting `p`). In double quotes it gives one word per
+/// element, so none when there is none, and several, options among them, when there are. A count
+/// (`#a[@]`, `#@`), a `*` join (`*`, `a[*]`, `!p*`), one element (`a[0]`) and a pattern that
+/// names `[@]` (`x#[@]`) give one word.
+fn spreads(n: &str) -> bool {
+    let indirect = n.strip_prefix('!');
+    let n = indirect.unwrap_or(n);
+    let rest = n.trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_');
+    if rest.len() == n.len() {
+        return rest.starts_with('@');
+    }
+    rest.starts_with("[@]") || (indirect.is_some() && rest.starts_with('@'))
 }
 
 /// Whether a bash-family shell with these arguments runs its stdin: no `-c` body and no script
@@ -306,6 +319,11 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
             return script(Some(w)).then_some(plain);
         };
         if a == "--" || a == "-" {
+            // The options end; a word that may vanish is read past, as before them.
+            while args.get(k).is_some_and(|w| may_vanish(w, src, false)) {
+                k += 1;
+                plain = false;
+            }
             return script(args.get(k)).then_some(plain);
         }
         if a.starts_with("--") {
@@ -366,7 +384,8 @@ fn pwsh_reads_stdin(args: &[Word], src: &str, row: &Program, program: &[&str]) -
         let Some(a) = literal(w) else {
             // A word that may vanish or spread (`$script`, `@args`, `(Join-Path $d x.ps1)`) may
             // hold any parameters: read on past it. Any other word the guard cannot read
-            // (`$PSScriptRoot/x.ps1`, `"$script"`) is the file or the command.
+            // (`$PSScriptRoot/x.ps1`, `"$script"`, a script block `{ Get-Date }`) is the file
+            // or the command.
             if may_vanish(w, src, row.extra.contains_key(STDIN_DROPS_EMPTY)) {
                 k += 1;
                 continue;
@@ -648,6 +667,17 @@ mod tests {
             "pwsh -i run.ps1 <<< 'Remove-Item -Recurse x'",
             "pwsh -in run.ps1 <<< 'Remove-Item -Recurse x'",
             "sudo --weird x bash <<< 'rm -rf ~'",
+            "sudo --weird bash ~/x.sh <<< 'rm -rf ~'",
+            "bash -- $OPTS x.sh <<< 'rm -rf ~'",
+            "bash - $A $B x.sh <<< 'rm -rf ~'",
+            "bash -- \"$@\" x.sh <<< 'rm -rf ~'",
+            "bash \"${#a[@]}\" <<< 'rm -rf ~'",
+            "bash \"${#@}\" <<< 'rm -rf ~'",
+            "bash \"${a[*]}\" <<< 'rm -rf ~'",
+            "bash \"${!p*}\" <<< 'rm -rf ~'",
+            "bash \"${a[0]}\" <<< 'rm -rf ~'",
+            "bash \"${x#[@]}\" <<< 'rm -rf ~'",
+            "bash \"${p@Q}\" <<< 'rm -rf ~'",
         ] {
             assert_eq!(texts(src), Vec::<String>::new(), "{src:?}");
         }
@@ -709,6 +739,19 @@ mod tests {
             "pwsh -NoExit -File run.ps1 <<< 'rm -rf ~'",
             "pwsh -noe run.ps1 <<< 'rm -rf ~'",
             "powershell -NoExit -Command Get-Date <<< 'rm -rf ~'",
+            "bash -- $OPTS <<< 'rm -rf ~'",
+            "bash - $A \"$@\" <<< 'rm -rf ~'",
+            "bash \"${@:2}\" <<< 'rm -rf ~'",
+            "bash ${@:2} <<< 'rm -rf ~'",
+            "bash \"${a[@]:1}\" <<< 'rm -rf ~'",
+            "bash \"${!a[@]}\" <<< 'rm -rf ~'",
+            "bash \"${a[@]/x/y}\" <<< 'rm -rf ~'",
+            "bash \"${@#x}\" <<< 'rm -rf ~'",
+            "bash \"${!p@}\" <<< 'rm -rf ~'",
+            "bash \"${@:+x}\" <<< 'rm -rf ~'",
+            "bash \"${a[@]:-d}\" <<< 'rm -rf ~'",
+            "sudo --weird bash <<< 'rm -rf ~'",
+            "env --weird zsh -s <<< 'rm -rf ~'",
         ] {
             let got = texts(src);
             let got: Vec<&str> = got.iter().map(|t| t.trim_end()).collect();
@@ -741,6 +784,8 @@ mod tests {
             "bash -eo pipefail <<< 'sleep 1'",
             "bash <<< \"sleep $N\"",
             "pwsh -Command - <<< 'sleep 1'",
+            "bash -- $OPTS <<< 'sleep 1'",
+            "sudo --weird bash <<< 'sleep 1'",
         ] {
             assert_eq!(script(src), [None], "{src:?}");
         }

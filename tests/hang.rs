@@ -174,6 +174,12 @@ fn a_body_fed_on_stdin_reads_as_its_c_twin() {
             // (`bash -o pipefail -c '…'`) is not read for loops and follows; the fed form reads
             // as that twin.
             case_loader::Lang::Bash if cell.twin.contains(" -o ") => (BASH[cell.body].0, "ok", ""),
+            // Known miss of the twin: behind a wrapper option the table does not list
+            // (`sudo --weird bash -c '…'`) the shell name is a guess and its `-c` body is not read
+            // for loops and follows; the fed form reads as that twin.
+            case_loader::Lang::Bash if cell.twin.contains("--weird") => {
+                (BASH[cell.body].0, "ok", "")
+            }
             case_loader::Lang::Bash => BASH[cell.body],
             case_loader::Lang::Pwsh => PWSH[cell.body],
         };

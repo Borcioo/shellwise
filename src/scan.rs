@@ -623,8 +623,7 @@ const EVAL_NAMES: [&str; 5] = [
 const BASH_SHELLS: [&str; 5] = ["bash", "sh", "zsh", "dash", "ksh"];
 /// The other shells a command may run its text in.
 const OTHER_SHELLS: [&str; 3] = ["pwsh", "powershell", "cmd"];
-const PRINTF: &str = "printf";
-const ECHO_NAMES: [&str; 4] = ["echo", PRINTF, "write-output", "write-host"];
+const ECHO_NAMES: [&str; 4] = ["echo", "printf", "write-output", "write-host"];
 const GIT_VALUE_OPTS: [&str; 7] = [
     "-c",
     "-C",
@@ -813,9 +812,6 @@ fn command_reads_stdin(words: &[Tok], b: &Budget) -> bool {
 /// What a writer may still expand in its text: `$`, a backtick, a backslash or a printf `%` escape.
 pub(crate) const EXPANDS: [char; 4] = ['$', '`', '\\', '%'];
 
-/// printf formats that print their one argument as it is (`printf '%s\n' '…'`).
-pub(crate) const PRINTF_ARG_FORMATS: [&str; 2] = ["%s", "%s\\n"];
-
 /// For each start in a segment's words, whether the words from there to the end hold one that is
 /// not quoted, and one with text the writer may still expand.
 struct Tails {
@@ -863,13 +859,6 @@ fn piped_text<'a>(words: &'a [Tok], tails: &Tails) -> Piped<'a> {
         return Piped::Other;
     }
     let text = if echo { rest } else { words };
-    if let [format, arg] = rest
-        && base_name(&first.value) == PRINTF
-        && PRINTF_ARG_FORMATS.contains(&format.value.as_str())
-        && !arg.value.contains(EXPANDS)
-    {
-        return Piped::Text(&rest[1..]);
-    }
     if tails.expands[at] || (literals && first.value.contains(EXPANDS)) {
         Piped::Expands(text)
     } else {

@@ -166,11 +166,13 @@ pub struct FedCell {
 }
 
 /// Bash carriers: the words before the shell's own options, the shell, and whether it is bounded.
-const BASH_CARRIERS: [(&str, bool); 8] = [
+const BASH_CARRIERS: [(&str, bool); 9] = [
     ("bash", false),
     ("sh", false),
     ("zsh", false),
     ("sudo bash", false),
+    // A wrapper option the table does not list: the shell name is a guess.
+    ("sudo --weird bash", false),
     ("env A=1 bash", false),
     ("nohup bash", false),
     ("timeout 60 bash", true),
