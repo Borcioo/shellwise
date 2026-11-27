@@ -131,6 +131,27 @@ oracle = "accepts"
 
 # --- gate-truncated-pipeline (break): a tee'd run piped into a truncator ---
 
+# Windows PowerShell takes the next word as the value of `-wd` / `-WorkingDirectory`, so the file
+# after it is the configured gate.
+[[row]]
+id = "gate-windows-powershell-file-after-a-working-directory"
+os = "any"
+shell = "pwsh"
+command = "powershell -wd C:\\x -File run-gate.ps1 | Select-Object -First 5"
+level = "warn"
+rules = ["gate-truncated-pipeline"]
+config = "gate_commands = ['run-gate*']\n"
+oracle = "accepts"
+
+[[row]]
+id = "gate-windows-powershell-file-after-a-working-directory-no-gate-configured"
+os = "any"
+shell = "pwsh"
+command = "powershell -wd C:\\x -File run-gate.ps1 | Select-Object -First 5"
+level = "ok"
+rules = []
+oracle = "accepts"
+
 [[row]]
 id = "gate-tee-then-select-first"
 os = "any"
