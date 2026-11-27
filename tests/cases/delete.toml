@@ -7774,6 +7774,41 @@ level = "ok"
 rules = []
 
 [[row]]
+id = "fed-control-ps-string-to-pwsh-resolved-file"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Resolve-Path ./x.ps1)"
+level = "ok"
+rules = []
+
+# An array expression may hold no element or several, whatever command it runs.
+[[row]]
+id = "fed-ps-string-to-pwsh-array-expression-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh @(Join-Path $PSScriptRoot x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A literal that is a parameter names no path.
+[[row]]
+id = "fed-ps-string-to-pwsh-joined-parameter-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Join-Path $PSScriptRoot -Resolve)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A command that is not known to return one path may return anything, options too.
+[[row]]
+id = "fed-ps-string-to-pwsh-other-call-with-literal-home"
+os = "any"
+shell = "pwsh"
+command = "'Remove-Item -Recurse -Force ~' | pwsh (Get-Script x.ps1)"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
 id = "fed-ps-string-to-pwsh-splat-home"
 os = "any"
 shell = "pwsh"
