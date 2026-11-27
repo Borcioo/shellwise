@@ -25,7 +25,8 @@ PowerShell): its own heredoc or here-string (`bash <<'EOF'`, `sh -s <<< '…'`,
 (`echo '…' | bash`, `printf '…' | sh`, `printf '%s\n' '…' | bash`, `cat <<'EOF' | bash`, in
 PowerShell `'…' | pwsh -Command -` and `Write-Output '…' | pwsh`), also behind `sudo`, `env`,
 `nohup`, `timeout` and `time`. The shell reads its options as the shell does: `bash -eo pipefail`,
-`bash -ox pipefail` and `zsh -oerrexit` read stdin, `bash -s a b` too; a script operand
+`bash -ox pipefail` and `zsh -oerrexit` read stdin, `bash -s a b` too, and PowerShell with
+`-NoExit` reads it after its file or command; a script operand
 (`bash run.sh`, `zsh -O extglob`), a `-c` body or a heredoc on another descriptor (`bash 3<<EOF`)
 leaves stdin as data. An argument the guard cannot read (`bash "$S" <<'EOF'`) reads stdin as the
 program.
