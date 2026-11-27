@@ -160,7 +160,8 @@ pub struct FedCell {
     pub body: usize,
     /// A wrapper bounds how long the shell runs (`timeout 60`).
     pub bounded: bool,
-    /// A bash called by its bare name from PowerShell (the twin draws `ps-bare-bash` too).
+    /// A bash called by its bare name from PowerShell on Windows (the twin draws `ps-bare-bash`
+    /// too).
     pub bare_bash: bool,
 }
 
@@ -285,7 +286,7 @@ pub fn fed_cells(bash_bodies: &[&str], pwsh_bodies: &[&str]) -> Vec<FedCell> {
                 lang: Lang::Bash,
                 body,
                 bounded: false,
-                bare_bash: true,
+                bare_bash: cfg!(windows),
             });
         }
     }

@@ -7497,11 +7497,19 @@ rules = ["opaque-destructive"]
 
 [[row]]
 id = "fed-ps-string-to-bash-home"
-os = "any"
+os = "windows"
 shell = "pwsh"
 command = "'rm -rf ~' | bash"
 level = "danger"
 rules = ["opaque-destructive", "ps-bare-bash"]
+
+[[row]]
+id = "fed-ps-string-to-bash-home-posix"
+os = "posix"
+shell = "pwsh"
+command = "'rm -rf ~' | bash"
+level = "danger"
+rules = ["opaque-destructive"]
 
 # Unreadable producers stay unread: a download, a file, a variable, a substitution, a filter
 # between the producer and the shell, text the producer may still expand.

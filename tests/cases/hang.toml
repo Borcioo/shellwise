@@ -8266,11 +8266,19 @@ rules = ["follow-unbounded"]
 
 [[row]]
 id = "wl-pwsh-fed-string-to-bash-loop"
-os = "any"
+os = "windows"
 shell = "pwsh"
 command = "'while true; do sleep 1; done' | bash"
 level = "break"
 rules = ["ps-bare-bash", "wait-loop-unbounded"]
+
+[[row]]
+id = "wl-pwsh-fed-string-to-bash-loop-posix"
+os = "posix"
+shell = "pwsh"
+command = "'while true; do sleep 1; done' | bash"
+level = "break"
+rules = ["wait-loop-unbounded"]
 
 [[row]]
 id = "wl-bash-fed-pipe-from-a-download-is-not-read"
