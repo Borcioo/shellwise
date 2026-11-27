@@ -7848,3 +7848,107 @@ shell = "bash"
 command = "cat 3<<'X' | bash\nrm -rf ~\nX"
 level = "ok"
 rules = []
+
+# What a producer writes is read only when the guard has its exact text.
+[[row]]
+id = "fed-control-pipe-cat-file-beside-a-heredoc"
+os = "any"
+shell = "bash"
+command = "cat notes.txt <<'EOF' | bash\nrm -rf ~\nEOF"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-echo-to-a-file"
+os = "any"
+shell = "bash"
+command = "echo 'rm -rf ~' >out.txt | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-control-pipe-printf-number-format"
+os = "any"
+shell = "bash"
+command = "printf '%d\\n' 'rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+# Known miss: `echo` with an option may rewrite its text (`-e`); not read.
+[[row]]
+id = "known-miss-fed-pipe-echo-with-an-option"
+os = "any"
+shell = "bash"
+command = "echo -n 'rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+# Known miss: a printf argument holding `$`, a backtick, `\` or `%` is not read, as the producer
+# text the scan of a command that does not parse reads.
+[[row]]
+id = "known-miss-fed-pipe-printf-line-argument-with-a-backslash"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~/a\\b' | bash"
+level = "ok"
+rules = []
+
+# Known miss: a here-string on `cat` is not read, as the scan of a command that does not parse
+# does not read it.
+[[row]]
+id = "known-miss-fed-pipe-cat-here-string"
+os = "any"
+shell = "bash"
+command = "cat <<< 'rm -rf ~' | bash"
+level = "ok"
+rules = []
+
+[[row]]
+id = "fed-heredoc-after-a-plus-option-home"
+os = "any"
+shell = "bash"
+command = "bash +o errexit <<'EOF'\nrm -rf ~\nEOF"
+level = "danger"
+rules = ["opaque-destructive"]
+
+# A fed shell inside a loop, a condition or a function, and each fed shell with its own body.
+[[row]]
+id = "fed-here-string-in-a-loop-home"
+os = "any"
+shell = "bash"
+command = "for i in 1; do bash <<< 'rm -rf ~'; done"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-in-a-condition-home"
+os = "any"
+shell = "bash"
+command = "if true; then bash <<< 'rm -rf ~'; fi"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-in-a-function-home"
+os = "any"
+shell = "bash"
+command = "f() { bash <<< 'rm -rf ~'; }"
+level = "danger"
+rules = ["opaque-destructive"]
+
+[[row]]
+id = "fed-here-string-two-shells-each-its-body"
+os = "any"
+shell = "bash"
+command = "bash <<< 'rm -rf build'; bash <<< 'rm -rf ~'"
+level = "danger"
+rules = ["opaque-destructive", "opaque-destructive"]
+
+# Known miss: beside a syntax error a printf argument holding `\` is not read either.
+[[row]]
+id = "known-miss-fed-pipe-printf-line-argument-with-a-backslash-beside-a-syntax-error"
+os = "any"
+shell = "bash"
+command = "printf '%s\\n' 'rm -rf ~/a\\b' | bash\n; )"
+level = "warn"
+rules = ["parse-error"]
