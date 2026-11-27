@@ -8169,6 +8169,15 @@ command = "echo -e 'rm -rf ~\\c' | bash"
 level = "ok"
 rules = []
 
+# A later `-E` turns the escapes off again: the backslash stays, and that is not read.
+[[row]]
+id = "fed-control-pipe-echo-with-escapes-turned-off-again"
+os = "any"
+shell = "bash"
+command = "echo -eE 'cd /tmp\\nrm -rf ~' | bash"
+level = "ok"
+rules = []
+
 [[row]]
 id = "fed-control-pipe-echo-with-a-backslash-and-no-option"
 os = "any"

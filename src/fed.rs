@@ -263,8 +263,8 @@ fn may_vanish(w: &Word, src: &str, quoted_vanish: bool) -> bool {
 /// `-oerrexit`, `-eo errexit`). With `-s` the words after the options are positional parameters;
 /// without it the first is the script, which is stdin only as `/dev/stdin`. A word the guard
 /// cannot read is the script, unless it may vanish or hold options (`may_vanish`, `-o$x`).
-/// `Some(plain)` when stdin is the
-/// program, `plain` when no option took a value (the walks read a `-c` body only then).
+/// `Some(plain)` when stdin is the program, `plain` when no option took a value (the walks read a
+/// `-c` body only then).
 fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> Option<bool> {
     let values = strings(row, STDIN_VALUE_OPTIONS);
     let positional = strings(row, STDIN_POSITIONAL);
@@ -348,7 +348,7 @@ fn bash_reads_stdin(args: &[Word], src: &str, row: &Program, loops: &[&str]) -> 
 /// a lone `-`, or no command and no file at all. A command, a file or an encoded command is no
 /// stdin program, unless `-NoExit` comes before it: then stdin is read after it. A parameter is
 /// any unambiguous prefix of its name (`-ex` for `-ExecutionPolicy`). A word the guard cannot
-/// read is the file or the command, unless it is a splat.
+/// read is the file or the command, unless it may vanish (`may_vanish`).
 fn pwsh_reads_stdin(args: &[Word], src: &str, row: &Program, program: &[&str]) -> bool {
     let encoded = strings(row, STDIN_ENCODED_PARAMS);
     let switches = strings(row, STDIN_SWITCH_PARAMS);
